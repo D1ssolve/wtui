@@ -1,0 +1,7 @@
+- ExecError
+    - дублируется в /git и /dotnet
+- dotnet, sln
+    - Хочется, чтобы имели общую директорию
+- discovery.go
+    - нужно ли phase 2 (deep find) ?
+-
