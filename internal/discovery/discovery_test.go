@@ -60,6 +60,38 @@ func (m *mockGitClient) Version(_ context.Context) (int, int, error) {
 	panic("mockGitClient.Version called unexpectedly")
 }
 
+func (m *mockGitClient) RevListCount(_ context.Context, _, _, _ string) (int, error) {
+	panic("mockGitClient.RevListCount called unexpectedly")
+}
+
+func (m *mockGitClient) RevListAheadBehind(_ context.Context, _, _ string) (int, int, error) {
+	panic("mockGitClient.RevListAheadBehind called unexpectedly")
+}
+
+func (m *mockGitClient) Fetch(_ context.Context, _ string) error {
+	panic("mockGitClient.Fetch called unexpectedly")
+}
+
+func (m *mockGitClient) Rebase(_ context.Context, _, _ string) error {
+	panic("mockGitClient.Rebase called unexpectedly")
+}
+
+func (m *mockGitClient) Push(_ context.Context, _ string, _ chan<- string) error {
+	panic("mockGitClient.Push called unexpectedly")
+}
+
+func (m *mockGitClient) Stash(_ context.Context, _ string, _ bool) error {
+	panic("mockGitClient.Stash called unexpectedly")
+}
+
+func (m *mockGitClient) GetWorktreeBranch(_ context.Context, _ string) (string, error) {
+	panic("mockGitClient.GetWorktreeBranch called unexpectedly")
+}
+
+func (m *mockGitClient) DeleteBranch(_ context.Context, _, _ string) error {
+	panic("mockGitClient.DeleteBranch called unexpectedly")
+}
+
 // Compile-time assertion that mockGitClient satisfies the git.Client interface.
 var _ git.Client = (*mockGitClient)(nil)
 
@@ -156,13 +188,13 @@ func TestResolve(t *testing.T) {
 			name:    "service-d NOT found when DiscoveryDepth=3 (.git is at depth 4, exceeds limit)",
 			token:   "service-d",
 			depth:   3,
-			wantErr: ErrServiceNotFound,
+			wantErr: errServiceNotFound,
 		},
 		{
-			name:    "nonexistent token returns ErrServiceNotFound",
+			name:    "nonexistent token returns errServiceNotFound",
 			token:   "nonexistent",
 			depth:   4,
-			wantErr: ErrServiceNotFound,
+			wantErr: errServiceNotFound,
 		},
 	}
 
@@ -216,9 +248,9 @@ func TestResolveDirectInvalidRepo(t *testing.T) {
 	if err == nil {
 		t.Fatal("Resolve: expected error for invalid direct repo, got nil")
 	}
-	// Must NOT be ErrServiceNotFound — the repo was found but invalid.
-	if errors.Is(err, ErrServiceNotFound) {
-		t.Errorf("Resolve: error should not be ErrServiceNotFound for an invalid repo, got: %v", err)
+	// Must NOT be errServiceNotFound — the repo was found but invalid.
+	if errors.Is(err, errServiceNotFound) {
+		t.Errorf("Resolve: error should not be errServiceNotFound for an invalid repo, got: %v", err)
 	}
 }
 
@@ -244,8 +276,8 @@ func TestResolveWalkInvalidRepo(t *testing.T) {
 	if err == nil {
 		t.Fatal("Resolve: expected error for walk-phase invalid repo, got nil")
 	}
-	if errors.Is(err, ErrServiceNotFound) {
-		t.Errorf("Resolve: should not return ErrServiceNotFound when repo validation fails: %v", err)
+	if errors.Is(err, errServiceNotFound) {
+		t.Errorf("Resolve: should not return errServiceNotFound when repo validation fails: %v", err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/diss0x/wtui/internal/logutil"
 	"github.com/diss0x/wtui/internal/task"
 )
 
@@ -27,7 +28,7 @@ SERVICE  one or more service/repo names to add as worktrees`,
 				Services: services,
 			}
 
-			if err := mgr.Add(cmd.Context(), params); err != nil {
+			if err := mgr.Add(logutil.WithTaskID(cmd.Context(), taskID), params); err != nil {
 				fmt.Fprintln(os.Stderr, "Error:", err)
 				return err
 			}

@@ -275,6 +275,22 @@ func TestTasksPanel_KeyS_EmitsGenerateSlnMsg(t *testing.T) {
 	}
 }
 
+func TestTasksPanel_KeyComma_EmitsOpenConfigModalMsg(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetTasks(makeTasks("IN-001"))
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey(","))
+	if cmd == nil {
+		t.Fatal(", key should return a cmd")
+	}
+
+	msg := cmd()
+	if _, ok := msg.(OpenConfigModalMsg); !ok {
+		t.Fatalf("expected OpenConfigModalMsg, got %T", msg)
+	}
+}
+
 func TestTasksPanel_KeyO_EmptyList_NoOp(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetFocused(true)

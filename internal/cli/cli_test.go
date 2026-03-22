@@ -5,11 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 
+	"github.com/diss0x/wtui/internal/config"
 	"github.com/diss0x/wtui/internal/domain"
 	"github.com/diss0x/wtui/internal/git"
 	"github.com/diss0x/wtui/internal/task"
@@ -37,12 +40,15 @@ type mockManager struct {
 	addFn                func(ctx context.Context, params task.AddParams) error
 	listFn               func(ctx context.Context) ([]domain.Task, error)
 	listServicesFn       func(ctx context.Context, taskID string) ([]domain.Service, error)
-	removeFn             func(ctx context.Context, taskID string, force bool) error
+	removeFn             func(ctx context.Context, taskID string, force, deleteBranches bool) error
 	generateSlnFn        func(ctx context.Context, taskID string) error
-	openWorkspaceFn      func(ctx context.Context, taskID string) error
 	listOpenCandidatesFn func(ctx context.Context, taskID string) (task.OpenCandidates, error)
 	openFileFn           func(ctx context.Context, path, app string) error
 	discoverReposFn      func(ctx context.Context) ([]domain.Repo, error)
+	syncTaskFn           func(ctx context.Context, taskID string, lineCh chan<- string) error
+	pushTaskFn           func(ctx context.Context, taskID string, lineCh chan<- string) error
+	pushServiceFn        func(ctx context.Context, taskID, serviceName string, lineCh chan<- string) error
+	stashServiceFn       func(ctx context.Context, taskID, serviceName string, pop bool) error
 }
 
 func (m *mockManager) Init(ctx context.Context, params task.InitParams) error {
@@ -73,9 +79,9 @@ func (m *mockManager) ListServices(ctx context.Context, taskID string) ([]domain
 	return []domain.Service{}, nil
 }
 
-func (m *mockManager) Remove(ctx context.Context, taskID string, force bool) error {
+func (m *mockManager) Remove(ctx context.Context, taskID string, force, deleteBranches bool) error {
 	if m.removeFn != nil {
-		return m.removeFn(ctx, taskID, force)
+		return m.removeFn(ctx, taskID, force, deleteBranches)
 	}
 	return nil
 }
@@ -83,13 +89,6 @@ func (m *mockManager) Remove(ctx context.Context, taskID string, force bool) err
 func (m *mockManager) GenerateSln(ctx context.Context, taskID string) error {
 	if m.generateSlnFn != nil {
 		return m.generateSlnFn(ctx, taskID)
-	}
-	return nil
-}
-
-func (m *mockManager) OpenWorkspace(ctx context.Context, taskID string) error {
-	if m.openWorkspaceFn != nil {
-		return m.openWorkspaceFn(ctx, taskID)
 	}
 	return nil
 }
@@ -114,6 +113,42 @@ func (m *mockManager) DiscoverRepos(ctx context.Context) ([]domain.Repo, error) 
 	}
 	return []domain.Repo{}, nil
 }
+
+func (m *mockManager) SyncTask(ctx context.Context, taskID string, lineCh chan<- string) error {
+	if m.syncTaskFn != nil {
+		return m.syncTaskFn(ctx, taskID, lineCh)
+	}
+	close(lineCh)
+	return nil
+}
+
+func (m *mockManager) PushTask(ctx context.Context, taskID string, lineCh chan<- string) error {
+	if m.pushTaskFn != nil {
+		return m.pushTaskFn(ctx, taskID, lineCh)
+	}
+	close(lineCh)
+	return nil
+}
+
+func (m *mockManager) PushService(ctx context.Context, taskID, serviceName string, lineCh chan<- string) error {
+	if m.pushServiceFn != nil {
+		return m.pushServiceFn(ctx, taskID, serviceName, lineCh)
+	}
+	return nil
+}
+
+func (m *mockManager) CloneTask(ctx context.Context, src, dst string) error {
+	return nil
+}
+
+func (m *mockManager) StashService(ctx context.Context, taskID, serviceName string, pop bool) error {
+	if m.stashServiceFn != nil {
+		return m.stashServiceFn(ctx, taskID, serviceName, pop)
+	}
+	return nil
+}
+
+func (m *mockManager) RemoveService(_ context.Context, _, _ string, _ bool) error { return nil }
 
 // Compile-time assertion: mockManager must implement task.Manager.
 var _ task.Manager = (*mockManager)(nil)
@@ -150,6 +185,7 @@ func buildTestRoot(mock task.Manager, version string) *cobra.Command {
 		newSlnCmd(),
 		newOpenCmd(),
 		newVersionCmd(version),
+		newConfigCmd(),
 	)
 
 	return root
@@ -341,7 +377,7 @@ func TestAdd_ErrTaskNotFound_ExitsCode1(t *testing.T) {
 
 func TestRemove_ErrTaskNotFound_ExitsCode1(t *testing.T) {
 	mock := &mockManager{
-		removeFn: func(_ context.Context, taskID string, force bool) error {
+		removeFn: func(_ context.Context, taskID string, force, _ bool) error {
 			return errors.Join(task.ErrTaskNotFound, errors.New(taskID))
 		},
 	}
@@ -358,7 +394,7 @@ func TestRemove_ErrTaskNotFound_ExitsCode1(t *testing.T) {
 
 func TestRemove_GitExecError_ExitsCode2(t *testing.T) {
 	mock := &mockManager{
-		removeFn: func(_ context.Context, taskID string, force bool) error {
+		removeFn: func(_ context.Context, taskID string, force, _ bool) error {
 			return &git.ExecError{
 				Argv:     []string{"git", "worktree", "remove", "/path"},
 				ExitCode: 128,
@@ -380,7 +416,7 @@ func TestRemove_GitExecError_ExitsCode2(t *testing.T) {
 func TestRemove_ForceFlag_PassedToManager(t *testing.T) {
 	var capturedForce bool
 	mock := &mockManager{
-		removeFn: func(_ context.Context, _ string, force bool) error {
+		removeFn: func(_ context.Context, _ string, force, _ bool) error {
 			capturedForce = force
 			return nil
 		},
@@ -397,7 +433,7 @@ func TestRemove_ForceFlag_PassedToManager(t *testing.T) {
 
 func TestRemove_Success(t *testing.T) {
 	mock := &mockManager{
-		removeFn: func(_ context.Context, _ string, _ bool) error { return nil },
+		removeFn: func(_ context.Context, _ string, _, _ bool) error { return nil },
 	}
 	root := buildTestRoot(mock, "dev")
 	stdout, _, err := executeCommand(root, "remove", "IN-6748")
@@ -674,5 +710,94 @@ func TestOpenCmd_NoFiles(t *testing.T) {
 	}
 	if !errors.Is(err, ErrNoFiles) {
 		t.Errorf("expected error to be (or wrap) ErrNoFiles, got: %v", err)
+	}
+}
+
+// ── config list tests ─────────────────────────────────────────────────────────
+
+func TestConfigList_PrintsEffectiveConfig(t *testing.T) {
+	mock := &mockManager{}
+	root := buildTestRoot(mock, "dev")
+
+	// Populate the package-level cfg that config list reads.
+	cfg = &config.Config{
+		RootDir:          "/test/root",
+		TasksRoot:        "/test/tasks",
+		BranchPrefix:     "feature/",
+		Editor:           "code",
+		DiscoveryDepth:   4,
+		OutputPanelLines: 6,
+		LogLevel:         "INFO",
+	}
+	t.Cleanup(func() { cfg = nil })
+
+	stdout, _, err := executeCommand(root, "config", "list")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !strings.Contains(stdout, "root_dir:") {
+		t.Errorf("expected root_dir in output, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "editor:") {
+		t.Errorf("expected editor in output, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "log_level:") {
+		t.Errorf("expected log_level in output, got: %q", stdout)
+	}
+}
+
+// ── config set tests ──────────────────────────────────────────────────────────
+
+func TestConfigSet_UpdatesKeyInFile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	// Write initial config.
+	if err := os.WriteFile(cfgPath, []byte("editor: code\nlog_level: INFO\n"), 0o644); err != nil {
+		t.Fatalf("write initial config: %v", err)
+	}
+
+	mock := &mockManager{}
+	root := buildTestRoot(mock, "dev")
+
+	// Override cfgFile so config set knows where to write.
+	cfgFile = cfgPath
+	t.Cleanup(func() { cfgFile = "" })
+
+	stdout, _, err := executeCommand(root, "config", "set", "editor", "rider")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !strings.Contains(stdout, "editor") {
+		t.Errorf("expected confirmation in output, got: %q", stdout)
+	}
+
+	// Verify the file was updated.
+	reloaded, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if reloaded.Editor != "rider" {
+		t.Errorf("Editor: got %q, want rider", reloaded.Editor)
+	}
+	// Other keys must be preserved.
+	if reloaded.LogLevel != "INFO" {
+		t.Errorf("LogLevel: got %q, want INFO", reloaded.LogLevel)
+	}
+}
+
+func TestConfigSet_UnknownKey_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	mock := &mockManager{}
+	root := buildTestRoot(mock, "dev")
+
+	cfgFile = cfgPath
+	t.Cleanup(func() { cfgFile = "" })
+
+	_, _, err := executeCommand(root, "config", "set", "unknown_key", "value")
+	if err == nil {
+		t.Fatal("expected error for unknown key, got nil")
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -50,7 +49,7 @@ func (c *CommandClient) IsAvailable(ctx context.Context) bool {
 	defer cancel()
 
 	argv := []string{"dotnet", "--version"}
-	c.logger.DebugContext(ctx, "exec dotnet", slog.Any("argv", argv))
+	c.logger.InfoContext(ctx, "exec dotnet", slog.Any("argv", argv))
 
 	cmd := exec.CommandContext(ctx, "dotnet", "--version")
 	cmd.Stdout = nil
@@ -80,7 +79,7 @@ func (c *CommandClient) run(ctx context.Context, workDir string, args ...string)
 	defer cancel()
 
 	argv := append([]string{"dotnet"}, args...)
-	c.logger.DebugContext(ctx, "exec dotnet", slog.Any("argv", argv))
+	c.logger.InfoContext(ctx, "exec dotnet", slog.Any("argv", argv))
 
 	cmd := exec.CommandContext(ctx, "dotnet", args...)
 	cmd.Dir = workDir
@@ -103,20 +102,4 @@ func (c *CommandClient) run(ctx context.Context, workDir string, args ...string)
 	}
 
 	return nil
-}
-
-type ExecError struct {
-	Argv     []string
-	ExitCode int
-	Stderr   string
-}
-
-func (e *ExecError) Error() string {
-	stderr := strings.TrimSpace(e.Stderr)
-	if stderr != "" {
-		return fmt.Sprintf("dotnet %s: exit %d: %s",
-			strings.Join(e.Argv[1:], " "), e.ExitCode, stderr)
-	}
-	return fmt.Sprintf("dotnet %s: exit %d",
-		strings.Join(e.Argv[1:], " "), e.ExitCode)
 }

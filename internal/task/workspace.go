@@ -35,7 +35,6 @@ type workspaceSettings struct {
 // The file is written atomically (temp file + rename) to prevent partial reads by
 // VS Code or other consumers.
 func generateWorkspaceFile(taskID, taskDir string) error {
-	// Collect subdirectories of taskDir.
 	entries, err := os.ReadDir(taskDir)
 	if err != nil {
 		return fmt.Errorf("workspace: read task dir %s: %w", taskDir, err)
@@ -46,18 +45,11 @@ func generateWorkspaceFile(taskID, taskDir string) error {
 		if !entry.IsDir() {
 			continue
 		}
-		// Compute the path relative from taskDir to the service worktree dir.
-		// Since worktrees are direct children, this is just entry.Name(), but
-		// filepath.Rel is used for correctness in case paths ever diverge.
-		relPath, relErr := filepath.Rel(taskDir, filepath.Join(taskDir, entry.Name()))
-		if relErr != nil {
-			// Fallback: use the entry name directly.
-			relPath = entry.Name()
-		}
-		folders = append(folders, workspaceFolder{Path: relPath})
+		// Worktrees are direct children of taskDir, so entry.Name() is the
+		// relative path from taskDir to each service worktree directory.
+		folders = append(folders, workspaceFolder{Path: entry.Name()})
 	}
 
-	// Sort alphabetically for a stable, diff-friendly output.
 	sort.Slice(folders, func(i, j int) bool {
 		return folders[i].Path < folders[j].Path
 	})
@@ -86,7 +78,6 @@ func generateWorkspaceFile(taskID, taskDir string) error {
 	}
 	tmpName := tmp.Name()
 
-	// Ensure the temp file is cleaned up on any error path.
 	success := false
 	defer func() {
 		if !success {

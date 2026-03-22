@@ -8,10 +8,86 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// validKeys is the set of YAML tag names that SetKey accepts.
+var validKeys = map[string]struct{}{
+	"root_dir":           {},
+	"tasks_root":         {},
+	"branch_prefix":      {},
+	"base_branch":        {},
+	"editor":             {},
+	"discovery_depth":    {},
+	"output_panel_lines": {},
+	"log_level":          {},
+}
+
+// SetKey reads the config YAML at path (or creates it when missing), updates the
+// named key, and writes back atomically (temp file + rename).
+//
+// Only the keys listed in the Config struct YAML tags are accepted.
+// Returns ErrUnknownKey for any key not in that set.
+func SetKey(path, key, value string) error {
+	if _, ok := validKeys[key]; !ok {
+		return fmt.Errorf("%w: %q", ErrUnknownKey, key)
+	}
+
+	// Read current YAML into a raw map so unknown keys are preserved.
+	raw := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("config: read %s: %w", path, err)
+	}
+	if len(data) > 0 {
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("config: parse %s: %w", path, err)
+		}
+	}
+
+	raw[key] = value
+
+	out, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("config: marshal: %w", err)
+	}
+
+	// Ensure parent directory exists.
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return fmt.Errorf("config: create config directory: %w", err)
+	}
+
+	// Write atomically: temp file in same directory, then rename.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".wtui-config-*.yaml.tmp")
+	if err != nil {
+		return fmt.Errorf("config: create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+
+	success := false
+	defer func() {
+		if !success {
+			os.Remove(tmpName)
+		}
+	}()
+
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close()
+		return fmt.Errorf("config: write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("config: close temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("config: rename temp file to %s: %w", path, err)
+	}
+
+	success = true
+	return nil
+}
+
 type Config struct {
 	RootDir          string `yaml:"root_dir"`
 	TasksRoot        string `yaml:"tasks_root"`
 	BranchPrefix     string `yaml:"branch_prefix"`
+	BaseBranch       string `yaml:"base_branch"`
 	Editor           string `yaml:"editor"`
 	DiscoveryDepth   int    `yaml:"discovery_depth"`
 	OutputPanelLines int    `yaml:"output_panel_lines"`
@@ -108,6 +184,9 @@ func (c *Config) Effective() *Config {
 	if v := os.Getenv("EDITOR"); v != "" {
 		c.Editor = v
 	}
+	if v := os.Getenv("WTUI_BASE_BRANCH"); v != "" {
+		c.BaseBranch = v
+	}
 
 	if c.RootDir == "" {
 		if cwd, err := os.Getwd(); err == nil {
@@ -121,6 +200,10 @@ func (c *Config) Effective() *Config {
 
 	if c.BranchPrefix == "" {
 		c.BranchPrefix = "feature/"
+	}
+
+	if c.BaseBranch == "" {
+		c.BaseBranch = "develop"
 	}
 
 	if c.Editor == "" {
@@ -187,6 +270,11 @@ tasks_root: %q
 # Default: "feature/"
 branch_prefix: %q
 
+# base_branch: The base branch that feature branches are rebased onto during Sync (S key).
+# Override with env var: WTUI_BASE_BRANCH
+# Default: "develop"
+base_branch: %q
+
 # editor: Command used to open .code-workspace files.
 # Override with env var: EDITOR
 # Default: "code"
@@ -207,6 +295,7 @@ log_level: %q
 		defaults.RootDir,
 		defaults.TasksRoot,
 		defaults.BranchPrefix,
+		defaults.BaseBranch,
 		editorDefault,
 		defaults.DiscoveryDepth,
 		defaults.OutputPanelLines,

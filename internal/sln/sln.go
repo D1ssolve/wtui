@@ -3,7 +3,6 @@ package sln
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -43,7 +42,6 @@ func (m *Manager) Generate(ctx context.Context, taskDir, taskID string, services
 
 	if err := m.dotnet.NewSln(ctx, taskDir, taskID); err != nil {
 		m.logger.ErrorContext(ctx, "failed to create .sln file",
-			slog.String("task_id", taskID),
 			slog.String("error", err.Error()),
 		)
 		return nil
@@ -61,7 +59,7 @@ func (m *Manager) Generate(ctx context.Context, taskDir, taskID string, services
 		}
 
 		if len(projs) == 0 {
-			m.logger.WarnContext(ctx, fmt.Sprintf("No .csproj files found for service '%s'", svc.Name),
+			m.logger.WarnContext(ctx, "no .csproj files found for service",
 				slog.String("service", svc.Name),
 				slog.String("worktree", svc.WorktreePath),
 			)

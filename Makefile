@@ -1,5 +1,4 @@
 # wtui Makefile
-# Targets: build, test, lint, install, clean, cross-platform builds, test-integration
 
 BINARY      := wtui
 BIN_DIR     := bin
@@ -16,23 +15,23 @@ export CGO_ENABLED=0
         build-darwin-amd64 build-darwin-arm64 \
         test-integration
 
-build: ## Build the binary into ./bin/wtui
+build:
 	@mkdir -p $(BIN_DIR)
 	go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY) $(CMD_PATH)
 
-test: ## Run the unit test suite
+test:
 	go test ./...
 
-lint: ## Run go vet
+lint:
 	go vet ./...
 
-install: build ## Install the binary to /usr/local/bin/
+install: build
 	cp $(BIN_DIR)/$(BINARY) $(INSTALL_DIR)/$(BINARY)
 
-clean: ## Remove the bin/ directory
+clean:
 	rm -rf $(BIN_DIR)
 
-test-integration: ## Run tests tagged with the 'integration' build tag
+test-integration:
 	go test -tags integration ./...
 
 build-linux-amd64: ## Build for Linux/amd64

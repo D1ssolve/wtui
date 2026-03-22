@@ -2,7 +2,9 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -24,20 +26,25 @@ func (m *manager) Add(ctx context.Context, params AddParams) error {
 
 	branchName := m.resolveBranchName("", params.TaskID)
 
-	m.addWorktreesForServices(ctx, params.Services, taskDir, branchName, "")
+	added, worktreeErrs := m.addWorktreesForServices(
+		ctx, params.Services, taskDir, branchName, "", params.StatusCh,
+	)
+
+	if len(params.Services) > 0 && added == 0 {
+		return fmt.Errorf("add: no worktrees added for task %s: %w",
+			params.TaskID, errors.Join(worktreeErrs...))
+	}
 
 	if err := generateWorkspaceFile(params.TaskID, taskDir); err != nil {
 		m.logger.WarnContext(ctx, "failed to regenerate workspace file",
-			"task_id", params.TaskID,
-			"error", err.Error(),
+			slog.String("error", err.Error()),
 		)
 	}
 
 	allServices := buildServicesFromSubdirs(taskDir)
 	if err := m.slnMgr.Generate(ctx, taskDir, params.TaskID, allServices); err != nil {
 		m.logger.WarnContext(ctx, "sln generation failed during add",
-			"task_id", params.TaskID,
-			"error", err.Error(),
+			slog.String("error", err.Error()),
 		)
 	}
 

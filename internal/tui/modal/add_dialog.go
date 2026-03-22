@@ -9,21 +9,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// ── AddDialog ─────────────────────────────────────────────────────────────────
-
-// AddDialog is a 1-field form for adding one or more services to an existing
-// task group.
-//
-// Fields:
-//
-//	0: Services — placeholder "service1 service2 ..."
 type AddDialog struct {
 	taskID string
 	input  textinput.Model
 }
 
-// NewAddDialog creates an AddDialog pre-associated with the given taskID.
-// The Services input field receives initial keyboard focus.
 func NewAddDialog(taskID string) *AddDialog {
 	ti := textinput.New()
 	ti.Prompt = ""
@@ -31,8 +21,7 @@ func NewAddDialog(taskID string) *AddDialog {
 	ti.Width = 40
 	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(modalColorDim)
 
-	// Focus the input immediately.
-	ti.Focus() //nolint:errcheck — v1 Focus() returns tea.Cmd, not error
+	ti.Focus()
 
 	return &AddDialog{
 		taskID: taskID,
@@ -40,12 +29,10 @@ func NewAddDialog(taskID string) *AddDialog {
 	}
 }
 
-// Title implements Modal.
 func (d *AddDialog) Title() string {
 	return fmt.Sprintf("Add Service to %s", d.taskID)
 }
 
-// Update implements Modal.
 func (d *AddDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -54,7 +41,6 @@ func (d *AddDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 			return d, func() tea.Msg { return CloseModalMsg{} }
 
 		case "enter":
-			// Parse services and emit the submit message.
 			services := parseServices(d.input.Value())
 			taskID := d.taskID
 			return d, func() tea.Msg {
@@ -62,19 +48,15 @@ func (d *AddDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 			}
 
 		case "tab", "shift+tab":
-			// Single-field form: Tab/Shift+Tab are no-ops (no other field to
-			// cycle to).
 			return d, nil
 		}
 	}
 
-	// Forward all other messages to the text input.
 	var cmd tea.Cmd
 	d.input, cmd = d.input.Update(msg)
 	return d, cmd
 }
 
-// View implements Modal.
 func (d *AddDialog) View() string {
 	labelStyle := lipgloss.NewStyle().
 		Bold(true).

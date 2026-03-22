@@ -8,13 +8,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/diss0x/wtui/internal/domain"
 )
 
-// List returns all tasks in cfg.TasksRoot, sorted alphabetically by task ID.
-// When TasksRoot does not exist, an empty slice and nil error are returned
-// (spec AC-10: not an error condition).
 func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 	entries, err := os.ReadDir(m.cfg.TasksRoot)
 	if err != nil {
@@ -30,14 +28,20 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 			continue
 		}
 		taskID := entry.Name()
-		tasks = append(tasks, domain.Task{
+		taskDir := filepath.Join(m.cfg.TasksRoot, taskID)
+		task := domain.Task{
 			ID:  taskID,
-			Dir: filepath.Join(m.cfg.TasksRoot, taskID),
-		})
+			Dir: taskDir,
+		}
+
+		// Stale detection: guard against race where dir is removed after ReadDir.
+		if _, err := os.Stat(taskDir); os.IsNotExist(err) {
+			task.Stale = true
+		}
+
+		tasks = append(tasks, task)
 	}
 
-	// os.ReadDir already returns entries in alphabetical order on most platforms,
-	// but we sort explicitly to guarantee the contract regardless of OS behaviour.
 	sort.Slice(tasks, func(i, j int) bool {
 		return tasks[i].ID < tasks[j].ID
 	})
@@ -45,12 +49,6 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 	return tasks, nil
 }
 
-// ListServices returns the services (worktrees) belonging to taskID, sorted
-// alphabetically by name. Each service entry has its IsDirty and Branch fields
-// populated via git calls; failures are logged and the entry is still included
-// with best-effort values.
-//
-// Returns ErrTaskNotFound when the task directory does not exist.
 func (m *manager) ListServices(ctx context.Context, taskID string) ([]domain.Service, error) {
 	if err := validateTaskID(taskID); err != nil {
 		return nil, err
@@ -69,49 +67,44 @@ func (m *manager) ListServices(ctx context.Context, taskID string) ([]domain.Ser
 		return nil, fmt.Errorf("list services: read task dir %s: %w", taskDir, err)
 	}
 
-	var services []domain.Service
+	// Collect only directory entries upfront — avoids spawning goroutines for
+	// files like *.code-workspace or *.sln.
+	var dirs []os.DirEntry
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+		if entry.IsDir() {
+			dirs = append(dirs, entry)
 		}
-
-		subdirPath := filepath.Join(taskDir, entry.Name())
-
-		// Guard: only include valid git worktrees. Non-git directories (e.g.
-		// node_modules, intermediate tool dirs) are expected and benign — skip
-		// them at Debug level rather than Warn.
-		commonDir, cdErr := m.git.CommonDir(ctx, subdirPath)
-		if cdErr != nil {
-			m.logger.DebugContext(ctx, "skipping non-git directory",
-				slog.String("dir", subdirPath),
-				slog.String("reason", cdErr.Error()),
-			)
-			continue
-		}
-
-		svc := domain.Service{
-			Name:         entry.Name(),
-			WorktreePath: subdirPath,
-			// commonDir is the .git directory; the repo root is one level up.
-			RepoPath: filepath.Dir(commonDir),
-		}
-
-		// Populate IsDirty.
-		dirty, dirtyErr := m.git.IsDirty(ctx, subdirPath)
-		if dirtyErr != nil {
-			m.logger.WarnContext(ctx, "could not determine dirty state",
-				"service", entry.Name(),
-				"error", dirtyErr.Error(),
-			)
-		}
-		svc.IsDirty = dirty
-
-		// Populate Branch from worktree list.
-		svc.Branch = m.currentBranch(ctx, subdirPath, entry.Name())
-
-		services = append(services, svc)
 	}
 
+	// Fan out: one goroutine per service directory.
+	type result struct {
+		svc domain.Service
+		ok  bool // false means the entry should be skipped (non-git dir)
+	}
+
+	results := make(chan result, len(dirs))
+
+	var wg sync.WaitGroup
+	for _, entry := range dirs {
+		wg.Go(func() {
+			svc, ok := m.inspectServiceDir(ctx, taskDir, entry)
+			results <- result{svc: svc, ok: ok}
+		})
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var services []domain.Service
+	for r := range results {
+		if r.ok {
+			services = append(services, r.svc)
+		}
+	}
+
+	// Restore deterministic order — goroutines complete in arbitrary sequence.
 	sort.Slice(services, func(i, j int) bool {
 		return services[i].Name < services[j].Name
 	})
@@ -119,18 +112,71 @@ func (m *manager) ListServices(ctx context.Context, taskID string) ([]domain.Ser
 	return services, nil
 }
 
-// currentBranch returns the branch name currently checked out in the worktree at
-// worktreePath. It queries `git worktree list` from the worktree path and extracts
-// the matching entry's branch ref, stripping the "refs/heads/" prefix.
-//
-// Returns an empty string when the branch cannot be determined (e.g., the path is
-// not a git worktree, or the worktree is in detached-HEAD state).
+// inspectServiceDir gathers all metadata for a single service subdirectory.
+// Returns (service, true) when the directory is a valid git worktree, and
+// (zero, false) when it should be excluded from the result (non-git dir).
+func (m *manager) inspectServiceDir(ctx context.Context, taskDir string, entry os.DirEntry) (domain.Service, bool) {
+	subdirPath := filepath.Join(taskDir, entry.Name())
+
+	// Stale detection: if the subdir no longer exists (removed after ReadDir),
+	// include it as stale so the panel can show [STALE] rather than silently dropping it.
+	if _, statErr := os.Stat(subdirPath); os.IsNotExist(statErr) {
+		return domain.Service{
+			Name:         entry.Name(),
+			WorktreePath: subdirPath,
+			Stale:        true,
+		}, true
+	}
+
+	commonDir, cdErr := m.git.CommonDir(ctx, subdirPath)
+	if cdErr != nil {
+		m.logger.DebugContext(ctx, "skipping non-git directory",
+			slog.String("dir", subdirPath),
+			slog.String("reason", cdErr.Error()),
+		)
+		return domain.Service{}, false
+	}
+
+	svc := domain.Service{
+		Name:         entry.Name(),
+		WorktreePath: subdirPath,
+		RepoPath:     filepath.Dir(commonDir),
+	}
+
+	dirty, dirtyErr := m.git.IsDirty(ctx, subdirPath)
+	if dirtyErr != nil {
+		m.logger.WarnContext(ctx, "could not determine dirty state",
+			slog.String("service", entry.Name()),
+			slog.String("error", dirtyErr.Error()),
+		)
+	}
+	svc.IsDirty = dirty
+	svc.Branch = m.currentBranch(ctx, subdirPath, entry.Name())
+
+	// Ahead/behind counts: best-effort, do not fail ListServices on error.
+	if svc.Branch != "" {
+		originBranch := "origin/" + svc.Branch
+		ahead, behind, abErr := m.git.RevListAheadBehind(ctx, subdirPath, originBranch)
+		if abErr != nil {
+			m.logger.DebugContext(ctx, "could not determine ahead/behind count",
+				slog.String("service", entry.Name()),
+				slog.String("error", abErr.Error()),
+			)
+		} else {
+			svc.Ahead = ahead
+			svc.Behind = behind
+		}
+	}
+
+	return svc, true
+}
+
 func (m *manager) currentBranch(ctx context.Context, worktreePath, serviceName string) string {
 	entries, err := m.git.ListWorktrees(ctx, worktreePath)
 	if err != nil {
 		m.logger.WarnContext(ctx, "could not list worktrees for branch detection",
-			"service", serviceName,
-			"error", err.Error(),
+			slog.String("service", serviceName),
+			slog.String("error", err.Error()),
 		)
 		return ""
 	}
@@ -145,7 +191,5 @@ func (m *manager) currentBranch(ctx context.Context, worktreePath, serviceName s
 		}
 	}
 
-	// No exact match — fall back to the first non-main worktree entry if there is
-	// only one linked worktree (handles cases where the path resolves differently).
 	return ""
 }

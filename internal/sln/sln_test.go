@@ -185,7 +185,7 @@ func TestGenerate_NoCsprojFiles(t *testing.T) {
 		t.Errorf("expected 0 SlnAdd calls; got %d", len(mock.slnAddCalls))
 	}
 	// The warning must appear in the log.
-	if !strings.Contains(logBuf.String(), "No .csproj files found for service") {
+	if !strings.Contains(logBuf.String(), "no .csproj files found for service") {
 		t.Errorf("expected warning about missing .csproj; log was:\n%s", logBuf.String())
 	}
 	if !strings.Contains(logBuf.String(), "alpha") {

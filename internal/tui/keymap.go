@@ -2,24 +2,17 @@ package tui
 
 import "github.com/charmbracelet/bubbles/key"
 
-// KeyMap holds all global keybindings for the wtui TUI.
-// Each binding pairs one or more actual key sequences with a human-readable
-// help string used in the footer hint bar.
 type KeyMap struct {
-	// Navigation
 	Up    key.Binding
 	Down  key.Binding
 	Left  key.Binding
 	Right key.Binding
 
-	// Confirmation / submission
 	Enter key.Binding
 
-	// Panel focus cycling
 	Tab      key.Binding
 	ShiftTab key.Binding
 
-	// Application control
 	Quit        key.Binding // q
 	ForceQuit   key.Binding // ctrl+c
 	Refresh     key.Binding // r
@@ -27,17 +20,16 @@ type KeyMap struct {
 	Escape      key.Binding // esc
 	ForceToggle key.Binding // f
 
-	// Task operations (Tasks panel context)
-	InitTask      key.Binding // i — open Init Task dialog
-	AddService    key.Binding // a — open Add Service dialog
-	RemoveTask    key.Binding // d / Delete — open Remove confirmation
-	OpenWorkspace key.Binding // o — open workspace in editor
-	GenerateSln   key.Binding // s — generate .sln file
-	Filter        key.Binding // / — activate filter mode
-	ShellExec     key.Binding // ; — run shell command in task directory
+	InitTask    key.Binding // i — open Init Task dialog
+	AddService  key.Binding // a — open Add Service dialog
+	RemoveTask  key.Binding // d / Delete — open Remove confirmation
+	GenerateSln key.Binding // s — generate .sln file
+	Filter      key.Binding // / — activate filter mode
+	ShellExec   key.Binding // ; — run shell command in task directory
+	PushTask    key.Binding // P — push all services in task
+	ToggleLogs  key.Binding // L — toggle log overlay
 }
 
-// DefaultKeyMap returns the application-wide default keybindings.
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
 		Up: key.NewBinding(
@@ -104,10 +96,6 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("d", "delete"),
 			key.WithHelp("d", "remove"),
 		),
-		OpenWorkspace: key.NewBinding(
-			key.WithKeys("o"),
-			key.WithHelp("o", "open workspace"),
-		),
 		GenerateSln: key.NewBinding(
 			key.WithKeys("s"),
 			key.WithHelp("s", "generate sln"),
@@ -119,6 +107,14 @@ func DefaultKeyMap() KeyMap {
 		ShellExec: key.NewBinding(
 			key.WithKeys(";"),
 			key.WithHelp(";", "shell"),
+		),
+		PushTask: key.NewBinding(
+			key.WithKeys("P"),
+			key.WithHelp("P", "push"),
+		),
+		ToggleLogs: key.NewBinding(
+			key.WithKeys("L"),
+			key.WithHelp("L", "logs"),
 		),
 	}
 }

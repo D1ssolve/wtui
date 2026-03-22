@@ -16,7 +16,7 @@ import (
 	"github.com/diss0x/wtui/internal/git"
 )
 
-var ErrServiceNotFound = errors.New("service not found")
+var errServiceNotFound = errors.New("service not found")
 
 type Discoverer struct {
 	cfg    *config.Config
@@ -26,6 +26,66 @@ type Discoverer struct {
 
 func New(cfg *config.Config, gitClient git.Client, logger *slog.Logger) *Discoverer {
 	return &Discoverer{cfg: cfg, git: gitClient, logger: logger}
+}
+
+// walkRepos calls fn for every directory that contains a direct .git child,
+// at depth >= 2 and <= cfg.DiscoveryDepth, rooted at cfg.RootDir.
+// fn receives the repo parent path (the directory that contains .git) and the
+// depth of that parent relative to RootDir.
+// fn may return filepath.SkipAll to stop the walk early.
+// Any other non-nil return from fn is propagated as the walkRepos error.
+func (d *Discoverer) walkRepos(fn func(repoPath string, depth int) error) error {
+	root := d.cfg.RootDir
+	sep := string(filepath.Separator)
+
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			if path == root {
+				return err
+			}
+			return fs.SkipDir
+		}
+
+		if path == root {
+			return nil
+		}
+
+		if !entry.IsDir() {
+			return nil
+		}
+
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return fs.SkipDir
+		}
+		depth := strings.Count(rel, sep) + 1
+
+		if depth > d.cfg.DiscoveryDepth {
+			return fs.SkipDir
+		}
+
+		if entry.Name() == ".git" {
+			// Require depth >= 2: the repo parent must be at least one level
+			// below root (i.e., ROOT/repo/.git, not ROOT/.git).
+			if depth < 2 {
+				return fs.SkipDir
+			}
+
+			parent := filepath.Dir(path)
+			if fnErr := fn(parent, depth); fnErr != nil {
+				return fnErr // includes filepath.SkipAll to stop early
+			}
+			// Always skip descent into .git after the callback has run.
+			return fs.SkipDir
+		}
+
+		// Prune directories that cannot contain any reachable .git within depth.
+		if depth >= d.cfg.DiscoveryDepth {
+			return fs.SkipDir
+		}
+
+		return nil
+	})
 }
 
 func (d *Discoverer) Resolve(ctx context.Context, token string) (string, error) {
@@ -47,56 +107,18 @@ func (d *Discoverer) Resolve(ctx context.Context, token string) (string, error) 
 		validationErr error
 	)
 
-	walkErr := filepath.WalkDir(d.cfg.RootDir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			if path == d.cfg.RootDir {
-				return err
-			}
-			return fs.SkipDir
-		}
-
-		if path == d.cfg.RootDir {
+	walkErr := d.walkRepos(func(repoPath string, depth int) error {
+		if filepath.Base(repoPath) != token {
 			return nil
 		}
-
-		if !entry.IsDir() {
-			return nil
+		d.logger.DebugContext(ctx, "discovery: found .git match, validating",
+			slog.String("parent", repoPath), slog.Int("depth", depth))
+		if verr := d.git.IsValidRepo(ctx, repoPath); verr != nil {
+			validationErr = fmt.Errorf("discovery: repo at %s failed validation: %w", repoPath, verr)
+			return filepath.SkipAll
 		}
-
-		rel, relErr := filepath.Rel(d.cfg.RootDir, path)
-		if relErr != nil {
-			return fs.SkipDir
-		}
-		depth := strings.Count(rel, string(filepath.Separator)) + 1
-
-		if depth > d.cfg.DiscoveryDepth {
-			return fs.SkipDir
-		}
-
-		if entry.Name() == ".git" {
-			if depth < 2 {
-				return fs.SkipDir
-			}
-
-			parent := filepath.Dir(path)
-			if filepath.Base(parent) == token {
-				d.logger.DebugContext(ctx, "discovery: found .git match, validating",
-					slog.String("parent", parent), slog.Int("depth", depth))
-				if verr := d.git.IsValidRepo(ctx, parent); verr != nil {
-					validationErr = fmt.Errorf("discovery: repo at %s failed validation: %w", parent, verr)
-					return filepath.SkipAll
-				}
-				found = parent
-				return filepath.SkipAll
-			}
-			return fs.SkipDir
-		}
-
-		if depth >= d.cfg.DiscoveryDepth {
-			return fs.SkipDir
-		}
-
-		return nil
+		found = repoPath
+		return filepath.SkipAll
 	})
 
 	if validationErr != nil {
@@ -109,61 +131,19 @@ func (d *Discoverer) Resolve(ctx context.Context, token string) (string, error) 
 		return found, nil
 	}
 
-	return "", fmt.Errorf("%w: %s", ErrServiceNotFound, token)
+	return "", fmt.Errorf("%w: %s", errServiceNotFound, token)
 }
 
-// FindAll walks cfg.RootDir from depth 1 to cfg.DiscoveryDepth and returns every
-// directory that contains a .git subdirectory. The check is a fast filesystem stat —
-// git.IsValidRepo is NOT called, making this suitable for populating list views where
-// low latency matters more than strict validation.
-//
-// Results are sorted alphabetically by repository name (filepath.Base of the path).
 func (d *Discoverer) FindAll(ctx context.Context) ([]domain.Repo, error) {
 	d.logger.DebugContext(ctx, "discovery: FindAll", slog.String("root", d.cfg.RootDir), slog.Int("depth", d.cfg.DiscoveryDepth))
 
 	var repos []domain.Repo
 
-	walkErr := filepath.WalkDir(d.cfg.RootDir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			if path == d.cfg.RootDir {
-				return err
-			}
-			return fs.SkipDir
-		}
-
-		if path == d.cfg.RootDir {
-			return nil
-		}
-
-		if !entry.IsDir() {
-			return nil
-		}
-
-		rel, relErr := filepath.Rel(d.cfg.RootDir, path)
-		if relErr != nil {
-			return fs.SkipDir
-		}
-		depth := strings.Count(rel, string(filepath.Separator)) + 1
-
-		if depth > d.cfg.DiscoveryDepth {
-			return fs.SkipDir
-		}
-
-		if entry.Name() == ".git" {
-			if depth >= 2 {
-				parent := filepath.Dir(path)
-				repos = append(repos, domain.Repo{
-					Name: filepath.Base(parent),
-					Path: parent,
-				})
-			}
-			return fs.SkipDir
-		}
-
-		if depth >= d.cfg.DiscoveryDepth {
-			return fs.SkipDir
-		}
-
+	walkErr := d.walkRepos(func(repoPath string, _ int) error {
+		repos = append(repos, domain.Repo{
+			Name: filepath.Base(repoPath),
+			Path: repoPath,
+		})
 		return nil
 	})
 

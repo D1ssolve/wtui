@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -569,5 +570,204 @@ func TestEffective_ChainReturn(t *testing.T) {
 	returned := cfg.Effective()
 	if returned != cfg {
 		t.Error("Effective() did not return the receiver")
+	}
+}
+
+// ----- SetKey tests ----------------------------------------------------------
+
+func TestSetKey_WritesKeyToNewFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	if err := SetKey(path, "editor", "nvim"); err != nil {
+		t.Fatalf("SetKey error: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after SetKey error: %v", err)
+	}
+	if cfg.Editor != "nvim" {
+		t.Errorf("Editor: got %q, want nvim", cfg.Editor)
+	}
+}
+
+func TestSetKey_PreservesOtherKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// Write an initial config with multiple keys.
+	initial := "editor: code\nbranch_prefix: feature/\nlog_level: WARN\n"
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write initial config: %v", err)
+	}
+
+	if err := SetKey(path, "editor", "rider"); err != nil {
+		t.Fatalf("SetKey error: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after SetKey error: %v", err)
+	}
+	if cfg.Editor != "rider" {
+		t.Errorf("Editor: got %q, want rider", cfg.Editor)
+	}
+	// Other keys must be preserved.
+	if cfg.BranchPrefix != "feature/" {
+		t.Errorf("BranchPrefix: got %q, want feature/", cfg.BranchPrefix)
+	}
+	if cfg.LogLevel != "WARN" {
+		t.Errorf("LogLevel: got %q, want WARN", cfg.LogLevel)
+	}
+}
+
+func TestSetKey_UnknownKey_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	err := SetKey(path, "unknown_field", "value")
+	if err == nil {
+		t.Fatal("expected error for unknown key, got nil")
+	}
+	if !errors.Is(err, ErrUnknownKey) {
+		t.Errorf("expected ErrUnknownKey, got: %v", err)
+	}
+}
+
+func TestSetKey_AllSupportedKeys(t *testing.T) {
+	cases := []struct {
+		key   string
+		value string
+	}{
+		{"root_dir", "/tmp/root"},
+		{"tasks_root", "/tmp/tasks"},
+		{"branch_prefix", "fix/"},
+		{"base_branch", "develop"},
+		{"editor", "vim"},
+		{"discovery_depth", "3"},
+		{"output_panel_lines", "10"},
+		{"log_level", "DEBUG"},
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			if err := SetKey(path, tc.key, tc.value); err != nil {
+				t.Errorf("SetKey(%q, %q) unexpected error: %v", tc.key, tc.value, err)
+			}
+		})
+	}
+}
+
+func TestSetKey_AtomicWrite_NoTempFileLeft(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	if err := SetKey(path, "log_level", "ERROR"); err != nil {
+		t.Fatalf("SetKey error: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestSetKey_CreatesParentDirs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "sub", "config.yaml")
+
+	if err := SetKey(path, "editor", "code"); err != nil {
+		t.Fatalf("SetKey with nested dirs error: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("file not created at %s: %v", path, err)
+	}
+}
+
+// ----- BaseBranch tests ------------------------------------------------------
+
+// TestEffective_BaseBranch_Default verifies that an empty Config gets BaseBranch
+// set to "develop" by Effective().
+func TestEffective_BaseBranch_Default(t *testing.T) {
+	unsetenv(t, "WTUI_ROOT")
+	unsetenv(t, "TASKFLOW_ROOT")
+	unsetenv(t, "EDITOR")
+	unsetenv(t, "WTUI_BASE_BRANCH")
+
+	cfg := &Config{}
+	cfg.Effective()
+
+	if cfg.BaseBranch != "develop" {
+		t.Errorf("BaseBranch default: got %q, want %q", cfg.BaseBranch, "develop")
+	}
+}
+
+// TestEffective_BaseBranch_FromYAML verifies that a BaseBranch value loaded from
+// YAML is preserved by Effective() and not overwritten with the default.
+func TestEffective_BaseBranch_FromYAML(t *testing.T) {
+	unsetenv(t, "WTUI_ROOT")
+	unsetenv(t, "TASKFLOW_ROOT")
+	unsetenv(t, "EDITOR")
+	unsetenv(t, "WTUI_BASE_BRANCH")
+
+	cfg := &Config{BaseBranch: "develop"}
+	cfg.Effective()
+
+	if cfg.BaseBranch != "develop" {
+		t.Errorf("BaseBranch from YAML: got %q, want %q", cfg.BaseBranch, "develop")
+	}
+}
+
+// TestEffective_BaseBranch_FromEnv verifies that WTUI_BASE_BRANCH overrides a
+// value already set in the Config struct (simulating a YAML-loaded value).
+func TestEffective_BaseBranch_FromEnv(t *testing.T) {
+	unsetenv(t, "WTUI_ROOT")
+	unsetenv(t, "TASKFLOW_ROOT")
+	unsetenv(t, "EDITOR")
+	setenv(t, "WTUI_BASE_BRANCH", "release/1.0")
+
+	cfg := &Config{BaseBranch: "develop"} // YAML value — env must win
+	cfg.Effective()
+
+	if cfg.BaseBranch != "release/1.0" {
+		t.Errorf("WTUI_BASE_BRANCH env override: got %q, want %q", cfg.BaseBranch, "release/1.0")
+	}
+}
+
+// TestSetKey_BaseBranch verifies that SetKey accepts "base_branch" as a valid
+// key and that the written value can be read back via Load.
+func TestSetKey_BaseBranch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	if err := SetKey(path, "base_branch", "develop"); err != nil {
+		t.Fatalf("SetKey(base_branch) error: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after SetKey(base_branch) error: %v", err)
+	}
+	if cfg.BaseBranch != "develop" {
+		t.Errorf("BaseBranch after SetKey: got %q, want %q", cfg.BaseBranch, "develop")
+	}
+
+	// Verify the raw file contains the expected YAML key.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config file: %v", err)
+	}
+	if !strings.Contains(string(data), "base_branch: develop") {
+		t.Errorf("config file does not contain 'base_branch: develop'; content:\n%s", data)
 	}
 }

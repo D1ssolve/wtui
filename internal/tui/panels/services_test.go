@@ -240,3 +240,124 @@ func TestServicesPanel_View_CleanService_ShowsCheckIcon(t *testing.T) {
 		t.Errorf("clean service should show ✓ icon, got: %q", view)
 	}
 }
+
+// ── SelectedService tests ─────────────────────────────────────────────────────
+
+func TestServicesPanel_SelectedService_NilOnEmpty(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	if p.SelectedService() != nil {
+		t.Error("expected nil SelectedService on empty list")
+	}
+}
+
+func TestServicesPanel_SelectedService_ReturnsFirstByDefault(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	tid, svcs := makeServices("IN-001", "collection", "databridge")
+	p.SetServices(tid, svcs)
+
+	svc := p.SelectedService()
+	if svc == nil {
+		t.Fatal("expected non-nil SelectedService")
+	}
+	if svc.Name != "collection" {
+		t.Errorf("expected first service 'collection', got %q", svc.Name)
+	}
+}
+
+func TestServicesPanel_SelectedService_ReturnsSecondAfterMove(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	tid, svcs := makeServices("IN-001", "collection", "databridge")
+	p.SetServices(tid, svcs)
+	p.SetFocused(true)
+
+	p, _ = p.Update(sendKey("j"))
+	svc := p.SelectedService()
+	if svc == nil {
+		t.Fatal("expected non-nil SelectedService")
+	}
+	if svc.Name != "databridge" {
+		t.Errorf("expected second service 'databridge', got %q", svc.Name)
+	}
+}
+
+// ── Stash keybinding tests ────────────────────────────────────────────────────
+
+func TestServicesPanel_CtrlS_EmitsStashServiceMsg(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	tid, svcs := makeServices("IN-001", "collection")
+	p.SetServices(tid, svcs)
+	p.SetFocused(true)
+
+	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd == nil {
+		t.Fatal("ctrl+s should return a cmd")
+	}
+	msg := cmd()
+	got, ok := msg.(StashServiceMsg)
+	if !ok {
+		t.Fatalf("expected StashServiceMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" {
+		t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
+	}
+	if got.ServiceName != "collection" {
+		t.Errorf("expected ServiceName=collection, got %s", got.ServiceName)
+	}
+	if got.Pop {
+		t.Error("expected Pop=false for ctrl+s (stash)")
+	}
+}
+
+func TestServicesPanel_CtrlU_EmitsStashServiceMsgPop(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	tid, svcs := makeServices("IN-001", "collection")
+	p.SetServices(tid, svcs)
+	p.SetFocused(true)
+
+	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	if cmd == nil {
+		t.Fatal("ctrl+u should return a cmd")
+	}
+	msg := cmd()
+	got, ok := msg.(StashServiceMsg)
+	if !ok {
+		t.Fatalf("expected StashServiceMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" {
+		t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
+	}
+	if got.ServiceName != "collection" {
+		t.Errorf("expected ServiceName=collection, got %s", got.ServiceName)
+	}
+	if !got.Pop {
+		t.Error("expected Pop=true for ctrl+u (unstash)")
+	}
+}
+
+func TestServicesPanel_CtrlS_NoServiceSelected_ReturnsNil(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	p.SetFocused(true)
+	// No services set — SelectedService returns nil.
+
+	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(StashServiceMsg); ok {
+			t.Error("ctrl+s with no service should not emit StashServiceMsg")
+		}
+	}
+}
+
+func TestServicesPanel_CtrlU_NoServiceSelected_ReturnsNil(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	p.SetFocused(true)
+	// No services set — SelectedService returns nil.
+
+	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	if cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(StashServiceMsg); ok {
+			t.Error("ctrl+u with no service should not emit StashServiceMsg")
+		}
+	}
+}

@@ -2,7 +2,9 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -20,7 +22,7 @@ import (
 //     error WITHOUT calling os.RemoveAll (task directory is preserved).
 //   - If all removals succeeded OR force is true: calls os.RemoveAll(taskDir)
 //     to delete the task directory regardless of individual worktree errors.
-func (m *manager) Remove(ctx context.Context, taskID string, force bool) error {
+func (m *manager) Remove(ctx context.Context, taskID string, force, deleteBranches bool) error {
 	if err := validateTaskID(taskID); err != nil {
 		return err
 	}
@@ -51,57 +53,58 @@ func (m *manager) Remove(ctx context.Context, taskID string, force bool) error {
 		commonDir, cdErr := m.git.CommonDir(ctx, subdirPath)
 		if cdErr != nil {
 			m.logger.WarnContext(ctx, "could not determine common git dir, skipping worktree removal",
-				"service", entry.Name(),
-				"error", cdErr.Error(),
+				slog.String("service", entry.Name()),
+				slog.String("error", cdErr.Error()),
 			)
 			removeErrors = append(removeErrors, fmt.Errorf("common-dir for %s: %w", entry.Name(), cdErr))
 			continue
 		}
 
-		// Remove the linked worktree.
+		// Resolve branch name before removing the worktree (needed for branch deletion).
+		var branchName string
+		if deleteBranches {
+			branchName, _ = m.git.GetWorktreeBranch(ctx, subdirPath)
+		}
+
 		if rmErr := m.git.RemoveWorktree(ctx, commonDir, subdirPath, force); rmErr != nil {
 			m.logger.WarnContext(ctx, "failed to remove worktree",
-				"service", entry.Name(),
-				"error", rmErr.Error(),
-				"force", force,
+				slog.String("service", entry.Name()),
+				slog.String("error", rmErr.Error()),
+				slog.Bool("force", force),
 			)
 			removeErrors = append(removeErrors, fmt.Errorf("remove worktree %s: %w", entry.Name(), rmErr))
-		} else {
-			m.logger.InfoContext(ctx, "removed worktree",
-				"service", entry.Name(),
-				"task_id", taskID,
-			)
+			continue
+		}
+
+		m.logger.InfoContext(ctx, "removed worktree", slog.String("service", entry.Name()))
+
+		if deleteBranches && branchName != "" {
+			if delErr := m.git.DeleteBranch(ctx, commonDir, branchName); delErr != nil {
+				m.logger.WarnContext(ctx, "failed to delete branch",
+					slog.String("service", entry.Name()),
+					slog.String("branch", branchName),
+					slog.String("error", delErr.Error()),
+				)
+				removeErrors = append(removeErrors, fmt.Errorf("delete branch %s: %w", branchName, delErr))
+			} else {
+				m.logger.InfoContext(ctx, "deleted branch",
+					slog.String("service", entry.Name()),
+					slog.String("branch", branchName),
+				)
+			}
 		}
 	}
 
 	// If there were errors and the caller did not request force-removal, preserve
 	// the task directory and surface the combined error (spec AC-14).
 	if len(removeErrors) > 0 && !force {
-		return combineErrors(removeErrors)
+		return errors.Join(removeErrors...)
 	}
 
-	// All worktrees removed successfully, or force=true — clean up the task dir.
 	if err := os.RemoveAll(taskDir); err != nil {
 		return fmt.Errorf("remove: delete task directory %s: %w", taskDir, err)
 	}
 
-	m.logger.InfoContext(ctx, "task removed", "task_id", taskID)
+	m.logger.InfoContext(ctx, "task removed")
 	return nil
-}
-
-// combineErrors returns a single error that includes the messages from all errors
-// in the slice. The errors are joined with "; " for readability.
-func combineErrors(errs []error) error {
-	if len(errs) == 0 {
-		return nil
-	}
-	if len(errs) == 1 {
-		return errs[0]
-	}
-
-	msg := errs[0].Error()
-	for _, e := range errs[1:] {
-		msg += "; " + e.Error()
-	}
-	return fmt.Errorf("%s", msg)
 }

@@ -192,21 +192,3 @@ func (m *manager) OpenFile(ctx context.Context, path, app string) error {
 	)
 	return nil
 }
-
-// OpenWorkspace launches the configured editor with the task's .code-workspace
-// file non-blocking. Delegates to OpenFile after locating the workspace file.
-func (m *manager) OpenWorkspace(ctx context.Context, taskID string) error {
-	if err := validateTaskID(taskID); err != nil {
-		return err
-	}
-
-	wsFile := filepath.Join(m.taskDir(taskID), taskID+".code-workspace")
-
-	if _, err := os.Stat(wsFile); os.IsNotExist(err) {
-		return fmt.Errorf("workspace file not found: %s", wsFile)
-	} else if err != nil {
-		return fmt.Errorf("open workspace: stat %s: %w", wsFile, err)
-	}
-
-	return m.OpenFile(ctx, wsFile, m.cfg.Editor)
-}

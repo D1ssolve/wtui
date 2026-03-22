@@ -1,31 +1,11 @@
 package git
 
-import (
-	"errors"
-	"fmt"
-	"strings"
-)
+import "github.com/diss0x/wtui/internal/execerr"
 
-var ErrExec = errors.New("git exec error")
+// ErrExec is the sentinel for git subprocess failures. It equals execerr.ErrExec,
+// so errors.Is(err, git.ErrExec) and errors.Is(err, execerr.ErrExec) both work.
+var ErrExec = execerr.ErrExec
 
-type ExecError struct {
-	Argv     []string
-	ExitCode int
-	Stderr   string
-}
-
-func (e *ExecError) Error() string {
-	stderr := strings.TrimSpace(e.Stderr)
-	if stderr != "" {
-		return fmt.Sprintf("git %s: exit %d: %s", strings.Join(e.Argv[1:], " "), e.ExitCode, stderr)
-	}
-	return fmt.Sprintf("git %s: exit %d", strings.Join(e.Argv[1:], " "), e.ExitCode)
-}
-
-func (e *ExecError) Is(target error) bool {
-	return target == ErrExec
-}
-
-func (e *ExecError) Unwrap() error {
-	return ErrExec
-}
+// ExecError is a type alias for execerr.ExecError. All *git.ExecError values
+// satisfy errors.Is(err, git.ErrExec) and errors.Is(err, execerr.ErrExec).
+type ExecError = execerr.ExecError

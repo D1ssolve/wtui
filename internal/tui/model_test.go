@@ -36,9 +36,8 @@ var _ task.Manager = (*mockManager)(nil)
 
 func (m *mockManager) Init(_ context.Context, _ task.InitParams) error  { return nil }
 func (m *mockManager) Add(_ context.Context, _ task.AddParams) error    { return nil }
-func (m *mockManager) Remove(_ context.Context, _ string, _ bool) error { return nil }
+func (m *mockManager) Remove(_ context.Context, _ string, _, _ bool) error { return nil }
 func (m *mockManager) GenerateSln(_ context.Context, _ string) error    { return nil }
-func (m *mockManager) OpenWorkspace(_ context.Context, _ string) error  { return nil }
 func (m *mockManager) ListOpenCandidates(_ context.Context, _ string) (task.OpenCandidates, error) {
 	return m.listOpenCandidatesResult, m.listOpenCandidatesErr
 }
@@ -55,6 +54,24 @@ func (m *mockManager) ListServices(_ context.Context, _ string) ([]domain.Servic
 func (m *mockManager) DiscoverRepos(_ context.Context) ([]domain.Repo, error) {
 	return m.listReposResult, m.listReposErr
 }
+
+func (m *mockManager) SyncTask(_ context.Context, _ string, lineCh chan<- string) error {
+	close(lineCh)
+	return nil
+}
+
+func (m *mockManager) PushTask(_ context.Context, _ string, lineCh chan<- string) error {
+	close(lineCh)
+	return nil
+}
+
+func (m *mockManager) PushService(_ context.Context, _, _ string, _ chan<- string) error { return nil }
+
+func (m *mockManager) CloneTask(_ context.Context, _, _ string) error { return nil }
+
+func (m *mockManager) StashService(_ context.Context, _, _ string, _ bool) error { return nil }
+
+func (m *mockManager) RemoveService(_ context.Context, _, _ string, _ bool) error { return nil }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -284,6 +301,9 @@ func TestUpdate_CloseModalMsg_NilsModal(t *testing.T) {
 func TestUpdate_OpenInitDialogMsg_OpensInitDialog(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
+	// Pre-load repos so the dialog opens immediately (no pending state).
+	m.reposPanel.SetRepos([]domain.Repo{{Name: "svc1", Path: "/tmp/svc1"}})
+
 	updated, _ := m.Update(panels.OpenInitDialogMsg{})
 	m = updated.(Model)
 	if m.modal == nil {
@@ -291,6 +311,46 @@ func TestUpdate_OpenInitDialogMsg_OpensInitDialog(t *testing.T) {
 	}
 	if _, ok := m.modal.(*modal.InitDialog); !ok {
 		t.Errorf("expected *modal.InitDialog, got %T", m.modal)
+	}
+}
+
+func TestUpdate_OpenInitDialogMsg_NoRepos_Pending(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+
+	// No repos loaded → dialog is deferred until ReposLoadedMsg.
+	updated, cmd := m.Update(panels.OpenInitDialogMsg{})
+	m = updated.(Model)
+	if m.modal != nil {
+		t.Fatal("modal must be nil when repos not loaded yet")
+	}
+	if !m.initDialogPending {
+		t.Fatal("initDialogPending must be true")
+	}
+	if cmd == nil {
+		t.Fatal("must return a cmd to load repos")
+	}
+}
+
+func TestUpdate_OpenConfigModalMsg_OpensConfigModal(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+
+	updated, _ := m.Update(panels.OpenConfigModalMsg{})
+	m = updated.(Model)
+	if m.modal == nil {
+		t.Fatal("OpenConfigModalMsg must open a modal")
+	}
+
+	cm, ok := m.modal.(*modal.ConfigModal)
+	if !ok {
+		t.Fatalf("expected *modal.ConfigModal, got %T", m.modal)
+	}
+
+	view := cm.View()
+	if !strings.Contains(view, m.cfg.Editor) {
+		t.Errorf("config modal view should contain editor %q", m.cfg.Editor)
+	}
+	if !strings.Contains(view, m.cfg.BranchPrefix) {
+		t.Errorf("config modal view should contain branch prefix %q", m.cfg.BranchPrefix)
 	}
 }
 
@@ -427,7 +487,7 @@ func TestUpdate_SubmitInitMsg_StartsOperation(t *testing.T) {
 func TestUpdate_SubmitRemoveMsg_StartsOperation(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
-	updated, cmd := m.Update(modal.SubmitRemoveMsg{
+	updated, cmd := m.Update(modal.SubmitRemoveTaskMsg{
 		TaskID: "IN-4444",
 		Force:  false,
 	})
@@ -579,3 +639,97 @@ func TestUpdate_OpenCandidatesLoaded_NoFiles_ShowsMessage(t *testing.T) {
 type mockError struct{ msg string }
 
 func (e *mockError) Error() string { return e.msg }
+
+// ─── 25. SyncTaskMsg starts sync operation ────────────────────────────────────
+
+func TestUpdate_SyncTaskMsg_StartsOperation(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(panels.SyncTaskMsg{TaskID: "IN-001"})
+	m = updated.(Model)
+
+	if !m.opRunning {
+		t.Error("opRunning must be true after SyncTaskMsg")
+	}
+	if cmd == nil {
+		t.Fatal("SyncTaskMsg must return a non-nil cmd")
+	}
+
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "Syncing task IN-001") {
+		t.Errorf("output panel should contain sync message, got:\n%s", view)
+	}
+}
+
+// ─── 26. PushServiceMsg starts push operation ────────────────────────────────
+
+func TestUpdate_PushServiceMsg_StartsOperation(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(panels.PushServiceMsg{TaskID: "IN-001", ServiceName: "svc-a"})
+	m = updated.(Model)
+
+	if !m.opRunning {
+		t.Error("opRunning must be true after PushServiceMsg")
+	}
+	if cmd == nil {
+		t.Fatal("PushServiceMsg must return a non-nil cmd")
+	}
+
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "Pushing svc-a") {
+		t.Errorf("output panel should contain push message, got:\n%s", view)
+	}
+}
+
+// ─── 27. StashServiceMsg starts stash operation ──────────────────────────────
+
+func TestUpdate_StashServiceMsg_Stash_StartsOperation(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(panels.StashServiceMsg{
+		TaskID:      "IN-001",
+		ServiceName: "svc-a",
+		Pop:         false,
+	})
+	m = updated.(Model)
+
+	if !m.opRunning {
+		t.Error("opRunning must be true after StashServiceMsg (stash)")
+	}
+	if cmd == nil {
+		t.Fatal("StashServiceMsg must return a non-nil cmd")
+	}
+
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "Stashing svc-a") {
+		t.Errorf("output panel should contain stash message, got:\n%s", view)
+	}
+}
+
+func TestUpdate_StashServiceMsg_Unstash_StartsOperation(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(panels.StashServiceMsg{
+		TaskID:      "IN-001",
+		ServiceName: "svc-a",
+		Pop:         true,
+	})
+	m = updated.(Model)
+
+	if !m.opRunning {
+		t.Error("opRunning must be true after StashServiceMsg (unstash)")
+	}
+	if cmd == nil {
+		t.Fatal("StashServiceMsg must return a non-nil cmd")
+	}
+
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "Unstashing svc-a") {
+		t.Errorf("output panel should contain unstash message, got:\n%s", view)
+	}
+}

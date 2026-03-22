@@ -10,39 +10,16 @@ import (
 	"github.com/diss0x/wtui/internal/task"
 )
 
-// Compile-time check: OpenDialog must implement Modal.
 var _ Modal = (*OpenDialog)(nil)
 
-// ── OpenDialog ────────────────────────────────────────────────────────────────
-
-// OpenDialog is a two-section picker that lets the user choose a file to open
-// and the application to open it with.
-//
-// Layout (when files are present):
-//
-//	File:
-//	  ▸ task.sln          ← selected, violet
-//	    task.code-workspace
-//
-//	App:
-//	  ▸ VS Code           ← selected, violet
-//	    Rider
-//
-//	[Enter] open  [Tab] switch section  [Esc] cancel
-//
-// When no files are found a short error message is shown and only Esc is active.
 type OpenDialog struct {
 	files        []task.OpenableFile
 	apps         []task.AppEntry
 	fileIdx      int
 	appIdx       int
-	focusSection int // 0 = files, 1 = apps
+	focusSection int
 }
 
-// NewOpenDialog creates an OpenDialog populated from candidates.
-// If candidates.Files is empty the dialog renders the "no files" state.
-// If candidates.Apps is empty the dialog still works — the app section is
-// omitted from the view and the submitted App field will be the empty string.
 func NewOpenDialog(candidates task.OpenCandidates) *OpenDialog {
 	return &OpenDialog{
 		files: candidates.Files,
@@ -50,18 +27,8 @@ func NewOpenDialog(candidates task.OpenCandidates) *OpenDialog {
 	}
 }
 
-// Title implements Modal.
 func (d *OpenDialog) Title() string { return "Open File" }
 
-// Update implements Modal.
-//
-// Key bindings:
-//
-//	j / Down  — move selection down in the focused section (wrap-around)
-//	k / Up    — move selection up in the focused section (wrap-around)
-//	Tab       — switch focus between file and app sections (if apps non-empty)
-//	Enter     — confirm; emits SubmitOpenFileMsg, or CloseModalMsg if no files
-//	Esc       — cancel; emits CloseModalMsg
 func (d *OpenDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -78,7 +45,6 @@ func (d *OpenDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 			return d, nil
 
 		case "tab":
-			// Switch section only when there are apps to switch to.
 			if len(d.apps) > 0 {
 				if d.focusSection == 0 {
 					d.focusSection = 1
@@ -106,7 +72,6 @@ func (d *OpenDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	return d, nil
 }
 
-// View implements Modal.
 func (d *OpenDialog) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	selectedStyle := lipgloss.NewStyle().Foreground(modalColorBorder)
@@ -117,11 +82,9 @@ func (d *OpenDialog) View() string {
 
 	var sb strings.Builder
 
-	// Title.
 	sb.WriteString(titleStyle.Render("Open File"))
 	sb.WriteString("\n\n")
 
-	// Empty-files state.
 	if len(d.files) == 0 {
 		sb.WriteString(normalStyle.Render("No openable files found in task directory."))
 		sb.WriteString("\n\n")
@@ -129,9 +92,6 @@ func (d *OpenDialog) View() string {
 		return sb.String()
 	}
 
-	// ── File section ──────────────────────────────────────────────────────────
-
-	// Section label: bold+normal when focused, dim when not.
 	if d.focusSection == 0 {
 		sb.WriteString(boldNormalStyle.Render("File:"))
 	} else {
@@ -147,8 +107,6 @@ func (d *OpenDialog) View() string {
 		}
 		sb.WriteString("\n")
 	}
-
-	// ── App section (omitted when no apps) ────────────────────────────────────
 
 	if len(d.apps) > 0 {
 		sb.WriteString("\n")
@@ -170,8 +128,6 @@ func (d *OpenDialog) View() string {
 		}
 	}
 
-	// ── Hint bar ──────────────────────────────────────────────────────────────
-
 	sb.WriteString("\n")
 	if len(d.apps) > 0 {
 		sb.WriteString(dimStyle.Render("[Enter] open  [Tab] switch section  [Esc] cancel"))
@@ -182,9 +138,6 @@ func (d *OpenDialog) View() string {
 	return sb.String()
 }
 
-// ── navigation helpers ────────────────────────────────────────────────────────
-
-// moveDown moves the selection cursor down in the focused section (wrap-around).
 func (d *OpenDialog) moveDown() {
 	if d.focusSection == 0 && len(d.files) > 0 {
 		d.fileIdx = (d.fileIdx + 1) % len(d.files)
@@ -193,7 +146,6 @@ func (d *OpenDialog) moveDown() {
 	}
 }
 
-// moveUp moves the selection cursor up in the focused section (wrap-around).
 func (d *OpenDialog) moveUp() {
 	if d.focusSection == 0 && len(d.files) > 0 {
 		d.fileIdx = (d.fileIdx + len(d.files) - 1) % len(d.files)

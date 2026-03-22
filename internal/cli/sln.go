@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/diss0x/wtui/internal/logutil"
 )
 
 func newSlnCmd() *cobra.Command {
@@ -19,7 +21,7 @@ solution. Requires dotnet CLI to be available in PATH; silently skips if not fou
 		RunE: func(cmd *cobra.Command, args []string) error {
 			taskID := args[0]
 
-			if err := mgr.GenerateSln(cmd.Context(), taskID); err != nil {
+			if err := mgr.GenerateSln(logutil.WithTaskID(cmd.Context(), taskID), taskID); err != nil {
 				fmt.Fprintln(os.Stderr, "Error:", err)
 				return err
 			}
