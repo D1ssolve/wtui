@@ -71,14 +71,6 @@ type Manager interface {
 	// returns nil on dotnet failures.
 	GenerateSln(ctx context.Context, taskID string) error
 
-	// ListOpenCandidates returns all openable files for the task dir and
-	// detected applications that can open them. Never returns a nil Files slice.
-	ListOpenCandidates(ctx context.Context, taskID string) (OpenCandidates, error)
-
-	// OpenFile launches app with path non-blocking (cmd.Start only, not Run).
-	// Returns an error if path or app is empty, or if cmd.Start fails.
-	OpenFile(ctx context.Context, path, app string) error
-
 	// DiscoverRepos returns all git repositories found under the configured RootDir,
 	// sorted alphabetically by name. Used to populate the TUI available-repos panel.
 	DiscoverRepos(ctx context.Context) ([]domain.Repo, error)

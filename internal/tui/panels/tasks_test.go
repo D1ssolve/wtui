@@ -237,25 +237,6 @@ func TestTasksPanel_KeyD_EmptyList_NoOp(t *testing.T) {
 	}
 }
 
-func TestTasksPanel_KeyO_EmitsOpenFilePickerMsg(t *testing.T) {
-	p := NewTasksPanel(40, 20)
-	p.SetTasks(makeTasks("IN-001"))
-	p.SetFocused(true)
-
-	_, cmd := p.Update(sendKey("o"))
-	if cmd == nil {
-		t.Fatal("o key should return a cmd")
-	}
-	msg := cmd()
-	got, ok := msg.(OpenFilePickerMsg)
-	if !ok {
-		t.Fatalf("expected OpenFilePickerMsg, got %T", msg)
-	}
-	if got.TaskID != "IN-001" {
-		t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
-	}
-}
-
 func TestTasksPanel_KeyS_EmitsGenerateSlnMsg(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetTasks(makeTasks("IN-001"))
@@ -288,16 +269,6 @@ func TestTasksPanel_KeyComma_EmitsOpenConfigModalMsg(t *testing.T) {
 	msg := cmd()
 	if _, ok := msg.(OpenConfigModalMsg); !ok {
 		t.Fatalf("expected OpenConfigModalMsg, got %T", msg)
-	}
-}
-
-func TestTasksPanel_KeyO_EmptyList_NoOp(t *testing.T) {
-	p := NewTasksPanel(40, 20)
-	p.SetFocused(true)
-
-	_, cmd := p.Update(sendKey("o"))
-	if cmd != nil {
-		t.Error("o on empty list should be a no-op")
 	}
 }
 
@@ -398,6 +369,100 @@ func TestTasksPanel_Unfocused_KeysIgnored(t *testing.T) {
 		if _, ok := msg.(OpenInitDialogMsg); ok {
 			t.Error("unfocused panel should not emit OpenInitDialogMsg")
 		}
+	}
+}
+
+// ── Filter mode tests ───────────────────────────────────────────────────────────
+
+// TestTasksPanel_FilterMode_ShowsFilterIndicator verifies [FILTER] appears when in filter mode.
+func TestTasksPanel_FilterMode_ShowsFilterIndicator(t *testing.T) {
+	p := NewTasksPanel(60, 20)
+	p.SetTasks(makeTasks("IN-001", "IN-002", "IN-003"))
+	p.SetFocused(true)
+
+	// Enter filter mode by pressing 'f' (which sends '/' to the list internally)
+	p, _ = p.Update(sendKey("f"))
+
+	view := p.View()
+	if !strings.Contains(view, "[FILTER]") {
+		t.Error("View should contain [FILTER] when in filter mode")
+	}
+}
+
+// TestTasksPanel_FilterMode_NoFilterIndicatorWhenNotFiltering verifies [FILTER] does not appear when not filtering.
+func TestTasksPanel_FilterMode_NoFilterIndicatorWhenNotFiltering(t *testing.T) {
+	p := NewTasksPanel(60, 20)
+	p.SetTasks(makeTasks("IN-001", "IN-002", "IN-003"))
+	p.SetFocused(true)
+
+	view := p.View()
+	if strings.Contains(view, "[FILTER]") {
+		t.Error("View should NOT contain [FILTER] when not in filter mode")
+	}
+}
+
+// TestTasksPanel_FilterMode_EscClearsFilter verifies ESC in filter mode clears filter.
+func TestTasksPanel_FilterMode_EscClearsFilter(t *testing.T) {
+	p := NewTasksPanel(60, 20)
+	p.SetTasks(makeTasks("IN-001", "IN-002", "IN-003"))
+	p.SetFocused(true)
+
+	// Enter filter mode and type something
+	p, _ = p.Update(sendKey("f"))
+	p, _ = p.Update(sendKey("I"))
+	p, _ = p.Update(sendKey("N"))
+
+	// Press ESC to clear filter
+	p, _ = p.Update(sendSpecialKey(tea.KeyEsc))
+
+	view := p.View()
+	if strings.Contains(view, "[FILTER]") {
+		t.Error("View should NOT contain [FILTER] after ESC clears filter")
+	}
+}
+
+// TestTasksPanel_FilterMode_EnterExitsFilterMode verifies ENTER exits filter mode while keeping filter.
+func TestTasksPanel_FilterMode_EnterExitsFilterMode(t *testing.T) {
+	p := NewTasksPanel(60, 20)
+	p.SetTasks(makeTasks("IN-001", "IN-002", "IN-003"))
+	p.SetFocused(true)
+
+	// Enter filter mode and type something
+	p, _ = p.Update(sendKey("f"))
+	p, _ = p.Update(sendKey("I"))
+	p, _ = p.Update(sendKey("N"))
+
+	// Press ENTER to exit filter mode (keep filter active)
+	p, _ = p.Update(sendSpecialKey(tea.KeyEnter))
+
+	view := p.View()
+	// After ENTER, we should NOT be in filter mode (no [FILTER] indicator)
+	if strings.Contains(view, "[FILTER]") {
+		t.Error("View should NOT contain [FILTER] after ENTER exits filter mode")
+	}
+	// But the filter should still be active (show "Search: IN")
+	if !strings.Contains(stripAnsi(view), "Search: IN") {
+		t.Error("View should show 'Search: IN' after ENTER exits filter mode")
+	}
+}
+
+// TestTasksPanel_FilterMode_FKeyEntersFilterMode verifies 'f' key enters filter mode.
+func TestTasksPanel_FilterMode_FKeyEntersFilterMode(t *testing.T) {
+	p := NewTasksPanel(60, 20)
+	p.SetTasks(makeTasks("IN-001", "IN-002", "IN-003"))
+	p.SetFocused(true)
+
+	// Initially not in filter mode
+	if p.FilterActive() {
+		t.Error("Panel should not be in filter mode initially")
+	}
+
+	// Press 'f' to enter filter mode
+	p, _ = p.Update(sendKey("f"))
+
+	// Now should be in filter mode
+	if !p.FilterActive() {
+		t.Error("Panel should be in filter mode after pressing 'f'")
 	}
 }
 

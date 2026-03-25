@@ -12,7 +12,7 @@ func renderFooter(m Model) string {
 
 	switch m.focus {
 	case FocusTasks:
-		hints = "[i] init  [c] clone  [d] remove  [o] open  [s] sln  [S] sync  [P] push  [;] shell  [,] config  [/] filter  [L] logs  [Tab] output  [Enter] services  [?] help  [q] quit"
+		hints = "[i] init  [c] clone  [d] remove  [s] sln  [S] sync  [P] push  [;] shell  [,] config  [/] filter  [L] logs  [Tab] output  [Enter] services  [?] help  [q] quit"
 	case FocusServices:
 		hints = "[a] add service  [p] push  [d] remove  [ctrl+s] stash  [ctrl+u] unstash  [Esc] back  [?] help"
 	case FocusOutput:

@@ -8,10 +8,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// outColor* are aliases to the shared panel palette defined in theme.go,
+// kept for readability at call sites.
 const (
-	outColorInactive = lipgloss.Color("#4A4A4A") // dark gray — inactive border
-	outColorDim      = lipgloss.Color("#6B7280") // muted gray — line prefix
-	outColorNormal   = lipgloss.Color("#D1D5DB") // light gray — line body
+	outColorInactive = colorInactive
+	outColorDim      = colorDim
+	outColorNormal   = colorNormal
 )
 
 type OutputPanel struct {

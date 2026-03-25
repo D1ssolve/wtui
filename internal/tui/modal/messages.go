@@ -20,11 +20,6 @@ type SubmitRemoveTaskMsg struct {
 
 type CloseModalMsg struct{}
 
-type SubmitOpenFileMsg struct {
-	Path string // absolute path to file
-	App  string // binary path or name
-}
-
 type SubmitCloneMsg struct {
 	Src string
 	Dst string

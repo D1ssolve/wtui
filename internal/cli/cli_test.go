@@ -36,19 +36,17 @@ func executeCommand(root *cobra.Command, args ...string) (stdout, stderr string,
 // mockManager is a test-double for task.Manager. All fields are optional
 // function values; unset ones return zero values and no error.
 type mockManager struct {
-	initFn               func(ctx context.Context, params task.InitParams) error
-	addFn                func(ctx context.Context, params task.AddParams) error
-	listFn               func(ctx context.Context) ([]domain.Task, error)
-	listServicesFn       func(ctx context.Context, taskID string) ([]domain.Service, error)
-	removeFn             func(ctx context.Context, taskID string, force, deleteBranches bool) error
-	generateSlnFn        func(ctx context.Context, taskID string) error
-	listOpenCandidatesFn func(ctx context.Context, taskID string) (task.OpenCandidates, error)
-	openFileFn           func(ctx context.Context, path, app string) error
-	discoverReposFn      func(ctx context.Context) ([]domain.Repo, error)
-	syncTaskFn           func(ctx context.Context, taskID string, lineCh chan<- string) error
-	pushTaskFn           func(ctx context.Context, taskID string, lineCh chan<- string) error
-	pushServiceFn        func(ctx context.Context, taskID, serviceName string, lineCh chan<- string) error
-	stashServiceFn       func(ctx context.Context, taskID, serviceName string, pop bool) error
+	initFn          func(ctx context.Context, params task.InitParams) error
+	addFn           func(ctx context.Context, params task.AddParams) error
+	listFn          func(ctx context.Context) ([]domain.Task, error)
+	listServicesFn  func(ctx context.Context, taskID string) ([]domain.Service, error)
+	removeFn        func(ctx context.Context, taskID string, force, deleteBranches bool) error
+	generateSlnFn   func(ctx context.Context, taskID string) error
+	discoverReposFn func(ctx context.Context) ([]domain.Repo, error)
+	syncTaskFn      func(ctx context.Context, taskID string, lineCh chan<- string) error
+	pushTaskFn      func(ctx context.Context, taskID string, lineCh chan<- string) error
+	pushServiceFn   func(ctx context.Context, taskID, serviceName string, lineCh chan<- string) error
+	stashServiceFn  func(ctx context.Context, taskID, serviceName string, pop bool) error
 }
 
 func (m *mockManager) Init(ctx context.Context, params task.InitParams) error {
@@ -89,20 +87,6 @@ func (m *mockManager) Remove(ctx context.Context, taskID string, force, deleteBr
 func (m *mockManager) GenerateSln(ctx context.Context, taskID string) error {
 	if m.generateSlnFn != nil {
 		return m.generateSlnFn(ctx, taskID)
-	}
-	return nil
-}
-
-func (m *mockManager) ListOpenCandidates(ctx context.Context, taskID string) (task.OpenCandidates, error) {
-	if m.listOpenCandidatesFn != nil {
-		return m.listOpenCandidatesFn(ctx, taskID)
-	}
-	return task.OpenCandidates{}, nil
-}
-
-func (m *mockManager) OpenFile(ctx context.Context, path, app string) error {
-	if m.openFileFn != nil {
-		return m.openFileFn(ctx, path, app)
 	}
 	return nil
 }
@@ -183,7 +167,6 @@ func buildTestRoot(mock task.Manager, version string) *cobra.Command {
 		newListCmd(),
 		newRemoveCmd(),
 		newSlnCmd(),
-		newOpenCmd(),
 		newVersionCmd(version),
 		newConfigCmd(),
 	)
@@ -593,124 +576,6 @@ func executeCommandWithStdin(root *cobra.Command, stdin *bytes.Buffer, args ...s
 	root.SetArgs(args)
 	err = root.Execute()
 	return stdoutBuf.String(), stderrBuf.String(), err
-}
-
-// ── open command tests (interactive) ─────────────────────────────────────────
-
-func TestOpenCmd_SingleFile_SingleApp(t *testing.T) {
-	mock := &mockManager{
-		listOpenCandidatesFn: func(_ context.Context, _ string) (task.OpenCandidates, error) {
-			return task.OpenCandidates{
-				Files: []task.OpenableFile{
-					{Name: "IN-6748.sln", Path: "/tasks/IN-6748/IN-6748.sln", Ext: ".sln"},
-				},
-				Apps: []task.AppEntry{
-					{Name: "VS Code", Binary: "code"},
-				},
-			}, nil
-		},
-	}
-	root := buildTestRoot(mock, "dev")
-	stdout, _, err := executeCommand(root, "open", "IN-6748")
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if !strings.Contains(stdout, "Using file:") {
-		t.Errorf("expected 'Using file:' in output, got: %q", stdout)
-	}
-	if !strings.Contains(stdout, "Using app:") {
-		t.Errorf("expected 'Using app:' in output, got: %q", stdout)
-	}
-	if !strings.Contains(stdout, "Opened") {
-		t.Errorf("expected 'Opened' in output, got: %q", stdout)
-	}
-	if !strings.Contains(stdout, "IN-6748.sln") {
-		t.Errorf("expected filename in output, got: %q", stdout)
-	}
-	if !strings.Contains(stdout, "VS Code") {
-		t.Errorf("expected app name in output, got: %q", stdout)
-	}
-}
-
-func TestOpenCmd_MultiFile_Valid(t *testing.T) {
-	var capturedPath string
-	mock := &mockManager{
-		listOpenCandidatesFn: func(_ context.Context, _ string) (task.OpenCandidates, error) {
-			return task.OpenCandidates{
-				Files: []task.OpenableFile{
-					{Name: "IN-6748.sln", Path: "/tasks/IN-6748/IN-6748.sln", Ext: ".sln"},
-					{Name: "IN-6748.code-workspace", Path: "/tasks/IN-6748/IN-6748.code-workspace", Ext: ".code-workspace"},
-				},
-				Apps: []task.AppEntry{
-					{Name: "VS Code", Binary: "code"},
-				},
-			}, nil
-		},
-		openFileFn: func(_ context.Context, path, _ string) error {
-			capturedPath = path
-			return nil
-		},
-	}
-	root := buildTestRoot(mock, "dev")
-	// Select file 1 (IN-6748.sln).
-	stdin := bytes.NewBufferString("1\n")
-	stdout, _, err := executeCommandWithStdin(root, stdin, "open", "IN-6748")
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if !strings.Contains(stdout, "Opened") {
-		t.Errorf("expected 'Opened' in output, got: %q", stdout)
-	}
-	if !strings.Contains(stdout, "IN-6748.sln") {
-		t.Errorf("expected selected filename in output, got: %q", stdout)
-	}
-	if capturedPath != "/tasks/IN-6748/IN-6748.sln" {
-		t.Errorf("expected path=/tasks/IN-6748/IN-6748.sln, got: %q", capturedPath)
-	}
-}
-
-func TestOpenCmd_MultiFile_InvalidInput(t *testing.T) {
-	mock := &mockManager{
-		listOpenCandidatesFn: func(_ context.Context, _ string) (task.OpenCandidates, error) {
-			return task.OpenCandidates{
-				Files: []task.OpenableFile{
-					{Name: "IN-6748.sln", Path: "/tasks/IN-6748/IN-6748.sln", Ext: ".sln"},
-					{Name: "IN-6748.code-workspace", Path: "/tasks/IN-6748/IN-6748.code-workspace", Ext: ".code-workspace"},
-				},
-				Apps: []task.AppEntry{
-					{Name: "VS Code", Binary: "code"},
-				},
-			}, nil
-		},
-	}
-	root := buildTestRoot(mock, "dev")
-	// Provide non-integer input.
-	stdin := bytes.NewBufferString("abc\n")
-	_, _, err := executeCommandWithStdin(root, stdin, "open", "IN-6748")
-	if err == nil {
-		t.Fatal("expected error for non-integer input, got nil")
-	}
-}
-
-func TestOpenCmd_NoFiles(t *testing.T) {
-	mock := &mockManager{
-		listOpenCandidatesFn: func(_ context.Context, _ string) (task.OpenCandidates, error) {
-			return task.OpenCandidates{
-				Files: []task.OpenableFile{},
-				Apps: []task.AppEntry{
-					{Name: "VS Code", Binary: "code"},
-				},
-			}, nil
-		},
-	}
-	root := buildTestRoot(mock, "dev")
-	_, _, err := executeCommand(root, "open", "IN-6748")
-	if err == nil {
-		t.Fatal("expected error when no files found, got nil")
-	}
-	if !errors.Is(err, ErrNoFiles) {
-		t.Errorf("expected error to be (or wrap) ErrNoFiles, got: %v", err)
-	}
 }
 
 // ── config list tests ─────────────────────────────────────────────────────────

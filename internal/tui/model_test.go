@@ -26,22 +26,14 @@ type mockManager struct {
 	listServicesErr    error
 	listReposResult    []domain.Repo
 	listReposErr       error
-
-	// OpenFilePicker flow
-	listOpenCandidatesResult task.OpenCandidates
-	listOpenCandidatesErr    error
 }
 
 var _ task.Manager = (*mockManager)(nil)
 
-func (m *mockManager) Init(_ context.Context, _ task.InitParams) error  { return nil }
-func (m *mockManager) Add(_ context.Context, _ task.AddParams) error    { return nil }
+func (m *mockManager) Init(_ context.Context, _ task.InitParams) error     { return nil }
+func (m *mockManager) Add(_ context.Context, _ task.AddParams) error       { return nil }
 func (m *mockManager) Remove(_ context.Context, _ string, _, _ bool) error { return nil }
-func (m *mockManager) GenerateSln(_ context.Context, _ string) error    { return nil }
-func (m *mockManager) ListOpenCandidates(_ context.Context, _ string) (task.OpenCandidates, error) {
-	return m.listOpenCandidatesResult, m.listOpenCandidatesErr
-}
-func (m *mockManager) OpenFile(_ context.Context, _, _ string) error { return nil }
+func (m *mockManager) GenerateSln(_ context.Context, _ string) error       { return nil }
 
 func (m *mockManager) List(_ context.Context) ([]domain.Task, error) {
 	return m.listTasksResult, m.listTasksErr
@@ -302,7 +294,7 @@ func TestUpdate_OpenInitDialogMsg_OpensInitDialog(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
 	// Pre-load repos so the dialog opens immediately (no pending state).
-	m.reposPanel.SetRepos([]domain.Repo{{Name: "svc1", Path: "/tmp/svc1"}})
+	m.repos = []domain.Repo{{Name: "svc1", Path: "/tmp/svc1"}}
 
 	updated, _ := m.Update(panels.OpenInitDialogMsg{})
 	m = updated.(Model)
@@ -548,89 +540,6 @@ func TestFocusPanel_NextPrev(t *testing.T) {
 	// FocusServices is a safe default — Prev() returns FocusTasks.
 	if got := FocusServices.Prev(); got != FocusTasks {
 		t.Errorf("FocusServices.Prev(): expected FocusTasks (safe default), got %v", got)
-	}
-}
-
-// ─── 23. OpenFilePickerMsg dispatches loadOpenCandidatesCmd ──────────────────
-
-// TestUpdate_OpenFilePickerMsg_LoadsCandidates verifies the full
-// panels.OpenFilePickerMsg → OpenCandidatesLoadedMsg → modal opened flow.
-func TestUpdate_OpenFilePickerMsg_LoadsCandidates(t *testing.T) {
-	mgr := &mockManager{
-		listOpenCandidatesResult: task.OpenCandidates{
-			Files: []task.OpenableFile{{Name: "task.sln", Path: "/tmp/task.sln", Ext: ".sln"}},
-			Apps:  []task.AppEntry{{Name: "VS Code", Binary: "code"}},
-		},
-	}
-	m := newTestModel(t, mgr)
-	m = sendWindowSize(m, 120, 40)
-
-	// Sending OpenFilePickerMsg should return a loadOpenCandidatesCmd.
-	updated, cmd := m.Update(panels.OpenFilePickerMsg{TaskID: "IN-001"})
-	m = updated.(Model)
-
-	if cmd == nil {
-		t.Fatal("OpenFilePickerMsg must return a non-nil cmd")
-	}
-	// Modal must not be open yet — candidates haven't loaded.
-	if m.modal != nil {
-		t.Error("modal must not be open before candidates are loaded")
-	}
-
-	// Execute the cmd to get OpenCandidatesLoadedMsg.
-	result := cmd()
-	loaded, ok := result.(OpenCandidatesLoadedMsg)
-	if !ok {
-		t.Fatalf("cmd must produce OpenCandidatesLoadedMsg, got %T", result)
-	}
-	if loaded.TaskID != "IN-001" {
-		t.Errorf("OpenCandidatesLoadedMsg.TaskID: expected IN-001, got %q", loaded.TaskID)
-	}
-	if len(loaded.Candidates.Files) != 1 {
-		t.Fatalf("expected 1 file in candidates, got %d", len(loaded.Candidates.Files))
-	}
-
-	// Send OpenCandidatesLoadedMsg: should open the OpenDialog modal.
-	updated, _ = m.Update(loaded)
-	m = updated.(Model)
-
-	if m.modal == nil {
-		t.Fatal("OpenCandidatesLoadedMsg with files must open a modal")
-	}
-	if _, ok := m.modal.(*modal.OpenDialog); !ok {
-		t.Errorf("expected *modal.OpenDialog, got %T", m.modal)
-	}
-}
-
-// ─── 24. OpenCandidatesLoadedMsg with no files shows output message ───────────
-
-// TestUpdate_OpenCandidatesLoaded_NoFiles_ShowsMessage verifies that when
-// ListOpenCandidates returns zero files the output panel gets an informational
-// message and no modal is opened.
-func TestUpdate_OpenCandidatesLoaded_NoFiles_ShowsMessage(t *testing.T) {
-	m := newTestModel(t, &mockManager{})
-	m = sendWindowSize(m, 120, 40)
-
-	updated, cmd := m.Update(OpenCandidatesLoadedMsg{
-		TaskID:     "IN-001",
-		Candidates: task.OpenCandidates{},
-	})
-	m = updated.(Model)
-
-	// No modal should be opened.
-	if m.modal != nil {
-		t.Error("modal must remain nil when no files are found")
-	}
-
-	// No background command should be dispatched.
-	if cmd != nil {
-		t.Error("no cmd expected when candidates has no files")
-	}
-
-	// Output panel should contain an informational message mentioning the task ID.
-	view := m.outputPanel.View()
-	if !strings.Contains(view, "IN-001") {
-		t.Errorf("output panel should contain task ID IN-001 in the no-files message, got:\n%s", view)
 	}
 }
 

@@ -24,6 +24,9 @@ func NewRemoveServiceDialog(taskID, serviceName, branch string) *RemoveServiceDi
 
 func (d *RemoveServiceDialog) Title() string { return "Remove Service" }
 
+// SetTerminalSize implements Modal.
+func (d *RemoveServiceDialog) SetTerminalSize(width, height int) {}
+
 func (d *RemoveServiceDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:

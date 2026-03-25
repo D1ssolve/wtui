@@ -3,6 +3,7 @@ package panels
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,12 +12,13 @@ import (
 	"github.com/diss0x/wtui/internal/domain"
 )
 
+// svcColor* are aliases to the shared panel palette defined in theme.go,
+// kept for readability at call sites.
 const (
-	svcColorInactive = lipgloss.Color("#4A4A4A") // dark gray — inactive border
-	svcColorNormal   = lipgloss.Color("#D1D5DB") // light gray — normal text
-	svcColorDim      = lipgloss.Color("#6B7280") // muted gray — branch / path
-	svcColorBold     = lipgloss.Color("#F3F4F6") // near-white — service name
-	svcColorDirty    = lipgloss.Color("#F59E0B") // amber — dirty service indicator
+	svcColorNormal = colorNormal
+	svcColorDim    = colorDim
+	svcColorBold   = colorBold
+	svcColorDirty  = colorDirty
 )
 
 type serviceItem struct {
@@ -115,8 +117,9 @@ func NewServicesPanel(width, height int) ServicesPanel {
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
-	l.SetShowPagination(false)
-	l.SetFilteringEnabled(false)
+	l.SetShowPagination(true)
+	l.SetFilteringEnabled(true)
+	l.SetShowFilter(false) // We show our own filter indicator
 	l.DisableQuitKeybindings()
 
 	return ServicesPanel{
@@ -168,6 +171,10 @@ func (p *ServicesPanel) SelectedService() *domain.Service {
 	return nil
 }
 
+func (p *ServicesPanel) FilterActive() bool {
+	return p.list.FilterState() == list.Filtering
+}
+
 func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 	if !p.focused {
 		var cmd tea.Cmd
@@ -177,6 +184,19 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Handle filter mode first
+		if p.list.FilterState() == list.Filtering {
+			switch msg.String() {
+			case "esc":
+				p.list.ResetFilter()
+				return p, nil
+			default:
+				var cmd tea.Cmd
+				p.list, cmd = p.list.Update(msg)
+				return p, cmd
+			}
+		}
+
 		switch msg.String() {
 		case "j", "down":
 			p.list.CursorDown()
@@ -222,6 +242,10 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			}
 
 		case "esc":
+			if p.list.FilterState() == list.FilterApplied {
+				p.list.ResetFilter()
+				return p, nil
+			}
 			return p, func() tea.Msg { return FocusTasksMsg{} }
 
 		case "d":
@@ -241,6 +265,36 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 					BranchName:  branch,
 				}
 			}
+
+		case "h":
+			// Go to previous page if not on the first page
+			if p.list.Paginator.Page > 0 {
+				p.list.Paginator.PrevPage()
+				// Set cursor to first item on new page
+				p.list.Select(p.list.Paginator.Page * p.list.Paginator.PerPage)
+			}
+			return p, nil
+
+		case "l":
+			// Go to next page if not on the last page
+			if p.list.Paginator.Page < p.list.Paginator.TotalPages-1 {
+				p.list.Paginator.NextPage()
+				// Set cursor to first item on new page
+				p.list.Select(p.list.Paginator.Page * p.list.Paginator.PerPage)
+			}
+			return p, nil
+
+		case "f":
+			// Toggle filter mode: enter if not filtering, exit if filtering
+			if p.list.FilterState() == list.Filtering {
+				p.list.ResetFilter()
+				return p, nil
+			}
+			// Enter filter mode by sending '/' key to the list (list uses '/' as filter key)
+			filterKey := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
+			var cmd tea.Cmd
+			p.list, cmd = p.list.Update(filterKey)
+			return p, cmd
 		}
 	}
 
@@ -250,45 +304,162 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 }
 
 func (p ServicesPanel) View() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary)
+
+	filterModeStyle := lipgloss.NewStyle().Foreground(panelColorPrimary).Bold(true)
+	filterStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")) // amber/warning color
+	dimStyle := lipgloss.NewStyle().Foreground(svcColorDim)
+
+	inner := innerDimensions(p.width, p.height)
+
+	// Filter items manually (similar to dialogs)
+	allItems := p.list.Items()
+	filterValue := strings.ToLower(p.list.FilterValue())
+
+	var filteredItems []serviceItem
+	for _, item := range allItems {
+		si, ok := item.(serviceItem)
+		if !ok {
+			continue
+		}
+		if filterValue == "" || strings.Contains(strings.ToLower(si.service.Name), filterValue) {
+			filteredItems = append(filteredItems, si)
+		}
+	}
+
+	// Update paginator total pages
+	if p.list.Paginator.PerPage > 0 {
+		p.list.Paginator.TotalPages = (len(filteredItems) + p.list.Paginator.PerPage - 1) / p.list.Paginator.PerPage
+	}
+	if p.list.Paginator.TotalPages < 1 {
+		p.list.Paginator.TotalPages = 1
+	}
+
+	// Clamp cursor to filtered items
+	if len(filteredItems) > 0 && p.list.Index() >= len(filteredItems) {
+		p.list.Select(len(filteredItems) - 1)
+	}
+
 	var titleText string
 	if p.taskID == "" {
 		titleText = "Services"
 	} else {
-		total := len(p.list.Items())
+		total := len(filteredItems)
 		current := 0
-		if total > 0 {
+		if total > 0 && p.list.Index() < total {
 			current = p.list.Index() + 1
 		}
 		titleText = fmt.Sprintf("Services — %s  [%d/%d]", p.taskID, current, total)
 	}
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary)
+	var headerLines []string
+	headerLines = append(headerLines, titleStyle.Render(titleText))
 
-	inner := innerDimensions(p.width, p.height)
+	// Show [FILTER] indicator when in filter mode or when filter is applied
+	if p.list.FilterState() == list.Filtering {
+		filterText := p.list.FilterValue()
+		headerLines = append(headerLines, filterModeStyle.Render("[FILTER] ")+"Search: "+filterStyle.Render(filterText+"_"))
+	} else if p.list.FilterState() == list.FilterApplied {
+		filterText := p.list.FilterValue()
+		headerLines = append(headerLines, dimStyle.Render("Search: "+filterText))
+	}
 
-	var body string
+	var bodyLines []string
 
 	switch {
 	case p.taskID == "":
-		body = lipgloss.NewStyle().
-			Foreground(svcColorDim).
-			Render("Select a task to view services.")
+		bodyLines = append(bodyLines, dimStyle.Render("Select a task to view services."))
 
-	case len(p.list.Items()) == 0:
-		body = lipgloss.NewStyle().
-			Foreground(svcColorDim).
-			Render("No services in this task. Press [a] to add.")
+	case len(filteredItems) == 0:
+		if p.list.FilterState() == list.FilterApplied {
+			bodyLines = append(bodyLines, dimStyle.Render("  No services match the filter."))
+		} else {
+			bodyLines = append(bodyLines, dimStyle.Render("No services in this task. Press [a] to add."))
+		}
 
 	default:
-		listCopy := p.list
-		listCopy.SetSize(inner.w, max(0, inner.h-1))
-		body = listCopy.View()
+		// Render filtered items manually
+		start, end := p.list.Paginator.GetSliceBounds(len(filteredItems))
+		for i := start; i < end && i < len(filteredItems); i++ {
+			si := filteredItems[i]
+			svc := si.service
+
+			// Build lines for this service
+			var lines []string
+
+			// Stale services: show a [STALE] badge
+			if svc.Stale {
+				staleStyle := lipgloss.NewStyle().Bold(true).Foreground(svcColorDirty)
+				nameStyle := lipgloss.NewStyle().Foreground(svcColorDim)
+				if i == p.list.Index() {
+					nameStyle = nameStyle.Underline(true)
+				}
+				line1 := fmt.Sprintf("  ✗ %s %s", nameStyle.Render(svc.Name), staleStyle.Render("[STALE]"))
+				line2 := fmt.Sprintf("    %s", dimStyle.Render("worktree path no longer exists"))
+				shortPath := truncatePath(svc.WorktreePath)
+				line3 := fmt.Sprintf("    %s", dimStyle.Render("path:   "+shortPath))
+				lines = append(lines, line1, line2, line3)
+			} else {
+				icon := "✓"
+				nameStyle := lipgloss.NewStyle().Bold(true).Foreground(svcColorBold)
+
+				if svc.IsDirty {
+					icon = "⚠"
+					nameStyle = lipgloss.NewStyle().Bold(true).Foreground(svcColorDirty)
+				}
+
+				if i == p.list.Index() {
+					nameStyle = nameStyle.Underline(true)
+				}
+				line1 := fmt.Sprintf("  %s %s", icon, nameStyle.Render(svc.Name))
+
+				branchInfo := svc.Branch
+				if svc.BaseBranch != "" {
+					branchInfo = fmt.Sprintf("%s ← %s", svc.Branch, svc.BaseBranch)
+				}
+
+				// Append ↑N ↓N badges when non-zero
+				aheadBehindSuffix := ""
+				if svc.Ahead > 0 || svc.Behind > 0 {
+					aheadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399"))  // green
+					behindStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F87171")) // red
+					aheadBehindSuffix = fmt.Sprintf("  %s %s",
+						aheadStyle.Render(fmt.Sprintf("↑%d", svc.Ahead)),
+						behindStyle.Render(fmt.Sprintf("↓%d", svc.Behind)),
+					)
+				}
+
+				line2 := fmt.Sprintf("    %s%s", dimStyle.Render("branch: "+branchInfo), aheadBehindSuffix)
+
+				shortPath := truncatePath(svc.WorktreePath)
+				line3 := fmt.Sprintf("    %s", dimStyle.Render("path:   "+shortPath))
+
+				lines = append(lines, line1, line2, line3)
+			}
+
+			bodyLines = append(bodyLines, lines...)
+		}
+
+		// Add pagination dots if needed
+		if p.list.Paginator.TotalPages > 1 {
+			bodyLines = append(bodyLines, dimStyle.Render("  "+p.list.Paginator.View()))
+		}
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render(titleText),
-		body,
-	)
+	// Calculate heights
+	headerHeight := len(headerLines)
+	bodyHeight := inner.h - headerHeight
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+
+	// Truncate body if too long
+	if len(bodyLines) > bodyHeight {
+		bodyLines = bodyLines[:bodyHeight]
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, headerLines...)
+	content = lipgloss.JoinVertical(lipgloss.Left, content, strings.Join(bodyLines, "\n"))
 
 	borderStyle := panelBorderStyle(p.focused)
 	return borderStyle.

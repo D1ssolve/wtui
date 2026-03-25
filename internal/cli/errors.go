@@ -7,9 +7,6 @@ import (
 	"github.com/diss0x/wtui/internal/task"
 )
 
-// ErrNoFiles is returned when no openable files are found for a task.
-var ErrNoFiles = errors.New("no openable files found")
-
 // Exit code domains:
 //
 //	0 — success (err == nil)

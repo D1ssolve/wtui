@@ -20,10 +20,6 @@ type OpenRemoveDialogMsg struct{ TaskID string }
 // requesting .sln file regeneration for the given task.
 type GenerateSlnMsg struct{ TaskID string }
 
-// OpenFilePickerMsg is emitted when [o] is pressed in the Tasks panel.
-// Triggers loading open candidates and opening the OpenDialog modal.
-type OpenFilePickerMsg struct{ TaskID string }
-
 // CloneTaskMsg is emitted when [c] is pressed in the Tasks panel,
 // requesting the clone dialog for the selected source task.
 type CloneTaskMsg struct{ SrcTaskID string }

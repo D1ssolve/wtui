@@ -13,6 +13,9 @@ func NewHelpOverlay() *HelpOverlay { return &HelpOverlay{} }
 
 func (h *HelpOverlay) Title() string { return "Keyboard Shortcuts" }
 
+// SetTerminalSize implements Modal.
+func (h *HelpOverlay) SetTerminalSize(width, height int) {}
+
 func (h *HelpOverlay) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
@@ -57,8 +60,6 @@ func (h *HelpOverlay) View() string {
 	sb.WriteString(row("d/Del", "Remove task group"))
 	sb.WriteString("\n")
 	sb.WriteString(row("c", "Clone task group"))
-	sb.WriteString("\n")
-	sb.WriteString(row("o", "Open file in task dir"))
 	sb.WriteString("\n")
 	sb.WriteString(row("s", "Generate .sln"))
 	sb.WriteString("\n")

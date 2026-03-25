@@ -34,6 +34,9 @@ func (d *CloneDialog) Title() string {
 	return fmt.Sprintf("Clone Task %s", d.srcTaskID)
 }
 
+// SetTerminalSize implements Modal.
+func (d *CloneDialog) SetTerminalSize(width, height int) {}
+
 func (d *CloneDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:

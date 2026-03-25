@@ -47,11 +47,6 @@ type DirtyServicesLoadedMsg struct {
 	DirtyServices []string
 }
 
-type OpenCandidatesLoadedMsg struct {
-	TaskID     string
-	Candidates task.OpenCandidates
-}
-
 func loadTasksCmd(mgr task.Manager) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -156,27 +151,6 @@ func generateSlnCmd(mgr task.Manager, taskID string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
 		defer cancel()
 		err := mgr.GenerateSln(ctx, taskID)
-		return CommandDoneMsg{Err: err}
-	}
-}
-
-func loadOpenCandidatesCmd(mgr task.Manager, taskID string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 10*time.Second)
-		defer cancel()
-		candidates, err := mgr.ListOpenCandidates(ctx, taskID)
-		if err != nil {
-			return CommandDoneMsg{Err: err}
-		}
-		return OpenCandidatesLoadedMsg{TaskID: taskID, Candidates: candidates}
-	}
-}
-
-func openFileCmd(mgr task.Manager, path, app string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		err := mgr.OpenFile(ctx, path, app)
 		return CommandDoneMsg{Err: err}
 	}
 }

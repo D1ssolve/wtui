@@ -1,8 +1,11 @@
 package modal
 
 import (
+	"fmt"
+	"io"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -25,21 +28,58 @@ type InitDialog struct {
 	focusIndex          int
 	defaultBranchPrefix string
 
+	// Terminal dimensions for list sizing.
+	terminalHeight int
+	terminalWidth  int
+
 	// Repo picker (replaces Services text input when repos are available).
-	repoPicker        []repoPickerItem
+	repoList          list.Model
 	repoPickerFocused bool
-	repoCursor        int
 	hasRepos          bool
 
-	// Search filter for the repo picker.
-	// repoFilter holds the raw text the user is typing.
-	// The filter is applied (items hidden) only when len(repoFilter) > 3.
-	repoFilter string
+	// Track checked state separately from list items.
+	repoChecked map[string]bool
 }
 
+// repoPickerItem implements list.Item for the repo picker.
 type repoPickerItem struct {
-	name    string
-	checked bool
+	name string
+}
+
+// FilterValue implements list.Item.
+func (r repoPickerItem) FilterValue() string { return r.name }
+
+// repoPickerDelegate renders repo picker items with checkbox style.
+type repoPickerDelegate struct{}
+
+func (d repoPickerDelegate) Height() int                             { return 1 }
+func (d repoPickerDelegate) Spacing() int                            { return 0 }
+func (d repoPickerDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+
+func (d repoPickerDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	ri, ok := item.(repoPickerItem)
+	if !ok {
+		return
+	}
+
+	// Get checked state from the model's extra data (we'll store it differently)
+	// For now, we'll need to track this separately
+	selectedStyle := lipgloss.NewStyle().Foreground(modalColorBorder).Bold(true)
+	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
+
+	// We need to access the checked state - this will be handled by the dialog
+	// The delegate doesn't have direct access to checked state, so we'll need
+	// a different approach
+	isSelected := index == m.Index()
+
+	// Build the line - checked state will be determined by the dialog
+	line := "  " + ri.name
+
+	if isSelected {
+		fmt.Fprint(w, selectedStyle.Render("▸ "+line))
+	} else {
+		fmt.Fprint(w, normalStyle.Render(line))
+	}
 }
 
 // field labels rendered in the dialog view.
@@ -53,10 +93,14 @@ var initFieldLabels = [4]string{
 // NewInitDialog creates an InitDialog pre-filled with defaultBranchPrefix.
 // When repos is non-empty, the Services field becomes a checkboxed repo picker.
 // When repos is empty, a plain text input is shown for services.
-func NewInitDialog(defaultBranchPrefix string, repos []domain.Repo) *InitDialog {
+// termWidth and termHeight are used to calculate the visible window size for the repo picker.
+func NewInitDialog(defaultBranchPrefix string, repos []domain.Repo, termWidth, termHeight int) *InitDialog {
 	d := &InitDialog{
 		defaultBranchPrefix: defaultBranchPrefix,
 		hasRepos:            len(repos) > 0,
+		terminalWidth:       termWidth,
+		terminalHeight:      termHeight,
+		repoChecked:         make(map[string]bool),
 	}
 
 	placeholders := [4]string{
@@ -80,10 +124,23 @@ func NewInitDialog(defaultBranchPrefix string, repos []domain.Repo) *InitDialog 
 	}
 
 	if d.hasRepos {
-		d.repoPicker = make([]repoPickerItem, len(repos))
+		items := make([]list.Item, len(repos))
 		for i, r := range repos {
-			d.repoPicker[i] = repoPickerItem{name: r.Name, checked: false}
+			items[i] = repoPickerItem{name: r.Name}
+			d.repoChecked[r.Name] = false
 		}
+
+		// Calculate list height based on terminal
+		listHeight := d.visibleListHeight()
+
+		d.repoList = list.New(items, repoPickerDelegate{}, 40, listHeight)
+		d.repoList.SetShowTitle(false)
+		d.repoList.SetShowStatusBar(false)
+		d.repoList.SetShowHelp(false)
+		d.repoList.SetShowPagination(true)
+		d.repoList.SetFilteringEnabled(true)
+		d.repoList.SetShowFilter(false) // We'll show our own filter indicator
+		d.repoList.DisableQuitKeybindings()
 	}
 
 	d.focusField(0)
@@ -94,72 +151,137 @@ func NewInitDialog(defaultBranchPrefix string, repos []domain.Repo) *InitDialog 
 // Title implements Modal.
 func (d *InitDialog) Title() string { return "New Task" }
 
+// SetTerminalSize implements Modal.
+func (d *InitDialog) SetTerminalSize(width, height int) {
+	d.terminalWidth = width
+	d.terminalHeight = height
+	if d.hasRepos {
+		d.repoList.SetSize(40, d.visibleListHeight())
+	}
+}
+
 // Update implements Modal.
 func (d *InitDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc":
-			// If a filter is active, clear it first; otherwise close the modal.
-			if d.repoPickerFocused && d.repoFilter != "" {
-				d.repoFilter = ""
-				d.clampRepoCursor()
-				return d, nil
-			}
-			return d, func() tea.Msg { return CloseModalMsg{} }
+		// In filter mode, handle keys differently (type into filter instead of navigate).
+		if d.repoPickerFocused && d.hasRepos && d.repoList.FilterState() == list.Filtering {
+			return d.handleFilterModeKey(msg)
+		}
+		// In normal mode, handle navigation and other keys.
+		return d.handleNormalModeKey(msg)
+	}
 
-		case "tab":
-			if d.repoPickerFocused && d.hasRepos {
-				visible := d.visibleRepos()
-				if len(visible) > 0 {
-					d.repoCursor = (d.repoCursor + 1) % len(visible)
-				}
-				return d, nil
-			}
-			return d, d.nextField()
+	// Forward to focused text field (skip when repo picker is focused).
+	if !d.repoPickerFocused {
+		var cmd tea.Cmd
+		d.fields[d.focusIndex], cmd = d.fields[d.focusIndex].Update(msg)
+		return d, cmd
+	}
 
-		case "shift+tab":
-			if d.repoPickerFocused && d.hasRepos {
-				visible := d.visibleRepos()
-				if len(visible) > 0 {
-					d.repoCursor = (d.repoCursor + len(visible) - 1) % len(visible)
-				}
-				return d, nil
-			}
-			return d, d.prevField()
+	// Forward to repo list when focused
+	if d.hasRepos {
+		var cmd tea.Cmd
+		d.repoList, cmd = d.repoList.Update(msg)
+		return d, cmd
+	}
 
-		case "enter":
-			if d.focusIndex == 3 {
-				return d, d.submit()
-			}
-			return d, d.nextField()
+	return d, nil
+}
 
-		case "backspace", "ctrl+h":
-			if d.repoPickerFocused && d.hasRepos {
-				if len(d.repoFilter) > 0 {
-					d.repoFilter = d.repoFilter[:len([]rune(d.repoFilter))-1]
-					d.clampRepoCursor()
-				}
-				return d, nil
-			}
+// handleNormalModeKey handles key events when not in filter mode.
+func (d *InitDialog) handleNormalModeKey(msg tea.KeyMsg) (Modal, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		// Not in filter mode: check if there's an active filter.
+		if d.repoPickerFocused && d.hasRepos && d.repoList.FilterState() == list.FilterApplied {
+			d.repoList.ResetFilter()
+			return d, nil
+		}
+		// No active filter: close the modal.
+		return d, func() tea.Msg { return CloseModalMsg{} }
 
-		case " ":
-			if d.repoPickerFocused && d.hasRepos {
-				visible := d.visibleRepos()
-				if d.repoCursor < len(visible) {
-					idx := visible[d.repoCursor]
-					d.repoPicker[idx].checked = !d.repoPicker[idx].checked
-				}
-				return d, nil
-			}
+	case "f":
+		// 'f' enters filter mode when repo picker is focused.
+		if d.repoPickerFocused && d.hasRepos {
+			// Enter filter mode by sending '/' key to the list (list uses '/' as filter key)
+			filterKey := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
+			var cmd tea.Cmd
+			d.repoList, cmd = d.repoList.Update(filterKey)
+			return d, cmd
+		}
+		// When text input focused: fall through to text input handler at end of function.
 
-		default:
-			// Printable runes typed while repo picker is focused → append to filter.
-			if d.repoPickerFocused && d.hasRepos && len(msg.Runes) > 0 {
-				d.repoFilter += string(msg.Runes)
-				d.clampRepoCursor()
-				return d, nil
+	case "j", "down":
+		if d.repoPickerFocused && d.hasRepos {
+			d.repoList.CursorDown()
+			d.clampCursorToFilteredItems()
+			return d, nil
+		}
+		// When text input focused: 'j' navigates to next field.
+		return d, d.nextField()
+
+	case "k", "up":
+		if d.repoPickerFocused && d.hasRepos {
+			d.repoList.CursorUp()
+			d.clampCursorToFilteredItems()
+			return d, nil
+		}
+		// When text input focused: 'k' navigates to previous field.
+		return d, d.prevField()
+
+	case "h":
+		// 'h' goes to previous page when repo picker is focused.
+		if d.repoPickerFocused && d.hasRepos {
+			if d.repoList.Paginator.Page > 0 {
+				d.repoList.Paginator.PrevPage()
+				// Set cursor to first item on new page
+				d.repoList.Select(d.repoList.Paginator.Page * d.repoList.Paginator.PerPage)
 			}
+			return d, nil
+		}
+		// When text input is focused: do nothing (no field navigation).
+		return d, nil
+
+	case "l":
+		// 'l' goes to next page when repo picker is focused.
+		if d.repoPickerFocused && d.hasRepos {
+			if d.repoList.Paginator.Page < d.repoList.Paginator.TotalPages-1 {
+				d.repoList.Paginator.NextPage()
+				// Set cursor to first item on new page
+				d.repoList.Select(d.repoList.Paginator.Page * d.repoList.Paginator.PerPage)
+			}
+			return d, nil
+		}
+		// When text input is focused: do nothing (no field navigation).
+		return d, nil
+
+	case "tab":
+		// TAB cycles to next field (wraps from last to first).
+		return d, d.nextField()
+
+	case "shift+tab":
+		// Shift+TAB cycles to previous field (wraps from first to last).
+		return d, d.prevField()
+
+	case "enter":
+		if d.focusIndex == 3 {
+			return d, d.submit()
+		}
+		return d, d.nextField()
+
+	case " ":
+		if d.repoPickerFocused && d.hasRepos {
+			d.toggleSelectedRepo()
+			return d, nil
+		}
+
+	default:
+		// Printable runes typed while repo picker is focused → pass to list for filtering
+		if d.repoPickerFocused && d.hasRepos && len(msg.Runes) > 0 {
+			var cmd tea.Cmd
+			d.repoList, cmd = d.repoList.Update(msg)
+			return d, cmd
 		}
 	}
 
@@ -171,6 +293,58 @@ func (d *InitDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	}
 
 	return d, nil
+}
+
+// handleFilterModeKey handles key events when in filter mode.
+// In filter mode, printable characters (including j/k/h/l) type into the filter.
+func (d *InitDialog) handleFilterModeKey(msg tea.KeyMsg) (Modal, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		// ESC in filter mode: clear filter and exit filter mode.
+		d.repoList.ResetFilter()
+		return d, nil
+
+	case "enter":
+		// Enter exits filter mode, keeps filter active.
+		var cmd tea.Cmd
+		d.repoList, cmd = d.repoList.Update(msg)
+		return d, cmd
+
+	default:
+		// All printable characters (including j/k/h/l) type into filter.
+		var cmd tea.Cmd
+		d.repoList, cmd = d.repoList.Update(msg)
+		return d, cmd
+	}
+}
+
+// toggleSelectedRepo toggles the checked state of the currently selected repo.
+// It correctly handles filtered lists by applying the same filtering logic as renderRepoPicker().
+func (d *InitDialog) toggleSelectedRepo() {
+	// Get all items and filter them manually (same logic as renderRepoPicker)
+	allItems := d.repoList.Items()
+	filterValue := strings.ToLower(d.repoList.FilterValue())
+
+	// Filter items if filter is active
+	var filteredItems []repoPickerItem
+	for _, item := range allItems {
+		ri, ok := item.(repoPickerItem)
+		if !ok {
+			continue
+		}
+		if filterValue == "" || strings.Contains(strings.ToLower(ri.name), filterValue) {
+			filteredItems = append(filteredItems, ri)
+		}
+	}
+
+	// Get the item at the cursor position in the filtered list
+	cursorIdx := d.repoList.Index()
+	if cursorIdx < 0 || cursorIdx >= len(filteredItems) {
+		return
+	}
+
+	ri := filteredItems[cursorIdx]
+	d.repoChecked[ri.name] = !d.repoChecked[ri.name]
 }
 
 // View implements Modal.
@@ -209,7 +383,11 @@ func (d *InitDialog) View() string {
 	hintStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 	sb.WriteString("\n")
 	if d.hasRepos {
-		sb.WriteString(hintStyle.Render("[Space] toggle  [Tab/Shift+Tab] navigate  [Type] search  [Esc] clear/cancel  [Enter] next field"))
+		if d.repoPickerFocused && d.repoList.FilterState() == list.Filtering {
+			sb.WriteString(hintStyle.Render("[Type] filter  [Backspace] delete  [Enter] confirm  [Esc] clear and exit"))
+		} else {
+			sb.WriteString(hintStyle.Render("[Space] toggle  [j/k] navigate  [h/l] page  [f] filter  [Enter] next field  [Esc] cancel"))
+		}
 	} else {
 		sb.WriteString(hintStyle.Render("[Enter] confirm  [Esc] cancel"))
 	}
@@ -219,31 +397,63 @@ func (d *InitDialog) View() string {
 
 func (d *InitDialog) renderRepoPicker() string {
 	var sb strings.Builder
-	selectedStyle := lipgloss.NewStyle().Foreground(modalColorBorder).Bold(true)
-	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
-	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
+	filterModeStyle := lipgloss.NewStyle().Foreground(modalColorBorder).Bold(true)
 	filterStyle := lipgloss.NewStyle().Foreground(modalColorWarning)
+	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 
-	// Search bar — always shown when picker is focused; shown dimly otherwise.
-	const filterPrompt = "Search: "
-	if d.repoPickerFocused {
-		cursor := "_"
-		sb.WriteString(filterStyle.Render(filterPrompt+d.repoFilter) + cursor + "\n")
-	} else if d.repoFilter != "" {
-		sb.WriteString(dimStyle.Render(filterPrompt+d.repoFilter) + "\n")
+	// Show [FILTER] indicator when in filter mode
+	if d.repoPickerFocused && d.repoList.FilterState() == list.Filtering {
+		filterText := d.repoList.FilterValue()
+		sb.WriteString(filterModeStyle.Render("[FILTER] ") + filterStyle.Render("Search: "+filterText+"_"))
+		sb.WriteString("\n")
+	} else if d.repoPickerFocused && d.repoList.FilterState() == list.FilterApplied {
+		filterText := d.repoList.FilterValue()
+		sb.WriteString(dimStyle.Render("Search: " + filterText))
+		sb.WriteString("\n")
 	}
 
-	visible := d.visibleRepos()
+	// Render the list items with checkbox style
+	selectedStyle := lipgloss.NewStyle().Foreground(modalColorBorder).Bold(true)
+	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
 
-	for visIdx, srcIdx := range visible {
-		item := d.repoPicker[srcIdx]
+	// Get all items and filter them manually
+	allItems := d.repoList.Items()
+	filterValue := strings.ToLower(d.repoList.FilterValue())
+
+	// Filter items if filter is active
+	var filteredItems []repoPickerItem
+	for _, item := range allItems {
+		ri, ok := item.(repoPickerItem)
+		if !ok {
+			continue
+		}
+		if filterValue == "" || strings.Contains(strings.ToLower(ri.name), filterValue) {
+			filteredItems = append(filteredItems, ri)
+		}
+	}
+
+	// Update paginator total pages to reflect filtered items
+	if d.repoList.Paginator.PerPage > 0 {
+		d.repoList.Paginator.TotalPages = (len(filteredItems) + d.repoList.Paginator.PerPage - 1) / d.repoList.Paginator.PerPage
+	}
+	if d.repoList.Paginator.TotalPages < 1 {
+		d.repoList.Paginator.TotalPages = 1
+	}
+
+	// Use paginator to get only items on current page
+	start, end := d.repoList.Paginator.GetSliceBounds(len(filteredItems))
+	for i := start; i < end && i < len(filteredItems); i++ {
+		ri := filteredItems[i]
+
+		checked := d.repoChecked[ri.name]
 		check := "[ ]"
-		if item.checked {
+		if checked {
 			check = "[x]"
 		}
-		line := check + " " + item.name
+		line := check + " " + ri.name
 
-		if d.repoPickerFocused && visIdx == d.repoCursor {
+		isSelected := i == d.repoList.Index()
+		if d.repoPickerFocused && isSelected {
 			sb.WriteString(selectedStyle.Render("▸ " + line))
 		} else {
 			sb.WriteString(normalStyle.Render("  " + line))
@@ -251,12 +461,18 @@ func (d *InitDialog) renderRepoPicker() string {
 		sb.WriteString("\n")
 	}
 
-	if len(visible) == 0 {
-		if d.repoFilter != "" {
+	if len(filteredItems) == 0 {
+		if d.repoList.FilterState() == list.FilterApplied {
 			sb.WriteString(dimStyle.Render("  No repos match the filter."))
 		} else {
 			sb.WriteString(dimStyle.Render("  No repos discovered."))
 		}
+		sb.WriteString("\n")
+	}
+
+	// Page indicator - show dots
+	if d.repoList.Paginator.TotalPages > 1 {
+		sb.WriteString(dimStyle.Render("  " + d.repoList.Paginator.View()))
 		sb.WriteString("\n")
 	}
 
@@ -297,9 +513,9 @@ func (d *InitDialog) prevField() tea.Cmd {
 func (d *InitDialog) submit() tea.Cmd {
 	var services []string
 	if d.hasRepos {
-		for _, item := range d.repoPicker {
-			if item.checked {
-				services = append(services, item.name)
+		for name, checked := range d.repoChecked {
+			if checked {
+				services = append(services, name)
 			}
 		}
 	} else {
@@ -334,33 +550,44 @@ func parseServices(raw string) []string {
 	return result
 }
 
-// visibleRepos returns the indices into d.repoPicker that should be shown.
-// When len(repoFilter) > 3 the list is restricted to items whose name contains
-// the filter string (case-insensitive). Otherwise all indices are returned.
-func (d *InitDialog) visibleRepos() []int {
-	indices := make([]int, 0, len(d.repoPicker))
-	needle := strings.ToLower(d.repoFilter)
-	applyFilter := len([]rune(d.repoFilter)) > 3
-	for i, item := range d.repoPicker {
-		if applyFilter && !strings.Contains(strings.ToLower(item.name), needle) {
-			continue
+// visibleListHeight returns the height for the repo list based on terminal dimensions.
+func (d *InitDialog) visibleListHeight() int {
+	if d.terminalHeight > 0 {
+		// Calculate based on terminal height: terminalHeight - 16 (overhead)
+		size := d.terminalHeight - 16
+		if size < 4 {
+			return 4 // Minimum visible window
 		}
-		indices = append(indices, i)
+		return size
 	}
-	return indices
+	// Default fallback when dimensions not yet passed
+	return 8
 }
 
-// clampRepoCursor ensures repoCursor stays within the visible list bounds.
-func (d *InitDialog) clampRepoCursor() {
-	visible := d.visibleRepos()
-	if len(visible) == 0 {
-		d.repoCursor = 0
+// clampCursorToFilteredItems ensures the cursor stays within the filtered items.
+// When a filter is active, the cursor must not exceed the number of visible items.
+func (d *InitDialog) clampCursorToFilteredItems() {
+	if !d.hasRepos {
 		return
 	}
-	if d.repoCursor >= len(visible) {
-		d.repoCursor = len(visible) - 1
+
+	allItems := d.repoList.Items()
+	filterValue := strings.ToLower(d.repoList.FilterValue())
+
+	// Count filtered items
+	filteredCount := 0
+	for _, item := range allItems {
+		ri, ok := item.(repoPickerItem)
+		if !ok {
+			continue
+		}
+		if filterValue == "" || strings.Contains(strings.ToLower(ri.name), filterValue) {
+			filteredCount++
+		}
 	}
-	if d.repoCursor < 0 {
-		d.repoCursor = 0
+
+	// Clamp cursor to filtered items
+	if filteredCount > 0 && d.repoList.Index() >= filteredCount {
+		d.repoList.Select(filteredCount - 1)
 	}
 }

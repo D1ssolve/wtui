@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/diss0x/wtui/internal/config"
+	"github.com/diss0x/wtui/internal/domain"
 	"github.com/diss0x/wtui/internal/logutil"
 	"github.com/diss0x/wtui/internal/task"
 	"github.com/diss0x/wtui/internal/tui/modal"
@@ -22,7 +23,8 @@ type Model struct {
 	logger *slog.Logger
 	mgr    task.Manager
 
-	focus FocusPanel
+	focus         FocusPanel
+	previousFocus FocusPanel // Tracks the panel before switching to Output
 
 	width  int
 	height int
@@ -32,7 +34,9 @@ type Model struct {
 	tasksPanel    panels.TasksPanel
 	servicesPanel panels.ServicesPanel
 	outputPanel   panels.OutputPanel
-	reposPanel    panels.ReposPanel
+
+	// repos caches the discovered repositories for the InitDialog.
+	repos []domain.Repo
 
 	modal modal.Modal
 
@@ -87,7 +91,6 @@ func New(cfg *config.Config, mgr task.Manager, logger *slog.Logger) (Model, erro
 		tasksPanel:    panels.NewTasksPanel(25, 10),
 		servicesPanel: panels.NewServicesPanel(55, 10),
 		outputPanel:   panels.NewOutputPanel(80, cfg.OutputPanelLines+2),
-		reposPanel:    panels.NewReposPanel(55, 10),
 	}
 
 	m.tasksPanel.SetFocused(true)
@@ -110,6 +113,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recalculateDimensions()
 		if m.logOverlay != nil {
 			m.logOverlay.SetSize(msg.Width, msg.Height)
+		}
+		// Update modal terminal dimensions if open.
+		if m.modal != nil {
+			m.modal.SetTerminalSize(msg.Width, msg.Height)
 		}
 		m.ready = true
 		m.logger.Debug("terminal resized",
@@ -154,10 +161,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case key.Matches(msg, m.keymap.Tab):
-			if m.focus != FocusServices {
-				m = m.cycleFocusForward()
-				m.logger.Debug("focus changed", slog.String("panel", m.focus.String()))
-			}
+			m = m.toggleOutputFocus()
+			m.logger.Debug("focus changed", slog.String("panel", m.focus.String()))
 			return m, nil
 
 		case key.Matches(msg, m.keymap.ShiftTab):
@@ -225,25 +230,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case panels.OpenInitDialogMsg:
-		repos := m.reposPanel.Repos()
-		if len(repos) > 0 {
-			m.modal = modal.NewInitDialog(m.cfg.BranchPrefix, repos)
+		if len(m.repos) > 0 {
+			m.modal = modal.NewInitDialog(m.cfg.BranchPrefix, m.repos, m.width, m.height)
 			return m, nil
 		}
 		m.initDialogPending = true
-		m.reposPanel.SetLoading(true)
 		return m, loadReposCmd(m.mgr)
 
 	case panels.OpenAddServiceMsg:
-		m.modal = modal.NewAddDialog(msg.TaskID)
+		m.modal = modal.NewAddDialog(msg.TaskID, m.repos, m.width, m.height)
 		return m, nil
 
 	case panels.OpenRemoveDialogMsg:
 		m.modal = modal.NewRemoveTaskDialog(msg.TaskID, 0, nil)
 		return m, loadDirtyServicesCmd(m.mgr, msg.TaskID)
-
-	case panels.OpenFilePickerMsg:
-		return m, loadOpenCandidatesCmd(m.mgr, msg.TaskID)
 
 	case panels.CloneTaskMsg:
 		m.modal = modal.NewCloneDialog(msg.SrcTaskID)
@@ -338,10 +338,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner.Tick,
 		)
 
-	case modal.SubmitOpenFileMsg:
-		m.modal = nil
-		return m, openFileCmd(m.mgr, msg.Path, msg.App)
-
 	case modal.SubmitCloneMsg:
 		m.modal = nil
 		m.opRunning = true
@@ -364,10 +360,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.initDialogPending = false
 			return m, nil
 		}
-		m.reposPanel.SetRepos(msg.Repos)
+		m.repos = msg.Repos
 		if m.initDialogPending {
 			m.initDialogPending = false
-			m.modal = modal.NewInitDialog(m.cfg.BranchPrefix, msg.Repos)
+			m.modal = modal.NewInitDialog(m.cfg.BranchPrefix, msg.Repos, m.width, m.height)
 		}
 		return m, nil
 
@@ -378,14 +374,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modal = rd
 			}
 		}
-		return m, nil
-
-	case OpenCandidatesLoadedMsg:
-		if len(msg.Candidates.Files) == 0 {
-			m.outputPanel.AppendLine("No openable files found for task " + msg.TaskID)
-			return m, nil
-		}
-		m.modal = modal.NewOpenDialog(msg.Candidates)
 		return m, nil
 
 	case OutputLineMsg:
@@ -444,7 +432,8 @@ func (m Model) View() string {
 	}
 
 	if m.modal != nil {
-		return modal.OverlayView(m.modal.View(), m.width, m.height)
+		maxContentH := max(m.height*70/100, 10)
+		return modal.OverlayView(m.modal.View(), m.width, m.height, maxContentH)
 	}
 
 	return fullView
@@ -462,7 +451,6 @@ func (m *Model) recalculateDimensions() {
 	m.tasksPanel.SetSize(tasksWidth, mainPanelHeight)
 	m.servicesPanel.SetSize(servicesWidth, mainPanelHeight)
 	m.outputPanel.SetSize(m.width, m.cfg.OutputPanelLines)
-	m.reposPanel.SetSize(servicesWidth, mainPanelHeight)
 }
 
 func (m Model) cycleFocusForward() Model {
@@ -478,6 +466,48 @@ func (m Model) cycleFocusBackward() Model {
 	m.tasksPanel.SetFocused(m.focus == FocusTasks)
 	m.servicesPanel.SetFocused(m.focus == FocusServices)
 	m.outputPanel.SetFocused(m.focus == FocusOutput)
+	return m
+}
+
+// toggleOutputFocus toggles between Output panel and the previously focused panel.
+// If currently on Output, it restores the previous focus; otherwise, it saves
+// the current focus and switches to Output.
+func (m Model) toggleOutputFocus() Model {
+	if m.focus == FocusOutput {
+		// Restore previous focus
+		m.focus = m.previousFocus
+	} else {
+		// Save current focus and switch to Output
+		m.previousFocus = m.focus
+		m.focus = FocusOutput
+	}
+	m.tasksPanel.SetFocused(m.focus == FocusTasks)
+	m.servicesPanel.SetFocused(m.focus == FocusServices)
+	m.outputPanel.SetFocused(m.focus == FocusOutput)
+	return m
+}
+
+// moveFocusLeft moves focus from Services to Tasks.
+// If already on Tasks, focus stays on Tasks.
+func (m Model) moveFocusLeft() Model {
+	if m.focus == FocusServices {
+		m.focus = FocusTasks
+		m.tasksPanel.SetFocused(true)
+		m.servicesPanel.SetFocused(false)
+		m.outputPanel.SetFocused(false)
+	}
+	return m
+}
+
+// moveFocusRight moves focus from Tasks to Services.
+// If already on Services, focus stays on Services.
+func (m Model) moveFocusRight() Model {
+	if m.focus == FocusTasks {
+		m.focus = FocusServices
+		m.tasksPanel.SetFocused(false)
+		m.servicesPanel.SetFocused(true)
+		m.outputPanel.SetFocused(false)
+	}
 	return m
 }
 
