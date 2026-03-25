@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/diss0x/wtui/internal/domain"
@@ -87,7 +88,7 @@ func TestServicesPanel_SetFocused(t *testing.T) {
 
 func TestServicesPanel_KeyA_EmitsOpenAddServiceMsg(t *testing.T) {
 	p := NewServicesPanel(60, 20)
-	tid, svcs := makeServices("IN-001", "collection")
+	tid, svcs := makeServices("IN-001", "collection", "databridge")
 	p.SetServices(tid, svcs)
 	p.SetFocused(true)
 
@@ -102,6 +103,12 @@ func TestServicesPanel_KeyA_EmitsOpenAddServiceMsg(t *testing.T) {
 	}
 	if got.TaskID != "IN-001" {
 		t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
+	}
+	if len(got.ExistingServices) != 2 {
+		t.Errorf("expected 2 existing services, got %d", len(got.ExistingServices))
+	}
+	if got.ExistingServices[0] != "collection" || got.ExistingServices[1] != "databridge" {
+		t.Errorf("expected ExistingServices=[collection, databridge], got %v", got.ExistingServices)
 	}
 }
 
@@ -364,32 +371,37 @@ func TestServicesPanel_CtrlU_NoServiceSelected_ReturnsNil(t *testing.T) {
 
 // ── Filter mode tests ───────────────────────────────────────────────────────────
 
-// TestServicesPanel_FilterMode_ShowsFilterIndicator verifies [FILTER] appears when in filter mode.
-func TestServicesPanel_FilterMode_ShowsFilterIndicator(t *testing.T) {
+// TestServicesPanel_FilterMode_EntersFilterMode verifies 'f' key enters filter mode.
+func TestServicesPanel_FilterMode_EntersFilterMode(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection", "databridge", "reporting")
 	p.SetServices(tid, svcs)
 	p.SetFocused(true)
 
+	// Initially not in filter mode
+	if p.FilterActive() {
+		t.Error("Panel should not be in filter mode initially")
+	}
+
 	// Enter filter mode by pressing 'f'
 	p, _ = p.Update(sendKey("f"))
 
-	view := p.View()
-	if !strings.Contains(view, "[FILTER]") {
-		t.Error("View should contain [FILTER] when in filter mode")
+	// Now should be in filter mode
+	if !p.FilterActive() {
+		t.Error("Panel should be in filter mode after pressing 'f'")
 	}
 }
 
-// TestServicesPanel_FilterMode_NoFilterIndicatorWhenNotFiltering verifies [FILTER] does not appear when not filtering.
+// TestServicesPanel_FilterMode_NoFilterIndicatorWhenNotFiltering verifies filter is not active initially.
 func TestServicesPanel_FilterMode_NoFilterIndicatorWhenNotFiltering(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection", "databridge")
 	p.SetServices(tid, svcs)
 	p.SetFocused(true)
 
-	view := p.View()
-	if strings.Contains(view, "[FILTER]") {
-		t.Error("View should NOT contain [FILTER] when not in filter mode")
+	// Initially not in filter mode
+	if p.FilterActive() {
+		t.Error("Panel should not be in filter mode initially")
 	}
 }
 
@@ -405,12 +417,17 @@ func TestServicesPanel_FilterMode_EscClearsFilter(t *testing.T) {
 	p, _ = p.Update(sendKey("c"))
 	p, _ = p.Update(sendKey("o"))
 
+	// Verify we're in filter mode
+	if !p.FilterActive() {
+		t.Error("Panel should be in filter mode after typing")
+	}
+
 	// Press ESC to clear filter
 	p, _ = p.Update(sendSpecialKey(tea.KeyEsc))
 
-	view := p.View()
-	if strings.Contains(view, "[FILTER]") {
-		t.Error("View should NOT contain [FILTER] after ESC clears filter")
+	// After ESC, filter should be cleared
+	if p.FilterActive() {
+		t.Error("Panel should NOT be in filter mode after ESC clears filter")
 	}
 }
 
@@ -426,16 +443,21 @@ func TestServicesPanel_FilterMode_EnterExitsFilterMode(t *testing.T) {
 	p, _ = p.Update(sendKey("c"))
 	p, _ = p.Update(sendKey("o"))
 
+	// Verify we're in filter mode
+	if !p.FilterActive() {
+		t.Error("Panel should be in filter mode after typing")
+	}
+
 	// Press ENTER to exit filter mode (keep filter active)
 	p, _ = p.Update(sendSpecialKey(tea.KeyEnter))
 
-	view := p.View()
-	// After ENTER, we should NOT be in filter mode (no [FILTER] indicator)
-	if strings.Contains(view, "[FILTER]") {
-		t.Error("View should NOT contain [FILTER] after ENTER exits filter mode")
+	// After ENTER, we should NOT be in filter mode
+	if p.FilterActive() {
+		t.Error("Panel should NOT be in filter mode after ENTER exits filter mode")
 	}
-	// But the filter should still be active (show "Search: co")
-	if !strings.Contains(stripAnsi(view), "Search: co") {
-		t.Error("View should show 'Search: co' after ENTER exits filter mode")
+
+	// But the filter should still be applied (FilterApplied state)
+	if p.list.FilterState() != list.FilterApplied {
+		t.Error("Filter should still be applied after ENTER")
 	}
 }

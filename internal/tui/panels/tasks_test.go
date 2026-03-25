@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/diss0x/wtui/internal/domain"
@@ -374,8 +375,8 @@ func TestTasksPanel_Unfocused_KeysIgnored(t *testing.T) {
 
 // ── Filter mode tests ───────────────────────────────────────────────────────────
 
-// TestTasksPanel_FilterMode_ShowsFilterIndicator verifies [FILTER] appears when in filter mode.
-func TestTasksPanel_FilterMode_ShowsFilterIndicator(t *testing.T) {
+// TestTasksPanel_FilterMode_ShowsFilterInput verifies filter mode shows the built-in filter input.
+func TestTasksPanel_FilterMode_ShowsFilterInput(t *testing.T) {
 	p := NewTasksPanel(60, 20)
 	p.SetTasks(makeTasks("IN-001", "IN-002", "IN-003"))
 	p.SetFocused(true)
@@ -383,21 +384,21 @@ func TestTasksPanel_FilterMode_ShowsFilterIndicator(t *testing.T) {
 	// Enter filter mode by pressing 'f' (which sends '/' to the list internally)
 	p, _ = p.Update(sendKey("f"))
 
-	view := p.View()
-	if !strings.Contains(view, "[FILTER]") {
-		t.Error("View should contain [FILTER] when in filter mode")
+	// Check that we're in filter mode
+	if !p.FilterActive() {
+		t.Error("Panel should be in filter mode after pressing 'f'")
 	}
 }
 
-// TestTasksPanel_FilterMode_NoFilterIndicatorWhenNotFiltering verifies [FILTER] does not appear when not filtering.
+// TestTasksPanel_FilterMode_NoFilterIndicatorWhenNotFiltering verifies filter is not active initially.
 func TestTasksPanel_FilterMode_NoFilterIndicatorWhenNotFiltering(t *testing.T) {
 	p := NewTasksPanel(60, 20)
 	p.SetTasks(makeTasks("IN-001", "IN-002", "IN-003"))
 	p.SetFocused(true)
 
-	view := p.View()
-	if strings.Contains(view, "[FILTER]") {
-		t.Error("View should NOT contain [FILTER] when not in filter mode")
+	// Initially not in filter mode
+	if p.FilterActive() {
+		t.Error("Panel should not be in filter mode initially")
 	}
 }
 
@@ -412,12 +413,17 @@ func TestTasksPanel_FilterMode_EscClearsFilter(t *testing.T) {
 	p, _ = p.Update(sendKey("I"))
 	p, _ = p.Update(sendKey("N"))
 
+	// Verify we're in filter mode
+	if !p.FilterActive() {
+		t.Error("Panel should be in filter mode after typing")
+	}
+
 	// Press ESC to clear filter
 	p, _ = p.Update(sendSpecialKey(tea.KeyEsc))
 
-	view := p.View()
-	if strings.Contains(view, "[FILTER]") {
-		t.Error("View should NOT contain [FILTER] after ESC clears filter")
+	// After ESC, filter should be cleared
+	if p.FilterActive() {
+		t.Error("Panel should NOT be in filter mode after ESC clears filter")
 	}
 }
 
@@ -432,17 +438,22 @@ func TestTasksPanel_FilterMode_EnterExitsFilterMode(t *testing.T) {
 	p, _ = p.Update(sendKey("I"))
 	p, _ = p.Update(sendKey("N"))
 
+	// Verify we're in filter mode
+	if !p.FilterActive() {
+		t.Error("Panel should be in filter mode after typing")
+	}
+
 	// Press ENTER to exit filter mode (keep filter active)
 	p, _ = p.Update(sendSpecialKey(tea.KeyEnter))
 
-	view := p.View()
-	// After ENTER, we should NOT be in filter mode (no [FILTER] indicator)
-	if strings.Contains(view, "[FILTER]") {
-		t.Error("View should NOT contain [FILTER] after ENTER exits filter mode")
+	// After ENTER, we should NOT be in filter mode
+	if p.FilterActive() {
+		t.Error("Panel should NOT be in filter mode after ENTER exits filter mode")
 	}
-	// But the filter should still be active (show "Search: IN")
-	if !strings.Contains(stripAnsi(view), "Search: IN") {
-		t.Error("View should show 'Search: IN' after ENTER exits filter mode")
+
+	// But the filter should still be applied (FilterApplied state)
+	if p.list.FilterState() != list.FilterApplied {
+		t.Error("Filter should still be applied after ENTER")
 	}
 }
 

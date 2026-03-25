@@ -34,7 +34,10 @@ type TaskSelectionChangedMsg struct{ TaskID string }
 
 // OpenAddServiceMsg is emitted when the user presses [a] in the Services panel,
 // requesting the Add Service dialog for the given task.
-type OpenAddServiceMsg struct{ TaskID string }
+type OpenAddServiceMsg struct {
+	TaskID           string
+	ExistingServices []string
+}
 
 // ShellExecMsg is emitted when the user presses [;] in the Tasks panel,
 // requesting a shell command prompt for the given task directory.

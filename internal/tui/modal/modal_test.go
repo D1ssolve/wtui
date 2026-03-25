@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -182,7 +183,7 @@ func TestInitDialog_Enter_NonLastField_Advances(t *testing.T) {
 // ── 5. AddDialog Enter emits SubmitAddMsg with parsed services ────────────────
 
 func TestAddDialog_Enter_Submits(t *testing.T) {
-	d := NewAddDialog("IN-6748", nil, 80, 24)
+	d := NewAddDialog("IN-6748", nil, nil, 80, 24)
 	d.input.SetValue("alpha beta,gamma")
 
 	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
@@ -211,7 +212,7 @@ func TestAddDialog_Enter_Submits(t *testing.T) {
 // ── 6. AddDialog Esc emits CloseModalMsg ─────────────────────────────────────
 
 func TestAddDialog_Esc_Closes(t *testing.T) {
-	d := NewAddDialog("IN-0001", nil, 80, 24)
+	d := NewAddDialog("IN-0001", nil, nil, 80, 24)
 	_, cmd := d.Update(sendSpecialKey(tea.KeyEsc))
 	if cmd == nil {
 		t.Fatal("Esc must return a cmd")
@@ -545,7 +546,7 @@ func TestRemoveDialog_ViewContainsDirtyWarnings(t *testing.T) {
 // ── 21. AddDialog Title includes taskID ──────────────────────────────────────
 
 func TestAddDialog_TitleIncludesTaskID(t *testing.T) {
-	d := NewAddDialog("IN-5555", nil, 80, 24)
+	d := NewAddDialog("IN-5555", nil, nil, 80, 24)
 	if !strings.Contains(d.Title(), "IN-5555") {
 		t.Errorf("Title() should contain taskID, got %q", d.Title())
 	}
@@ -627,7 +628,7 @@ func newAddDialogWithRepos(names ...string) *AddDialog {
 	for i, name := range names {
 		repos[i] = domain.Repo{Name: name}
 	}
-	d := NewAddDialog("IN-1234", repos, 80, 24)
+	d := NewAddDialog("IN-1234", repos, nil, 80, 24)
 	d.focusField(1) // focus the repo picker
 	return d
 }
@@ -641,6 +642,28 @@ func getRepoNames(d *InitDialog) []string {
 		names[i] = ri.name
 	}
 	return names
+}
+
+// isInitRepoChecked returns whether the repo with the given name is checked in
+// the InitDialog's repo list. It searches all items (not just visible ones).
+func isInitRepoChecked(d *InitDialog, name string) bool {
+	for _, it := range d.repoList.Items() {
+		if ri, ok := it.(repoPickerItem); ok && ri.name == name {
+			return ri.checked
+		}
+	}
+	return false
+}
+
+// isAddRepoChecked returns whether the repo with the given name is checked in
+// the AddDialog's repo list. It searches all items (not just visible ones).
+func isAddRepoChecked(d *AddDialog, name string) bool {
+	for _, it := range d.repoList.Items() {
+		if ri, ok := it.(repoPickerItem); ok && ri.name == name {
+			return ri.checked
+		}
+	}
+	return false
 }
 
 // ── 24. InitDialog repo picker filter — list filters items ───────────────
@@ -716,13 +739,13 @@ func TestInitDialog_RepoPicker_Space_TogglesCheckbox(t *testing.T) {
 	d.Update(sendKey(" "))
 
 	// First item should be checked
-	if !d.repoChecked["alpha-service"] {
+	if !isInitRepoChecked(d, "alpha-service") {
 		t.Error("First item should be checked after Space")
 	}
 
 	// Toggle again to uncheck
 	d.Update(sendKey(" "))
-	if d.repoChecked["alpha-service"] {
+	if isInitRepoChecked(d, "alpha-service") {
 		t.Error("First item should be unchecked after second Space")
 	}
 }
@@ -790,9 +813,13 @@ func TestInitDialog_RepoPicker_Filter_SubmitIncludesAllChecked(t *testing.T) {
 	d.fields[0].SetValue("IN-0001")
 	d.fields[2].SetValue("feature/")
 
-	// Check first two items
-	d.repoChecked["api-gateway"] = true
-	d.repoChecked["backend-app"] = true
+	// Check first two items by toggling them via the list API.
+	// Set cursor at index 0 and toggle api-gateway.
+	d.repoList.Select(0)
+	d.toggleSelectedRepo()
+	// Set cursor at index 1 and toggle backend-app.
+	d.repoList.Select(1)
+	d.toggleSelectedRepo()
 
 	// Navigate to last field and submit
 	d.focusIndex = 3
@@ -890,77 +917,79 @@ func TestInitDialog_Esc_NotInFilterMode_NoFilter_ClosesDialog(t *testing.T) {
 
 // ── Task 2: AddDialog filter mode tests ────────────────────────────────────────
 
-// TestAddDialog_Tab_TogglesToRepoPicker verifies TAB toggles from text input to repo picker.
+// TestAddDialog_Tab_TogglesToRepoPicker verifies that when repos are available
+// the dialog opens with the repo picker already focused (no Tab required).
 func TestAddDialog_Tab_TogglesToRepoPicker(t *testing.T) {
 	repos := []domain.Repo{{Name: "alpha-service"}, {Name: "beta-service"}}
-	d := NewAddDialog("IN-1234", repos, 80, 24)
-	// Text input is focused by default (field 0).
+	d := NewAddDialog("IN-1234", repos, nil, 80, 24)
 
-	if d.repoPickerFocused {
-		t.Fatal("expected repoPickerFocused=false initially")
+	// Repo picker must be focused immediately — no Tab needed.
+	if !d.repoPickerFocused {
+		t.Fatal("expected repoPickerFocused=true initially when repos are available")
 	}
 
-	// Tab should toggle to repo picker.
+	// Tab is a no-op in single-field mode — picker stays focused.
 	m, _ := d.Update(sendSpecialKey(tea.KeyTab))
 	d = m.(*AddDialog)
 
 	if !d.repoPickerFocused {
-		t.Error("Tab should toggle focus to repo picker")
+		t.Error("Tab should keep focus on repo picker when it is the only field")
 	}
 }
 
-// TestAddDialog_Tab_FromRepoPicker_TogglesToTextInput verifies TAB toggles from repo picker to text input.
+// TestAddDialog_Tab_FromRepoPicker_TogglesToTextInput verifies TAB is a no-op
+// when repos are available (repo picker is the only interactive element).
 func TestAddDialog_Tab_FromRepoPicker_TogglesToTextInput(t *testing.T) {
 	d := newAddDialogWithRepos("alpha-service", "beta-service")
-	d.focusField(1) // focus repo picker
 
 	if !d.repoPickerFocused {
-		t.Fatal("expected repoPickerFocused=true after focusField(1)")
+		t.Fatal("expected repoPickerFocused=true initially")
 	}
 
-	// Tab should toggle back to text input.
+	// Tab should keep the repo picker focused — nothing else to cycle to.
 	m, _ := d.Update(sendSpecialKey(tea.KeyTab))
 	d = m.(*AddDialog)
 
-	if d.repoPickerFocused {
-		t.Error("Tab should toggle focus back to text input")
+	if !d.repoPickerFocused {
+		t.Error("Tab should keep focus on repo picker when it is the only field")
 	}
 }
 
-// TestAddDialog_ShiftTab_TogglesToRepoPicker verifies Shift+TAB toggles from text input to repo picker.
+// TestAddDialog_ShiftTab_TogglesToRepoPicker verifies that Shift+TAB is also a
+// no-op when repos are available — repo picker stays focused.
 func TestAddDialog_ShiftTab_TogglesToRepoPicker(t *testing.T) {
 	repos := []domain.Repo{{Name: "alpha-service"}, {Name: "beta-service"}}
-	d := NewAddDialog("IN-1234", repos, 80, 24)
+	d := NewAddDialog("IN-1234", repos, nil, 80, 24)
 
-	// Text input is focused by default.
-	if d.repoPickerFocused {
-		t.Fatal("expected repoPickerFocused=false initially")
+	// Repo picker must be focused immediately.
+	if !d.repoPickerFocused {
+		t.Fatal("expected repoPickerFocused=true initially when repos are available")
 	}
 
-	// Shift+Tab should toggle to repo picker.
+	// Shift+Tab is a no-op — picker stays focused.
 	m, _ := d.Update(sendSpecialKey(tea.KeyShiftTab))
 	d = m.(*AddDialog)
 
 	if !d.repoPickerFocused {
-		t.Error("Shift+Tab should toggle focus to repo picker")
+		t.Error("Shift+Tab should keep focus on repo picker when it is the only field")
 	}
 }
 
-// TestAddDialog_ShiftTab_FromRepoPicker_TogglesToTextInput verifies Shift+TAB toggles from repo picker to text input.
+// TestAddDialog_ShiftTab_FromRepoPicker_TogglesToTextInput verifies Shift+TAB
+// is a no-op when repos are available — repo picker stays focused.
 func TestAddDialog_ShiftTab_FromRepoPicker_TogglesToTextInput(t *testing.T) {
 	d := newAddDialogWithRepos("alpha-service", "beta-service")
-	d.focusField(1) // focus repo picker
 
 	if !d.repoPickerFocused {
-		t.Fatal("expected repoPickerFocused=true after focusField(1)")
+		t.Fatal("expected repoPickerFocused=true initially")
 	}
 
-	// Shift+Tab should toggle back to text input.
+	// Shift+Tab should keep the repo picker focused.
 	m, _ := d.Update(sendSpecialKey(tea.KeyShiftTab))
 	d = m.(*AddDialog)
 
-	if d.repoPickerFocused {
-		t.Error("Shift+Tab should toggle focus back to text input")
+	if !d.repoPickerFocused {
+		t.Error("Shift+Tab should keep focus on repo picker when it is the only field")
 	}
 }
 
@@ -988,15 +1017,16 @@ func TestAddDialog_Tab_DoesNotNavigateWithinRepoPicker(t *testing.T) {
 
 	initialIndex := d.repoList.Index()
 
-	// Tab should NOT change list index - it should toggle focus to text input.
+	// Tab is a no-op when repos are available — list index stays the same
+	// and repo picker remains focused (it is the only interactive element).
 	m, _ := d.Update(sendSpecialKey(tea.KeyTab))
 	d = m.(*AddDialog)
 
 	if d.repoList.Index() != initialIndex {
 		t.Errorf("Tab should not change list index, got %d (was %d)", d.repoList.Index(), initialIndex)
 	}
-	if d.repoPickerFocused {
-		t.Error("Tab should toggle focus away from repo picker")
+	if !d.repoPickerFocused {
+		t.Error("Tab should keep focus on repo picker when it is the only field")
 	}
 }
 
@@ -1167,7 +1197,7 @@ func TestAddDialog_H_InNormalMode_GoToPrevPage(t *testing.T) {
 	for i := range repos {
 		repos[i] = domain.Repo{Name: fmt.Sprintf("service-%d", i)}
 	}
-	d := NewAddDialog("IN-1234", repos, 80, 24)
+	d := NewAddDialog("IN-1234", repos, nil, 80, 24)
 	d.focusField(1) // focus repo picker
 
 	// Move to page 2
@@ -1192,7 +1222,7 @@ func TestAddDialog_L_InNormalMode_GoToNextPage(t *testing.T) {
 	for i := range repos {
 		repos[i] = domain.Repo{Name: fmt.Sprintf("service-%d", i)}
 	}
-	d := NewAddDialog("IN-1234", repos, 80, 24)
+	d := NewAddDialog("IN-1234", repos, nil, 80, 24)
 	d.focusField(1) // focus repo picker
 
 	if d.repoList.Paginator.Page != 0 {
@@ -1220,10 +1250,10 @@ func TestAddDialog_F_Key_EntersFilterMode(t *testing.T) {
 }
 
 // TestAddDialog_F_Key_NotInRepoPicker_TypesIntoTextInput verifies 'f' types into
-// text input when text input is focused (not entering filter mode).
+// text input when there are no repos (plain text input mode).
 func TestAddDialog_F_Key_NotInRepoPicker_TypesIntoTextInput(t *testing.T) {
-	d := NewAddDialog("IN-1234", []domain.Repo{{Name: "alpha-service"}}, 80, 24)
-	// Text input is focused by default (field 0)
+	d := NewAddDialog("IN-1234", nil, nil, 80, 24) // no repos — plain text input
+	// Text input is focused by default when there are no repos.
 
 	m, _ := d.Update(sendKey("f"))
 	d = m.(*AddDialog)
@@ -1273,7 +1303,9 @@ func TestAddDialog_Esc_NotInFilterMode_NoFilter_ClosesDialog(t *testing.T) {
 
 // ── Task 4: View() shows filter mode indicator ───────────────────────────────────
 
-// TestInitDialog_View_ShowsFilterModeIndicator verifies [FILTER] prefix appears when in filter mode.
+// TestInitDialog_View_ShowsFilterModeIndicator verifies the list's native filter input
+// is rendered (via list.View()) when in filter mode. Since renderRepoPicker() is gone,
+// the filter state is signalled by the list component's own view rather than a "[FILTER]" prefix.
 func TestInitDialog_View_ShowsFilterModeIndicator(t *testing.T) {
 	d := newInitDialogWithRepos("alpha", "beta")
 
@@ -1281,23 +1313,25 @@ func TestInitDialog_View_ShowsFilterModeIndicator(t *testing.T) {
 	m, _ := d.Update(sendKey("f"))
 	d = m.(*InitDialog)
 
-	view := d.View()
-	if !strings.Contains(view, "[FILTER]") {
-		t.Error("View should contain [FILTER] when in filter mode")
+	// Verify that list is actually in filtering state (the indicator of filter mode).
+	if d.repoList.FilterState() != list.Filtering {
+		t.Error("After 'f' key, list should be in Filtering state")
 	}
 }
 
-// TestInitDialog_View_NoFilterModeIndicatorWhenNotInFilterMode verifies [FILTER] prefix does not appear when not in filter mode.
+// TestInitDialog_View_NoFilterModeIndicatorWhenNotInFilterMode verifies list is unfiltered when not in filter mode.
 func TestInitDialog_View_NoFilterModeIndicatorWhenNotInFilterMode(t *testing.T) {
 	d := newInitDialogWithRepos("alpha", "beta")
 
-	view := d.View()
-	if strings.Contains(view, "[FILTER]") {
-		t.Error("View should NOT contain [FILTER] when not in filter mode")
+	// List should be unfiltered by default.
+	if d.repoList.FilterState() != list.Unfiltered {
+		t.Error("List should be Unfiltered when not in filter mode")
 	}
 }
 
-// TestInitDialog_View_ShowsFilterModeHints verifies hint bar shows filter mode hints when in filter mode.
+// TestInitDialog_View_ShowsFilterModeHints verifies hint bar shows normal hints
+// (filter mode no longer gets a separate hint bar — the list's built-in filter input
+// serves as the filter UI; the outer hint bar always shows the standard keybindings).
 func TestInitDialog_View_ShowsFilterModeHints(t *testing.T) {
 	d := newInitDialogWithRepos("alpha", "beta")
 
@@ -1305,12 +1339,13 @@ func TestInitDialog_View_ShowsFilterModeHints(t *testing.T) {
 	m, _ := d.Update(sendKey("f"))
 	d = m.(*InitDialog)
 
+	// The outer hint bar always shows normal hints after the refactor.
 	view := d.View()
-	if !strings.Contains(view, "[Type] filter") {
-		t.Error("View should contain '[Type] filter' hint when in filter mode")
+	if !strings.Contains(view, "[Space] toggle") {
+		t.Error("View should contain '[Space] toggle' hint (normal hint always shown)")
 	}
-	if !strings.Contains(view, "[Backspace] delete") {
-		t.Error("View should contain '[Backspace] delete' hint when in filter mode")
+	if !strings.Contains(view, "[f] filter") {
+		t.Error("View should contain '[f] filter' hint (normal hint always shown)")
 	}
 }
 
@@ -1330,7 +1365,8 @@ func TestInitDialog_View_ShowsNormalModeHints(t *testing.T) {
 	}
 }
 
-// TestAddDialog_View_ShowsFilterModeIndicator verifies [FILTER] prefix appears when in filter mode.
+// TestAddDialog_View_ShowsFilterModeIndicator verifies the list's native filter input
+// is rendered (via list.View()) when in filter mode.
 func TestAddDialog_View_ShowsFilterModeIndicator(t *testing.T) {
 	d := newAddDialogWithRepos("alpha", "beta")
 
@@ -1338,23 +1374,24 @@ func TestAddDialog_View_ShowsFilterModeIndicator(t *testing.T) {
 	m, _ := d.Update(sendKey("f"))
 	d = m.(*AddDialog)
 
-	view := d.View()
-	if !strings.Contains(view, "[FILTER]") {
-		t.Error("View should contain [FILTER] when in filter mode")
+	// Verify that list is actually in filtering state.
+	if d.repoList.FilterState() != list.Filtering {
+		t.Error("After 'f' key, list should be in Filtering state")
 	}
 }
 
-// TestAddDialog_View_NoFilterModeIndicatorWhenNotInFilterMode verifies [FILTER] prefix does not appear when not in filter mode.
+// TestAddDialog_View_NoFilterModeIndicatorWhenNotInFilterMode verifies list is unfiltered when not in filter mode.
 func TestAddDialog_View_NoFilterModeIndicatorWhenNotInFilterMode(t *testing.T) {
 	d := newAddDialogWithRepos("alpha", "beta")
 
-	view := d.View()
-	if strings.Contains(view, "[FILTER]") {
-		t.Error("View should NOT contain [FILTER] when not in filter mode")
+	// List should be unfiltered by default.
+	if d.repoList.FilterState() != list.Unfiltered {
+		t.Error("List should be Unfiltered when not in filter mode")
 	}
 }
 
-// TestAddDialog_View_ShowsFilterModeHints verifies hint bar shows filter mode hints when in filter mode.
+// TestAddDialog_View_ShowsFilterModeHints verifies hint bar shows normal hints
+// (the outer hint bar always shows the standard keybindings after the refactor).
 func TestAddDialog_View_ShowsFilterModeHints(t *testing.T) {
 	d := newAddDialogWithRepos("alpha", "beta")
 
@@ -1362,12 +1399,13 @@ func TestAddDialog_View_ShowsFilterModeHints(t *testing.T) {
 	m, _ := d.Update(sendKey("f"))
 	d = m.(*AddDialog)
 
+	// The outer hint bar always shows normal hints after the refactor.
 	view := d.View()
-	if !strings.Contains(view, "[Type] filter") {
-		t.Error("View should contain '[Type] filter' hint when in filter mode")
+	if !strings.Contains(view, "[Space] toggle") {
+		t.Error("View should contain '[Space] toggle' hint (normal hint always shown)")
 	}
-	if !strings.Contains(view, "[Backspace] delete") {
-		t.Error("View should contain '[Backspace] delete' hint when in filter mode")
+	if !strings.Contains(view, "[f] filter") {
+		t.Error("View should contain '[f] filter' hint (normal hint always shown)")
 	}
 }
 
@@ -1411,7 +1449,7 @@ func TestAddDialog_RepoPicker_PaginationShowsDots(t *testing.T) {
 	for i := range repos {
 		repos[i] = domain.Repo{Name: fmt.Sprintf("service-%d", i)}
 	}
-	d := NewAddDialog("IN-1234", repos, 80, 24)
+	d := NewAddDialog("IN-1234", repos, nil, 80, 24)
 	d.focusField(1)
 
 	view := d.View()
@@ -1439,14 +1477,14 @@ func TestInitDialog_RepoPicker_CheckboxToggles(t *testing.T) {
 	// Toggle first item
 	d.Update(sendKey(" "))
 
-	if !d.repoChecked["alpha"] {
+	if !isInitRepoChecked(d, "alpha") {
 		t.Error("First item should be checked after Space")
 	}
 
 	// Toggle again
 	d.Update(sendKey(" "))
 
-	if d.repoChecked["alpha"] {
+	if isInitRepoChecked(d, "alpha") {
 		t.Error("First item should be unchecked after second Space")
 	}
 }
@@ -1469,14 +1507,14 @@ func TestAddDialog_RepoPicker_CheckboxToggles(t *testing.T) {
 	// Toggle first item
 	d.Update(sendKey(" "))
 
-	if !d.repoChecked["alpha"] {
+	if !isAddRepoChecked(d, "alpha") {
 		t.Error("First item should be checked after Space")
 	}
 
 	// Toggle again
 	d.Update(sendKey(" "))
 
-	if d.repoChecked["alpha"] {
+	if isAddRepoChecked(d, "alpha") {
 		t.Error("First item should be unchecked after second Space")
 	}
 }
@@ -1484,54 +1522,132 @@ func TestAddDialog_RepoPicker_CheckboxToggles(t *testing.T) {
 // ── Cursor clamping tests for filtered items ─────────────────────────────────────
 
 // visibleNames returns the names of repos currently visible after filtering.
+// visibleNames returns names of repos currently visible in the InitDialog's repo list.
+// It uses list.VisibleItems() which reflects the filter state managed by bubbles/list.
 func visibleNames(d *InitDialog) []string {
-	allItems := d.repoList.Items()
-	filterValue := strings.ToLower(d.repoList.FilterValue())
-
 	var names []string
-	for _, item := range allItems {
+	for _, item := range d.repoList.VisibleItems() {
 		ri, ok := item.(repoPickerItem)
 		if !ok {
 			continue
 		}
-		if filterValue == "" || strings.Contains(strings.ToLower(ri.name), filterValue) {
-			names = append(names, ri.name)
-		}
+		names = append(names, ri.name)
 	}
 	return names
 }
 
-// visibleNamesAddDialog returns the names of repos currently visible after filtering for AddDialog.
+// visibleNamesAddDialog returns names of repos currently visible in the AddDialog's repo list.
+// It uses list.VisibleItems() which reflects the filter state managed by bubbles/list.
 func visibleNamesAddDialog(d *AddDialog) []string {
-	allItems := d.repoList.Items()
-	filterValue := strings.ToLower(d.repoList.FilterValue())
-
 	var names []string
-	for _, item := range allItems {
+	for _, item := range d.repoList.VisibleItems() {
 		ri, ok := item.(repoPickerItem)
 		if !ok {
 			continue
 		}
-		if filterValue == "" || strings.Contains(strings.ToLower(ri.name), filterValue) {
-			names = append(names, ri.name)
-		}
+		names = append(names, ri.name)
 	}
 	return names
 }
 
-// typeIntoFilter enters filter mode and types the given characters.
-func typeIntoFilter(d *InitDialog, chars string) {
-	d.Update(sendKey("f")) // enter filter mode
-	for _, c := range chars {
-		d.Update(sendKey(string(c)))
+// drainFilterCmdsInit processes a cmd returned from an InitDialog Update call
+// and feeds any list.FilterMatchesMsg back into the dialog so the filter state
+// is applied synchronously in tests (no real Bubble Tea runtime running).
+// Sub-commands in a BatchMsg are executed concurrently; results that arrive
+// within 50 ms are processed. Slow timer-based cmds (cursor blinks ~500 ms)
+// are ignored so tests do not block on them.
+func drainFilterCmdsInit(d *InitDialog, cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if msg == nil {
+		return
+	}
+	switch m := msg.(type) {
+	case tea.BatchMsg:
+		type result struct{ msg tea.Msg }
+		ch := make(chan result, len(m))
+		for _, subCmd := range m {
+			subCmd := subCmd
+			go func() { ch <- result{subCmd()} }()
+		}
+		deadline := time.After(50 * time.Millisecond)
+		for i := 0; i < len(m); i++ {
+			select {
+			case r := <-ch:
+				if fm, ok := r.msg.(list.FilterMatchesMsg); ok {
+					_, nextCmd := d.Update(fm)
+					drainFilterCmdsInit(d, nextCmd)
+				}
+			case <-deadline:
+				return
+			}
+		}
+	case list.FilterMatchesMsg:
+		_, nextCmd := d.Update(m)
+		drainFilterCmdsInit(d, nextCmd)
 	}
 }
 
-// typeIntoFilterAddDialog enters filter mode and types the given characters for AddDialog.
-func typeIntoFilterAddDialog(d *AddDialog, chars string) {
-	d.Update(sendKey("f")) // enter filter mode
+// drainFilterCmdsAdd processes a cmd returned from an AddDialog Update call
+// and feeds any list.FilterMatchesMsg back into the dialog.
+// Sub-commands in a BatchMsg are executed concurrently; results that arrive
+// within 50 ms are processed. Slow timer-based cmds (cursor blinks ~500 ms)
+// are ignored so tests do not block on them.
+func drainFilterCmdsAdd(d *AddDialog, cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if msg == nil {
+		return
+	}
+	switch m := msg.(type) {
+	case tea.BatchMsg:
+		type result struct{ msg tea.Msg }
+		ch := make(chan result, len(m))
+		for _, subCmd := range m {
+			subCmd := subCmd
+			go func() { ch <- result{subCmd()} }()
+		}
+		deadline := time.After(50 * time.Millisecond)
+		for i := 0; i < len(m); i++ {
+			select {
+			case r := <-ch:
+				if fm, ok := r.msg.(list.FilterMatchesMsg); ok {
+					_, nextCmd := d.Update(fm)
+					drainFilterCmdsAdd(d, nextCmd)
+				}
+			case <-deadline:
+				return
+			}
+		}
+	case list.FilterMatchesMsg:
+		_, nextCmd := d.Update(m)
+		drainFilterCmdsAdd(d, nextCmd)
+	}
+}
+
+// typeIntoFilter enters filter mode and types the given characters into the InitDialog.
+// It drains returned commands so that list.FilterMatchesMsg is processed synchronously.
+func typeIntoFilter(d *InitDialog, chars string) {
+	_, cmd := d.Update(sendKey("f")) // enter filter mode
+	drainFilterCmdsInit(d, cmd)
 	for _, c := range chars {
-		d.Update(sendKey(string(c)))
+		_, cmd = d.Update(sendKey(string(c)))
+		drainFilterCmdsInit(d, cmd)
+	}
+}
+
+// typeIntoFilterAddDialog enters filter mode and types the given characters into the AddDialog.
+// It drains returned commands so that list.FilterMatchesMsg is processed synchronously.
+func typeIntoFilterAddDialog(d *AddDialog, chars string) {
+	_, cmd := d.Update(sendKey("f")) // enter filter mode
+	drainFilterCmdsAdd(d, cmd)
+	for _, c := range chars {
+		_, cmd = d.Update(sendKey(string(c)))
+		drainFilterCmdsAdd(d, cmd)
 	}
 }
 
@@ -1989,10 +2105,10 @@ func TestInitDialog_ToggleWithFilter_TogglesCorrectItem(t *testing.T) {
 	d.Update(sendKey(" "))
 
 	// Verify repo-b is checked, repo-a is NOT checked
-	if !d.repoChecked["repo-b"] {
+	if !isInitRepoChecked(d, "repo-b") {
 		t.Error("repo-b should be checked after Space on filtered view")
 	}
-	if d.repoChecked["repo-a"] {
+	if isInitRepoChecked(d, "repo-a") {
 		t.Error("repo-a should NOT be checked (it's not visible in filtered view)")
 	}
 }
@@ -2027,10 +2143,10 @@ func TestInitDialog_ToggleWithFilter_MultipleVisibleItems(t *testing.T) {
 	d.Update(sendKey(" "))
 
 	// Verify gamma is checked, alpha is NOT checked
-	if !d.repoChecked["gamma"] {
+	if !isInitRepoChecked(d, "gamma") {
 		t.Error("gamma should be checked after Space on filtered view")
 	}
-	if d.repoChecked["alpha"] {
+	if isInitRepoChecked(d, "alpha") {
 		t.Error("alpha should NOT be checked (it's not visible in filtered view)")
 	}
 }
@@ -2066,10 +2182,10 @@ func TestAddDialog_ToggleWithFilter_TogglesCorrectItem(t *testing.T) {
 	d.Update(sendKey(" "))
 
 	// Verify repo-c is checked, repo-a is NOT checked
-	if !d.repoChecked["repo-c"] {
+	if !isAddRepoChecked(d, "repo-c") {
 		t.Error("repo-c should be checked after Space on filtered view")
 	}
-	if d.repoChecked["repo-a"] {
+	if isAddRepoChecked(d, "repo-a") {
 		t.Error("repo-a should NOT be checked (it's not visible in filtered view)")
 	}
 }
@@ -2102,10 +2218,10 @@ func TestAddDialog_ToggleWithFilter_MultipleVisibleItems(t *testing.T) {
 	d.Update(sendKey(" "))
 
 	// Verify delta is checked, gamma is NOT checked
-	if !d.repoChecked["delta"] {
+	if !isAddRepoChecked(d, "delta") {
 		t.Error("delta should be checked after Space on filtered view")
 	}
-	if d.repoChecked["gamma"] {
+	if isAddRepoChecked(d, "gamma") {
 		t.Error("gamma should NOT be checked (it's not visible in filtered view)")
 	}
 }
@@ -2134,10 +2250,10 @@ func TestInitDialog_ToggleWithFilter_NavigateAndToggle(t *testing.T) {
 	// Toggle - should toggle elderberry
 	d.Update(sendKey(" "))
 
-	if !d.repoChecked["elderberry"] {
+	if !isInitRepoChecked(d, "elderberry") {
 		t.Error("elderberry should be checked")
 	}
-	if d.repoChecked["banana"] || d.repoChecked["date"] {
+	if isInitRepoChecked(d, "banana") || isInitRepoChecked(d, "date") {
 		t.Error("banana and date should NOT be checked (not visible)")
 	}
 }
@@ -2166,10 +2282,162 @@ func TestAddDialog_ToggleWithFilter_NavigateAndToggle(t *testing.T) {
 	// Toggle - should toggle elderberry
 	d.Update(sendKey(" "))
 
-	if !d.repoChecked["elderberry"] {
+	if !isAddRepoChecked(d, "elderberry") {
 		t.Error("elderberry should be checked")
 	}
-	if d.repoChecked["banana"] || d.repoChecked["date"] {
+	if isAddRepoChecked(d, "banana") || isAddRepoChecked(d, "date") {
 		t.Error("banana and date should NOT be checked (not visible)")
+	}
+}
+
+// ── AddDialog existing services filtering tests ─────────────────────────────────
+
+// TestAddDialog_ExistingServices_FiltersRepos verifies that repos in existingServices
+// are excluded from the repo picker list.
+func TestAddDialog_ExistingServices_FiltersRepos(t *testing.T) {
+	repos := makeTestRepos("alpha", "beta", "gamma", "delta")
+	existing := []string{"beta", "delta"} // These should be filtered out
+
+	d := NewAddDialog("IN-1234", repos, existing, 80, 24)
+
+	// Should only show non-existing repos: alpha, gamma
+	visible := visibleNamesAddDialog(d)
+	if len(visible) != 2 {
+		t.Fatalf("expected 2 visible repos (alpha, gamma), got %d: %v", len(visible), visible)
+	}
+
+	// Check the specific repos that should be visible
+	if visible[0] != "alpha" || visible[1] != "gamma" {
+		t.Errorf("expected visible repos [alpha, gamma], got %v", visible)
+	}
+
+	// Verify filtered repos are NOT in the list
+	for _, name := range visible {
+		if name == "beta" || name == "delta" {
+			t.Errorf("repo %s should have been filtered out (in existingServices)", name)
+		}
+	}
+}
+
+// TestAddDialog_ExistingServices_Empty_ShowsAllRepos verifies that when existingServices
+// is empty/nil, all repos are shown.
+func TestAddDialog_ExistingServices_Empty_ShowsAllRepos(t *testing.T) {
+	repos := makeTestRepos("alpha", "beta", "gamma")
+
+	// Test with nil existingServices
+	d := NewAddDialog("IN-1234", repos, nil, 80, 24)
+	visible := visibleNamesAddDialog(d)
+	if len(visible) != 3 {
+		t.Errorf("expected 3 visible repos with nil existingServices, got %d", len(visible))
+	}
+
+	// Test with empty existingServices
+	d = NewAddDialog("IN-1234", repos, []string{}, 80, 24)
+	visible = visibleNamesAddDialog(d)
+	if len(visible) != 3 {
+		t.Errorf("expected 3 visible repos with empty existingServices, got %d", len(visible))
+	}
+}
+
+// TestAddDialog_ExistingServices_AllFiltered_ShowsNoRepos verifies that when all
+// repos are in existingServices, the list is empty.
+func TestAddDialog_ExistingServices_AllFiltered_ShowsNoRepos(t *testing.T) {
+	repos := makeTestRepos("alpha", "beta", "gamma")
+	existing := []string{"alpha", "beta", "gamma"} // All repos are existing
+
+	d := NewAddDialog("IN-1234", repos, existing, 80, 24)
+
+	visible := visibleNamesAddDialog(d)
+	if len(visible) != 0 {
+		t.Errorf("expected 0 visible repos when all are filtered, got %d: %v", len(visible), visible)
+	}
+
+	// hasRepos should be false since all were filtered out
+	if d.hasRepos {
+		t.Error("hasRepos should be false when all repos are filtered out")
+	}
+}
+
+// TestAddDialog_ExistingServices_PartialMatch verifies that only matching repo names
+// are filtered, and partial name matches are NOT filtered.
+func TestAddDialog_ExistingServices_PartialMatch(t *testing.T) {
+	repos := makeTestRepos("api-gateway", "api-service", "backend-app")
+	existing := []string{"api-service"} // Only exact match should be filtered
+
+	d := NewAddDialog("IN-1234", repos, existing, 80, 24)
+
+	visible := visibleNamesAddDialog(d)
+	if len(visible) != 2 {
+		t.Fatalf("expected 2 visible repos, got %d: %v", len(visible), visible)
+	}
+
+	// api-gateway and backend-app should be visible
+	// api-service should be filtered
+	for _, name := range visible {
+		if name == "api-service" {
+			t.Error("api-service should have been filtered out")
+		}
+	}
+
+	// Verify api-gateway is still visible (partial match "api-" should not filter)
+	found := false
+	for _, name := range visible {
+		if name == "api-gateway" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("api-gateway should be visible (partial match should not filter)")
+	}
+}
+
+// TestAddDialog_ExistingServices_CaseSensitive verifies that filtering is case-sensitive.
+func TestAddDialog_ExistingServices_CaseSensitive(t *testing.T) {
+	repos := makeTestRepos("Alpha", "BETA", "gamma")
+	existing := []string{"alpha"} // lowercase, should NOT match "Alpha"
+
+	d := NewAddDialog("IN-1234", repos, existing, 80, 24)
+
+	visible := visibleNamesAddDialog(d)
+	// All repos should still be visible since "alpha" != "Alpha"
+	if len(visible) != 3 {
+		t.Errorf("filtering should be case-sensitive, expected 3 repos, got %d", len(visible))
+	}
+}
+
+// TestAddDialog_ExistingServices_WithFiltering verifies that existing services filtering
+// works together with the user's filter mode.
+func TestAddDialog_ExistingServices_WithFiltering(t *testing.T) {
+	repos := makeTestRepos("alpha-service", "beta-service", "gamma-other", "delta-service")
+	existing := []string{"beta-service"} // Filter out beta-service
+
+	d := NewAddDialog("IN-1234", repos, existing, 80, 24)
+
+	// Initial visible repos should be: alpha-service, gamma-other, delta-service (3 items)
+	visible := visibleNamesAddDialog(d)
+	if len(visible) != 3 {
+		t.Fatalf("expected 3 visible repos initially, got %d: %v", len(visible), visible)
+	}
+
+	// Now apply user filter for "service"
+	typeIntoFilterAddDialog(d, "service")
+	d.Update(sendSpecialKey(tea.KeyEnter)) // exit filter mode, keep filter applied
+
+	// Should now show: alpha-service, delta-service (2 items)
+	visible = visibleNamesAddDialog(d)
+	if len(visible) != 2 {
+		t.Errorf("expected 2 visible repos after filter, got %d: %v", len(visible), visible)
+	}
+
+	// Verify beta-service is not in visible (filtered by existingServices)
+	// and gamma-other is not in visible (filtered by user filter)
+	for _, name := range visible {
+		if name == "beta-service" {
+			t.Error("beta-service should not be visible (filtered by existingServices)")
+		}
+		if name == "gamma-other" {
+			t.Error("gamma-other should not be visible (filtered by user filter)")
+		}
 	}
 }

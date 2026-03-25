@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -155,6 +156,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		// When a panel is actively filtering, route all keys directly to that
+		// panel so that characters like q, r, ?, L, tab are typed into the
+		// filter input instead of triggering global actions.
+		// ctrl+c (ForceQuit) is the only exception — it always quits.
+		if key.Matches(msg, m.keymap.ForceQuit) {
+			m.logger.Info("quit requested")
+			return m, tea.Quit
+		}
+		switch m.focus {
+		case FocusTasks:
+			if m.tasksPanel.FilterActive() {
+				newPanel, cmd := m.tasksPanel.Update(msg)
+				m.tasksPanel = newPanel
+				return m, cmd
+			}
+		case FocusServices:
+			if m.servicesPanel.FilterActive() {
+				newPanel, cmd := m.servicesPanel.Update(msg)
+				m.servicesPanel = newPanel
+				return m, cmd
+			}
+		}
+
 		switch {
 		case key.Matches(msg, m.keymap.Quit), key.Matches(msg, m.keymap.ForceQuit):
 			m.logger.Info("quit requested")
@@ -238,7 +262,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadReposCmd(m.mgr)
 
 	case panels.OpenAddServiceMsg:
-		m.modal = modal.NewAddDialog(msg.TaskID, m.repos, m.width, m.height)
+		m.modal = modal.NewAddDialog(msg.TaskID, m.repos, msg.ExistingServices, m.width, m.height)
 		return m, nil
 
 	case panels.OpenRemoveDialogMsg:
@@ -400,6 +424,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.opRunning {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
+	case list.FilterMatchesMsg:
+		// FilterMatchesMsg is produced asynchronously by bubbles/list when the
+		// filter input changes. It must be forwarded to whichever component owns
+		// the active list (modal when open, otherwise the focused panel) so the
+		// list can update its filteredItems slice and re-render the correct subset.
+		if m.modal != nil {
+			newModal, cmd := m.modal.Update(msg)
+			m.modal = newModal
+			return m, cmd
+		}
+		switch m.focus {
+		case FocusTasks:
+			newPanel, cmd := m.tasksPanel.Update(msg)
+			m.tasksPanel = newPanel
+			return m, cmd
+		case FocusServices:
+			newPanel, cmd := m.servicesPanel.Update(msg)
+			m.servicesPanel = newPanel
 			return m, cmd
 		}
 		return m, nil
