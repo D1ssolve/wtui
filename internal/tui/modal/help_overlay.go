@@ -64,6 +64,8 @@ func (h *HelpOverlay) View() string {
 	sb.WriteString("\n")
 	sb.WriteString(row("R", "Open <taskID>.sln in Rider"))
 	sb.WriteString("\n")
+	sb.WriteString(row("C", "Open <taskID>.code-workspace in VS Code"))
+	sb.WriteString("\n")
 	sb.WriteString(row(";", "Run shell command in selected task directory"))
 	sb.WriteString("\n")
 	sb.WriteString(row(",", "Show effective config"))

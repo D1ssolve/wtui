@@ -51,20 +51,12 @@ type Model struct {
 
 	styles Styles
 
-	shellInput *shellInputState
-
 	initDialogPending bool
 	addDialogPending  *panels.OpenAddServiceMsg
 
 	pendingInitParams *task.InitParams
 
 	pendingAddParams *task.AddParams
-}
-
-type shellInputState struct {
-	taskDir string
-	input   string
-	cursor  int
 }
 
 func New(cfg *config.Config, mgr task.Manager, logger *slog.Logger) (Model, error) {
@@ -139,10 +131,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, logTickCmd()
 
 	case tea.KeyMsg:
-		if m.shellInput != nil {
-			return m.updateShellInput(msg)
-		}
-
 		if m.logOverlay != nil {
 			if key.Matches(msg, m.keymap.ToggleLogs) || key.Matches(msg, m.keymap.Escape) {
 				m.logOverlay = nil
@@ -320,14 +308,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.outputPanel.AppendLine("Syncing task " + msg.TaskID + " with " + msg.Strategy.String() + " strategy...")
 		return m, tea.Batch(syncTaskCmd(m.mgr, msg.TaskID, msg.Strategy), m.spinner.Tick)
 
-	case panels.ShellExecMsg:
-		m.shellInput = &shellInputState{taskDir: msg.TaskDir}
-		return m, nil
-
 	case panels.RiderTaskMsg:
 		m.opRunning = true
 		m.outputPanel.AppendLine("Opening " + msg.TaskID + ".sln in Rider from " + msg.TaskDir + "...")
 		return m, tea.Batch(riderTaskCmd(msg.TaskID, msg.TaskDir), m.spinner.Tick)
+
+	case panels.CodeWorkspaceTaskMsg:
+		m.opRunning = true
+		m.outputPanel.AppendLine("Opening " + msg.TaskID + ".code-workspace in " + m.cfg.Editor + " from " + msg.TaskDir + "...")
+		return m, tea.Batch(codeWorkspaceTaskCmd(m.cfg.Editor, msg.TaskID, msg.TaskDir), m.spinner.Tick)
 
 	case modal.CloseModalMsg:
 		m.modal = nil
@@ -658,44 +647,3 @@ func errorf(msg string) error {
 type modelError struct{ msg string }
 
 func (e *modelError) Error() string { return e.msg }
-
-func (m Model) updateShellInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "ctrl+c":
-		m.shellInput = nil
-		return m, nil
-
-	case "enter":
-		if m.shellInput.input == "" {
-			m.shellInput = nil
-			return m, nil
-		}
-		cmd := m.shellInput.input
-		dir := m.shellInput.taskDir
-		m.shellInput = nil
-		m.outputPanel.AppendLine("Running shell command in " + dir + ": " + cmd)
-		return m, execShellCmd(cmd, dir)
-
-	case "backspace", "ctrl+h":
-		si := m.shellInput
-		if si.cursor > 0 {
-			runes := []rune(si.input)
-			si.input = string(runes[:si.cursor-1]) + string(runes[si.cursor:])
-			si.cursor--
-		}
-		return m, nil
-
-	default:
-		if len(msg.Runes) > 0 {
-			si := m.shellInput
-			runes := []rune(si.input)
-			newRunes := make([]rune, 0, len(runes)+len(msg.Runes))
-			newRunes = append(newRunes, runes[:si.cursor]...)
-			newRunes = append(newRunes, msg.Runes...)
-			newRunes = append(newRunes, runes[si.cursor:]...)
-			si.input = string(newRunes)
-			si.cursor += len(msg.Runes)
-		}
-		return m, nil
-	}
-}

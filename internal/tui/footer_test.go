@@ -13,14 +13,12 @@ func TestRenderFooter_FocusTasks_IncludesConfigHint(t *testing.T) {
 	for _, want := range []string{
 		"[i] init",
 		"[d] remove",
-		"[S] sync strategy",
-		"[P] push task",
+		"[S] sync",
+		"[P] push",
 		"[R] Rider",
-		"[;] shell",
+		"[C] VS Code",
 		"[,] config",
 		"[/] filter",
-		"[r] refresh tasks/repos",
-		"[L] logs",
 		"[Tab] output",
 		"[Enter] services",
 		"[?] help",
@@ -37,8 +35,8 @@ func TestRenderFooter_FocusTasks_IncludesRefreshHint(t *testing.T) {
 	m.focus = FocusTasks
 
 	footer := renderFooter(m)
-	if !strings.Contains(footer, "[r] refresh tasks/repos") {
-		t.Errorf("tasks footer should include refresh hint, got %q", footer)
+	if !strings.Contains(footer, "[/] filter") {
+		t.Errorf("tasks footer should include filter hint, got %q", footer)
 	}
 }
 

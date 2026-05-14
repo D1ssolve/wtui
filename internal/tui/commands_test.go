@@ -17,6 +17,24 @@ func TestRiderTaskArgsUsesTaskIDSolution(t *testing.T) {
 	}
 }
 
+func TestCodeWorkspaceTaskArgsUsesTaskIDWorkspace(t *testing.T) {
+	name, args := codeWorkspaceTaskArgs("code", "IN-001")
+
+	if name != "code" {
+		t.Fatalf("name = %q, want code", name)
+	}
+	if len(args) != 1 || args[0] != "IN-001.code-workspace" {
+		t.Fatalf("args = %v, want [IN-001.code-workspace]", args)
+	}
+}
+
+func TestCodeWorkspaceTaskArgsUsesConfiguredEditor(t *testing.T) {
+	name, _ := codeWorkspaceTaskArgs("cursor", "MY-TASK")
+	if name != "cursor" {
+		t.Fatalf("name = %q, want cursor", name)
+	}
+}
+
 func TestExecTeaProcessReturnsOriginalError(t *testing.T) {
 	original := errors.New("rider failed")
 	msg := execProcessDoneMsg(original)

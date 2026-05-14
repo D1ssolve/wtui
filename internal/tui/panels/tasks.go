@@ -251,14 +251,6 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 			}
 			return p, nil
 
-		case ";":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			dir := task.Dir
-			return p, func() tea.Msg { return ShellExecMsg{TaskDir: dir} }
-
 		case "R":
 			task := p.SelectedTask()
 			if task == nil {
@@ -267,6 +259,15 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 			taskID := task.ID
 			dir := task.Dir
 			return p, func() tea.Msg { return RiderTaskMsg{TaskID: taskID, TaskDir: dir} }
+
+		case "C":
+			task := p.SelectedTask()
+			if task == nil {
+				return p, nil
+			}
+			taskID := task.ID
+			dir := task.Dir
+			return p, func() tea.Msg { return CodeWorkspaceTaskMsg{TaskID: taskID, TaskDir: dir} }
 
 		case ",":
 			return p, func() tea.Msg { return OpenConfigModalMsg{} }

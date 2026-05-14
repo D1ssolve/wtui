@@ -159,6 +159,15 @@ func riderTaskArgs(taskID string) (string, []string) {
 	return "rider", []string{taskID + ".sln"}
 }
 
+func codeWorkspaceTaskCmd(editor, taskID, dir string) tea.Cmd {
+	name, args := codeWorkspaceTaskArgs(editor, taskID)
+	return execProcessCmd(name, args, dir)
+}
+
+func codeWorkspaceTaskArgs(editor, taskID string) (string, []string) {
+	return editor, []string{taskID + ".code-workspace"}
+}
+
 func pushTaskCmd(mgr task.Manager, taskID string) tea.Cmd {
 	statusCh := make(chan string, 32)
 	return tea.Batch(
@@ -209,12 +218,6 @@ func readNextLine(ch <-chan string) tea.Cmd {
 		}
 		return OutputLineMsg{Line: line, Next: readNextLine(ch)}
 	}
-}
-
-func execShellCmd(cmd, dir string) tea.Cmd {
-	c := exec.Command("sh", "-c", cmd)
-	c.Dir = dir
-	return execTeaProcess(c)
 }
 
 func execProcessCmd(name string, args []string, dir string) tea.Cmd {

@@ -17,9 +17,14 @@ type OpenAddServiceMsg struct {
 	ExistingServices []string
 }
 
-type ShellExecMsg struct{ TaskDir string }
+type ShellExecMsg struct{ TaskDir string } // reserved for future use
 
 type RiderTaskMsg struct {
+	TaskID  string
+	TaskDir string
+}
+
+type CodeWorkspaceTaskMsg struct {
 	TaskID  string
 	TaskDir string
 }
