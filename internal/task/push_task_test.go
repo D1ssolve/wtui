@@ -8,13 +8,10 @@ import (
 	"testing"
 )
 
-// TestPushTask_NoServices verifies that PushTask returns nil when the task has
-// no service subdirectories.
 func TestPushTask_NoServices(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 
-	// Create an empty task directory (no service subdirs).
 	taskDir := filepath.Join(tasksRoot, "IN-EMPTY")
 	if err := os.MkdirAll(taskDir, 0o755); err != nil {
 		t.Fatalf("setup: %v", err)
@@ -28,14 +25,11 @@ func TestPushTask_NoServices(t *testing.T) {
 		t.Errorf("PushTask returned error for task with no services: %v", err)
 	}
 
-	// lineCh should be closed after PushTask returns.
 	for line := range lineCh {
 		t.Errorf("unexpected line on lineCh: %q", line)
 	}
 }
 
-// TestPushTask_PushesAllServices verifies that PushTask calls git.Push once per
-// service in parallel and that all worktree paths are correct.
 func TestPushTask_PushesAllServices(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -51,7 +45,6 @@ func TestPushTask_PushesAllServices(t *testing.T) {
 		}
 	}
 
-	// Fake common dirs so ListServices can discover them as valid worktrees.
 	fakeCommonDirs := map[string]string{
 		servicePaths["svc-a"]: filepath.Join(rootDir, "repos", "svc-a", ".git"),
 		servicePaths["svc-b"]: filepath.Join(rootDir, "repos", "svc-b", ".git"),
@@ -79,13 +72,11 @@ func TestPushTask_PushesAllServices(t *testing.T) {
 		t.Errorf("PushTask returned unexpected error: %v", err)
 	}
 
-	// Collect all progress lines.
 	var lines []string
 	for line := range lineCh {
 		lines = append(lines, line)
 	}
 
-	// Both services must have been pushed.
 	gitMock.mu.Lock()
 	pushCalls := append([]string(nil), gitMock.pushCalls...)
 	gitMock.mu.Unlock()
@@ -94,7 +85,6 @@ func TestPushTask_PushesAllServices(t *testing.T) {
 		t.Fatalf("expected 2 Push calls, got %d", len(pushCalls))
 	}
 
-	// Verify correct worktree paths.
 	wantPaths := map[string]bool{
 		servicePaths["svc-a"]: false,
 		servicePaths["svc-b"]: false,
@@ -112,15 +102,12 @@ func TestPushTask_PushesAllServices(t *testing.T) {
 		}
 	}
 
-	// Verify progress lines contain pushing and pushed messages for both services.
 	assertContainsLine(t, lines, "[svc-a] pushing...")
 	assertContainsLine(t, lines, "[svc-a] pushed.")
 	assertContainsLine(t, lines, "[svc-b] pushing...")
 	assertContainsLine(t, lines, "[svc-b] pushed.")
 }
 
-// TestPushTask_ContinuesOnError verifies that PushTask continues pushing all
-// services even when one or more fail, and returns the first error encountered.
 func TestPushTask_ContinuesOnError(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -167,12 +154,10 @@ func TestPushTask_ContinuesOnError(t *testing.T) {
 	lineCh := make(chan string, 16)
 	err := mgr.PushTask(context.Background(), "IN-PUSH-ERR", lineCh)
 
-	// Must return the first push error.
 	if !errors.Is(err, pushErr) {
 		t.Fatalf("PushTask error = %v, want %v", err, pushErr)
 	}
 
-	// Both services must have been attempted (best-effort).
 	gitMock.mu.Lock()
 	pushCalls := append([]string(nil), gitMock.pushCalls...)
 	gitMock.mu.Unlock()
@@ -181,21 +166,17 @@ func TestPushTask_ContinuesOnError(t *testing.T) {
 		t.Fatalf("expected 2 Push calls (best-effort), got %d", len(pushCalls))
 	}
 
-	// Collect progress lines.
 	var lines []string
 	for line := range lineCh {
 		lines = append(lines, line)
 	}
 
-	// Both services must have been attempted.
 	assertContainsLine(t, lines, "[svc-a] pushing...")
 	assertContainsLine(t, lines, "[svc-a] pushed.")
 	assertContainsLine(t, lines, "[svc-b] pushing...")
 	assertContainsLine(t, lines, "[svc-b] push error: push rejected")
 }
 
-// TestPushTask_ReportsProgress verifies that PushTask writes progress lines to
-// lineCh for a single service: pushing... message, git output, and pushed. message.
 func TestPushTask_ReportsProgress(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -232,13 +213,11 @@ func TestPushTask_ReportsProgress(t *testing.T) {
 		t.Fatalf("PushTask returned unexpected error: %v", err)
 	}
 
-	// Collect all lines from lineCh.
 	var lines []string
 	for line := range lineCh {
 		lines = append(lines, line)
 	}
 
-	// Verify progress sequence.
 	wantLines := []string{
 		"[svc-a] pushing...",
 		"Enumerating objects: 3, done.",

@@ -12,25 +12,18 @@ import (
 	"testing"
 )
 
-// realPath resolves any OS-level symlinks in a path (necessary on macOS where
-// t.TempDir() returns /var/folders/... which is a symlink to /private/var/folders/...,
-// while git resolves symlinks and returns the canonical path).
 func realPath(t *testing.T, p string) string {
 	t.Helper()
 	resolved, err := filepath.EvalSymlinks(p)
 	if err != nil {
-		// If the path doesn't exist yet (pre-creation), return as-is.
+
 		return p
 	}
 	return resolved
 }
 
-// TestCommandClient_Integration exercises CommandClient against a real git repository
-// created in a temporary directory. These tests require:
-//   - git to be present in $PATH
-//   - the "integration" build tag: go test -tags integration ./internal/git/...
 func TestCommandClient_Integration(t *testing.T) {
-	// Skip if git is not available in $PATH.
+
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not in PATH, skipping integration tests")
 	}
@@ -39,13 +32,11 @@ func TestCommandClient_Integration(t *testing.T) {
 	client := NewCommandClient(logger)
 	ctx := context.Background()
 
-	// Create a temporary directory and initialise a git repo inside it.
 	repoDir := t.TempDir()
 	mustGit(t, repoDir, "init")
 	mustGit(t, repoDir, "config", "user.email", "test@example.com")
 	mustGit(t, repoDir, "config", "user.name", "Test User")
 
-	// Create an initial commit so the repo has a HEAD.
 	writeFile(t, filepath.Join(repoDir, "README.md"), "# test")
 	mustGit(t, repoDir, "add", ".")
 	mustGit(t, repoDir, "commit", "-m", "initial commit")
@@ -75,7 +66,7 @@ func TestCommandClient_Integration(t *testing.T) {
 	})
 
 	t.Run("BaseBranch_fallback", func(t *testing.T) {
-		// No remote set, so should fall back to the current branch name.
+
 		branch, err := client.BaseBranch(ctx, repoDir)
 		if err != nil {
 			t.Fatalf("BaseBranch() error: %v", err)
@@ -97,7 +88,7 @@ func TestCommandClient_Integration(t *testing.T) {
 	})
 
 	t.Run("BranchExists_true", func(t *testing.T) {
-		// The initial commit should have created a branch (master or main).
+
 		branch, err := client.BaseBranch(ctx, repoDir)
 		if err != nil {
 			t.Fatalf("BaseBranch() error: %v", err)
@@ -108,6 +99,47 @@ func TestCommandClient_Integration(t *testing.T) {
 		}
 		if !exists {
 			t.Errorf("expected branch %q to exist", branch)
+		}
+	})
+
+	t.Run("RemoteBranchExists_false", func(t *testing.T) {
+		exists, err := client.RemoteBranchExists(ctx, repoDir, "nonexistent-remote-branch-xyz")
+		if err != nil {
+			t.Fatalf("RemoteBranchExists() error: %v", err)
+		}
+		if exists {
+			t.Error("expected exists=false for nonexistent remote branch")
+		}
+	})
+
+	t.Run("RemoteBranchExists_true", func(t *testing.T) {
+
+		remoteDir := t.TempDir()
+		mustGit(t, remoteDir, "init", "--bare")
+
+		mustGit(t, repoDir, "remote", "add", "origin", remoteDir)
+
+		branch, err := client.BaseBranch(ctx, repoDir)
+		if err != nil {
+			t.Fatalf("BaseBranch() error: %v", err)
+		}
+
+		mustGit(t, repoDir, "push", "-u", "origin", branch)
+
+		exists, err := client.RemoteBranchExists(ctx, repoDir, branch)
+		if err != nil {
+			t.Fatalf("RemoteBranchExists() error: %v", err)
+		}
+		if !exists {
+			t.Errorf("expected remote branch %q to exist", branch)
+		}
+	})
+
+	t.Run("RemoteBranchExists_invalid_repo", func(t *testing.T) {
+		notARepo := t.TempDir()
+		_, err := client.RemoteBranchExists(ctx, notARepo, "some-branch")
+		if err == nil {
+			t.Error("expected error for non-git directory, got nil")
 		}
 	})
 
@@ -147,7 +179,7 @@ func TestCommandClient_Integration(t *testing.T) {
 	})
 
 	t.Run("IsDirty_dirty", func(t *testing.T) {
-		// Create an untracked file to make the repo dirty.
+
 		dirtyFile := filepath.Join(repoDir, "dirty.txt")
 		writeFile(t, dirtyFile, "dirty content")
 		t.Cleanup(func() { os.Remove(dirtyFile) })
@@ -162,29 +194,24 @@ func TestCommandClient_Integration(t *testing.T) {
 	})
 
 	t.Run("AddWorktree_and_RemoveWorktree", func(t *testing.T) {
-		// Get the current branch name.
+
 		currentBranch, err := client.BaseBranch(ctx, repoDir)
 		if err != nil {
 			t.Fatalf("BaseBranch() error: %v", err)
 		}
 
-		// Create a linked worktree with a new branch.
 		wtDir := filepath.Join(t.TempDir(), "linked-worktree")
 		newBranch := "feature/integration-test"
 		if err := client.AddWorktree(ctx, repoDir, wtDir, newBranch, true, currentBranch); err != nil {
 			t.Fatalf("AddWorktree() error: %v", err)
 		}
 
-		// Verify the worktree directory was created.
 		if _, statErr := os.Stat(wtDir); statErr != nil {
 			t.Errorf("worktree directory not created: %v", statErr)
 		}
 
-		// Resolve symlinks on both sides so that macOS /var -> /private/var doesn't
-		// cause a spurious mismatch between t.TempDir() and git's reported paths.
 		wtDirReal := realPath(t, wtDir)
 
-		// Verify it appears in ListWorktrees.
 		entries, err := client.ListWorktrees(ctx, repoDir)
 		if err != nil {
 			t.Fatalf("ListWorktrees() after AddWorktree error: %v", err)
@@ -200,22 +227,17 @@ func TestCommandClient_Integration(t *testing.T) {
 			t.Errorf("new worktree %q not found in list: %+v", wtDir, entries)
 		}
 
-		// Get the common dir for removal.
 		commonDir, err := client.CommonDir(ctx, repoDir)
 		if err != nil {
 			t.Fatalf("CommonDir() error: %v", err)
 		}
 
-		// Remove the worktree (non-force, clean worktree).
 		if err := client.RemoveWorktree(ctx, commonDir, wtDir, false); err != nil {
 			t.Fatalf("RemoveWorktree() error: %v", err)
 		}
 	})
 }
 
-// ─── test helpers ─────────────────────────────────────────────────────────────
-
-// mustGit runs a git command in dir and fatals the test on error.
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -226,7 +248,6 @@ func mustGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// writeFile writes content to path, fataling the test on error.
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {

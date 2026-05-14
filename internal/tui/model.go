@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 
@@ -25,7 +26,7 @@ type Model struct {
 	mgr    task.Manager
 
 	focus         FocusPanel
-	previousFocus FocusPanel // Tracks the panel before switching to Output
+	previousFocus FocusPanel
 
 	width  int
 	height int
@@ -36,7 +37,6 @@ type Model struct {
 	servicesPanel panels.ServicesPanel
 	outputPanel   panels.OutputPanel
 
-	// repos caches the discovered repositories for the InitDialog.
 	repos []domain.Repo
 
 	modal modal.Modal
@@ -54,6 +54,11 @@ type Model struct {
 	shellInput *shellInputState
 
 	initDialogPending bool
+	addDialogPending  *panels.OpenAddServiceMsg
+
+	pendingInitParams *task.InitParams
+
+	pendingAddParams *task.AddParams
 }
 
 type shellInputState struct {
@@ -101,7 +106,7 @@ func New(cfg *config.Config, mgr task.Manager, logger *slog.Logger) (Model, erro
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		loadTasksCmd(m.mgr),
-		loadReposCmd(m.mgr),
+		loadReposCmd(m.mgr, false),
 		m.spinner.Tick,
 	)
 }
@@ -115,7 +120,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.logOverlay != nil {
 			m.logOverlay.SetSize(msg.Width, msg.Height)
 		}
-		// Update modal terminal dimensions if open.
+
 		if m.modal != nil {
 			m.modal.SetTerminalSize(msg.Width, msg.Height)
 		}
@@ -138,8 +143,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateShellInput(msg)
 		}
 
-		// When the log overlay is open, route all keys to it.
-		// L and Esc close the overlay; everything else scrolls.
 		if m.logOverlay != nil {
 			if key.Matches(msg, m.keymap.ToggleLogs) || key.Matches(msg, m.keymap.Escape) {
 				m.logOverlay = nil
@@ -156,10 +159,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		// When a panel is actively filtering, route all keys directly to that
-		// panel so that characters like q, r, ?, L, tab are typed into the
-		// filter input instead of triggering global actions.
-		// ctrl+c (ForceQuit) is the only exception — it always quits.
 		if key.Matches(msg, m.keymap.ForceQuit) {
 			m.logger.Info("quit requested")
 			return m, tea.Quit
@@ -209,13 +208,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, logTickCmd()
 
 		case key.Matches(msg, m.keymap.Refresh):
-			cmds := []tea.Cmd{loadTasksCmd(m.mgr)}
-			if m.initDialogPending {
-				cmds = append(cmds, loadReposCmd(m.mgr))
-			}
-			if _, ok := m.modal.(*modal.InitDialog); ok {
-				cmds = append(cmds, loadReposCmd(m.mgr))
-			}
+			m.outputPanel.AppendLine("Refreshing tasks and repository cache...")
+			cmds := []tea.Cmd{loadTasksCmd(m.mgr), loadReposCmd(m.mgr, true)}
 			return m, tea.Batch(cmds...)
 		}
 
@@ -258,10 +252,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modal = modal.NewInitDialog(m.cfg.BranchPrefix, m.repos, m.width, m.height)
 			return m, nil
 		}
+		m.outputPanel.AppendLine("Loading repository cache for init dialog...")
 		m.initDialogPending = true
-		return m, loadReposCmd(m.mgr)
+		return m, loadReposCmd(m.mgr, false)
 
 	case panels.OpenAddServiceMsg:
+		if len(m.repos) == 0 {
+			pending := msg
+			m.addDialogPending = &pending
+			m.outputPanel.AppendLine("Loading repository cache for add service dialog...")
+			return m, loadReposCmd(m.mgr, false)
+		}
 		m.modal = modal.NewAddDialog(msg.TaskID, m.repos, msg.ExistingServices, m.width, m.height)
 		return m, nil
 
@@ -269,23 +270,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = modal.NewRemoveTaskDialog(msg.TaskID, 0, nil)
 		return m, loadDirtyServicesCmd(m.mgr, msg.TaskID)
 
-	case panels.CloneTaskMsg:
-		m.modal = modal.NewCloneDialog(msg.SrcTaskID)
+	case panels.OpenSyncStrategyDialogMsg:
+		m.modal = modal.NewSyncStrategyDialog(msg.TaskID)
 		return m, nil
 
 	case panels.OpenConfigModalMsg:
 		m.modal = modal.NewConfigModal(m.cfg)
 		return m, nil
-
-	case panels.GenerateSlnMsg:
-		m.opRunning = true
-		m.outputPanel.AppendLine("Generating .sln file...")
-		return m, tea.Batch(generateSlnCmd(m.mgr, msg.TaskID), m.spinner.Tick)
-
-	case panels.SyncTaskMsg:
-		m.opRunning = true
-		m.outputPanel.AppendLine("Syncing task " + msg.TaskID + " onto origin/" + m.cfg.BaseBranch + "...")
-		return m, tea.Batch(syncTaskCmd(m.mgr, msg.TaskID), m.spinner.Tick)
 
 	case panels.PushTaskMsg:
 		m.opRunning = true
@@ -294,7 +285,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case panels.PushServiceMsg:
 		m.opRunning = true
-		m.outputPanel.AppendLine("Pushing " + msg.ServiceName + "...")
+		m.outputPanel.AppendLine("Pushing service " + msg.ServiceName + " for task " + msg.TaskID + "...")
 		return m, tea.Batch(pushServiceCmd(m.mgr, msg.TaskID, msg.ServiceName), m.spinner.Tick)
 
 	case panels.StashServiceMsg:
@@ -303,7 +294,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			op = "Unstashing"
 		}
 		m.opRunning = true
-		m.outputPanel.AppendLine(op + " " + msg.ServiceName + "...")
+		m.outputPanel.AppendLine(op + " service " + msg.ServiceName + " for task " + msg.TaskID + "...")
 		return m, tea.Batch(stashServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Pop), m.spinner.Tick)
 
 	case panels.OpenRemoveServiceDialogMsg:
@@ -319,25 +310,108 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner.Tick,
 		)
 
+	case modal.SubmitSyncStrategyMsg:
+		m.modal = nil
+		if msg.Strategy == task.SyncStrategyNoop {
+			m.outputPanel.AppendLine("Sync cancelled for task " + msg.TaskID + ".")
+			return m, nil
+		}
+		m.opRunning = true
+		m.outputPanel.AppendLine("Syncing task " + msg.TaskID + " with " + msg.Strategy.String() + " strategy...")
+		return m, tea.Batch(syncTaskCmd(m.mgr, msg.TaskID, msg.Strategy), m.spinner.Tick)
+
 	case panels.ShellExecMsg:
 		m.shellInput = &shellInputState{taskDir: msg.TaskDir}
 		return m, nil
 
+	case panels.RiderTaskMsg:
+		m.opRunning = true
+		m.outputPanel.AppendLine("Opening " + msg.TaskID + ".sln in Rider from " + msg.TaskDir + "...")
+		return m, tea.Batch(riderTaskCmd(msg.TaskID, msg.TaskDir), m.spinner.Tick)
+
 	case modal.CloseModalMsg:
 		m.modal = nil
+
+		m.pendingInitParams = nil
+		m.pendingAddParams = nil
+		return m, nil
+
+	case modal.RemoteBranchConflictMsg:
+
+		m.modal = modal.NewRemoteBranchConflictDialog(
+			msg.TaskID,
+			msg.ServiceName,
+			msg.BranchName,
+			msg.RepoPath,
+		)
+		return m, nil
+
+	case modal.SubmitRemoteBranchStrategyMsg:
+		m.modal = nil
+
+		if msg.Strategy == task.StrategyCancel {
+			m.outputPanel.AppendLine("Skipped service " + msg.ServiceName + " (cancelled by user)")
+			m.pendingInitParams = nil
+			m.pendingAddParams = nil
+			return m, nil
+		}
+
+		if m.pendingInitParams != nil {
+
+			if m.pendingInitParams.RemoteBranchStrategies == nil {
+				m.pendingInitParams.RemoteBranchStrategies = make(map[string]task.RemoteBranchStrategy)
+			}
+			if m.pendingInitParams.BranchSuffixes == nil {
+				m.pendingInitParams.BranchSuffixes = make(map[string]string)
+			}
+			m.pendingInitParams.RemoteBranchStrategies[msg.ServiceName] = msg.Strategy
+			if msg.Strategy == task.StrategyNewBranch {
+				m.pendingInitParams.BranchSuffixes[msg.ServiceName] = msg.BranchSuffix
+			}
+
+			m.outputPanel.AppendLine("Retrying with " + msg.Strategy.String() + " strategy for " + msg.ServiceName + "...")
+			return m, tea.Batch(
+				initTaskCmd(m.mgr, *m.pendingInitParams),
+				m.spinner.Tick,
+			)
+		}
+
+		if m.pendingAddParams != nil {
+
+			if m.pendingAddParams.RemoteBranchStrategies == nil {
+				m.pendingAddParams.RemoteBranchStrategies = make(map[string]task.RemoteBranchStrategy)
+			}
+			if m.pendingAddParams.BranchSuffixes == nil {
+				m.pendingAddParams.BranchSuffixes = make(map[string]string)
+			}
+			m.pendingAddParams.RemoteBranchStrategies[msg.ServiceName] = msg.Strategy
+			if msg.Strategy == task.StrategyNewBranch {
+				m.pendingAddParams.BranchSuffixes[msg.ServiceName] = msg.BranchSuffix
+			}
+
+			m.outputPanel.AppendLine("Retrying with " + msg.Strategy.String() + " strategy for " + msg.ServiceName + "...")
+			return m, tea.Batch(
+				addServiceCmd(m.mgr, *m.pendingAddParams),
+				m.spinner.Tick,
+			)
+		}
+
+		m.logger.Error("SubmitRemoteBranchStrategyMsg received but no pending params")
 		return m, nil
 
 	case modal.SubmitInitMsg:
 		m.modal = nil
 		m.opRunning = true
 		m.outputPanel.AppendLine("Initializing task " + msg.TaskID + "...")
+		m.pendingInitParams = &task.InitParams{
+			TaskID:       msg.TaskID,
+			Services:     msg.Services,
+			BranchPrefix: msg.BranchPrefix,
+			BaseBranch:   msg.BaseBranch,
+		}
+		m.pendingAddParams = nil
 		return m, tea.Batch(
-			initTaskCmd(m.mgr, task.InitParams{
-				TaskID:       msg.TaskID,
-				Services:     msg.Services,
-				BranchPrefix: msg.BranchPrefix,
-				BaseBranch:   msg.BaseBranch,
-			}),
+			initTaskCmd(m.mgr, *m.pendingInitParams),
 			m.spinner.Tick,
 		)
 
@@ -345,11 +419,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = nil
 		m.opRunning = true
 		m.outputPanel.AppendLine("Adding services to " + msg.TaskID + "...")
+		m.pendingAddParams = &task.AddParams{
+			TaskID:   msg.TaskID,
+			Services: msg.Services,
+		}
+		m.pendingInitParams = nil
 		return m, tea.Batch(
-			addServiceCmd(m.mgr, task.AddParams{
-				TaskID:   msg.TaskID,
-				Services: msg.Services,
-			}),
+			addServiceCmd(m.mgr, *m.pendingAddParams),
 			m.spinner.Tick,
 		)
 
@@ -361,12 +437,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			removeTaskCmd(m.mgr, msg.TaskID, msg.Force, msg.DeleteBranches),
 			m.spinner.Tick,
 		)
-
-	case modal.SubmitCloneMsg:
-		m.modal = nil
-		m.opRunning = true
-		m.outputPanel.AppendLine("Cloning task " + msg.Dst + " from " + msg.Src + "...")
-		return m, tea.Batch(cloneTaskCmd(m.mgr, msg.Src, msg.Dst), m.spinner.Tick)
 
 	case TasksLoadedMsg:
 		m.tasksPanel.SetTasks(msg.Tasks)
@@ -382,12 +452,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				slog.String("error", msg.Err.Error()))
 			m.outputPanel.AppendLine("Error: could not discover repos: " + msg.Err.Error())
 			m.initDialogPending = false
+			m.addDialogPending = nil
 			return m, nil
 		}
 		m.repos = msg.Repos
 		if m.initDialogPending {
 			m.initDialogPending = false
 			m.modal = modal.NewInitDialog(m.cfg.BranchPrefix, msg.Repos, m.width, m.height)
+		}
+		if m.addDialogPending != nil {
+			pending := *m.addDialogPending
+			m.addDialogPending = nil
+			m.modal = modal.NewAddDialog(pending.TaskID, msg.Repos, pending.ExistingServices, m.width, m.height)
 		}
 		return m, nil
 
@@ -407,17 +483,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CommandDoneMsg:
 		m.opRunning = false
 		if msg.Err != nil {
+
+			var conflictErr *task.ErrRemoteBranchConflict
+			if errors.As(msg.Err, &conflictErr) {
+
+				m.outputPanel.AppendLine("Remote branch conflict detected for " + conflictErr.ServiceName + "...")
+				return m, func() tea.Msg {
+					return modal.RemoteBranchConflictMsg{
+						TaskID:      conflictErr.TaskID,
+						ServiceName: conflictErr.ServiceName,
+						BranchName:  conflictErr.BranchName,
+						RepoPath:    conflictErr.RepoPath,
+					}
+				}
+			}
+
 			m.outputPanel.AppendLine("Error: " + msg.Err.Error())
 			m.logger.Error("command failed", slog.String("err", msg.Err.Error()))
+
+			m.pendingInitParams = nil
+			m.pendingAddParams = nil
 		} else {
 			m.outputPanel.AppendLine("Done.")
+
+			m.pendingInitParams = nil
+			m.pendingAddParams = nil
 		}
 
 		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
 
 	case channelDrainedMsg:
-		// The status channel was closed. No action needed — the authoritative
-		// CommandDoneMsg from the main operation goroutine handles completion.
+
 		return m, nil
 
 	case spinner.TickMsg:
@@ -429,10 +525,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case list.FilterMatchesMsg:
-		// FilterMatchesMsg is produced asynchronously by bubbles/list when the
-		// filter input changes. It must be forwarded to whichever component owns
-		// the active list (modal when open, otherwise the focused panel) so the
-		// list can update its filteredItems slice and re-render the correct subset.
+
 		if m.modal != nil {
 			newModal, cmd := m.modal.Update(msg)
 			m.modal = newModal
@@ -515,15 +608,12 @@ func (m Model) cycleFocusBackward() Model {
 	return m
 }
 
-// toggleOutputFocus toggles between Output panel and the previously focused panel.
-// If currently on Output, it restores the previous focus; otherwise, it saves
-// the current focus and switches to Output.
 func (m Model) toggleOutputFocus() Model {
 	if m.focus == FocusOutput {
-		// Restore previous focus
+
 		m.focus = m.previousFocus
 	} else {
-		// Save current focus and switch to Output
+
 		m.previousFocus = m.focus
 		m.focus = FocusOutput
 	}
@@ -533,8 +623,6 @@ func (m Model) toggleOutputFocus() Model {
 	return m
 }
 
-// moveFocusLeft moves focus from Services to Tasks.
-// If already on Tasks, focus stays on Tasks.
 func (m Model) moveFocusLeft() Model {
 	if m.focus == FocusServices {
 		m.focus = FocusTasks
@@ -545,8 +633,6 @@ func (m Model) moveFocusLeft() Model {
 	return m
 }
 
-// moveFocusRight moves focus from Tasks to Services.
-// If already on Services, focus stays on Services.
 func (m Model) moveFocusRight() Model {
 	if m.focus == FocusTasks {
 		m.focus = FocusServices
@@ -587,6 +673,7 @@ func (m Model) updateShellInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.shellInput.input
 		dir := m.shellInput.taskDir
 		m.shellInput = nil
+		m.outputPanel.AppendLine("Running shell command in " + dir + ": " + cmd)
 		return m, execShellCmd(cmd, dir)
 
 	case "backspace", "ctrl+h":

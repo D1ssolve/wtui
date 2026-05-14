@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os/exec"
 	"time"
 
@@ -33,13 +32,6 @@ type OutputLineMsg struct {
 
 type CommandDoneMsg struct{ Err error }
 
-// channelDrainedMsg is an internal sentinel returned by readNextCommand and
-// readNextLine when their source channel is closed. It is intentionally
-// unexported so that only the single authoritative CommandDoneMsg (returned by
-// the main operation goroutine) triggers the "Done." output line and post-op
-// refresh. Without this sentinel the model would receive two CommandDoneMsgs —
-// one from the main goroutine and one from the draining helper — causing the
-// "Done." line to appear twice.
 type channelDrainedMsg struct{}
 
 type DirtyServicesLoadedMsg struct {
@@ -65,7 +57,7 @@ func loadServicesCmd(mgr task.Manager, taskID string) tea.Cmd {
 		defer cancel()
 		services, err := mgr.ListServices(ctx, taskID)
 		if err != nil {
-			// The task was deleted just before this refresh; treat as empty list.
+
 			if errors.Is(err, task.ErrTaskNotFound) {
 				return ServicesLoadedMsg{TaskID: taskID, Services: nil}
 			}
@@ -75,11 +67,11 @@ func loadServicesCmd(mgr task.Manager, taskID string) tea.Cmd {
 	}
 }
 
-func loadReposCmd(mgr task.Manager) tea.Cmd {
+func loadReposCmd(mgr task.Manager, force bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		repos, err := mgr.DiscoverRepos(ctx)
+		repos, err := mgr.Repos(ctx, force)
 		if err != nil {
 			return ReposLoadedMsg{Err: err}
 		}
@@ -146,33 +138,25 @@ func removeTaskCmd(mgr task.Manager, taskID string, force, deleteBranches bool) 
 	}
 }
 
-func generateSlnCmd(mgr task.Manager, taskID string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
-		defer cancel()
-		err := mgr.GenerateSln(ctx, taskID)
-		return CommandDoneMsg{Err: err}
-	}
-}
-
-func cloneTaskCmd(mgr task.Manager, src, dst string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), dst), 5*time.Minute)
-		defer cancel()
-		return CommandDoneMsg{Err: mgr.CloneTask(ctx, src, dst)}
-	}
-}
-
-func syncTaskCmd(mgr task.Manager, taskID string) tea.Cmd {
+func syncTaskCmd(mgr task.Manager, taskID string, strategy task.SyncStrategy) tea.Cmd {
 	statusCh := make(chan string, 32)
 	return tea.Batch(
 		func() tea.Msg {
 			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
 			defer cancel()
-			return CommandDoneMsg{Err: mgr.SyncTask(ctx, taskID, statusCh)}
+			return CommandDoneMsg{Err: mgr.SyncTask(ctx, taskID, strategy, statusCh)}
 		},
 		readNextLine(statusCh),
 	)
+}
+
+func riderTaskCmd(taskID, dir string) tea.Cmd {
+	name, args := riderTaskArgs(taskID)
+	return execProcessCmd(name, args, dir)
+}
+
+func riderTaskArgs(taskID string) (string, []string) {
+	return "rider", []string{taskID + ".sln"}
 }
 
 func pushTaskCmd(mgr task.Manager, taskID string) tea.Cmd {
@@ -227,23 +211,22 @@ func readNextLine(ch <-chan string) tea.Cmd {
 	}
 }
 
-// execShellCmd hands the terminal over to an interactive shell in the task's
-// working directory. This is the only place in the TUI that calls exec.Command
-// directly without routing through task.Manager — this is intentional.
-//
-// Routing through Manager would require returning a subprocess handle from the
-// Manager interface just to pass to tea.ExecProcess, which would violate
-// Manager's contract (blocking calls only). The risk is low: this function is
-// a single-use TUI escape hatch, not business logic.
-//
-// See ADR-004 for the full rationale.
 func execShellCmd(cmd, dir string) tea.Cmd {
 	c := exec.Command("sh", "-c", cmd)
 	c.Dir = dir
-	return tea.ExecProcess(c, func(err error) tea.Msg {
-		if err != nil {
-			return CommandDoneMsg{Err: fmt.Errorf("shell: %w", err)}
-		}
-		return CommandDoneMsg{}
-	})
+	return execTeaProcess(c)
+}
+
+func execProcessCmd(name string, args []string, dir string) tea.Cmd {
+	c := exec.Command(name, args...)
+	c.Dir = dir
+	return execTeaProcess(c)
+}
+
+func execTeaProcess(c *exec.Cmd) tea.Cmd {
+	return tea.ExecProcess(c, execProcessDoneMsg)
+}
+
+func execProcessDoneMsg(err error) tea.Msg {
+	return CommandDoneMsg{Err: err}
 }

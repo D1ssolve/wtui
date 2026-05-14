@@ -10,8 +10,6 @@ import (
 	"github.com/diss0x/wtui/internal/domain"
 )
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
 func makeServices(taskID string, names ...string) (string, []domain.Service) {
 	svcs := make([]domain.Service, len(names))
 	for i, n := range names {
@@ -24,8 +22,6 @@ func makeServices(taskID string, names ...string) (string, []domain.Service) {
 	}
 	return taskID, svcs
 }
-
-// ── ServicesPanel tests ───────────────────────────────────────────────────────
 
 func TestServicesPanel_New_EmptyByDefault(t *testing.T) {
 	p := NewServicesPanel(60, 20)
@@ -83,8 +79,6 @@ func TestServicesPanel_SetFocused(t *testing.T) {
 		t.Error("SetFocused(false) should clear focused")
 	}
 }
-
-// ── Keybinding tests ──────────────────────────────────────────────────────────
 
 func TestServicesPanel_KeyA_EmitsOpenAddServiceMsg(t *testing.T) {
 	p := NewServicesPanel(60, 20)
@@ -154,7 +148,6 @@ func TestServicesPanel_KeyK_MovesUp(t *testing.T) {
 
 func TestServicesPanel_Unfocused_EscNoOp(t *testing.T) {
 	p := NewServicesPanel(60, 20)
-	// focused = false (default)
 
 	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd != nil {
@@ -164,8 +157,6 @@ func TestServicesPanel_Unfocused_EscNoOp(t *testing.T) {
 		}
 	}
 }
-
-// ── View / placeholder tests ──────────────────────────────────────────────────
 
 func TestServicesPanel_View_NoTaskSelected_ShowsPlaceholder(t *testing.T) {
 	p := NewServicesPanel(60, 20)
@@ -205,7 +196,7 @@ func TestServicesPanel_View_ItemCount(t *testing.T) {
 	tid, svcs := makeServices("IN-001", "collection", "databridge")
 	p.SetServices(tid, svcs)
 	view := stripAnsi(p.View())
-	// Should contain something like [1/2]
+
 	if !strings.Contains(view, "/2]") {
 		t.Errorf("expected total count in title, got: %q", view)
 	}
@@ -224,7 +215,7 @@ func TestServicesPanel_View_DirtyService_ShowsWarningIcon(t *testing.T) {
 		},
 	}
 	p.SetServices("IN-001", svcs)
-	view := p.View() // includes ANSI codes; check raw string
+	view := p.View()
 	if !strings.Contains(view, "⚠") {
 		t.Errorf("dirty service should show ⚠ icon, got: %q", view)
 	}
@@ -247,8 +238,6 @@ func TestServicesPanel_View_CleanService_ShowsCheckIcon(t *testing.T) {
 		t.Errorf("clean service should show ✓ icon, got: %q", view)
 	}
 }
-
-// ── SelectedService tests ─────────────────────────────────────────────────────
 
 func TestServicesPanel_SelectedService_NilOnEmpty(t *testing.T) {
 	p := NewServicesPanel(60, 20)
@@ -286,8 +275,6 @@ func TestServicesPanel_SelectedService_ReturnsSecondAfterMove(t *testing.T) {
 		t.Errorf("expected second service 'databridge', got %q", svc.Name)
 	}
 }
-
-// ── Stash keybinding tests ────────────────────────────────────────────────────
 
 func TestServicesPanel_CtrlS_EmitsStashServiceMsg(t *testing.T) {
 	p := NewServicesPanel(60, 20)
@@ -344,7 +331,6 @@ func TestServicesPanel_CtrlU_EmitsStashServiceMsgPop(t *testing.T) {
 func TestServicesPanel_CtrlS_NoServiceSelected_ReturnsNil(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	p.SetFocused(true)
-	// No services set — SelectedService returns nil.
 
 	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if cmd != nil {
@@ -358,7 +344,6 @@ func TestServicesPanel_CtrlS_NoServiceSelected_ReturnsNil(t *testing.T) {
 func TestServicesPanel_CtrlU_NoServiceSelected_ReturnsNil(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	p.SetFocused(true)
-	// No services set — SelectedService returns nil.
 
 	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
 	if cmd != nil {
@@ -369,94 +354,75 @@ func TestServicesPanel_CtrlU_NoServiceSelected_ReturnsNil(t *testing.T) {
 	}
 }
 
-// ── Filter mode tests ───────────────────────────────────────────────────────────
-
-// TestServicesPanel_FilterMode_EntersFilterMode verifies 'f' key enters filter mode.
 func TestServicesPanel_FilterMode_EntersFilterMode(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection", "databridge", "reporting")
 	p.SetServices(tid, svcs)
 	p.SetFocused(true)
 
-	// Initially not in filter mode
 	if p.FilterActive() {
 		t.Error("Panel should not be in filter mode initially")
 	}
 
-	// Enter filter mode by pressing 'f'
 	p, _ = p.Update(sendKey("f"))
 
-	// Now should be in filter mode
 	if !p.FilterActive() {
 		t.Error("Panel should be in filter mode after pressing 'f'")
 	}
 }
 
-// TestServicesPanel_FilterMode_NoFilterIndicatorWhenNotFiltering verifies filter is not active initially.
 func TestServicesPanel_FilterMode_NoFilterIndicatorWhenNotFiltering(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection", "databridge")
 	p.SetServices(tid, svcs)
 	p.SetFocused(true)
 
-	// Initially not in filter mode
 	if p.FilterActive() {
 		t.Error("Panel should not be in filter mode initially")
 	}
 }
 
-// TestServicesPanel_FilterMode_EscClearsFilter verifies ESC in filter mode clears filter.
 func TestServicesPanel_FilterMode_EscClearsFilter(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection", "databridge", "reporting")
 	p.SetServices(tid, svcs)
 	p.SetFocused(true)
 
-	// Enter filter mode and type something
 	p, _ = p.Update(sendKey("f"))
 	p, _ = p.Update(sendKey("c"))
 	p, _ = p.Update(sendKey("o"))
 
-	// Verify we're in filter mode
 	if !p.FilterActive() {
 		t.Error("Panel should be in filter mode after typing")
 	}
 
-	// Press ESC to clear filter
 	p, _ = p.Update(sendSpecialKey(tea.KeyEsc))
 
-	// After ESC, filter should be cleared
 	if p.FilterActive() {
 		t.Error("Panel should NOT be in filter mode after ESC clears filter")
 	}
 }
 
-// TestServicesPanel_FilterMode_EnterExitsFilterMode verifies ENTER exits filter mode while keeping filter.
 func TestServicesPanel_FilterMode_EnterExitsFilterMode(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection", "databridge", "reporting")
 	p.SetServices(tid, svcs)
 	p.SetFocused(true)
 
-	// Enter filter mode and type something
 	p, _ = p.Update(sendKey("f"))
 	p, _ = p.Update(sendKey("c"))
 	p, _ = p.Update(sendKey("o"))
 
-	// Verify we're in filter mode
 	if !p.FilterActive() {
 		t.Error("Panel should be in filter mode after typing")
 	}
 
-	// Press ENTER to exit filter mode (keep filter active)
 	p, _ = p.Update(sendSpecialKey(tea.KeyEnter))
 
-	// After ENTER, we should NOT be in filter mode
 	if p.FilterActive() {
 		t.Error("Panel should NOT be in filter mode after ENTER exits filter mode")
 	}
 
-	// But the filter should still be applied (FilterApplied state)
 	if p.list.FilterState() != list.FilterApplied {
 		t.Error("Filter should still be applied after ENTER")
 	}

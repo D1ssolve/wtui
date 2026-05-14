@@ -14,20 +14,10 @@ const isAvailableTimeout = 10 * time.Second
 const subprocessTimeout = 30 * time.Second
 
 type Client interface {
-	// IsAvailable reports whether the dotnet CLI is present and functional.
-	// It returns false (never an error) when dotnet is not in PATH or exits
-	// non-zero — the caller is expected to treat absence as a non-fatal condition.
 	IsAvailable(ctx context.Context) bool
 
-	// NewSln creates a new solution file named <name>.sln inside workDir by
-	// running: dotnet new sln -n <name>
-	// Stdout is discarded; stderr is captured and included in any returned error.
 	NewSln(ctx context.Context, workDir, name string) error
 
-	// SlnAdd adds the project at projPath to the solution at slnPath by running:
-	// dotnet sln <slnPath> add <projPath>
-	// Both paths should be absolute or relative to workDir.
-	// Stdout is discarded; stderr is captured and included in any returned error.
 	SlnAdd(ctx context.Context, workDir, slnPath, projPath string) error
 }
 

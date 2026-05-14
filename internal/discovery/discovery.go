@@ -28,12 +28,6 @@ func New(cfg *config.Config, gitClient git.Client, logger *slog.Logger) *Discove
 	return &Discoverer{cfg: cfg, git: gitClient, logger: logger}
 }
 
-// walkRepos calls fn for every directory that contains a direct .git child,
-// at depth >= 2 and <= cfg.DiscoveryDepth, rooted at cfg.RootDir.
-// fn receives the repo parent path (the directory that contains .git) and the
-// depth of that parent relative to RootDir.
-// fn may return filepath.SkipAll to stop the walk early.
-// Any other non-nil return from fn is propagated as the walkRepos error.
 func (d *Discoverer) walkRepos(fn func(repoPath string, depth int) error) error {
 	root := d.cfg.RootDir
 	sep := string(filepath.Separator)
@@ -65,21 +59,19 @@ func (d *Discoverer) walkRepos(fn func(repoPath string, depth int) error) error 
 		}
 
 		if entry.Name() == ".git" {
-			// Require depth >= 2: the repo parent must be at least one level
-			// below root (i.e., ROOT/repo/.git, not ROOT/.git).
+
 			if depth < 2 {
 				return fs.SkipDir
 			}
 
 			parent := filepath.Dir(path)
 			if fnErr := fn(parent, depth); fnErr != nil {
-				return fnErr // includes filepath.SkipAll to stop early
+				return fnErr
 			}
-			// Always skip descent into .git after the callback has run.
+
 			return fs.SkipDir
 		}
 
-		// Prune directories that cannot contain any reachable .git within depth.
 		if depth >= d.cfg.DiscoveryDepth {
 			return fs.SkipDir
 		}

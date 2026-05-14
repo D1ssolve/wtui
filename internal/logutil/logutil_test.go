@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// TestParseLogLevel verifies all recognised level strings and the unknown-input default.
 func TestParseLogLevel(t *testing.T) {
 	t.Parallel()
 
@@ -38,7 +37,6 @@ func TestParseLogLevel(t *testing.T) {
 	}
 }
 
-// TestXDGStateDir verifies the XDG_STATE_HOME override and the fallback path.
 func TestXDGStateDir(t *testing.T) {
 	t.Run("uses_XDG_STATE_HOME_when_set", func(t *testing.T) {
 		t.Setenv("XDG_STATE_HOME", "/custom/state")
@@ -60,7 +58,27 @@ func TestXDGStateDir(t *testing.T) {
 	})
 }
 
-// TestInitLogger_CreatesLogFile verifies InitLogger creates a log file in a temp dir.
+func TestXDGCacheDir(t *testing.T) {
+	t.Run("uses_XDG_CACHE_HOME_when_set", func(t *testing.T) {
+		t.Setenv("XDG_CACHE_HOME", "/custom/cache")
+		got := XDGCacheDir("myapp")
+		want := filepath.Join("/custom/cache", "myapp")
+		if got != want {
+			t.Errorf("XDGCacheDir = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("falls_back_to_home_cache", func(t *testing.T) {
+		t.Setenv("XDG_CACHE_HOME", "")
+		t.Setenv("HOME", "/testhome")
+		got := XDGCacheDir("myapp")
+		want := filepath.Join("/testhome", ".cache", "myapp")
+		if got != want {
+			t.Errorf("XDGCacheDir = %q, want %q", got, want)
+		}
+	})
+}
+
 func TestInitLogger_CreatesLogFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", tmp)
@@ -73,7 +91,6 @@ func TestInitLogger_CreatesLogFile(t *testing.T) {
 		t.Fatal("InitLogger returned nil logger")
 	}
 
-	// Verify the log file was created at the expected path.
 	logPath := filepath.Join(tmp, "testapp", "testapp.log")
 	if _, statErr := os.Stat(logPath); statErr != nil {
 		t.Errorf("expected log file at %s, got stat error: %v", logPath, statErr)

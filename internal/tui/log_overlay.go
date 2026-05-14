@@ -14,17 +14,16 @@ import (
 )
 
 const (
-	logColorBorder = lipgloss.Color("#7C3AED") // violet accent — mirrors ColorPrimary
+	logColorBorder = lipgloss.Color("#7C3AED")
 	logColorTitle  = lipgloss.Color("#7C3AED")
-	logColorTime   = lipgloss.Color("#6B7280") // muted gray — timestamp
-	logColorPrefix = lipgloss.Color("#10B981") // green — $ prefix
-	logColorCmd    = lipgloss.Color("#9CA3AF") // cool gray — command text
-	logColorHint   = lipgloss.Color("#4A4A4A") // dark gray — hint bar
-	logColorEmpty  = lipgloss.Color("#6B7280") // muted gray — empty state
-	logColorFilter = lipgloss.Color("#F59E0B") // amber — active filter indicator
+	logColorTime   = lipgloss.Color("#6B7280")
+	logColorPrefix = lipgloss.Color("#10B981")
+	logColorCmd    = lipgloss.Color("#9CA3AF")
+	logColorHint   = lipgloss.Color("#4A4A4A")
+	logColorEmpty  = lipgloss.Color("#6B7280")
+	logColorFilter = lipgloss.Color("#F59E0B")
 )
 
-// LogTickMsg triggers a periodic log file refresh while the overlay is visible.
 type LogTickMsg struct{}
 
 func logTickCmd() tea.Cmd {
@@ -45,15 +44,12 @@ type parsedLogEntry struct {
 	taskID   string
 }
 
-// LogOverlay is a scrollable full-screen overlay that tails the wtui log file
-// and displays all "exec *" entries (every subprocess command run).
-// When filter is non-empty, only entries whose taskID matches are shown.
 type LogOverlay struct {
 	logPath       string
 	lastOffset    int64
 	entries       []parsedLogEntry
-	filter        string // task ID to filter by; empty = show all
-	defaultFilter string // the filter set at open time; restored when toggling back
+	filter        string
+	defaultFilter string
 	viewport      viewport.Model
 	termW         int
 	termH         int
@@ -74,8 +70,6 @@ func NewLogOverlay(logPath string, termW, termH int, filter string) *LogOverlay 
 	return o
 }
 
-// logBoxDimensions returns the outer (border-inclusive) box dimensions for the
-// overlay, sized relative to the terminal.
 func logBoxDimensions(termW, termH int) (w, h int) {
 	w = termW * 85 / 100
 	if w < 60 {
@@ -94,22 +88,19 @@ func logBoxDimensions(termW, termH int) (w, h int) {
 	return
 }
 
-// logViewportDimensions derives the usable viewport size from terminal dimensions.
-// Accounts for: border (2 each axis) + padding (2 horizontal) + title + hint (2 vertical).
 func logViewportDimensions(termW, termH int) (vpW, vpH int) {
 	bw, bh := logBoxDimensions(termW, termH)
-	vpW = bw - 4 // border (1+1) + padding (1+1)
+	vpW = bw - 4
 	if vpW < 10 {
 		vpW = 10
 	}
-	vpH = bh - 4 // border (1+1) + title (1) + hint (1)
+	vpH = bh - 4
 	if vpH < 1 {
 		vpH = 1
 	}
 	return
 }
 
-// SetSize is called on terminal resize while the overlay is visible.
 func (o *LogOverlay) SetSize(termW, termH int) {
 	o.termW = termW
 	o.termH = termH
@@ -119,8 +110,6 @@ func (o *LogOverlay) SetSize(termW, termH int) {
 	o.rebuildContent()
 }
 
-// Refresh reads any new lines appended to the log file since the last call,
-// parses JSON entries, and keeps only "exec *" records (all subprocess commands).
 func (o *LogOverlay) Refresh() {
 	f, err := os.Open(o.logPath)
 	if err != nil {
@@ -192,8 +181,6 @@ func (o *LogOverlay) rebuildContent() {
 	o.viewport.SetContent(strings.Join(visible, "\n"))
 }
 
-// Update handles keyboard input for the overlay (scroll only; open/close is
-// handled by the root model before this is called).
 func (o *LogOverlay) Update(msg tea.Msg) (*LogOverlay, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -226,7 +213,6 @@ func (o *LogOverlay) Update(msg tea.Msg) (*LogOverlay, tea.Cmd) {
 	return o, cmd
 }
 
-// View renders the overlay centered over the full terminal area.
 func (o *LogOverlay) View() string {
 	bw, bh := logBoxDimensions(o.termW, o.termH)
 
@@ -256,8 +242,8 @@ func (o *LogOverlay) View() string {
 	boxed := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(logColorBorder).
-		Width(bw-4).   // content width: border (2) + padding (2) = 4 overhead
-		Height(bh-2).  // content height: border (2) = 2 overhead
+		Width(bw-4).
+		Height(bh-2).
 		Padding(0, 1).
 		Render(content)
 

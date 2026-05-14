@@ -14,14 +14,7 @@ import (
 	"github.com/diss0x/wtui/internal/git"
 )
 
-// ── mock git.Client ───────────────────────────────────────────────────────────
-
-// mockGitClient implements git.Client for testing purposes.
-// IsValidRepo returns nil for any path whose base name begins with "service-",
-// and an error for all other paths. All other methods are stubs that panic if
-// unexpectedly called during discovery tests.
 type mockGitClient struct {
-	// validRepoFn overrides IsValidRepo behaviour when non-nil.
 	validRepoFn func(repoPath string) error
 }
 
@@ -76,6 +69,10 @@ func (m *mockGitClient) Rebase(_ context.Context, _, _ string) error {
 	panic("mockGitClient.Rebase called unexpectedly")
 }
 
+func (m *mockGitClient) Merge(_ context.Context, _, _ string) error {
+	panic("mockGitClient.Merge called unexpectedly")
+}
+
 func (m *mockGitClient) Push(_ context.Context, _ string, _ chan<- string) error {
 	panic("mockGitClient.Push called unexpectedly")
 }
@@ -92,22 +89,16 @@ func (m *mockGitClient) DeleteBranch(_ context.Context, _, _ string) error {
 	panic("mockGitClient.DeleteBranch called unexpectedly")
 }
 
-// Compile-time assertion that mockGitClient satisfies the git.Client interface.
+func (m *mockGitClient) RemoteBranchExists(_ context.Context, _, _ string) (bool, error) {
+	panic("mockGitClient.RemoteBranchExists called unexpectedly")
+}
+
+func (m *mockGitClient) AddWorktreeWithTracking(_ context.Context, _, _, _, _ string) error {
+	panic("mockGitClient.AddWorktreeWithTracking called unexpectedly")
+}
+
 var _ git.Client = (*mockGitClient)(nil)
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-// buildTestTree creates the following directory structure under a fresh temp dir:
-//
-//	ROOT/
-//	  service-a/.git/          depth-2 .git (service at depth 1)
-//	  service-b/.git/          depth-2 .git (service at depth 1)
-//	  group1/
-//	    service-c/.git/        depth-3 .git (service at depth 2)
-//	  group2/nested/
-//	    service-d/.git/        depth-4 .git (service at depth 3)
-//
-// It returns the ROOT path and a cleanup function.
 func buildTestTree(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -128,8 +119,6 @@ func buildTestTree(t *testing.T) string {
 	return root
 }
 
-// newDiscoverer constructs a Discoverer with the given root and depth, using the
-// default mock git client.
 func newDiscoverer(root string, depth int) *Discoverer {
 	cfg := &config.Config{
 		RootDir:        root,
@@ -138,12 +127,9 @@ func newDiscoverer(root string, depth int) *Discoverer {
 	return New(cfg, &mockGitClient{}, newNopLogger())
 }
 
-// newNopLogger returns a slog.Logger that discards all output.
 func newNopLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError + 100}))
 }
-
-// ── Resolve tests ─────────────────────────────────────────────────────────────
 
 func TestResolve(t *testing.T) {
 	root := buildTestTree(t)
@@ -152,9 +138,9 @@ func TestResolve(t *testing.T) {
 		name       string
 		token      string
 		depth      int
-		wantSuffix string // expected path suffix relative to root
-		wantErr    error  // if non-nil, errors.Is(err, wantErr) must be true
-		wantErrNil bool   // if true, no error expected
+		wantSuffix string
+		wantErr    error
+		wantErrNil bool
 	}{
 		{
 			name:       "direct service-a at depth 1",
@@ -225,17 +211,13 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-// TestResolveDirectInvalidRepo tests that Resolve returns an error (not a fallback) when
-// ROOT/token/.git exists but git.IsValidRepo reports the repository as invalid.
 func TestResolveDirectInvalidRepo(t *testing.T) {
 	root := t.TempDir()
 
-	// Create ROOT/badrepo/.git as a directory, but the mock will reject it.
 	if err := os.MkdirAll(filepath.Join(root, "badrepo", ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	// Use a custom validRepoFn that always returns an error.
 	cfg := &config.Config{RootDir: root, DiscoveryDepth: 4}
 	mockClient := &mockGitClient{
 		validRepoFn: func(_ string) error {
@@ -248,18 +230,15 @@ func TestResolveDirectInvalidRepo(t *testing.T) {
 	if err == nil {
 		t.Fatal("Resolve: expected error for invalid direct repo, got nil")
 	}
-	// Must NOT be errServiceNotFound — the repo was found but invalid.
+
 	if errors.Is(err, errServiceNotFound) {
 		t.Errorf("Resolve: error should not be errServiceNotFound for an invalid repo, got: %v", err)
 	}
 }
 
-// TestResolveWalkInvalidRepo tests that Resolve returns an error when a .git is found
-// during the walk phase but IsValidRepo fails for it.
 func TestResolveWalkInvalidRepo(t *testing.T) {
 	root := t.TempDir()
 
-	// service-c is nested (won't be caught by direct check).
 	if err := os.MkdirAll(filepath.Join(root, "group1", "service-c", ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -281,8 +260,6 @@ func TestResolveWalkInvalidRepo(t *testing.T) {
 	}
 }
 
-// ── FindAll tests ─────────────────────────────────────────────────────────────
-
 func TestFindAll(t *testing.T) {
 	root := buildTestTree(t)
 	d := newDiscoverer(root, 4)
@@ -292,7 +269,6 @@ func TestFindAll(t *testing.T) {
 		t.Fatalf("FindAll: unexpected error: %v", err)
 	}
 
-	// Expect all four services, sorted alphabetically.
 	want := []domain.Repo{
 		{Name: "service-a", Path: filepath.Join(root, "service-a")},
 		{Name: "service-b", Path: filepath.Join(root, "service-b")},
@@ -315,8 +291,6 @@ func TestFindAll(t *testing.T) {
 	}
 }
 
-// TestFindAllRespectsDiscoveryDepth verifies that service-d (at .git depth 4) is
-// excluded when DiscoveryDepth is set to 3.
 func TestFindAllRespectsDiscoveryDepth(t *testing.T) {
 	root := buildTestTree(t)
 	d := newDiscoverer(root, 3)
@@ -332,7 +306,6 @@ func TestFindAllRespectsDiscoveryDepth(t *testing.T) {
 		}
 	}
 
-	// service-a, service-b, service-c should all be present.
 	wantNames := map[string]bool{"service-a": false, "service-b": false, "service-c": false}
 	for _, r := range repos {
 		if _, ok := wantNames[r.Name]; ok {
@@ -346,12 +319,9 @@ func TestFindAllRespectsDiscoveryDepth(t *testing.T) {
 	}
 }
 
-// TestFindAllSortedAlphabetically creates repos in a non-alphabetical creation order
-// and confirms the results are always alphabetically sorted.
 func TestFindAllSortedAlphabetically(t *testing.T) {
 	root := t.TempDir()
 
-	// Create in reverse order to make the test meaningful.
 	dirs := []string{
 		filepath.Join(root, "zebra", ".git"),
 		filepath.Join(root, "alpha", ".git"),
@@ -380,8 +350,6 @@ func TestFindAllSortedAlphabetically(t *testing.T) {
 	}
 }
 
-// TestFindAllEmptyRoot verifies that FindAll returns an empty (non-nil) slice when
-// there are no git repos under the root.
 func TestFindAllEmptyRoot(t *testing.T) {
 	root := t.TempDir()
 	d := newDiscoverer(root, 4)
@@ -395,9 +363,6 @@ func TestFindAllEmptyRoot(t *testing.T) {
 	}
 }
 
-// ── utilities ─────────────────────────────────────────────────────────────────
-
-// repoNames extracts the Name field from a []domain.Repo for readable test output.
 func repoNames(repos []domain.Repo) []string {
 	names := make([]string, len(repos))
 	for i, r := range repos {

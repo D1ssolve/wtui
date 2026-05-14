@@ -26,7 +26,6 @@ func NewConfigModal(cfg *config.Config) *ConfigModal {
 
 func (m *ConfigModal) Title() string { return "Configuration" }
 
-// SetTerminalSize implements Modal.
 func (m *ConfigModal) SetTerminalSize(width, height int) {}
 
 func (m *ConfigModal) Update(msg tea.Msg) (Modal, tea.Cmd) {

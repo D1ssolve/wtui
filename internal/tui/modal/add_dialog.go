@@ -12,35 +12,25 @@ import (
 	"github.com/diss0x/wtui/internal/domain"
 )
 
-// AddDialog is a dialog for adding services to an existing task.
-// Similar to InitDialog, it shows a repo picker when repos are available.
 type AddDialog struct {
 	taskID string
 	input  textinput.Model
 
-	// Terminal dimensions for list sizing.
 	terminalHeight int
 	terminalWidth  int
 
-	// Repo picker (replaces Services text input when repos are available).
 	repoList          list.Model
 	repoPickerFocused bool
 	hasRepos          bool
 }
 
-// NewAddDialog creates an AddDialog for adding services to a task.
-// When repos is non-empty, the Services field becomes a checkboxed repo picker.
-// When repos is empty, a plain text input is shown for services.
-// termWidth and termHeight are used to calculate the visible window size for the repo picker.
-// existingServices is a list of service names already in the task; these repos are filtered out.
 func NewAddDialog(taskID string, repos []domain.Repo, existingServices []string, termWidth, termHeight int) *AddDialog {
-	// Build a set of existing service names for fast lookup.
+
 	existingSet := make(map[string]struct{}, len(existingServices))
 	for _, name := range existingServices {
 		existingSet[name] = struct{}{}
 	}
 
-	// Filter repos to exclude existing services.
 	filteredRepos := make([]domain.Repo, 0, len(repos))
 	for _, r := range repos {
 		if _, exists := existingSet[r.Name]; !exists {
@@ -78,7 +68,7 @@ func NewAddDialog(taskID string, repos []domain.Repo, existingServices []string,
 		d.repoList.SetShowHelp(false)
 		d.repoList.SetShowPagination(true)
 		d.repoList.SetFilteringEnabled(true)
-		d.repoList.SetShowFilter(false) // rendered manually in View() to avoid blank title bar
+		d.repoList.SetShowFilter(false)
 		d.repoList.DisableQuitKeybindings()
 		d.repoList.Styles.NoItems = lipgloss.NewStyle().Foreground(modalColorDim).PaddingLeft(2)
 	}
@@ -92,7 +82,6 @@ func (d *AddDialog) Title() string {
 	return fmt.Sprintf("Add Service to %s", d.taskID)
 }
 
-// SetTerminalSize implements Modal.
 func (d *AddDialog) SetTerminalSize(width, height int) {
 	d.terminalWidth = width
 	d.terminalHeight = height
@@ -101,15 +90,13 @@ func (d *AddDialog) SetTerminalSize(width, height int) {
 	}
 }
 
-// Update implements Modal.
 func (d *AddDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return d.handleKey(msg)
 
 	default:
-		// Forward non-key messages (e.g. list.FilterMatchesMsg, spinner.TickMsg)
-		// to the repo list so async filter results are applied.
+
 		if d.hasRepos {
 			var cmd tea.Cmd
 			d.repoList, cmd = d.repoList.Update(msg)
@@ -124,12 +111,8 @@ func (d *AddDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	}
 }
 
-// handleKey routes a key event to the repo picker or text input depending on
-// current focus and filter state.
 func (d *AddDialog) handleKey(msg tea.KeyMsg) (Modal, tea.Cmd) {
-	// When the repo picker is filtering, forward all keys to the list — the
-	// built-in filter input handles typing, backspace, enter (accept), and esc
-	// (cancel). We only intercept esc to also reset our own state cleanly.
+
 	if d.repoPickerFocused && d.hasRepos && d.repoList.FilterState() == list.Filtering {
 		switch msg.String() {
 		case "esc":
@@ -167,7 +150,7 @@ func (d *AddDialog) handleKey(msg tea.KeyMsg) (Modal, tea.Cmd) {
 		if !d.repoPickerFocused {
 			return d, d.nextField()
 		}
-		// Repo picker focused — submit selected services.
+
 		services := d.selectedServices()
 		taskID := d.taskID
 		return d, func() tea.Msg {
@@ -180,34 +163,27 @@ func (d *AddDialog) handleKey(msg tea.KeyMsg) (Modal, tea.Cmd) {
 		}
 
 	case "f":
-		// Enter filter mode when repo picker is focused.
+
 		if d.repoPickerFocused && d.hasRepos {
 			filterKey := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
 			var cmd tea.Cmd
 			d.repoList, cmd = d.repoList.Update(filterKey)
 			return d, cmd
 		}
-		// Otherwise fall through to the text-input handler below.
+
 	}
 
-	// When repo picker is focused, delegate navigation (j/k/h/l/page keys) and
-	// any other unhandled key to the list component directly.
 	if d.repoPickerFocused && d.hasRepos {
 		var cmd tea.Cmd
 		d.repoList, cmd = d.repoList.Update(msg)
 		return d, cmd
 	}
 
-	// Text field is focused — forward to the active input.
 	var cmd tea.Cmd
 	d.input, cmd = d.input.Update(msg)
 	return d, cmd
 }
 
-// toggleSelectedRepo toggles the checked state of the item under the cursor.
-// It uses GlobalIndex() and SetItem() so it works correctly when a filter is active.
-// Returns the command from SetItem, which triggers a filter recomputation when a
-// filter is applied — without it filteredItems would not reflect the updated checked state.
 func (d *AddDialog) toggleSelectedRepo() tea.Cmd {
 	globalIdx := d.repoList.GlobalIndex()
 	item := d.repoList.SelectedItem()
@@ -219,7 +195,6 @@ func (d *AddDialog) toggleSelectedRepo() tea.Cmd {
 	return d.repoList.SetItem(globalIdx, ri)
 }
 
-// View implements Modal.
 func (d *AddDialog) View() string {
 	labelStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -260,7 +235,6 @@ func (d *AddDialog) View() string {
 	return sb.String()
 }
 
-// selectedServices returns the names of all checked repos.
 func (d *AddDialog) selectedServices() []string {
 	var services []string
 	for _, it := range d.repoList.Items() {
@@ -271,8 +245,6 @@ func (d *AddDialog) selectedServices() []string {
 	return services
 }
 
-// focusField focuses field i (0 = text input, 1+ = handled as repo picker focus).
-// When repos are available field 0 (text input) is hidden, so Tab cycling skips it.
 func (d *AddDialog) focusField(i int) {
 	d.repoPickerFocused = d.hasRepos || i > 0
 
@@ -283,16 +255,13 @@ func (d *AddDialog) focusField(i int) {
 	}
 }
 
-// nextField advances focus. When repos are available the only interactive
-// element is the repo picker, so Tab is a no-op (no field to cycle to).
 func (d *AddDialog) nextField() tea.Cmd {
 	if d.hasRepos {
-		return nil // single-field dialog — Tab does nothing
+		return nil
 	}
 	return nil
 }
 
-// prevField mirrors nextField.
 func (d *AddDialog) prevField() tea.Cmd {
 	if d.hasRepos {
 		return nil
@@ -300,7 +269,6 @@ func (d *AddDialog) prevField() tea.Cmd {
 	return nil
 }
 
-// visibleListHeight returns the height for the repo list based on terminal dimensions.
 func (d *AddDialog) visibleListHeight() int {
 	if d.terminalHeight > 0 {
 		size := d.terminalHeight - 16

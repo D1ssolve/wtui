@@ -8,8 +8,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// outColor* are aliases to the shared panel palette defined in theme.go,
-// kept for readability at call sites.
 const (
 	outColorInactive = colorInactive
 	outColorDim      = colorDim

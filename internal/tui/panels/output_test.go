@@ -7,8 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// ── OutputPanel tests ─────────────────────────────────────────────────────────
-
 func TestOutputPanel_New_EmptyViewport(t *testing.T) {
 	p := NewOutputPanel(80, 10)
 	if p.lineCount() != 0 {
@@ -34,7 +32,7 @@ func TestOutputPanel_AppendLine_PrefixedWithArrow(t *testing.T) {
 	if len(lines) == 0 {
 		t.Fatal("expected at least 1 raw line")
 	}
-	// Raw line may contain ANSI codes; check it contains "> " and the text.
+
 	combined := strings.Join(lines, "")
 	if !strings.Contains(combined, ">") {
 		t.Errorf("AppendLine should prefix with '>': %q", combined)
@@ -55,12 +53,12 @@ func TestOutputPanel_AppendLine_MultipleLines(t *testing.T) {
 }
 
 func TestOutputPanel_AppendLine_AutoScrollsToBottom(t *testing.T) {
-	p := NewOutputPanel(80, 5) // small height to force scrolling
-	// Fill beyond visible area.
+	p := NewOutputPanel(80, 5)
+
 	for i := 0; i < 20; i++ {
 		p.AppendLine("line")
 	}
-	// After each AppendLine the viewport should be at bottom.
+
 	if !p.viewport.AtBottom() {
 		t.Error("AppendLine should auto-scroll to bottom")
 	}
@@ -82,7 +80,7 @@ func TestOutputPanel_SetSize_UpdatesDimensions(t *testing.T) {
 	if p.width != 120 || p.height != 20 {
 		t.Errorf("SetSize: expected 120×20, got %d×%d", p.width, p.height)
 	}
-	// Viewport inner width should be (120 - 2) = 118.
+
 	if p.viewport.Width != 118 {
 		t.Errorf("viewport width should be 118, got %d", p.viewport.Width)
 	}
@@ -105,16 +103,14 @@ func TestOutputPanel_ScrollToBottom(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		p.AppendLine("line")
 	}
-	// Manually scroll up.
+
 	p.viewport.GotoTop()
-	// Call ScrollToBottom.
+
 	p.ScrollToBottom()
 	if !p.viewport.AtBottom() {
 		t.Error("ScrollToBottom should move viewport to bottom")
 	}
 }
-
-// ── Keybinding tests ──────────────────────────────────────────────────────────
 
 func TestOutputPanel_KeyEsc_EmitsFocusTasksMsg(t *testing.T) {
 	p := NewOutputPanel(80, 10)
@@ -135,7 +131,7 @@ func TestOutputPanel_KeyG_Lower_ScrollsToTop(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		p.AppendLine("line")
 	}
-	// Viewport is at bottom after appends.
+
 	p.SetFocused(true)
 
 	p, _ = p.Update(sendKey("g"))
@@ -149,7 +145,7 @@ func TestOutputPanel_KeyG_Upper_ScrollsToBottom(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		p.AppendLine("line")
 	}
-	p.viewport.GotoTop() // scroll up first
+	p.viewport.GotoTop()
 	p.SetFocused(true)
 
 	p, _ = p.Update(sendKey("G"))
@@ -178,7 +174,7 @@ func TestOutputPanel_KeyK_ScrollsUp(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		p.AppendLine("line")
 	}
-	// Start at bottom.
+
 	p.SetFocused(true)
 	before := p.viewport.YOffset
 
@@ -190,7 +186,6 @@ func TestOutputPanel_KeyK_ScrollsUp(t *testing.T) {
 
 func TestOutputPanel_Unfocused_KeysIgnored(t *testing.T) {
 	p := NewOutputPanel(80, 10)
-	// focused = false (default)
 
 	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd != nil {
@@ -200,8 +195,6 @@ func TestOutputPanel_Unfocused_KeysIgnored(t *testing.T) {
 		}
 	}
 }
-
-// ── View tests ────────────────────────────────────────────────────────────────
 
 func TestOutputPanel_View_ContainsTitle(t *testing.T) {
 	p := NewOutputPanel(80, 10)
@@ -214,7 +207,7 @@ func TestOutputPanel_View_ContainsTitle(t *testing.T) {
 func TestOutputPanel_View_ContainsAppendedLine(t *testing.T) {
 	p := NewOutputPanel(80, 10)
 	p.AppendLine("hello from subprocess")
-	view := p.View() // keep ANSI for content check
+	view := p.View()
 	if !strings.Contains(view, "hello from subprocess") {
 		t.Errorf("View should contain appended line text, got: %q", view)
 	}

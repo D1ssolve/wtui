@@ -16,80 +16,42 @@ import (
 const subprocessTimeout = 30 * time.Second
 
 type Client interface {
-	// IsValidRepo returns nil when repoPath is inside a valid git work-tree, or an
-	// error (typically *ExecError) when it is not.
 	IsValidRepo(ctx context.Context, repoPath string) error
 
-	// BaseBranch returns the canonical default branch name for the repository at
-	// repoPath. It first tries to resolve refs/remotes/origin/HEAD; if that ref does
-	// not exist it falls back to the current branch via rev-parse --abbrev-ref HEAD.
 	BaseBranch(ctx context.Context, repoPath string) (string, error)
 
-	// BranchExists reports whether a local branch named branch exists in the
-	// repository at repoPath. A missing branch returns (false, nil) — not an error.
 	BranchExists(ctx context.Context, repoPath, branch string) (bool, error)
 
-	// ListWorktrees returns all worktrees associated with the repository at repoPath,
-	// including the main worktree.
+	RemoteBranchExists(ctx context.Context, repoPath, branch string) (bool, error)
+
 	ListWorktrees(ctx context.Context, repoPath string) ([]WorktreeEntry, error)
 
-	// AddWorktree creates a linked worktree at dest.
-	//
-	// When newBranch is true a new branch named branch is created from base and
-	// checked out: equivalent to `git worktree add -b <branch> <dest> <base>`.
-	//
-	// When newBranch is false the existing branch is checked out directly:
-	// equivalent to `git worktree add <dest> <branch>`.
 	AddWorktree(ctx context.Context, repoPath, dest, branch string, newBranch bool, base string) error
 
-	// CommonDir returns the path to the common git directory (i.e. the .git directory
-	// of the main worktree) as reported by `git rev-parse --git-common-dir`.
+	AddWorktreeWithTracking(ctx context.Context, repoPath, dest, localBranch, remoteBranch string) error
+
 	CommonDir(ctx context.Context, worktreePath string) (string, error)
 
-	// GetWorktreeBranch returns the current branch of worktree.
 	GetWorktreeBranch(ctx context.Context, worktreePath string) (string, error)
 
-	// RemoveWorktree removes a linked worktree. commonDir must be the path returned by
-	// CommonDir for any worktree in the same repository. Pass force=true to pass
-	// --force to git (required for dirty worktrees).
 	RemoveWorktree(ctx context.Context, commonDir, worktreePath string, force bool) error
 
-	// IsDirty reports whether the worktree at worktreePath has uncommitted changes
-	// (staged or unstaged). Returns (false, nil) for a clean worktree.
 	IsDirty(ctx context.Context, worktreePath string) (bool, error)
 
-	// Version returns the major and minor version numbers of the installed git binary.
-	// The raw version string is expected to match `git version X.Y.Z`.
 	Version(ctx context.Context) (major, minor int, err error)
 
-	// RevListCount returns the number of commits reachable from tip but not from
-	// base, using `git rev-list --count tip...base` in worktreePath.
-	// Returns (0, nil) when the base ref does not exist (e.g. untracked branch).
 	RevListCount(ctx context.Context, worktreePath, tip, base string) (int, error)
 
-	// RevListAheadBehind returns the number of commits that worktreePath's HEAD
-	// is ahead of and behind originBranch in a single
-	// `git rev-list --count --left-right HEAD...originBranch` invocation.
-	//
-	// Returns (0, 0, nil) when originBranch does not exist (untracked branch).
-	// The left count is ahead; the right count is behind.
 	RevListAheadBehind(ctx context.Context, worktreePath, originBranch string) (ahead, behind int, err error)
 
-	// Fetch runs `git fetch origin` in worktreePath.
-	// Returns nil on success; *ExecError on git failure.
 	Fetch(ctx context.Context, worktreePath string) error
 
-	// Rebase runs `git rebase <upstream>` in worktreePath.
-	// upstream should be a fully-qualified ref, e.g. "origin/feature/IN-1234".
+	Merge(ctx context.Context, worktreePath, branch string) error
+
 	Rebase(ctx context.Context, worktreePath, upstream string) error
 
-	// Push runs `git push -u origin HEAD` in worktreePath.
-	// Lines from stderr and stdout are written to lineCh as they arrive.
-	// lineCh is NOT closed by Push — the caller manages channel lifetime.
 	Push(ctx context.Context, worktreePath string, lineCh chan<- string) error
 
-	// Stash runs `git stash` (pop=false) or `git stash pop` (pop=true)
-	// in worktreePath.
 	Stash(ctx context.Context, worktreePath string, pop bool) error
 
 	DeleteBranch(ctx context.Context, repoPath, branch string) error
@@ -173,6 +135,22 @@ func (c *CommandClient) BranchExists(ctx context.Context, repoPath, branch strin
 	return false, err
 }
 
+func (c *CommandClient) RemoteBranchExists(ctx context.Context, repoPath, branch string) (bool, error) {
+	_, err := c.execGit(ctx, "-C", repoPath, "ls-remote", "--exit-code", "--heads", "origin", branch)
+	if err == nil {
+		return true, nil
+	}
+
+	var execErr *ExecError
+	if ok := isExecError(err, &execErr); ok {
+
+		if execErr.ExitCode == 2 {
+			return false, nil
+		}
+	}
+	return false, err
+}
+
 func (c *CommandClient) ListWorktrees(ctx context.Context, repoPath string) ([]WorktreeEntry, error) {
 	out, err := c.execGit(ctx, "-C", repoPath, "worktree", "list", "--porcelain")
 	if err != nil {
@@ -188,6 +166,12 @@ func (c *CommandClient) AddWorktree(ctx context.Context, repoPath, dest, branch 
 	} else {
 		args = []string{"-C", repoPath, "worktree", "add", dest, branch}
 	}
+	_, err := c.execGit(ctx, args...)
+	return err
+}
+
+func (c *CommandClient) AddWorktreeWithTracking(ctx context.Context, repoPath, dest, localBranch, remoteBranch string) error {
+	args := []string{"-C", repoPath, "worktree", "add", "-b", localBranch, dest, "origin/" + remoteBranch}
 	_, err := c.execGit(ctx, args...)
 	return err
 }
@@ -263,8 +247,7 @@ func (c *CommandClient) Version(ctx context.Context) (major, minor int, err erro
 func (c *CommandClient) RevListCount(ctx context.Context, worktreePath, tip, base string) (int, error) {
 	out, err := c.execGit(ctx, "-C", worktreePath, "rev-list", "--count", tip+"..."+base)
 	if err != nil {
-		// When the base ref does not exist (untracked branch), git exits non-zero.
-		// Treat this as (0, nil) so callers can silently ignore missing remote refs.
+
 		var execErr *ExecError
 		if isExecError(err, &execErr) {
 			return 0, nil
@@ -278,21 +261,18 @@ func (c *CommandClient) RevListCount(ctx context.Context, worktreePath, tip, bas
 	return n, nil
 }
 
-// RevListAheadBehind returns ahead/behind commit counts for worktreePath's HEAD
-// relative to originBranch using a single `git rev-list --count --left-right`
-// invocation. Returns (0, 0, nil) when originBranch does not exist.
 func (c *CommandClient) RevListAheadBehind(ctx context.Context, worktreePath, originBranch string) (ahead, behind int, err error) {
 	out, runErr := c.execGit(ctx, "-C", worktreePath, "rev-list", "--count", "--left-right",
 		"HEAD..."+originBranch)
 	if runErr != nil {
 		var execErr *ExecError
 		if isExecError(runErr, &execErr) {
-			// Remote ref doesn't exist yet — treat as (0, 0).
+
 			return 0, 0, nil
 		}
 		return 0, 0, fmt.Errorf("rev-list ahead/behind %s: %w", originBranch, runErr)
 	}
-	// Output is "<left>\t<right>"
+
 	parts := strings.SplitN(strings.TrimSpace(out), "\t", 2)
 	if len(parts) != 2 {
 		return 0, 0, fmt.Errorf("rev-list ahead/behind: unexpected output %q", out)
@@ -308,21 +288,21 @@ func (c *CommandClient) RevListAheadBehind(ctx context.Context, worktreePath, or
 	return a, b, nil
 }
 
-// Fetch runs `git fetch origin` in worktreePath.
 func (c *CommandClient) Fetch(ctx context.Context, worktreePath string) error {
 	_, err := c.execGit(ctx, "-C", worktreePath, "fetch", "origin")
 	return err
 }
 
-// Rebase runs `git rebase <upstream>` in worktreePath.
+func (c *CommandClient) Merge(ctx context.Context, worktreePath, branch string) error {
+	_, err := c.execGit(ctx, "-C", worktreePath, "merge", branch)
+	return err
+}
+
 func (c *CommandClient) Rebase(ctx context.Context, worktreePath, upstream string) error {
 	_, err := c.execGit(ctx, "-C", worktreePath, "rebase", upstream)
 	return err
 }
 
-// Push runs `git push -u origin HEAD` in worktreePath.
-// Lines emitted to stdout and stderr are forwarded to lineCh as they arrive.
-// Push does NOT close lineCh — the caller controls channel lifetime.
 func (c *CommandClient) Push(ctx context.Context, worktreePath string, lineCh chan<- string) error {
 	ctx, cancel := context.WithTimeout(ctx, subprocessTimeout)
 	defer cancel()
@@ -334,7 +314,6 @@ func (c *CommandClient) Push(ctx context.Context, worktreePath string, lineCh ch
 
 	cmd := exec.CommandContext(ctx, "git", args...)
 
-	// git push emits progress on stderr; capture stdout separately.
 	var stdoutBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 
@@ -347,8 +326,6 @@ func (c *CommandClient) Push(ctx context.Context, worktreePath string, lineCh ch
 		return fmt.Errorf("push: start: %w", err)
 	}
 
-	// Stream stderr lines to lineCh in a goroutine.
-	// The goroutine exits when the pipe reaches EOF after the process exits.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -358,8 +335,7 @@ func (c *CommandClient) Push(ctx context.Context, worktreePath string, lineCh ch
 			select {
 			case lineCh <- line:
 			case <-ctx.Done():
-				// Context cancelled: drain remaining output so the subprocess
-				// is not blocked writing to the pipe.
+
 				for scanner.Scan() {
 				}
 				return
@@ -367,18 +343,15 @@ func (c *CommandClient) Push(ctx context.Context, worktreePath string, lineCh ch
 		}
 	}()
 
-	// cmd.Wait waits for the process to exit and closes the pipe, causing
-	// the scanner goroutine above to reach EOF and terminate.
 	runErr := cmd.Wait()
-	<-done // ensure all stderr lines have been forwarded before returning
+	<-done
 
-	// Forward any stdout lines after the process exits.
 	if out := strings.TrimSpace(stdoutBuf.String()); out != "" {
 		for line := range strings.SplitSeq(out, "\n") {
 			select {
 			case lineCh <- line:
 			default:
-				// Non-blocking: skip if caller is not consuming (best-effort).
+
 			}
 		}
 	}
@@ -391,13 +364,12 @@ func (c *CommandClient) Push(ctx context.Context, worktreePath string, lineCh ch
 		return &ExecError{
 			Argv:     argv,
 			ExitCode: exitCode,
-			Stderr:   "", // already streamed line-by-line to lineCh
+			Stderr:   "",
 		}
 	}
 	return nil
 }
 
-// Stash runs `git stash` (pop=false) or `git stash pop` (pop=true) in worktreePath.
 func (c *CommandClient) Stash(ctx context.Context, worktreePath string, pop bool) error {
 	args := []string{"-C", worktreePath, "stash"}
 	if pop {

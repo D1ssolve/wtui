@@ -8,8 +8,6 @@ import (
 	"sort"
 )
 
-// workspaceFile is the JSON structure written to <taskID>.code-workspace.
-// Matches the VS Code multi-root workspace schema.
 type workspaceFile struct {
 	Folders  []workspaceFolder `json:"folders"`
 	Settings workspaceSettings `json:"settings"`
@@ -23,17 +21,6 @@ type workspaceSettings struct {
 	LabelFormat string `json:"workbench.editor.labelFormat"`
 }
 
-// generateWorkspaceFile creates or overwrites the VS Code .code-workspace file
-// at <taskDir>/<taskID>.code-workspace.
-//
-// The folders list contains one entry per direct subdirectory of taskDir; paths
-// are relative from taskDir to each service worktree (i.e., just the directory
-// name since worktrees are direct children of taskDir).
-//
-// Entries are sorted alphabetically by path to produce a stable output.
-//
-// The file is written atomically (temp file + rename) to prevent partial reads by
-// VS Code or other consumers.
 func generateWorkspaceFile(taskID, taskDir string) error {
 	entries, err := os.ReadDir(taskDir)
 	if err != nil {
@@ -45,8 +32,7 @@ func generateWorkspaceFile(taskID, taskDir string) error {
 		if !entry.IsDir() {
 			continue
 		}
-		// Worktrees are direct children of taskDir, so entry.Name() is the
-		// relative path from taskDir to each service worktree directory.
+
 		folders = append(folders, workspaceFolder{Path: entry.Name()})
 	}
 
@@ -65,13 +51,11 @@ func generateWorkspaceFile(taskID, taskDir string) error {
 	if err != nil {
 		return fmt.Errorf("workspace: marshal JSON: %w", err)
 	}
-	// Append a trailing newline for POSIX compliance and cleaner diffs.
+
 	data = append(data, '\n')
 
 	wsPath := filepath.Join(taskDir, taskID+".code-workspace")
 
-	// Atomic write: write to a temp file in the same directory then rename.
-	// Using the same directory ensures the rename is atomic on the same filesystem.
 	tmp, err := os.CreateTemp(taskDir, ".wtui-workspace-*.tmp")
 	if err != nil {
 		return fmt.Errorf("workspace: create temp file: %w", err)
@@ -81,7 +65,7 @@ func generateWorkspaceFile(taskID, taskDir string) error {
 	success := false
 	defer func() {
 		if !success {
-			os.Remove(tmpName) //nolint:errcheck
+			os.Remove(tmpName)
 		}
 	}()
 

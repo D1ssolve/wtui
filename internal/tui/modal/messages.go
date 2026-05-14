@@ -1,15 +1,17 @@
 package modal
 
+import "github.com/diss0x/wtui/internal/task"
+
 type SubmitInitMsg struct {
 	TaskID       string
-	Services     []string // parsed from comma or space separated input
+	Services     []string
 	BranchPrefix string
 	BaseBranch   string
 }
 
 type SubmitAddMsg struct {
 	TaskID   string
-	Services []string // parsed from comma or space separated input
+	Services []string
 }
 
 type SubmitRemoveTaskMsg struct {
@@ -20,13 +22,27 @@ type SubmitRemoveTaskMsg struct {
 
 type CloseModalMsg struct{}
 
-type SubmitCloneMsg struct {
-	Src string
-	Dst string
-}
-
 type SubmitRemoveServiceMsg struct {
 	TaskID       string
 	ServiceName  string
 	RemoveBranch bool
+}
+
+type SubmitSyncStrategyMsg struct {
+	TaskID   string
+	Strategy task.SyncStrategy
+}
+
+type SubmitRemoteBranchStrategyMsg struct {
+	TaskID       string
+	ServiceName  string
+	Strategy     task.RemoteBranchStrategy
+	BranchSuffix string
+}
+
+type RemoteBranchConflictMsg struct {
+	TaskID      string
+	ServiceName string
+	BranchName  string
+	RepoPath    string
 }

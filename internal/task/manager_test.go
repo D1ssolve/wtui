@@ -9,58 +9,99 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"log/slog"
 
 	"github.com/diss0x/wtui/internal/config"
 	"github.com/diss0x/wtui/internal/discovery"
+	"github.com/diss0x/wtui/internal/domain"
 	"github.com/diss0x/wtui/internal/dotnet"
 	"github.com/diss0x/wtui/internal/git"
 	"github.com/diss0x/wtui/internal/sln"
 )
 
-// ─── Mock git.Client ─────────────────────────────────────────────────────────
+type fakeRepoResolver struct {
+	findAllRepos []domain.Repo
+	refreshRepos []domain.Repo
+	findAllCalls int
+	refreshCalls int
+}
 
-// mockGitClient implements git.Client with configurable return values and
-// call recording for assertion in tests.
+type fakeFindAllRepoResolver struct {
+	findAllRepos []domain.Repo
+	findAllCalls int
+}
+
+func (f *fakeRepoResolver) Resolve(_ context.Context, _ string) (string, error) { return "", nil }
+
+func (f *fakeRepoResolver) FindAll(_ context.Context) ([]domain.Repo, error) {
+	f.findAllCalls++
+	return f.findAllRepos, nil
+}
+
+func (f *fakeRepoResolver) Refresh(_ context.Context) ([]domain.Repo, error) {
+	f.refreshCalls++
+	return f.refreshRepos, nil
+}
+
+func (f *fakeFindAllRepoResolver) Resolve(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (f *fakeFindAllRepoResolver) FindAll(_ context.Context) ([]domain.Repo, error) {
+	f.findAllCalls++
+	return f.findAllRepos, nil
+}
+
 type mockGitClient struct {
 	mu sync.Mutex
 
-	// Per-method return values.
 	isValidRepoErr   error
 	baseBranchResult string
 	baseBranchErr    error
 	branchExistsRes  bool
 	branchExistsErr  error
-	listWorktreesRes []git.WorktreeEntry
-	listWorktreesErr error
-	addWorktreeErr   error
-	commonDirResult  string
-	commonDirErr     error
-	// commonDirFn overrides commonDirResult/commonDirErr when set.
-	// Receives the worktreePath argument; allows per-path test behaviour.
-	commonDirFn       func(path string) (string, error)
-	removeWorktreeErr error
-	isDirtyRes        bool
-	isDirtyErr        error
-	fetchErr          error
-	rebaseErr         error
-	pushErr           error
-	fetchFn           func(path string) error
-	rebaseFn          func(path, upstream string) error
-	pushFn            func(path string, lineCh chan<- string) error
-	stashErr          error
-	versionMajor      int
-	versionMinor      int
-	versionErr        error
 
-	// Call records.
-	addWorktreeCalls    []addWorktreeCall
-	removeWorktreeCalls []removeWorktreeCall
-	fetchCalls          []string
-	rebaseCalls         []rebaseCall
-	pushCalls           []string
-	stashCalls          []stashCall
+	remoteBranchExistsRes bool
+	remoteBranchExistsErr error
+
+	remoteBranchExistsFn func(repoPath, branch string) (bool, error)
+	listWorktreesRes     []git.WorktreeEntry
+	listWorktreesErr     error
+	addWorktreeErr       error
+	commonDirResult      string
+	commonDirErr         error
+
+	commonDirFn          func(path string) (string, error)
+	removeWorktreeErr    error
+	isDirtyRes           bool
+	isDirtyErr           error
+	fetchErr             error
+	rebaseErr            error
+	mergeErr             error
+	pushErr              error
+	fetchFn              func(path string) error
+	rebaseFn             func(path, upstream string) error
+	mergeFn              func(path, branch string) error
+	pushFn               func(path string, lineCh chan<- string) error
+	stashErr             error
+	versionMajor         int
+	versionMinor         int
+	versionErr           error
+	isDirtyFn            func(path string) (bool, error)
+	revListAheadBehindFn func(path, originBranch string) (int, int, error)
+
+	addWorktreeWithTrackingErr error
+
+	addWorktreeCalls             []addWorktreeCall
+	addWorktreeWithTrackingCalls []addWorktreeWithTrackingCall
+	removeWorktreeCalls          []removeWorktreeCall
+	fetchCalls                   []string
+	rebaseCalls                  []rebaseCall
+	mergeCalls                   []mergeCall
+	pushCalls                    []string
+	stashCalls                   []stashCall
 }
 
 type addWorktreeCall struct {
@@ -69,6 +110,13 @@ type addWorktreeCall struct {
 	Branch    string
 	NewBranch bool
 	Base      string
+}
+
+type addWorktreeWithTrackingCall struct {
+	RepoPath     string
+	Dest         string
+	LocalBranch  string
+	RemoteBranch string
 }
 
 type removeWorktreeCall struct {
@@ -85,6 +133,11 @@ type stashCall struct {
 type rebaseCall struct {
 	WorktreePath string
 	Upstream     string
+}
+
+type mergeCall struct {
+	WorktreePath string
+	Branch       string
 }
 
 func (m *mockGitClient) IsValidRepo(_ context.Context, _ string) error {
@@ -134,7 +187,10 @@ func (m *mockGitClient) RemoveWorktree(_ context.Context, commonDir, worktreePat
 	return m.removeWorktreeErr
 }
 
-func (m *mockGitClient) IsDirty(_ context.Context, _ string) (bool, error) {
+func (m *mockGitClient) IsDirty(_ context.Context, path string) (bool, error) {
+	if m.isDirtyFn != nil {
+		return m.isDirtyFn(path)
+	}
 	return m.isDirtyRes, m.isDirtyErr
 }
 
@@ -146,7 +202,10 @@ func (m *mockGitClient) RevListCount(_ context.Context, _, _, _ string) (int, er
 	return 0, nil
 }
 
-func (m *mockGitClient) RevListAheadBehind(_ context.Context, _, _ string) (int, int, error) {
+func (m *mockGitClient) RevListAheadBehind(_ context.Context, path, originBranch string) (int, int, error) {
+	if m.revListAheadBehindFn != nil {
+		return m.revListAheadBehindFn(path, originBranch)
+	}
 	return 0, 0, nil
 }
 
@@ -172,6 +231,18 @@ func (m *mockGitClient) Rebase(_ context.Context, path, upstream string) error {
 	}
 
 	return m.rebaseErr
+}
+
+func (m *mockGitClient) Merge(_ context.Context, path, branch string) error {
+	m.mu.Lock()
+	m.mergeCalls = append(m.mergeCalls, mergeCall{WorktreePath: path, Branch: branch})
+	m.mu.Unlock()
+
+	if m.mergeFn != nil {
+		return m.mergeFn(path, branch)
+	}
+
+	return m.mergeErr
 }
 
 func (m *mockGitClient) Push(_ context.Context, path string, lineCh chan<- string) error {
@@ -204,10 +275,25 @@ func (m *mockGitClient) DeleteBranch(_ context.Context, _, _ string) error {
 	return nil
 }
 
-// ─── Mock dotnet.Client ───────────────────────────────────────────────────────
+func (m *mockGitClient) RemoteBranchExists(_ context.Context, repoPath, branch string) (bool, error) {
+	if m.remoteBranchExistsFn != nil {
+		return m.remoteBranchExistsFn(repoPath, branch)
+	}
+	return m.remoteBranchExistsRes, m.remoteBranchExistsErr
+}
 
-// mockDotnetClient implements dotnet.Client. IsAvailable always returns false so
-// that sln.Manager.Generate is a guaranteed no-op in tests.
+func (m *mockGitClient) AddWorktreeWithTracking(_ context.Context, repoPath, dest, localBranch, remoteBranch string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.addWorktreeWithTrackingCalls = append(m.addWorktreeWithTrackingCalls, addWorktreeWithTrackingCall{
+		RepoPath:     repoPath,
+		Dest:         dest,
+		LocalBranch:  localBranch,
+		RemoteBranch: remoteBranch,
+	})
+	return m.addWorktreeWithTrackingErr
+}
+
 type mockDotnetClient struct{}
 
 func (m *mockDotnetClient) IsAvailable(_ context.Context) bool { return false }
@@ -218,18 +304,12 @@ func (m *mockDotnetClient) SlnAdd(_ context.Context, _, _, _ string) error {
 	return errors.New("dotnet not available in tests")
 }
 
-// ─── Test helpers ─────────────────────────────────────────────────────────────
-
-// newTestLogger returns a slog.Logger that discards all output. Test failures
-// should not be obscured by log noise.
 func newTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelError, // only surface errors in tests
+		Level: slog.LevelError,
 	}))
 }
 
-// newTestManager constructs a Manager wired with the given git client and a real
-// *discovery.Discoverer that points at rootDir.
 func newTestManager(t *testing.T, tasksRoot, rootDir string, gitMock *mockGitClient) Manager {
 	t.Helper()
 
@@ -240,7 +320,7 @@ func newTestManager(t *testing.T, tasksRoot, rootDir string, gitMock *mockGitCli
 		Editor:       "code",
 	}
 	cfg.Effective()
-	// Override with provided values after Effective() sets defaults.
+
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
 
@@ -251,9 +331,6 @@ func newTestManager(t *testing.T, tasksRoot, rootDir string, gitMock *mockGitCli
 	return New(cfg, gitMock, disc, slnMgr, logger)
 }
 
-// newTestManagerWithCfg constructs a Manager using the provided config directly.
-// It is used by tests that need fine-grained control over config fields such as
-// BaseBranch. The caller is responsible for setting all required fields.
 func newTestManagerWithCfg(t *testing.T, cfg *config.Config, gitMock *mockGitClient) Manager {
 	t.Helper()
 
@@ -264,8 +341,6 @@ func newTestManagerWithCfg(t *testing.T, cfg *config.Config, gitMock *mockGitCli
 	return New(cfg, gitMock, disc, slnMgr, logger)
 }
 
-// makeGitDir creates a fake .git directory under repoDir so the discoverer can
-// find it via the direct-child or depth-walk check.
 func makeGitDir(t *testing.T, repoDir string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755); err != nil {
@@ -273,22 +348,17 @@ func makeGitDir(t *testing.T, repoDir string) {
 	}
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
-
-// TestInit_CreatesDirAndCallsAddWorktree verifies that Init creates the task
-// directory and calls git.AddWorktree with correct arguments.
 func TestInit_CreatesDirAndCallsAddWorktree(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 
-	// Create a fake service repo.
 	svcRepo := filepath.Join(rootDir, "myservice")
 	makeGitDir(t, svcRepo)
 
 	gitMock := &mockGitClient{
 		isValidRepoErr:   nil,
 		baseBranchResult: "main",
-		branchExistsRes:  false, // branch doesn't exist → newBranch=true
+		branchExistsRes:  false,
 		listWorktreesRes: nil,
 	}
 
@@ -304,13 +374,11 @@ func TestInit_CreatesDirAndCallsAddWorktree(t *testing.T) {
 		t.Fatalf("Init returned unexpected error: %v", err)
 	}
 
-	// Task directory must exist.
 	taskDir := filepath.Join(tasksRoot, "IN-001")
 	if _, err := os.Stat(taskDir); err != nil {
 		t.Fatalf("task directory not created: %v", err)
 	}
 
-	// AddWorktree must have been called once.
 	gitMock.mu.Lock()
 	calls := gitMock.addWorktreeCalls
 	gitMock.mu.Unlock()
@@ -337,14 +405,11 @@ func TestInit_CreatesDirAndCallsAddWorktree(t *testing.T) {
 	}
 }
 
-// TestInit_ErrTaskExists verifies that Init returns ErrTaskExists when the task
-// directory already exists.
 func TestInit_ErrTaskExists(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 	taskDir := filepath.Join(tasksRoot, "IN-002")
 
-	// Pre-create the task directory.
 	if err := os.MkdirAll(taskDir, 0o755); err != nil {
 		t.Fatalf("setup: create task dir: %v", err)
 	}
@@ -358,9 +423,6 @@ func TestInit_ErrTaskExists(t *testing.T) {
 	}
 }
 
-// TestInit_ContinuesWhenServiceNotFound verifies that Init rolls back the task
-// directory and returns an error when the only requested service cannot be
-// resolved. (Previously this was a no-op; now a fully-failed init is an error.)
 func TestInit_ContinuesWhenServiceNotFound(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -374,18 +436,16 @@ func TestInit_ContinuesWhenServiceNotFound(t *testing.T) {
 		TaskID:   "IN-003",
 		Services: []string{"nonexistent"},
 	})
-	// All services failed → Init must return an error.
+
 	if err == nil {
 		t.Fatal("Init returned nil, want error when all services fail to resolve")
 	}
 
-	// Task directory must have been rolled back.
 	taskDir := filepath.Join(tasksRoot, "IN-003")
 	if _, statErr := os.Stat(taskDir); !os.IsNotExist(statErr) {
 		t.Errorf("task directory still exists after rollback, want it removed")
 	}
 
-	// AddWorktree must NOT have been called (resolve failed before reaching git).
 	gitMock.mu.Lock()
 	n := len(gitMock.addWorktreeCalls)
 	gitMock.mu.Unlock()
@@ -394,8 +454,6 @@ func TestInit_ContinuesWhenServiceNotFound(t *testing.T) {
 	}
 }
 
-// TestInit_UsesExistingBranch verifies that when BranchExists returns true, Init
-// calls AddWorktree with newBranch=false (check out existing branch, no -b flag).
 func TestInit_UsesExistingBranch(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -406,7 +464,7 @@ func TestInit_UsesExistingBranch(t *testing.T) {
 	gitMock := &mockGitClient{
 		isValidRepoErr:   nil,
 		baseBranchResult: "main",
-		branchExistsRes:  true, // branch already exists
+		branchExistsRes:  true,
 		listWorktreesRes: nil,
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
@@ -430,8 +488,6 @@ func TestInit_UsesExistingBranch(t *testing.T) {
 	}
 }
 
-// TestAdd_ErrTaskNotFound verifies that Add returns ErrTaskNotFound when the
-// task directory does not exist.
 func TestAdd_ErrTaskNotFound(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -445,8 +501,6 @@ func TestAdd_ErrTaskNotFound(t *testing.T) {
 	}
 }
 
-// TestList_EmptyWhenTasksRootMissing verifies that List returns an empty slice
-// (not an error) when the TasksRoot directory does not exist.
 func TestList_EmptyWhenTasksRootMissing(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, "does_not_exist")
@@ -463,13 +517,10 @@ func TestList_EmptyWhenTasksRootMissing(t *testing.T) {
 	}
 }
 
-// TestList_ReturnsSortedTasks verifies that List returns tasks alphabetically
-// sorted by ID when multiple task directories exist.
 func TestList_ReturnsSortedTasks(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 
-	// Create task directories in reverse alphabetical order to confirm sorting.
 	for _, id := range []string{"IN-003", "IN-001", "IN-002"} {
 		if err := os.MkdirAll(filepath.Join(tasksRoot, id), 0o755); err != nil {
 			t.Fatalf("setup: %v", err)
@@ -496,8 +547,6 @@ func TestList_ReturnsSortedTasks(t *testing.T) {
 	}
 }
 
-// TestListServices_ErrTaskNotFound verifies that ListServices returns ErrTaskNotFound
-// when the task directory does not exist.
 func TestListServices_ErrTaskNotFound(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -511,14 +560,10 @@ func TestListServices_ErrTaskNotFound(t *testing.T) {
 	}
 }
 
-// TestListServices_SkipsNonGitDirs verifies that ListServices excludes plain
-// directories that are not git worktrees (i.e. CommonDir returns an error for
-// them) while still including valid worktree directories.
 func TestListServices_SkipsNonGitDirs(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 
-	// Task directory with two subdirs: one valid worktree, one plain dir.
 	taskDir := filepath.Join(tasksRoot, "IN-LSS")
 	for _, name := range []string{"service-a", "not-a-worktree"} {
 		if err := os.MkdirAll(filepath.Join(taskDir, name), 0o755); err != nil {
@@ -526,14 +571,13 @@ func TestListServices_SkipsNonGitDirs(t *testing.T) {
 		}
 	}
 
-	// Fake commonDir path returned for the valid worktree.
 	fakeCommonDir := filepath.Join(rootDir, "service-a", ".git")
 	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
 		t.Fatalf("setup: create fakeCommonDir: %v", err)
 	}
 
 	gitMock := &mockGitClient{
-		// commonDirFn returns success for service-a and an error for not-a-worktree.
+
 		commonDirFn: func(path string) (string, error) {
 			if filepath.Base(path) == "service-a" {
 				return fakeCommonDir, nil
@@ -556,13 +600,93 @@ func TestListServices_SkipsNonGitDirs(t *testing.T) {
 	}
 }
 
-// TestRemove_CallsGitAndRemovesTaskDir verifies that Remove calls git worktree
-// remove for each service and then os.RemoveAll deletes the task directory.
+func TestListServices_ChecksDirtyAndAheadBehindConcurrently(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-LSS")
+	svcDir := filepath.Join(taskDir, "service-a")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: create service dir: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "service-a", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: create fakeCommonDir: %v", err)
+	}
+
+	ready := make(chan string, 2)
+	release := make(chan struct{})
+
+	gitMock := &mockGitClient{
+		commonDirResult: fakeCommonDir,
+		listWorktreesRes: []git.WorktreeEntry{{
+			Path:   svcDir,
+			Branch: "refs/heads/feature/IN-LSS-service-a",
+		}},
+		isDirtyFn: func(path string) (bool, error) {
+			if path != svcDir {
+				t.Errorf("IsDirty path = %q, want %q", path, svcDir)
+			}
+			ready <- "dirty"
+			<-release
+			return true, nil
+		},
+		revListAheadBehindFn: func(path, originBranch string) (int, int, error) {
+			if path != svcDir {
+				t.Errorf("RevListAheadBehind path = %q, want %q", path, svcDir)
+			}
+			if originBranch != "origin/feature/IN-LSS-service-a" {
+				t.Errorf("RevListAheadBehind origin = %q, want %q", originBranch, "origin/feature/IN-LSS-service-a")
+			}
+			ready <- "aheadBehind"
+			<-release
+			return 2, 3, nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	done := make(chan []string, 1)
+	go func() {
+		var calls []string
+		for range 2 {
+			calls = append(calls, <-ready)
+		}
+		done <- calls
+	}()
+
+	errCh := make(chan error, 1)
+	var services []domain.Service
+	go func() {
+		var err error
+		services, err = mgr.ListServices(context.Background(), "IN-LSS")
+		errCh <- err
+	}()
+
+	select {
+	case <-done:
+		close(release)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("ListServices did not start IsDirty and RevListAheadBehind concurrently")
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("ListServices returned unexpected error: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("ListServices returned %d services, want 1; got %v", len(services), services)
+	}
+	if !services[0].IsDirty {
+		t.Errorf("IsDirty = false, want true")
+	}
+	if services[0].Ahead != 2 || services[0].Behind != 3 {
+		t.Errorf("ahead/behind = %d/%d, want 2/3", services[0].Ahead, services[0].Behind)
+	}
+}
+
 func TestRemove_CallsGitAndRemovesTaskDir(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 
-	// Create a task directory with one service subdirectory.
 	taskDir := filepath.Join(tasksRoot, "IN-010")
 	svcDir := filepath.Join(taskDir, "myservice")
 	if err := os.MkdirAll(svcDir, 0o755); err != nil {
@@ -584,12 +708,10 @@ func TestRemove_CallsGitAndRemovesTaskDir(t *testing.T) {
 		t.Fatalf("Remove returned unexpected error: %v", err)
 	}
 
-	// Task directory must be gone.
 	if _, err := os.Stat(taskDir); !os.IsNotExist(err) {
 		t.Errorf("task directory still exists after Remove")
 	}
 
-	// RemoveWorktree must have been called once.
 	gitMock.mu.Lock()
 	calls := gitMock.removeWorktreeCalls
 	gitMock.mu.Unlock()
@@ -602,9 +724,6 @@ func TestRemove_CallsGitAndRemovesTaskDir(t *testing.T) {
 	}
 }
 
-// TestRemove_WithoutForce_FailedWorktreePreservesTaskDir verifies that when
-// RemoveWorktree fails and force=false, the task directory is NOT deleted and an
-// error is returned.
 func TestRemove_WithoutForce_FailedWorktreePreservesTaskDir(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -632,14 +751,11 @@ func TestRemove_WithoutForce_FailedWorktreePreservesTaskDir(t *testing.T) {
 		t.Fatal("Remove returned nil, want error for dirty worktree without force")
 	}
 
-	// Task directory must still exist because removal failed.
 	if _, statErr := os.Stat(taskDir); statErr != nil {
 		t.Errorf("task directory was deleted despite worktree removal error")
 	}
 }
 
-// TestRemove_WithForce_RemovesTaskDirDespiteErrors verifies that with force=true
-// os.RemoveAll is called even when git worktree remove fails.
 func TestRemove_WithForce_RemovesTaskDirDespiteErrors(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -661,7 +777,6 @@ func TestRemove_WithForce_RemovesTaskDirDespiteErrors(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	// With force=true, Remove must succeed and clean up the task dir.
 	if err := mgr.Remove(context.Background(), "IN-012", true, false); err != nil {
 		t.Fatalf("Remove(force=true) returned unexpected error: %v", err)
 	}
@@ -671,7 +786,6 @@ func TestRemove_WithForce_RemovesTaskDirDespiteErrors(t *testing.T) {
 	}
 }
 
-// TestValidateTaskID tests the task ID validator for forbidden characters.
 func TestValidateTaskID(t *testing.T) {
 	tests := []struct {
 		id      string
@@ -704,13 +818,10 @@ func TestValidateTaskID(t *testing.T) {
 	}
 }
 
-// TestGenerateWorkspaceFile verifies that generateWorkspaceFile produces a valid
-// JSON .code-workspace file with relative folder paths for each service subdir.
 func TestGenerateWorkspaceFile(t *testing.T) {
 	taskDir := t.TempDir()
 	taskID := "IN-WS-001"
 
-	// Create service subdirectories.
 	for _, name := range []string{"svcB", "svcA"} {
 		if err := os.MkdirAll(filepath.Join(taskDir, name), 0o755); err != nil {
 			t.Fatalf("setup: %v", err)
@@ -729,7 +840,6 @@ func TestGenerateWorkspaceFile(t *testing.T) {
 
 	content := string(data)
 
-	// Workspace file must reference both services.
 	if !strings.Contains(content, `"svcA"`) {
 		t.Errorf("workspace file missing svcA path: %s", content)
 	}
@@ -737,14 +847,11 @@ func TestGenerateWorkspaceFile(t *testing.T) {
 		t.Errorf("workspace file missing svcB path: %s", content)
 	}
 
-	// Settings must be present.
 	if !strings.Contains(content, `"workbench.editor.labelFormat": "medium"`) {
 		t.Errorf("workspace file missing settings: %s", content)
 	}
 }
 
-// TestBuildServicesFromSubdirs verifies that buildServicesFromSubdirs correctly
-// maps directory names to domain.Service entries.
 func TestBuildServicesFromSubdirs(t *testing.T) {
 	taskDir := t.TempDir()
 
@@ -753,7 +860,7 @@ func TestBuildServicesFromSubdirs(t *testing.T) {
 			t.Fatalf("setup: %v", err)
 		}
 	}
-	// Also create a non-directory file to ensure it is skipped.
+
 	if err := os.WriteFile(filepath.Join(taskDir, "some.sln"), []byte(""), 0o644); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -764,9 +871,6 @@ func TestBuildServicesFromSubdirs(t *testing.T) {
 	}
 }
 
-// TestList_StaleFlag verifies that Task.Stale is false for a normal task dir
-// (the stale=true path for a race-removed dir is not directly testable in a
-// unit test without racy filesystem manipulation, but we assert the happy path).
 func TestList_StaleFlag_NormalTask(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -791,121 +895,6 @@ func TestList_StaleFlag_NormalTask(t *testing.T) {
 	}
 }
 
-// ─── CloneTask tests ──────────────────────────────────────────────────────────
-
-// TestCloneTask_CallsAddWorktreePerService verifies that CloneTask resolves src
-// services and calls git.AddWorktree once per service, using the dst branch name
-// and the service's BaseBranch (defaulting to "HEAD" when empty).
-func TestCloneTask_CallsAddWorktreePerService(t *testing.T) {
-	rootDir := t.TempDir()
-	tasksRoot := filepath.Join(rootDir, ".tasks")
-
-	// Create the src task directory with two service subdirs so that ListServices
-	// can discover them as git worktrees.
-	srcTaskDir := filepath.Join(tasksRoot, "IN-SRC")
-	for _, svcName := range []string{"svcA", "svcB"} {
-		if err := os.MkdirAll(filepath.Join(srcTaskDir, svcName), 0o755); err != nil {
-			t.Fatalf("setup: create src service dir %s: %v", svcName, err)
-		}
-	}
-
-	// Fake repo paths returned by CommonDir for each service.
-	fakeCommonDirA := filepath.Join(rootDir, "svcA", ".git")
-	fakeCommonDirB := filepath.Join(rootDir, "svcB", ".git")
-	for _, p := range []string{fakeCommonDirA, fakeCommonDirB} {
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			t.Fatalf("setup: create fakeCommonDir %s: %v", p, err)
-		}
-	}
-
-	gitMock := &mockGitClient{
-		commonDirFn: func(path string) (string, error) {
-			switch filepath.Base(path) {
-			case "svcA":
-				return fakeCommonDirA, nil
-			case "svcB":
-				return fakeCommonDirB, nil
-			default:
-				return "", errors.New("not a git worktree")
-			}
-		},
-	}
-	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
-
-	if err := mgr.CloneTask(context.Background(), "IN-SRC", "IN-DST"); err != nil {
-		t.Fatalf("CloneTask returned unexpected error: %v", err)
-	}
-
-	// Dst task directory must exist.
-	dstDir := filepath.Join(tasksRoot, "IN-DST")
-	if _, err := os.Stat(dstDir); err != nil {
-		t.Fatalf("dst task directory not created: %v", err)
-	}
-
-	// AddWorktree must have been called once per service.
-	gitMock.mu.Lock()
-	calls := gitMock.addWorktreeCalls
-	gitMock.mu.Unlock()
-
-	if len(calls) != 2 {
-		t.Fatalf("expected 2 AddWorktree calls, got %d", len(calls))
-	}
-
-	// All calls must use newBranch=true with the dst branch name.
-	wantBranch := "feature/IN-DST"
-	for _, call := range calls {
-		if call.Branch != wantBranch {
-			t.Errorf("AddWorktree branch = %q, want %q", call.Branch, wantBranch)
-		}
-		if !call.NewBranch {
-			t.Error("AddWorktree newBranch = false, want true (clone always creates new branches)")
-		}
-		// BaseBranch not populated by ListServices, so base should default to "HEAD".
-		if call.Base != "HEAD" {
-			t.Errorf("AddWorktree base = %q, want %q (BaseBranch empty → fallback)", call.Base, "HEAD")
-		}
-	}
-}
-
-// TestCloneTask_ErrTaskExists verifies that CloneTask returns ErrTaskExists when
-// the dst directory already exists.
-func TestCloneTask_ErrTaskExists(t *testing.T) {
-	rootDir := t.TempDir()
-	tasksRoot := filepath.Join(rootDir, ".tasks")
-
-	// Create both src and dst directories.
-	for _, id := range []string{"IN-SRC2", "IN-DST2"} {
-		if err := os.MkdirAll(filepath.Join(tasksRoot, id), 0o755); err != nil {
-			t.Fatalf("setup: %v", err)
-		}
-	}
-
-	gitMock := &mockGitClient{}
-	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
-
-	err := mgr.CloneTask(context.Background(), "IN-SRC2", "IN-DST2")
-	if !errors.Is(err, ErrTaskExists) {
-		t.Errorf("CloneTask error = %v, want ErrTaskExists", err)
-	}
-}
-
-// TestCloneTask_ErrSrcNotFound verifies that CloneTask returns ErrTaskNotFound
-// when the src task directory does not exist.
-func TestCloneTask_ErrSrcNotFound(t *testing.T) {
-	rootDir := t.TempDir()
-	tasksRoot := filepath.Join(rootDir, ".tasks")
-
-	gitMock := &mockGitClient{}
-	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
-
-	err := mgr.CloneTask(context.Background(), "IN-NOSRC", "IN-NEWDST")
-	if !errors.Is(err, ErrTaskNotFound) {
-		t.Errorf("CloneTask error = %v, want ErrTaskNotFound", err)
-	}
-}
-
-// TestSyncTask_FetchFailureReturnsFirstError verifies that SyncTask runs all
-// service goroutines, emits progress lines, and returns the first fetch error.
 func TestSyncTask_FetchFailureReturnsFirstError(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -959,7 +948,7 @@ func TestSyncTask_FetchFailureReturnsFirstError(t *testing.T) {
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 	lineCh := make(chan string, 16)
 
-	err := mgr.SyncTask(context.Background(), "IN-SYNC", lineCh)
+	err := mgr.SyncTask(context.Background(), "IN-SYNC", SyncStrategyRebase, lineCh)
 	if !errors.Is(err, fetchErr) {
 		t.Fatalf("SyncTask error = %v, want %v", err, fetchErr)
 	}
@@ -994,9 +983,6 @@ func TestSyncTask_FetchFailureReturnsFirstError(t *testing.T) {
 	}
 }
 
-// TestSyncTask_RebasesOntoConfigBaseBranch verifies that SyncTask uses
-// cfg.BaseBranch (here "develop") as the upstream for git.Rebase, producing
-// "origin/develop" for every service in the task.
 func TestSyncTask_RebasesOntoConfigBaseBranch(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -1046,16 +1032,15 @@ func TestSyncTask_RebasesOntoConfigBaseBranch(t *testing.T) {
 	cfg.Effective()
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
-	cfg.BaseBranch = "develop" // ensure Effective() did not overwrite with default
+	cfg.BaseBranch = "develop"
 
 	mgr := newTestManagerWithCfg(t, cfg, gitMock)
 	lineCh := make(chan string, 32)
 
-	if err := mgr.SyncTask(context.Background(), "IN-BB", lineCh); err != nil {
+	if err := mgr.SyncTask(context.Background(), "IN-BB", SyncStrategyRebase, lineCh); err != nil {
 		t.Fatalf("SyncTask returned unexpected error: %v", err)
 	}
 
-	// Drain the channel (it is closed by SyncTask).
 	for range lineCh {
 	}
 
@@ -1073,9 +1058,6 @@ func TestSyncTask_RebasesOntoConfigBaseBranch(t *testing.T) {
 	}
 }
 
-// TestSyncTask_RebasesOntoMainWhenBaseBranchEmpty verifies that SyncTask falls
-// back to "origin/develop" when cfg.BaseBranch is the empty string (the in-code
-// guard: `if baseBranch == "" { baseBranch = "develop" }`).
 func TestSyncTask_RebasesOntoMainWhenBaseBranchEmpty(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -1103,29 +1085,26 @@ func TestSyncTask_RebasesOntoMainWhenBaseBranchEmpty(t *testing.T) {
 		},
 	}
 
-	// Deliberately set BaseBranch to "" to exercise the in-code fallback.
 	cfg := &config.Config{
 		TasksRoot:    tasksRoot,
 		RootDir:      rootDir,
 		BranchPrefix: "feature/",
-		BaseBranch:   "", // empty — SyncTask must fall back to "develop"
+		BaseBranch:   "",
 		Editor:       "code",
 	}
-	// Call Effective() but then reset BaseBranch to "" to simulate a config
-	// that somehow bypasses the default (e.g. set programmatically after load).
+
 	cfg.Effective()
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
-	cfg.BaseBranch = "" // force empty after Effective() to test the in-code guard (fallback = "develop")
+	cfg.BaseBranch = ""
 
 	mgr := newTestManagerWithCfg(t, cfg, gitMock)
 	lineCh := make(chan string, 16)
 
-	if err := mgr.SyncTask(context.Background(), "IN-EMPTY-BB", lineCh); err != nil {
+	if err := mgr.SyncTask(context.Background(), "IN-EMPTY-BB", SyncStrategyRebase, lineCh); err != nil {
 		t.Fatalf("SyncTask returned unexpected error: %v", err)
 	}
 
-	// Drain the channel.
 	for range lineCh {
 	}
 
@@ -1142,8 +1121,6 @@ func TestSyncTask_RebasesOntoMainWhenBaseBranchEmpty(t *testing.T) {
 	}
 }
 
-// TestPushService_StreamsLines verifies that PushService emits progress lines,
-// forwards streamed git output, and pushes the expected worktree path.
 func TestPushService_StreamsLines(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -1196,8 +1173,6 @@ func TestPushService_StreamsLines(t *testing.T) {
 	}
 }
 
-// TestPushService_ErrServiceNotFound verifies that missing service worktrees
-// return an ErrServiceNotFound-wrapped error.
 func TestPushService_ErrServiceNotFound(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -1215,8 +1190,6 @@ func TestPushService_ErrServiceNotFound(t *testing.T) {
 	}
 }
 
-// TestStashService_Stash verifies that pop=false calls git.Stash with pop=false
-// for the target service worktree.
 func TestStashService_Stash(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -1247,8 +1220,6 @@ func TestStashService_Stash(t *testing.T) {
 	}
 }
 
-// TestStashService_Pop verifies that pop=true calls git.Stash with pop=true
-// for the target service worktree.
 func TestStashService_Pop(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -1279,8 +1250,6 @@ func TestStashService_Pop(t *testing.T) {
 	}
 }
 
-// TestStashService_ErrServiceNotFound verifies that missing service worktrees
-// return an ErrServiceNotFound-wrapped error.
 func TestStashService_ErrServiceNotFound(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -1297,12 +1266,255 @@ func TestStashService_ErrServiceNotFound(t *testing.T) {
 	}
 }
 
-// Compile-time assertion: mockGitClient must implement git.Client.
 var _ git.Client = (*mockGitClient)(nil)
 
-// TestInit_RollsBackWhenNoWorktreesAdded verifies that Init removes the task
-// directory and returns an error when services were requested but none could be
-// added (e.g. all service tokens are invalid).
+func TestManagerReposCachedUsesFindAll(t *testing.T) {
+	resolver := &fakeRepoResolver{findAllRepos: []domain.Repo{{Name: "api", Path: "/repo/api"}}}
+	mgr := New(&config.Config{}, &mockGitClient{}, resolver, nil, slog.Default())
+
+	got, err := mgr.Repos(context.Background(), false)
+	if err != nil {
+		t.Fatalf("Repos(false): %v", err)
+	}
+	if resolver.findAllCalls != 1 || resolver.refreshCalls != 0 {
+		t.Fatalf("calls findAll=%d refresh=%d", resolver.findAllCalls, resolver.refreshCalls)
+	}
+	if len(got) != 1 || got[0].Name != "api" {
+		t.Fatalf("repos = %#v", got)
+	}
+}
+
+func TestManagerReposForcedUsesRefreshWhenAvailable(t *testing.T) {
+	resolver := &fakeRepoResolver{refreshRepos: []domain.Repo{{Name: "fresh", Path: "/repo/fresh"}}}
+	mgr := New(&config.Config{}, &mockGitClient{}, resolver, nil, slog.Default())
+
+	got, err := mgr.Repos(context.Background(), true)
+	if err != nil {
+		t.Fatalf("Repos(true): %v", err)
+	}
+	if resolver.findAllCalls != 0 || resolver.refreshCalls != 1 {
+		t.Fatalf("calls findAll=%d refresh=%d", resolver.findAllCalls, resolver.refreshCalls)
+	}
+	if len(got) != 1 || got[0].Name != "fresh" {
+		t.Fatalf("repos = %#v", got)
+	}
+}
+
+func TestManagerReposForcedFallsBackToFindAll(t *testing.T) {
+	resolver := &fakeFindAllRepoResolver{findAllRepos: []domain.Repo{{Name: "cached", Path: "/repo/cached"}}}
+	mgr := New(&config.Config{}, &mockGitClient{}, resolver, nil, slog.Default())
+
+	got, err := mgr.Repos(context.Background(), true)
+	if err != nil {
+		t.Fatalf("Repos(true): %v", err)
+	}
+	if resolver.findAllCalls != 1 {
+		t.Fatalf("findAll calls = %d, want 1", resolver.findAllCalls)
+	}
+	if len(got) != 1 || got[0].Name != "cached" {
+		t.Fatalf("repos = %#v", got)
+	}
+}
+
+func TestSyncStrategy_String(t *testing.T) {
+	tests := []struct {
+		strategy SyncStrategy
+		want     string
+	}{
+		{SyncStrategyMerge, "merge"},
+		{SyncStrategyRebase, "rebase"},
+		{SyncStrategyNoop, "noop"},
+		{SyncStrategy(99), "unknown"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.want, func(t *testing.T) {
+			if got := tc.strategy.String(); got != tc.want {
+				t.Errorf("SyncStrategy(%d).String() = %q, want %q", tc.strategy, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSyncTask_NoopStrategyDoesNotFetchOrMergeOrRebase(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-NOOP")
+	svcPath := filepath.Join(taskDir, "svc-noop")
+	if err := os.MkdirAll(svcPath, 0o755); err != nil {
+		t.Fatalf("setup: create service dir: %v", err)
+	}
+
+	gitMock := &mockGitClient{}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+	lineCh := make(chan string, 16)
+
+	if err := mgr.SyncTask(context.Background(), "IN-NOOP", SyncStrategyNoop, lineCh); err != nil {
+		t.Fatalf("SyncTask returned unexpected error: %v", err)
+	}
+
+	var lines []string
+	for line := range lineCh {
+		lines = append(lines, line)
+	}
+
+	assertContainsLine(t, lines, "sync skipped.")
+
+	gitMock.mu.Lock()
+	fetchCalls := append([]string(nil), gitMock.fetchCalls...)
+	mergeCalls := append([]mergeCall(nil), gitMock.mergeCalls...)
+	rebaseCalls := append([]rebaseCall(nil), gitMock.rebaseCalls...)
+	gitMock.mu.Unlock()
+
+	if len(fetchCalls) != 0 {
+		t.Fatalf("Fetch call count = %d, want 0", len(fetchCalls))
+	}
+	if len(mergeCalls) != 0 {
+		t.Fatalf("Merge call count = %d, want 0", len(mergeCalls))
+	}
+	if len(rebaseCalls) != 0 {
+		t.Fatalf("Rebase call count = %d, want 0", len(rebaseCalls))
+	}
+}
+
+func TestSyncTask_MergesWithMergeStrategy(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-MERGE")
+
+	svcPath := filepath.Join(taskDir, "svc-merge")
+	if err := os.MkdirAll(svcPath, 0o755); err != nil {
+		t.Fatalf("setup: create service dir: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-merge", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: create fake common dir: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == svcPath {
+				return fakeCommonDir, nil
+			}
+			return "", errors.New("not a git worktree")
+		},
+		listWorktreesRes: []git.WorktreeEntry{
+			{Path: svcPath, Branch: "refs/heads/feature/IN-MERGE"},
+		},
+	}
+
+	cfg := &config.Config{
+		TasksRoot:    tasksRoot,
+		RootDir:      rootDir,
+		BranchPrefix: "feature/",
+		BaseBranch:   "main",
+		Editor:       "code",
+	}
+	cfg.Effective()
+	cfg.TasksRoot = tasksRoot
+	cfg.RootDir = rootDir
+	cfg.BaseBranch = "main"
+
+	mgr := newTestManagerWithCfg(t, cfg, gitMock)
+	lineCh := make(chan string, 16)
+
+	if err := mgr.SyncTask(context.Background(), "IN-MERGE", SyncStrategyMerge, lineCh); err != nil {
+		t.Fatalf("SyncTask returned unexpected error: %v", err)
+	}
+
+	for range lineCh {
+	}
+
+	gitMock.mu.Lock()
+	mergeCalls := append([]mergeCall(nil), gitMock.mergeCalls...)
+	rebaseCalls := append([]rebaseCall(nil), gitMock.rebaseCalls...)
+	gitMock.mu.Unlock()
+
+	if len(mergeCalls) != 1 {
+		t.Fatalf("Merge call count = %d, want 1", len(mergeCalls))
+	}
+	if mergeCalls[0].WorktreePath != svcPath {
+		t.Errorf("Merge worktree path = %q, want %q", mergeCalls[0].WorktreePath, svcPath)
+	}
+	if mergeCalls[0].Branch != "origin/main" {
+		t.Errorf("Merge branch = %q, want %q", mergeCalls[0].Branch, "origin/main")
+	}
+
+	if len(rebaseCalls) != 0 {
+		t.Errorf("Rebase call count = %d, want 0 (merge strategy should not call rebase)", len(rebaseCalls))
+	}
+}
+
+func TestSyncTask_RebasesWithRebaseStrategy(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-REBASE")
+
+	svcPath := filepath.Join(taskDir, "svc-rebase")
+	if err := os.MkdirAll(svcPath, 0o755); err != nil {
+		t.Fatalf("setup: create service dir: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-rebase", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: create fake common dir: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == svcPath {
+				return fakeCommonDir, nil
+			}
+			return "", errors.New("not a git worktree")
+		},
+		listWorktreesRes: []git.WorktreeEntry{
+			{Path: svcPath, Branch: "refs/heads/feature/IN-REBASE"},
+		},
+	}
+
+	cfg := &config.Config{
+		TasksRoot:    tasksRoot,
+		RootDir:      rootDir,
+		BranchPrefix: "feature/",
+		BaseBranch:   "develop",
+		Editor:       "code",
+	}
+	cfg.Effective()
+	cfg.TasksRoot = tasksRoot
+	cfg.RootDir = rootDir
+	cfg.BaseBranch = "develop"
+
+	mgr := newTestManagerWithCfg(t, cfg, gitMock)
+	lineCh := make(chan string, 16)
+
+	if err := mgr.SyncTask(context.Background(), "IN-REBASE", SyncStrategyRebase, lineCh); err != nil {
+		t.Fatalf("SyncTask returned unexpected error: %v", err)
+	}
+
+	for range lineCh {
+	}
+
+	gitMock.mu.Lock()
+	mergeCalls := append([]mergeCall(nil), gitMock.mergeCalls...)
+	rebaseCalls := append([]rebaseCall(nil), gitMock.rebaseCalls...)
+	gitMock.mu.Unlock()
+
+	if len(rebaseCalls) != 1 {
+		t.Fatalf("Rebase call count = %d, want 1", len(rebaseCalls))
+	}
+	if rebaseCalls[0].WorktreePath != svcPath {
+		t.Errorf("Rebase worktree path = %q, want %q", rebaseCalls[0].WorktreePath, svcPath)
+	}
+	if rebaseCalls[0].Upstream != "origin/develop" {
+		t.Errorf("Rebase upstream = %q, want %q", rebaseCalls[0].Upstream, "origin/develop")
+	}
+
+	if len(mergeCalls) != 0 {
+		t.Errorf("Merge call count = %d, want 0 (rebase strategy should not call merge)", len(mergeCalls))
+	}
+}
+
 func TestInit_RollsBackWhenNoWorktreesAdded(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -1320,15 +1532,12 @@ func TestInit_RollsBackWhenNoWorktreesAdded(t *testing.T) {
 		t.Fatal("Init returned nil, want error when no worktrees could be added")
 	}
 
-	// Task directory must have been rolled back.
 	taskDir := filepath.Join(tasksRoot, "IN-ROLLBACK")
 	if _, statErr := os.Stat(taskDir); !os.IsNotExist(statErr) {
 		t.Errorf("task directory still exists after rollback, want it removed")
 	}
 }
 
-// TestInit_NoServicesRequested verifies that Init with an empty Services slice
-// succeeds without rollback (zero services requested = zero expected).
 func TestInit_NoServicesRequested(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -1345,13 +1554,10 @@ func TestInit_NoServicesRequested(t *testing.T) {
 	}
 }
 
-// TestAdd_ReturnsErrorWhenNoWorktreesAdded verifies that Add returns an error
-// when all requested services fail but does NOT remove the pre-existing task dir.
 func TestAdd_ReturnsErrorWhenNoWorktreesAdded(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 
-	// Pre-create the task directory.
 	taskDir := filepath.Join(tasksRoot, "IN-ADD-FAIL")
 	if err := os.MkdirAll(taskDir, 0o755); err != nil {
 		t.Fatalf("setup: %v", err)
@@ -1370,16 +1576,816 @@ func TestAdd_ReturnsErrorWhenNoWorktreesAdded(t *testing.T) {
 		t.Fatal("Add returned nil, want error when no worktrees could be added")
 	}
 
-	// Task directory must still exist (no rollback on Add).
 	if _, statErr := os.Stat(taskDir); statErr != nil {
 		t.Errorf("task directory was removed by Add, want it preserved: %v", statErr)
 	}
 }
 
-// Compile-time assertion: mockDotnetClient must implement dotnet.Client.
-var _ dotnet.Client = (*mockDotnetClient)(nil)
+func TestInit_RemoteBranchConflict_ReturnsError(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: true,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Init(context.Background(), InitParams{
+		TaskID:       "IN-CONFLICT",
+		Services:     []string{"myservice"},
+		BranchPrefix: "feature/",
+	})
+
+	if err == nil {
+		t.Fatal("Init returned nil, want ErrRemoteBranchConflict")
+	}
+
+	var conflictErr *ErrRemoteBranchConflict
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("Init error = %v, want ErrRemoteBranchConflict", err)
+	}
+
+	if conflictErr.TaskID != "IN-CONFLICT" {
+		t.Errorf("TaskID = %q, want %q", conflictErr.TaskID, "IN-CONFLICT")
+	}
+	if conflictErr.ServiceName != "myservice" {
+		t.Errorf("ServiceName = %q, want %q", conflictErr.ServiceName, "myservice")
+	}
+	if conflictErr.BranchName != "feature/IN-CONFLICT" {
+		t.Errorf("BranchName = %q, want %q", conflictErr.BranchName, "feature/IN-CONFLICT")
+	}
+}
+
+func TestInit_RemoteBranchConflict_ReturnsErrorAfterPartialSuccess(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	for _, service := range []string{"okservice", "conflictservice"} {
+		makeGitDir(t, filepath.Join(rootDir, service))
+	}
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:   nil,
+		baseBranchResult: "main",
+		branchExistsRes:  false,
+		listWorktreesRes: nil,
+		remoteBranchExistsFn: func(repoPath, branch string) (bool, error) {
+			return filepath.Base(repoPath) == "conflictservice", nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Init(context.Background(), InitParams{
+		TaskID:       "IN-PARTIAL-CONFLICT",
+		Services:     []string{"okservice", "conflictservice"},
+		BranchPrefix: "feature/",
+	})
+
+	if err == nil {
+		t.Fatal("Init returned nil, want ErrRemoteBranchConflict after partial success")
+	}
+	var conflictErr *ErrRemoteBranchConflict
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("Init error = %v, want ErrRemoteBranchConflict", err)
+	}
+	if conflictErr.ServiceName != "conflictservice" {
+		t.Errorf("ServiceName = %q, want %q", conflictErr.ServiceName, "conflictservice")
+	}
+
+	if _, statErr := os.Stat(filepath.Join(tasksRoot, "IN-PARTIAL-CONFLICT")); statErr != nil {
+		t.Errorf("task directory not preserved after partial success: %v", statErr)
+	}
+
+	gitMock.mu.Lock()
+	addCalls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+	if len(addCalls) != 1 || addCalls[0].Branch != "feature/IN-PARTIAL-CONFLICT" {
+		t.Fatalf("AddWorktree calls = %+v, want one successful service add", addCalls)
+	}
+}
+
+func TestInit_RemoteBranchConflict_RetryWithStrategySucceeds(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	for _, svc := range []string{"okservice", "conflictservice"} {
+		makeGitDir(t, filepath.Join(rootDir, svc))
+	}
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:   nil,
+		baseBranchResult: "main",
+		branchExistsRes:  false,
+		listWorktreesRes: nil,
+		remoteBranchExistsFn: func(repoPath, branch string) (bool, error) {
+			return filepath.Base(repoPath) == "conflictservice", nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	// First call: okservice succeeds, conflictservice hits remote branch conflict.
+	err := mgr.Init(context.Background(), InitParams{
+		TaskID:       "IN-RETRY",
+		Services:     []string{"okservice", "conflictservice"},
+		BranchPrefix: "feature/",
+	})
+	var conflictErr *ErrRemoteBranchConflict
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("first Init expected ErrRemoteBranchConflict, got %v", err)
+	}
+	if conflictErr.ServiceName != "conflictservice" {
+		t.Fatalf("conflictErr.ServiceName = %q, want %q", conflictErr.ServiceName, "conflictservice")
+	}
+
+	// Task directory must still exist (partial success preserved it).
+	if _, statErr := os.Stat(filepath.Join(tasksRoot, "IN-RETRY")); statErr != nil {
+		t.Fatalf("task directory should be preserved after partial success: %v", statErr)
+	}
+
+	// Second call: retry with StrategyFetchAndSwitch for conflictservice.
+	err = mgr.Init(context.Background(), InitParams{
+		TaskID:       "IN-RETRY",
+		Services:     []string{"okservice", "conflictservice"},
+		BranchPrefix: "feature/",
+		RemoteBranchStrategies: map[string]RemoteBranchStrategy{
+			"conflictservice": StrategyFetchAndSwitch,
+		},
+	})
+	if err != nil {
+		t.Fatalf("retry Init returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	trackingCalls := gitMock.addWorktreeWithTrackingCalls
+	gitMock.mu.Unlock()
+	if len(trackingCalls) != 1 || trackingCalls[0].LocalBranch != "feature/IN-RETRY" {
+		t.Fatalf("expected 1 AddWorktreeWithTracking call for conflictservice, got %+v", trackingCalls)
+	}
+}
+
+func TestInit_RemoteBranchConflict_StrategyFetchAndSwitch(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: true,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Init(context.Background(), InitParams{
+		TaskID:       "IN-FETCH",
+		Services:     []string{"myservice"},
+		BranchPrefix: "feature/",
+		RemoteBranchStrategies: map[string]RemoteBranchStrategy{
+			"myservice": StrategyFetchAndSwitch,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Init returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeWithTrackingCalls
+	gitMock.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktreeWithTracking call, got %d", len(calls))
+	}
+
+	call := calls[0]
+	wantBranch := "feature/IN-FETCH"
+	if call.LocalBranch != wantBranch {
+		t.Errorf("LocalBranch = %q, want %q", call.LocalBranch, wantBranch)
+	}
+	if call.RemoteBranch != wantBranch {
+		t.Errorf("RemoteBranch = %q, want %q", call.RemoteBranch, wantBranch)
+	}
+
+	gitMock.mu.Lock()
+	addCalls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+
+	if len(addCalls) != 0 {
+		t.Errorf("AddWorktree was called %d times, want 0 (should use AddWorktreeWithTracking)", len(addCalls))
+	}
+}
+
+func TestInit_RemoteBranchConflict_StrategyNewBranch(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: true,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Init(context.Background(), InitParams{
+		TaskID:       "IN-NEWBRANCH",
+		Services:     []string{"myservice"},
+		BranchPrefix: "feature/",
+		RemoteBranchStrategies: map[string]RemoteBranchStrategy{
+			"myservice": StrategyNewBranch,
+		},
+		BranchSuffixes: map[string]string{
+			"myservice": "-v2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Init returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktree call, got %d", len(calls))
+	}
+
+	call := calls[0]
+	wantBranch := "feature/IN-NEWBRANCH-v2"
+	if call.Branch != wantBranch {
+		t.Errorf("Branch = %q, want %q", call.Branch, wantBranch)
+	}
+	if !call.NewBranch {
+		t.Error("NewBranch = false, want true (should create new branch)")
+	}
+	if call.Base != "main" {
+		t.Errorf("Base = %q, want %q", call.Base, "main")
+	}
+}
+
+func TestInit_RemoteBranchConflict_StrategyCancel(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: true,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Init(context.Background(), InitParams{
+		TaskID:       "IN-CANCEL",
+		Services:     []string{"myservice"},
+		BranchPrefix: "feature/",
+		RemoteBranchStrategies: map[string]RemoteBranchStrategy{
+			"myservice": StrategyCancel,
+		},
+	})
+
+	if err == nil {
+		t.Fatal("Init returned nil, want error when all services are cancelled")
+	}
+
+	gitMock.mu.Lock()
+	addCalls := gitMock.addWorktreeCalls
+	trackingCalls := gitMock.addWorktreeWithTrackingCalls
+	gitMock.mu.Unlock()
+
+	if len(addCalls) != 0 {
+		t.Errorf("AddWorktree was called %d times, want 0 (cancelled)", len(addCalls))
+	}
+	if len(trackingCalls) != 0 {
+		t.Errorf("AddWorktreeWithTracking was called %d times, want 0 (cancelled)", len(trackingCalls))
+	}
+}
+
+func TestInit_RemoteBranchConflict_NetworkError_FailOpen(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: false,
+		remoteBranchExistsErr: errors.New("network error"),
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Init(context.Background(), InitParams{
+		TaskID:       "IN-NETWORK",
+		Services:     []string{"myservice"},
+		BranchPrefix: "feature/",
+	})
+	if err != nil {
+		t.Fatalf("Init returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktree call, got %d", len(calls))
+	}
+
+	call := calls[0]
+	if !call.NewBranch {
+		t.Error("NewBranch = false, want true (should create new branch)")
+	}
+}
+
+func TestInit_RemoteBranchConflict_NoRemoteBranch(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: false,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Init(context.Background(), InitParams{
+		TaskID:       "IN-NORMAL",
+		Services:     []string{"myservice"},
+		BranchPrefix: "feature/",
+	})
+	if err != nil {
+		t.Fatalf("Init returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktree call, got %d", len(calls))
+	}
+
+	call := calls[0]
+	if !call.NewBranch {
+		t.Error("NewBranch = false, want true (should create new branch)")
+	}
+	if call.Base != "main" {
+		t.Errorf("Base = %q, want %q", call.Base, "main")
+	}
+}
+
+func TestInit_RemoteBranchConflict_LocalBranchExists(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       true,
+		remoteBranchExistsRes: true,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Init(context.Background(), InitParams{
+		TaskID:       "IN-EXISTING",
+		Services:     []string{"myservice"},
+		BranchPrefix: "feature/",
+	})
+	if err != nil {
+		t.Fatalf("Init returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktree call, got %d", len(calls))
+	}
+
+	call := calls[0]
+	if call.NewBranch {
+		t.Error("NewBranch = true, want false (should use existing branch)")
+	}
+}
+
+func TestAdd_RemoteBranchConflict_ReturnsError(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "ADD-CONFLICT")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: true,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Add(context.Background(), AddParams{
+		TaskID:   "ADD-CONFLICT",
+		Services: []string{"myservice"},
+	})
+
+	if err == nil {
+		t.Fatal("Add returned nil, want ErrRemoteBranchConflict")
+	}
+
+	var conflictErr *ErrRemoteBranchConflict
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("Add error = %v, want ErrRemoteBranchConflict", err)
+	}
+
+	if conflictErr.TaskID != "ADD-CONFLICT" {
+		t.Errorf("TaskID = %q, want %q", conflictErr.TaskID, "ADD-CONFLICT")
+	}
+	if conflictErr.ServiceName != "myservice" {
+		t.Errorf("ServiceName = %q, want %q", conflictErr.ServiceName, "myservice")
+	}
+}
+
+func TestAdd_RemoteBranchConflict_ReturnsErrorAfterPartialSuccess(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "ADD-PARTIAL-CONFLICT")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	for _, service := range []string{"okservice", "conflictservice"} {
+		makeGitDir(t, filepath.Join(rootDir, service))
+	}
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:   nil,
+		baseBranchResult: "main",
+		branchExistsRes:  false,
+		listWorktreesRes: nil,
+		remoteBranchExistsFn: func(repoPath, branch string) (bool, error) {
+			return filepath.Base(repoPath) == "conflictservice", nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Add(context.Background(), AddParams{
+		TaskID:   "ADD-PARTIAL-CONFLICT",
+		Services: []string{"okservice", "conflictservice"},
+	})
+
+	if err == nil {
+		t.Fatal("Add returned nil, want ErrRemoteBranchConflict after partial success")
+	}
+	var conflictErr *ErrRemoteBranchConflict
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("Add error = %v, want ErrRemoteBranchConflict", err)
+	}
+	if conflictErr.ServiceName != "conflictservice" {
+		t.Errorf("ServiceName = %q, want %q", conflictErr.ServiceName, "conflictservice")
+	}
+	if _, statErr := os.Stat(taskDir); statErr != nil {
+		t.Errorf("task directory not preserved after partial success: %v", statErr)
+	}
+
+	gitMock.mu.Lock()
+	addCalls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+	if len(addCalls) != 1 || addCalls[0].Branch != "feature/ADD-PARTIAL-CONFLICT" {
+		t.Fatalf("AddWorktree calls = %+v, want one successful service add", addCalls)
+	}
+}
+
+func TestAdd_RemoteBranchConflict_StrategyFetchAndSwitch(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "ADD-FETCH")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: true,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Add(context.Background(), AddParams{
+		TaskID:   "ADD-FETCH",
+		Services: []string{"myservice"},
+		RemoteBranchStrategies: map[string]RemoteBranchStrategy{
+			"myservice": StrategyFetchAndSwitch,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Add returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeWithTrackingCalls
+	gitMock.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktreeWithTracking call, got %d", len(calls))
+	}
+
+	call := calls[0]
+	wantBranch := "feature/ADD-FETCH"
+	if call.LocalBranch != wantBranch {
+		t.Errorf("LocalBranch = %q, want %q", call.LocalBranch, wantBranch)
+	}
+	if call.RemoteBranch != wantBranch {
+		t.Errorf("RemoteBranch = %q, want %q", call.RemoteBranch, wantBranch)
+	}
+
+	gitMock.mu.Lock()
+	addCalls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+
+	if len(addCalls) != 0 {
+		t.Errorf("AddWorktree was called %d times, want 0 (should use AddWorktreeWithTracking)", len(addCalls))
+	}
+}
+
+func TestAdd_RemoteBranchConflict_StrategyNewBranch(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "ADD-NEWBRANCH")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: true,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Add(context.Background(), AddParams{
+		TaskID:   "ADD-NEWBRANCH",
+		Services: []string{"myservice"},
+		RemoteBranchStrategies: map[string]RemoteBranchStrategy{
+			"myservice": StrategyNewBranch,
+		},
+		BranchSuffixes: map[string]string{
+			"myservice": "-v2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Add returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktree call, got %d", len(calls))
+	}
+
+	call := calls[0]
+	wantBranch := "feature/ADD-NEWBRANCH-v2"
+	if call.Branch != wantBranch {
+		t.Errorf("Branch = %q, want %q", call.Branch, wantBranch)
+	}
+	if !call.NewBranch {
+		t.Error("NewBranch = false, want true (should create new branch)")
+	}
+	if call.Base != "main" {
+		t.Errorf("Base = %q, want %q", call.Base, "main")
+	}
+}
+
+func TestAdd_RemoteBranchConflict_StrategyCancel(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "ADD-CANCEL")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: true,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Add(context.Background(), AddParams{
+		TaskID:   "ADD-CANCEL",
+		Services: []string{"myservice"},
+		RemoteBranchStrategies: map[string]RemoteBranchStrategy{
+			"myservice": StrategyCancel,
+		},
+	})
+
+	if err == nil {
+		t.Fatal("Add returned nil, want error when all services are cancelled")
+	}
+
+	gitMock.mu.Lock()
+	addCalls := gitMock.addWorktreeCalls
+	trackingCalls := gitMock.addWorktreeWithTrackingCalls
+	gitMock.mu.Unlock()
+
+	if len(addCalls) != 0 {
+		t.Errorf("AddWorktree was called %d times, want 0 (cancelled)", len(addCalls))
+	}
+	if len(trackingCalls) != 0 {
+		t.Errorf("AddWorktreeWithTracking was called %d times, want 0 (cancelled)", len(trackingCalls))
+	}
+}
+
+func TestAdd_RemoteBranchConflict_NoRemoteBranch(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "ADD-NORMAL")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: false,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Add(context.Background(), AddParams{
+		TaskID:   "ADD-NORMAL",
+		Services: []string{"myservice"},
+	})
+	if err != nil {
+		t.Fatalf("Add returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktree call, got %d", len(calls))
+	}
+
+	call := calls[0]
+	if !call.NewBranch {
+		t.Error("NewBranch = false, want true (should create new branch)")
+	}
+	if call.Base != "main" {
+		t.Errorf("Base = %q, want %q", call.Base, "main")
+	}
+}
+
+func TestAdd_RemoteBranchConflict_LocalBranchExists(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "ADD-EXISTING")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       true,
+		remoteBranchExistsRes: true,
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Add(context.Background(), AddParams{
+		TaskID:   "ADD-EXISTING",
+		Services: []string{"myservice"},
+	})
+	if err != nil {
+		t.Fatalf("Add returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktree call, got %d", len(calls))
+	}
+
+	call := calls[0]
+	if call.NewBranch {
+		t.Error("NewBranch = true, want false (should use existing branch)")
+	}
+}
+
+func TestAdd_RemoteBranchConflict_NetworkError_FailOpen(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "ADD-NETWORK")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	svcRepo := filepath.Join(rootDir, "myservice")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:        nil,
+		baseBranchResult:      "main",
+		branchExistsRes:       false,
+		remoteBranchExistsRes: false,
+		remoteBranchExistsErr: errors.New("network error"),
+		listWorktreesRes:      nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Add(context.Background(), AddParams{
+		TaskID:   "ADD-NETWORK",
+		Services: []string{"myservice"},
+	})
+	if err != nil {
+		t.Fatalf("Add returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktree call, got %d", len(calls))
+	}
+
+	call := calls[0]
+	if !call.NewBranch {
+		t.Error("NewBranch = false, want true (should create new branch)")
+	}
+}
+
+var _ dotnet.Client = (*mockDotnetClient)(nil)
 
 func assertContainsLine(t *testing.T, lines []string, want string) {
 	t.Helper()

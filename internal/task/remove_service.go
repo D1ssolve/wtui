@@ -3,7 +3,6 @@ package task
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -49,16 +48,8 @@ func (m *manager) RemoveService(
 		}
 	}
 
-	taskDir := m.taskDir(taskID)
-	if _, err := os.Stat(taskDir); err != nil {
+	if _, err := os.Stat(m.taskDir(taskID)); err != nil {
 		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
-	}
-
-	if err := m.GenerateSln(ctx, taskID); err != nil {
-		m.logger.WarnContext(ctx, "sln generation failed after service removal",
-			slog.String("task", taskID),
-			slog.String("error", err.Error()),
-		)
 	}
 
 	return nil

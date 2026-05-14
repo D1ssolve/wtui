@@ -27,8 +27,12 @@ func (m *manager) Add(ctx context.Context, params AddParams) error {
 	branchName := m.resolveBranchName("", params.TaskID)
 
 	added, worktreeErrs := m.addWorktreesForServices(
-		ctx, params.Services, taskDir, branchName, "", params.StatusCh,
+		ctx, params.TaskID, params.Services, taskDir, branchName, "",
+		params.RemoteBranchStrategies, params.BranchSuffixes, params.StatusCh,
 	)
+	if err := unresolvedRemoteBranchConflict(worktreeErrs); err != nil {
+		return fmt.Errorf("add: remote branch conflicts for task %s: %w", params.TaskID, err)
+	}
 
 	if len(params.Services) > 0 && added == 0 {
 		return fmt.Errorf("add: no worktrees added for task %s: %w",

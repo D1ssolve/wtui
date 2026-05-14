@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// ----- helpers ---------------------------------------------------------------
-
-// setenv sets an environment variable for the duration of the test and restores
-// it automatically via t.Cleanup.
 func setenv(t *testing.T, key, value string) {
 	t.Helper()
 	orig, existed := os.LookupEnv(key)
@@ -25,7 +21,6 @@ func setenv(t *testing.T, key, value string) {
 	})
 }
 
-// unsetenv unsets an environment variable for the duration of the test.
 func unsetenv(t *testing.T, key string) {
 	t.Helper()
 	orig, existed := os.LookupEnv(key)
@@ -37,7 +32,6 @@ func unsetenv(t *testing.T, key string) {
 	})
 }
 
-// writeTempConfig writes content to a temp file and returns its path.
 func writeTempConfig(t *testing.T, content string) string {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "wtui-config-*.yaml")
@@ -50,8 +44,6 @@ func writeTempConfig(t *testing.T, content string) string {
 	f.Close()
 	return f.Name()
 }
-
-// ----- Load tests ------------------------------------------------------------
 
 func TestLoad_FlagPath_FileExists(t *testing.T) {
 	path := writeTempConfig(t, `
@@ -103,8 +95,7 @@ func TestLoad_FlagPath_FileMissing_ReturnsError(t *testing.T) {
 }
 
 func TestLoad_NoFile_ReturnsEmptyConfig(t *testing.T) {
-	// Ensure none of the candidate paths exist by pointing XDG_CONFIG_HOME to a
-	// non-existent directory and clearing HOME temporarily.
+
 	tmpDir := t.TempDir()
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(tmpDir, "nonexistent"))
 
@@ -112,7 +103,7 @@ func TestLoad_NoFile_ReturnsEmptyConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load returned error when no file exists: %v", err)
 	}
-	// All fields should be zero-valued — defaults are applied by Effective(), not Load().
+
 	if cfg.RootDir != "" || cfg.Editor != "" || cfg.LogLevel != "" {
 		t.Errorf("expected zero-value config, got: %+v", cfg)
 	}
@@ -166,10 +157,8 @@ log_level: [unclosed bracket
 	}
 }
 
-// ----- Effective() tests -----------------------------------------------------
-
 func TestEffective_AllDefaults(t *testing.T) {
-	// Ensure env vars don't interfere.
+
 	unsetenv(t, "WTUI_ROOT")
 	unsetenv(t, "TASKFLOW_ROOT")
 	unsetenv(t, "EDITOR")
@@ -285,7 +274,7 @@ func TestEffective_EnvVarEDITOR_AppliedWhenFieldEmpty(t *testing.T) {
 	unsetenv(t, "TASKFLOW_ROOT")
 	setenv(t, "EDITOR", "nano")
 
-	cfg := &Config{} // Editor is empty
+	cfg := &Config{}
 	cfg.Effective()
 
 	if cfg.Editor != "nano" {
@@ -307,7 +296,6 @@ func TestEffective_TasksRoot_DerivedFromRootDir(t *testing.T) {
 	}
 }
 
-// TestEffective_DiscoveryDepth tests clamping and defaulting behaviour.
 func TestEffective_DiscoveryDepth(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
 	unsetenv(t, "TASKFLOW_ROOT")
@@ -336,7 +324,6 @@ func TestEffective_DiscoveryDepth(t *testing.T) {
 	}
 }
 
-// TestEffective_OutputPanelLines tests clamping and defaulting behaviour.
 func TestEffective_OutputPanelLines(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
 	unsetenv(t, "TASKFLOW_ROOT")
@@ -368,8 +355,6 @@ func TestEffective_OutputPanelLines(t *testing.T) {
 	}
 }
 
-// ----- WriteDefault tests ----------------------------------------------------
-
 func TestWriteDefault_CreatesValidYAMLFile(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
 	unsetenv(t, "TASKFLOW_ROOT")
@@ -379,24 +364,21 @@ func TestWriteDefault_CreatesValidYAMLFile(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 
 	cfg := &Config{}
-	cfg.Effective() // apply defaults before writing
+	cfg.Effective()
 
 	if err := cfg.WriteDefault(path); err != nil {
 		t.Fatalf("WriteDefault error: %v", err)
 	}
 
-	// File must exist.
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("written file missing: %v", err)
 	}
 
-	// Re-loading the file must succeed.
 	reloaded, err := Load(path)
 	if err != nil {
 		t.Fatalf("reload after WriteDefault error: %v", err)
 	}
 
-	// After applying Effective() the reloaded config should match the original defaults.
 	reloaded.Effective()
 
 	if reloaded.BranchPrefix != "feature/" {
@@ -422,7 +404,7 @@ func TestWriteDefault_CreatesParentDirs(t *testing.T) {
 	unsetenv(t, "EDITOR")
 
 	dir := t.TempDir()
-	// Use a path whose parent directories do not yet exist.
+
 	path := filepath.Join(dir, "a", "b", "c", "config.yaml")
 
 	cfg := &Config{}
@@ -467,10 +449,11 @@ func TestWriteDefault_ContentHasComments(t *testing.T) {
 	if !strings.Contains(content, "discovery_depth:") {
 		t.Error("written config file missing discovery_depth key")
 	}
+	if strings.Contains(content, "--init-config") {
+		t.Error("written config file references removed CLI init-config command")
+	}
 }
 
-// TestWriteDefault_AtomicWrite verifies the file is not partially written even
-// if we check it immediately after creation (uses rename semantics).
 func TestWriteDefault_AtomicWrite_NoTempFileLeft(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
 	unsetenv(t, "TASKFLOW_ROOT")
@@ -486,7 +469,6 @@ func TestWriteDefault_AtomicWrite_NoTempFileLeft(t *testing.T) {
 		t.Fatalf("WriteDefault error: %v", err)
 	}
 
-	// No temp files should remain in the directory.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("readdir: %v", err)
@@ -498,14 +480,9 @@ func TestWriteDefault_AtomicWrite_NoTempFileLeft(t *testing.T) {
 	}
 }
 
-// ----- Resolution priority tests ---------------------------------------------
-
-// TestLoad_FlagPath_TakesPriorityOverXDG verifies that an explicit --config path
-// takes priority over the XDG location.
 func TestLoad_FlagPath_TakesPriorityOverXDG(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create a config at the XDG location.
 	xdgDir := filepath.Join(tmpDir, "xdg", "wtui")
 	if err := os.MkdirAll(xdgDir, 0o750); err != nil {
 		t.Fatal(err)
@@ -516,7 +493,6 @@ func TestLoad_FlagPath_TakesPriorityOverXDG(t *testing.T) {
 	}
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(tmpDir, "xdg"))
 
-	// Create a different config at the flag path.
 	flagCfg := writeTempConfig(t, "log_level: ERROR\n")
 
 	cfg, err := Load(flagCfg)
@@ -528,12 +504,9 @@ func TestLoad_FlagPath_TakesPriorityOverXDG(t *testing.T) {
 	}
 }
 
-// TestLoad_XDG_TakesPriorityOverHOME verifies that the XDG path is preferred over
-// the plain HOME fallback when both exist.
 func TestLoad_XDG_TakesPriorityOverHOME(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// XDG config with DEBUG.
 	xdgDir := filepath.Join(tmpDir, "xdg", "wtui")
 	if err := os.MkdirAll(xdgDir, 0o750); err != nil {
 		t.Fatal(err)
@@ -542,7 +515,6 @@ func TestLoad_XDG_TakesPriorityOverHOME(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// HOME config with WARN (should NOT be picked when XDG is set).
 	homeDir := filepath.Join(tmpDir, "home", ".config", "wtui")
 	if err := os.MkdirAll(homeDir, 0o750); err != nil {
 		t.Fatal(err)
@@ -552,7 +524,7 @@ func TestLoad_XDG_TakesPriorityOverHOME(t *testing.T) {
 	}
 
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(tmpDir, "xdg"))
-	// Override HOME to point at our temp home dir so the ~/.config candidate resolves there.
+
 	setenv(t, "HOME", filepath.Join(tmpDir, "home"))
 
 	cfg, err := Load("")
@@ -564,7 +536,6 @@ func TestLoad_XDG_TakesPriorityOverHOME(t *testing.T) {
 	}
 }
 
-// TestEffective_ChainReturn verifies that Effective() returns the receiver for chaining.
 func TestEffective_ChainReturn(t *testing.T) {
 	cfg := &Config{}
 	returned := cfg.Effective()
@@ -572,8 +543,6 @@ func TestEffective_ChainReturn(t *testing.T) {
 		t.Error("Effective() did not return the receiver")
 	}
 }
-
-// ----- SetKey tests ----------------------------------------------------------
 
 func TestSetKey_WritesKeyToNewFile(t *testing.T) {
 	dir := t.TempDir()
@@ -596,7 +565,6 @@ func TestSetKey_PreservesOtherKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 
-	// Write an initial config with multiple keys.
 	initial := "editor: code\nbranch_prefix: feature/\nlog_level: WARN\n"
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial config: %v", err)
@@ -613,7 +581,7 @@ func TestSetKey_PreservesOtherKeys(t *testing.T) {
 	if cfg.Editor != "rider" {
 		t.Errorf("Editor: got %q, want rider", cfg.Editor)
 	}
-	// Other keys must be preserved.
+
 	if cfg.BranchPrefix != "feature/" {
 		t.Errorf("BranchPrefix: got %q, want feature/", cfg.BranchPrefix)
 	}
@@ -694,10 +662,6 @@ func TestSetKey_CreatesParentDirs(t *testing.T) {
 	}
 }
 
-// ----- BaseBranch tests ------------------------------------------------------
-
-// TestEffective_BaseBranch_Default verifies that an empty Config gets BaseBranch
-// set to "develop" by Effective().
 func TestEffective_BaseBranch_Default(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
 	unsetenv(t, "TASKFLOW_ROOT")
@@ -712,8 +676,6 @@ func TestEffective_BaseBranch_Default(t *testing.T) {
 	}
 }
 
-// TestEffective_BaseBranch_FromYAML verifies that a BaseBranch value loaded from
-// YAML is preserved by Effective() and not overwritten with the default.
 func TestEffective_BaseBranch_FromYAML(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
 	unsetenv(t, "TASKFLOW_ROOT")
@@ -728,15 +690,13 @@ func TestEffective_BaseBranch_FromYAML(t *testing.T) {
 	}
 }
 
-// TestEffective_BaseBranch_FromEnv verifies that WTUI_BASE_BRANCH overrides a
-// value already set in the Config struct (simulating a YAML-loaded value).
 func TestEffective_BaseBranch_FromEnv(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
 	unsetenv(t, "TASKFLOW_ROOT")
 	unsetenv(t, "EDITOR")
 	setenv(t, "WTUI_BASE_BRANCH", "release/1.0")
 
-	cfg := &Config{BaseBranch: "develop"} // YAML value — env must win
+	cfg := &Config{BaseBranch: "develop"}
 	cfg.Effective()
 
 	if cfg.BaseBranch != "release/1.0" {
@@ -744,8 +704,6 @@ func TestEffective_BaseBranch_FromEnv(t *testing.T) {
 	}
 }
 
-// TestSetKey_BaseBranch verifies that SetKey accepts "base_branch" as a valid
-// key and that the written value can be read back via Load.
 func TestSetKey_BaseBranch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -762,7 +720,6 @@ func TestSetKey_BaseBranch(t *testing.T) {
 		t.Errorf("BaseBranch after SetKey: got %q, want %q", cfg.BaseBranch, "develop")
 	}
 
-	// Verify the raw file contains the expected YAML key.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read config file: %v", err)

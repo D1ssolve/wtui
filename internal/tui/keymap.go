@@ -6,13 +6,13 @@ type KeyMap struct {
 	Tab      key.Binding
 	ShiftTab key.Binding
 
-	Quit      key.Binding // q
-	ForceQuit key.Binding // ctrl+c
-	Refresh   key.Binding // r
-	Help      key.Binding // ?
-	Escape    key.Binding // esc
+	Quit      key.Binding
+	ForceQuit key.Binding
+	Refresh   key.Binding
+	Help      key.Binding
+	Escape    key.Binding
 
-	ToggleLogs key.Binding // L — toggle log overlay
+	ToggleLogs key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -35,7 +35,7 @@ func DefaultKeyMap() KeyMap {
 		),
 		Refresh: key.NewBinding(
 			key.WithKeys("r"),
-			key.WithHelp("r", "refresh"),
+			key.WithHelp("r", "refresh tasks/repos"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),

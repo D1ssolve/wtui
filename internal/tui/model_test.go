@@ -15,17 +15,14 @@ import (
 	"github.com/diss0x/wtui/internal/tui/panels"
 )
 
-// ─── Mock task.Manager ────────────────────────────────────────────────────────
-
-// mockManager is a no-op implementation of task.Manager for unit-testing the
-// root TUI model without any real filesystem or git operations.
 type mockManager struct {
 	listTasksResult    []domain.Task
 	listTasksErr       error
 	listServicesResult []domain.Service
 	listServicesErr    error
-	listReposResult    []domain.Repo
-	listReposErr       error
+	reposResult        []domain.Repo
+	reposErr           error
+	repoRefreshArgs    []bool
 }
 
 var _ task.Manager = (*mockManager)(nil)
@@ -33,7 +30,6 @@ var _ task.Manager = (*mockManager)(nil)
 func (m *mockManager) Init(_ context.Context, _ task.InitParams) error     { return nil }
 func (m *mockManager) Add(_ context.Context, _ task.AddParams) error       { return nil }
 func (m *mockManager) Remove(_ context.Context, _ string, _, _ bool) error { return nil }
-func (m *mockManager) GenerateSln(_ context.Context, _ string) error       { return nil }
 
 func (m *mockManager) List(_ context.Context) ([]domain.Task, error) {
 	return m.listTasksResult, m.listTasksErr
@@ -43,11 +39,12 @@ func (m *mockManager) ListServices(_ context.Context, _ string) ([]domain.Servic
 	return m.listServicesResult, m.listServicesErr
 }
 
-func (m *mockManager) DiscoverRepos(_ context.Context) ([]domain.Repo, error) {
-	return m.listReposResult, m.listReposErr
+func (m *mockManager) Repos(_ context.Context, refresh bool) ([]domain.Repo, error) {
+	m.repoRefreshArgs = append(m.repoRefreshArgs, refresh)
+	return m.reposResult, m.reposErr
 }
 
-func (m *mockManager) SyncTask(_ context.Context, _ string, lineCh chan<- string) error {
+func (m *mockManager) SyncTask(_ context.Context, _ string, _ task.SyncStrategy, lineCh chan<- string) error {
 	close(lineCh)
 	return nil
 }
@@ -59,16 +56,10 @@ func (m *mockManager) PushTask(_ context.Context, _ string, lineCh chan<- string
 
 func (m *mockManager) PushService(_ context.Context, _, _ string, _ chan<- string) error { return nil }
 
-func (m *mockManager) CloneTask(_ context.Context, _, _ string) error { return nil }
-
 func (m *mockManager) StashService(_ context.Context, _, _ string, _ bool) error { return nil }
 
 func (m *mockManager) RemoveService(_ context.Context, _, _ string, _ bool) error { return nil }
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
-
-// newTestConfig returns a minimal *config.Config with Effective() applied,
-// suitable for unit tests that do not touch the filesystem.
 func newTestConfig() *config.Config {
 	cfg := &config.Config{
 		RootDir:          "/tmp/wtui-test",
@@ -82,8 +73,6 @@ func newTestConfig() *config.Config {
 	return cfg.Effective()
 }
 
-// newTestModel is a convenience constructor that wires a mockManager and a
-// default config into a fresh Model.  It calls t.Fatal on construction failure.
 func newTestModel(t *testing.T, mgr task.Manager) Model {
 	t.Helper()
 	m, err := New(newTestConfig(), mgr, slog.Default())
@@ -93,17 +82,11 @@ func newTestModel(t *testing.T, mgr task.Manager) Model {
 	return m
 }
 
-// sendWindowSize delivers a tea.WindowSizeMsg to the model and returns the
-// updated model, marking it as ready.
 func sendWindowSize(m Model, w, h int) Model {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	return updated.(Model)
 }
 
-// ─── 1. Construction smoke test ───────────────────────────────────────────────
-
-// TestModelInit verifies that tui.New succeeds with valid dependencies and that
-// the initial focus is FocusTasks.
 func TestModelInit(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
@@ -123,8 +106,6 @@ func TestModelInit(t *testing.T) {
 		t.Error("model must not be ready before receiving the first WindowSizeMsg")
 	}
 }
-
-// ─── 2. New rejects nil arguments ────────────────────────────────────────────
 
 func TestNew_NilCfg_ReturnsError(t *testing.T) {
 	_, err := New(nil, &mockManager{}, slog.Default())
@@ -147,8 +128,6 @@ func TestNew_NilLogger_ReturnsError(t *testing.T) {
 	}
 }
 
-// ─── 3. View before WindowSizeMsg returns "Loading..." ───────────────────────
-
 func TestView_BeforeWindowSize_ReturnsLoading(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
@@ -157,8 +136,6 @@ func TestView_BeforeWindowSize_ReturnsLoading(t *testing.T) {
 		t.Errorf("View() before WindowSizeMsg: expected %q, got %q", "Loading...", view)
 	}
 }
-
-// ─── 4. WindowSizeMsg marks model as ready ───────────────────────────────────
 
 func TestUpdate_WindowSizeMsg_SetsReady(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
@@ -175,8 +152,6 @@ func TestUpdate_WindowSizeMsg_SetsReady(t *testing.T) {
 	}
 }
 
-// ─── 5. View after WindowSizeMsg does not return "Loading..." ────────────────
-
 func TestView_AfterWindowSize_NotLoading(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
@@ -187,8 +162,6 @@ func TestView_AfterWindowSize_NotLoading(t *testing.T) {
 	}
 }
 
-// ─── 6. Init returns non-nil Cmd batch ───────────────────────────────────────
-
 func TestInit_ReturnsCmd(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
@@ -198,7 +171,35 @@ func TestInit_ReturnsCmd(t *testing.T) {
 	}
 }
 
-// ─── 7. Quit key returns tea.Quit ─────────────────────────────────────────────
+func TestLoadReposCmdUsesCachedReposByDefault(t *testing.T) {
+	mgr := &mockManager{reposResult: []domain.Repo{{Name: "api", Path: "/repo/api"}}}
+	msg := loadReposCmd(mgr, false)()
+	loaded, ok := msg.(ReposLoadedMsg)
+	if !ok {
+		t.Fatalf("expected ReposLoadedMsg, got %T", msg)
+	}
+	if loaded.Err != nil {
+		t.Fatalf("ReposLoadedMsg err = %v", loaded.Err)
+	}
+	if len(mgr.repoRefreshArgs) != 1 || mgr.repoRefreshArgs[0] {
+		t.Fatalf("repo refresh args = %v, want [false]", mgr.repoRefreshArgs)
+	}
+}
+
+func TestLoadReposCmdForceRefreshesRepos(t *testing.T) {
+	mgr := &mockManager{reposResult: []domain.Repo{{Name: "fresh", Path: "/repo/fresh"}}}
+	msg := loadReposCmd(mgr, true)()
+	loaded, ok := msg.(ReposLoadedMsg)
+	if !ok {
+		t.Fatalf("expected ReposLoadedMsg, got %T", msg)
+	}
+	if loaded.Err != nil {
+		t.Fatalf("ReposLoadedMsg err = %v", loaded.Err)
+	}
+	if len(mgr.repoRefreshArgs) != 1 || !mgr.repoRefreshArgs[0] {
+		t.Fatalf("repo refresh args = %v, want [true]", mgr.repoRefreshArgs)
+	}
+}
 
 func TestUpdate_QuitKey_ReturnsQuit(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
@@ -207,31 +208,26 @@ func TestUpdate_QuitKey_ReturnsQuit(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("Ctrl+C must return a cmd")
 	}
-	// Execute the cmd to verify it is tea.Quit.
+
 	msg := cmd()
 	if _, ok := msg.(tea.QuitMsg); !ok {
 		t.Errorf("Ctrl+C cmd must produce tea.QuitMsg, got %T", msg)
 	}
 }
 
-// ─── 8. Tab cycles focus forward ─────────────────────────────────────────────
-
 func TestUpdate_Tab_CyclesFocusForward(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
-	// Initial state: FocusTasks.
 	if m.focus != FocusTasks {
 		t.Fatalf("expected FocusTasks initially, got %v", m.focus)
 	}
 
-	// Tab from FocusTasks → FocusOutput (FocusServices is excluded from cycle).
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	if m.focus != FocusOutput {
 		t.Errorf("after Tab: expected FocusOutput, got %v", m.focus)
 	}
 
-	// Tab from FocusOutput → wraps back to FocusTasks.
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	if m.focus != FocusTasks {
@@ -239,12 +235,9 @@ func TestUpdate_Tab_CyclesFocusForward(t *testing.T) {
 	}
 }
 
-// ─── 9. ShiftTab cycles focus backward ───────────────────────────────────────
-
 func TestUpdate_ShiftTab_CyclesFocusBackward(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
-	// Shift+Tab from FocusTasks → FocusOutput (wrap).
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	m = updated.(Model)
 	if m.focus != FocusOutput {
@@ -252,12 +245,9 @@ func TestUpdate_ShiftTab_CyclesFocusBackward(t *testing.T) {
 	}
 }
 
-// ─── 10. Help key opens HelpOverlay modal ────────────────────────────────────
-
 func TestUpdate_HelpKey_OpensHelpModal(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
-	// '?' opens help.
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
 	m = updated.(Model)
 	if m.modal == nil {
@@ -268,19 +258,15 @@ func TestUpdate_HelpKey_OpensHelpModal(t *testing.T) {
 	}
 }
 
-// ─── 11. CloseModalMsg nils the modal ────────────────────────────────────────
-
 func TestUpdate_CloseModalMsg_NilsModal(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
-	// Open a modal first.
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
 	m = updated.(Model)
 	if m.modal == nil {
 		t.Fatal("precondition failed: modal should be open")
 	}
 
-	// Close it.
 	updated, _ = m.Update(modal.CloseModalMsg{})
 	m = updated.(Model)
 	if m.modal != nil {
@@ -288,12 +274,9 @@ func TestUpdate_CloseModalMsg_NilsModal(t *testing.T) {
 	}
 }
 
-// ─── 12. OpenInitDialogMsg opens InitDialog ──────────────────────────────────
-
 func TestUpdate_OpenInitDialogMsg_OpensInitDialog(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
-	// Pre-load repos so the dialog opens immediately (no pending state).
 	m.repos = []domain.Repo{{Name: "svc1", Path: "/tmp/svc1"}}
 
 	updated, _ := m.Update(panels.OpenInitDialogMsg{})
@@ -308,8 +291,8 @@ func TestUpdate_OpenInitDialogMsg_OpensInitDialog(t *testing.T) {
 
 func TestUpdate_OpenInitDialogMsg_NoRepos_Pending(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
 
-	// No repos loaded → dialog is deferred until ReposLoadedMsg.
 	updated, cmd := m.Update(panels.OpenInitDialogMsg{})
 	m = updated.(Model)
 	if m.modal != nil {
@@ -320,6 +303,72 @@ func TestUpdate_OpenInitDialogMsg_NoRepos_Pending(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("must return a cmd to load repos")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Loading repository cache for init dialog...") {
+		t.Fatalf("output should mention deferred init repo load, got %q", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_OpenAddServiceMsg_NoRepos_Pending(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(panels.OpenAddServiceMsg{TaskID: "IN-1", ExistingServices: []string{"api"}})
+	m = updated.(Model)
+	if m.modal != nil {
+		t.Fatal("modal must be nil when repos are not loaded yet")
+	}
+	if m.addDialogPending == nil {
+		t.Fatal("addDialogPending must be set")
+	}
+	if cmd == nil {
+		t.Fatal("must return command to load repos")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Loading repository cache for add service dialog...") {
+		t.Fatalf("output should mention deferred add service repo load, got %q", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_ReposLoadedMsg_OpensPendingAddDialog(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.addDialogPending = &panels.OpenAddServiceMsg{TaskID: "IN-1"}
+
+	updated, _ := m.Update(ReposLoadedMsg{Repos: []domain.Repo{{Name: "api", Path: "/repo/api"}}})
+	m = updated.(Model)
+	if m.addDialogPending != nil {
+		t.Fatal("addDialogPending should be cleared")
+	}
+	if _, ok := m.modal.(*modal.AddDialog); !ok {
+		t.Fatalf("expected AddDialog, got %T", m.modal)
+	}
+}
+
+func TestUpdate_ReposLoadedMsg_ErrorKeepsExistingRepos(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	m.repos = []domain.Repo{{Name: "old", Path: "/repo/old"}}
+
+	updated, _ := m.Update(ReposLoadedMsg{Err: &mockError{msg: "scan failed"}})
+	m = updated.(Model)
+	if len(m.repos) != 1 || m.repos[0].Name != "old" {
+		t.Fatalf("repos should be preserved on error, got %#v", m.repos)
+	}
+	if !strings.Contains(m.outputPanel.View(), "scan failed") {
+		t.Fatalf("output should contain refresh error, got %q", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_RefreshKeyStartsTaskAndRepoRefresh(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("refresh key must return command")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Refreshing tasks and repository cache...") {
+		t.Fatalf("output should mention tasks and repository cache refresh, got %q", m.outputPanel.View())
 	}
 }
 
@@ -346,8 +395,6 @@ func TestUpdate_OpenConfigModalMsg_OpensConfigModal(t *testing.T) {
 	}
 }
 
-// ─── 13. FocusServicesMsg switches focus to services panel ───────────────────
-
 func TestUpdate_FocusServicesMsg_SwitchesFocus(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
@@ -358,24 +405,18 @@ func TestUpdate_FocusServicesMsg_SwitchesFocus(t *testing.T) {
 	}
 }
 
-// ─── 14. FocusTasksMsg switches focus to tasks panel ─────────────────────────
-
 func TestUpdate_FocusTasksMsg_SwitchesFocus(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
-	// Move to services first.
 	updated, _ := m.Update(panels.FocusServicesMsg{TaskID: "IN-0001"})
 	m = updated.(Model)
 
-	// Then return to tasks.
 	updated, _ = m.Update(panels.FocusTasksMsg{})
 	m = updated.(Model)
 	if m.focus != FocusTasks {
 		t.Errorf("FocusTasksMsg: expected FocusTasks, got %v", m.focus)
 	}
 }
-
-// ─── 15. TasksLoadedMsg updates the tasks panel ──────────────────────────────
 
 func TestUpdate_TasksLoadedMsg_UpdatesPanel(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
@@ -385,7 +426,6 @@ func TestUpdate_TasksLoadedMsg_UpdatesPanel(t *testing.T) {
 	updated, _ := m.Update(TasksLoadedMsg{Tasks: tasks})
 	m = updated.(Model)
 
-	// After receiving TasksLoadedMsg the tasks panel should render the task IDs.
 	view := m.tasksPanel.View()
 	if !strings.Contains(view, "IN-1111") {
 		t.Errorf("tasks panel view should contain IN-1111 after TasksLoadedMsg")
@@ -394,8 +434,6 @@ func TestUpdate_TasksLoadedMsg_UpdatesPanel(t *testing.T) {
 		t.Errorf("tasks panel view should contain IN-2222 after TasksLoadedMsg")
 	}
 }
-
-// ─── 16. CommandDoneMsg with error appends error to output panel ──────────────
 
 func TestUpdate_CommandDoneMsg_WithError_AppendsError(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
@@ -415,8 +453,6 @@ func TestUpdate_CommandDoneMsg_WithError_AppendsError(t *testing.T) {
 	}
 }
 
-// ─── 17. CommandDoneMsg without error appends "Done." ─────────────────────────
-
 func TestUpdate_CommandDoneMsg_NoError_AppendsDone(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
@@ -435,8 +471,6 @@ func TestUpdate_CommandDoneMsg_NoError_AppendsDone(t *testing.T) {
 	}
 }
 
-// ─── 18. OutputLineMsg appends line to output panel ───────────────────────────
-
 func TestUpdate_OutputLineMsg_AppendLine(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
@@ -449,8 +483,6 @@ func TestUpdate_OutputLineMsg_AppendLine(t *testing.T) {
 		t.Errorf("output panel should contain the line from OutputLineMsg")
 	}
 }
-
-// ─── 19. SubmitInitMsg starts init operation ─────────────────────────────────
 
 func TestUpdate_SubmitInitMsg_StartsOperation(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
@@ -474,8 +506,6 @@ func TestUpdate_SubmitInitMsg_StartsOperation(t *testing.T) {
 	}
 }
 
-// ─── 20. SubmitRemoveMsg starts remove operation ──────────────────────────────
-
 func TestUpdate_SubmitRemoveMsg_StartsOperation(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
@@ -496,8 +526,6 @@ func TestUpdate_SubmitRemoveMsg_StartsOperation(t *testing.T) {
 	}
 }
 
-// ─── 21. FocusPanel.String() returns correct strings ─────────────────────────
-
 func TestFocusPanel_String(t *testing.T) {
 	tests := []struct {
 		panel FocusPanel
@@ -515,63 +543,34 @@ func TestFocusPanel_String(t *testing.T) {
 	}
 }
 
-// ─── 22. FocusPanel.Next() and .Prev() cycle correctly ───────────────────────
-
 func TestFocusPanel_NextPrev(t *testing.T) {
-	// Forward cycle: Tasks ↔ Output (FocusServices excluded from Tab cycle).
+
 	if got := FocusTasks.Next(); got != FocusOutput {
 		t.Errorf("FocusTasks.Next(): expected FocusOutput, got %v", got)
 	}
 	if got := FocusOutput.Next(); got != FocusTasks {
 		t.Errorf("FocusOutput.Next(): expected FocusTasks, got %v", got)
 	}
-	// FocusServices is a safe default — Next() returns FocusTasks.
+
 	if got := FocusServices.Next(); got != FocusTasks {
 		t.Errorf("FocusServices.Next(): expected FocusTasks (safe default), got %v", got)
 	}
 
-	// Backward cycle: Tasks ↔ Output (symmetric with Next).
 	if got := FocusTasks.Prev(); got != FocusOutput {
 		t.Errorf("FocusTasks.Prev(): expected FocusOutput, got %v", got)
 	}
 	if got := FocusOutput.Prev(); got != FocusTasks {
 		t.Errorf("FocusOutput.Prev(): expected FocusTasks, got %v", got)
 	}
-	// FocusServices is a safe default — Prev() returns FocusTasks.
+
 	if got := FocusServices.Prev(); got != FocusTasks {
 		t.Errorf("FocusServices.Prev(): expected FocusTasks (safe default), got %v", got)
 	}
 }
 
-// ─── internal test helpers ────────────────────────────────────────────────────
-
 type mockError struct{ msg string }
 
 func (e *mockError) Error() string { return e.msg }
-
-// ─── 25. SyncTaskMsg starts sync operation ────────────────────────────────────
-
-func TestUpdate_SyncTaskMsg_StartsOperation(t *testing.T) {
-	m := newTestModel(t, &mockManager{})
-	m = sendWindowSize(m, 120, 40)
-
-	updated, cmd := m.Update(panels.SyncTaskMsg{TaskID: "IN-001"})
-	m = updated.(Model)
-
-	if !m.opRunning {
-		t.Error("opRunning must be true after SyncTaskMsg")
-	}
-	if cmd == nil {
-		t.Fatal("SyncTaskMsg must return a non-nil cmd")
-	}
-
-	view := m.outputPanel.View()
-	if !strings.Contains(view, "Syncing task IN-001") {
-		t.Errorf("output panel should contain sync message, got:\n%s", view)
-	}
-}
-
-// ─── 26. PushServiceMsg starts push operation ────────────────────────────────
 
 func TestUpdate_PushServiceMsg_StartsOperation(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
@@ -588,12 +587,28 @@ func TestUpdate_PushServiceMsg_StartsOperation(t *testing.T) {
 	}
 
 	view := m.outputPanel.View()
-	if !strings.Contains(view, "Pushing svc-a") {
+	if !strings.Contains(view, "Pushing service svc-a for task IN-001...") {
 		t.Errorf("output panel should contain push message, got:\n%s", view)
 	}
 }
 
-// ─── 27. StashServiceMsg starts stash operation ──────────────────────────────
+func TestUpdate_PushTaskMsg_StartsOperationWithTaskID(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(panels.PushTaskMsg{TaskID: "IN-777"})
+	m = updated.(Model)
+
+	if !m.opRunning {
+		t.Error("opRunning must be true after PushTaskMsg")
+	}
+	if cmd == nil {
+		t.Fatal("PushTaskMsg must return a non-nil cmd")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Pushing task IN-777...") {
+		t.Errorf("output panel should contain task push message, got:\n%s", m.outputPanel.View())
+	}
+}
 
 func TestUpdate_StashServiceMsg_Stash_StartsOperation(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
@@ -614,7 +629,7 @@ func TestUpdate_StashServiceMsg_Stash_StartsOperation(t *testing.T) {
 	}
 
 	view := m.outputPanel.View()
-	if !strings.Contains(view, "Stashing svc-a") {
+	if !strings.Contains(view, "Stashing service svc-a for task IN-001...") {
 		t.Errorf("output panel should contain stash message, got:\n%s", view)
 	}
 }
@@ -638,7 +653,105 @@ func TestUpdate_StashServiceMsg_Unstash_StartsOperation(t *testing.T) {
 	}
 
 	view := m.outputPanel.View()
-	if !strings.Contains(view, "Unstashing svc-a") {
+	if !strings.Contains(view, "Unstashing service svc-a for task IN-001...") {
 		t.Errorf("output panel should contain unstash message, got:\n%s", view)
+	}
+}
+
+func TestUpdate_SubmitSyncStrategyMsg_StartsOperationWithStrategy(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(modal.SubmitSyncStrategyMsg{TaskID: "IN-010", Strategy: task.SyncStrategyRebase})
+	m = updated.(Model)
+
+	if !m.opRunning {
+		t.Error("opRunning must be true after SubmitSyncStrategyMsg")
+	}
+	if cmd == nil {
+		t.Fatal("SubmitSyncStrategyMsg must return a non-nil cmd")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Syncing task IN-010 with rebase strategy...") {
+		t.Errorf("output panel should contain sync strategy message, got:\n%s", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_SubmitSyncStrategyMsg_NoopClosesWithoutStartingOperation(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	m.modal = modal.NewSyncStrategyDialog("IN-010")
+
+	updated, cmd := m.Update(modal.SubmitSyncStrategyMsg{TaskID: "IN-010", Strategy: task.SyncStrategyNoop})
+	m = updated.(Model)
+
+	if m.opRunning {
+		t.Error("opRunning must be false after noop sync strategy")
+	}
+	if cmd != nil {
+		t.Fatal("noop sync strategy must not return a command")
+	}
+	if m.modal != nil {
+		t.Fatal("noop sync strategy must close the modal")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Sync cancelled for task IN-010.") {
+		t.Errorf("output panel should contain sync cancellation message, got:\n%s", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_RiderTaskMsg_StartsOperationWithSolutionName(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(panels.RiderTaskMsg{TaskID: "IN-222", TaskDir: "/tmp/IN-222"})
+	m = updated.(Model)
+
+	if !m.opRunning {
+		t.Error("opRunning must be true after RiderTaskMsg")
+	}
+	if cmd == nil {
+		t.Fatal("RiderTaskMsg must return a non-nil cmd")
+	}
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "Opening IN-222.sln in Rider from /tmp/IN-222...") {
+		t.Errorf("output panel should contain Rider task solution message, got:\n%s", view)
+	}
+}
+
+func TestUpdate_ShellInputEnter_AppendsCommandAndTaskDirectory(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	m.shellInput = &shellInputState{taskDir: "/tmp/IN-333", input: "git status", cursor: len("git status")}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+
+	if m.shellInput != nil {
+		t.Fatal("shell input should close after enter")
+	}
+	if cmd == nil {
+		t.Fatal("shell enter must return command for non-empty input")
+	}
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "Running shell command in /tmp/IN-333: git status") {
+		t.Errorf("output panel should contain shell command and dir, got:\n%s", view)
+	}
+}
+
+func TestUpdate_ShellInputEnter_EmptyInputDoesNotAppendOutput(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	m.shellInput = &shellInputState{taskDir: "/tmp/IN-333"}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+
+	if m.shellInput != nil {
+		t.Fatal("shell input should close after empty enter")
+	}
+	if cmd != nil {
+		t.Fatal("empty shell enter should not return command")
+	}
+	if strings.Contains(m.outputPanel.View(), "Running shell command") {
+		t.Errorf("empty shell input should not append output, got:\n%s", m.outputPanel.View())
 	}
 }

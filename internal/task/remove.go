@@ -9,19 +9,6 @@ import (
 	"path/filepath"
 )
 
-// Remove removes a task and all its linked git worktrees.
-//
-// This is the Go translation of `cmd_remove` from taskflow.sh.
-//
-// Behaviour:
-//   - Returns ErrTaskNotFound if the task directory does not exist.
-//   - For each service subdirectory: obtains the common git dir and calls
-//     git worktree remove. Errors per service are recorded but do not abort
-//     the loop.
-//   - If any worktree removal failed AND force is false: returns a combined
-//     error WITHOUT calling os.RemoveAll (task directory is preserved).
-//   - If all removals succeeded OR force is true: calls os.RemoveAll(taskDir)
-//     to delete the task directory regardless of individual worktree errors.
 func (m *manager) Remove(ctx context.Context, taskID string, force, deleteBranches bool) error {
 	if err := validateTaskID(taskID); err != nil {
 		return err
@@ -49,7 +36,6 @@ func (m *manager) Remove(ctx context.Context, taskID string, force, deleteBranch
 
 		subdirPath := filepath.Join(taskDir, entry.Name())
 
-		// Obtain the common git directory (required by git worktree remove --git-dir).
 		commonDir, cdErr := m.git.CommonDir(ctx, subdirPath)
 		if cdErr != nil {
 			m.logger.WarnContext(ctx, "could not determine common git dir, skipping worktree removal",
@@ -60,7 +46,6 @@ func (m *manager) Remove(ctx context.Context, taskID string, force, deleteBranch
 			continue
 		}
 
-		// Resolve branch name before removing the worktree (needed for branch deletion).
 		var branchName string
 		if deleteBranches {
 			branchName, _ = m.git.GetWorktreeBranch(ctx, subdirPath)
@@ -95,8 +80,6 @@ func (m *manager) Remove(ctx context.Context, taskID string, force, deleteBranch
 		}
 	}
 
-	// If there were errors and the caller did not request force-removal, preserve
-	// the task directory and surface the combined error (spec AC-14).
 	if len(removeErrors) > 0 && !force {
 		return errors.Join(removeErrors...)
 	}

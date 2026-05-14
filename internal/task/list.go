@@ -34,7 +34,6 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 			Dir: taskDir,
 		}
 
-		// Stale detection: guard against race where dir is removed after ReadDir.
 		if _, err := os.Stat(taskDir); os.IsNotExist(err) {
 			task.Stale = true
 		}
@@ -67,8 +66,6 @@ func (m *manager) ListServices(ctx context.Context, taskID string) ([]domain.Ser
 		return nil, fmt.Errorf("list services: read task dir %s: %w", taskDir, err)
 	}
 
-	// Collect only directory entries upfront — avoids spawning goroutines for
-	// files like *.code-workspace or *.sln.
 	var dirs []os.DirEntry
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -76,10 +73,9 @@ func (m *manager) ListServices(ctx context.Context, taskID string) ([]domain.Ser
 		}
 	}
 
-	// Fan out: one goroutine per service directory.
 	type result struct {
 		svc domain.Service
-		ok  bool // false means the entry should be skipped (non-git dir)
+		ok  bool
 	}
 
 	results := make(chan result, len(dirs))
@@ -104,7 +100,6 @@ func (m *manager) ListServices(ctx context.Context, taskID string) ([]domain.Ser
 		}
 	}
 
-	// Restore deterministic order — goroutines complete in arbitrary sequence.
 	sort.Slice(services, func(i, j int) bool {
 		return services[i].Name < services[j].Name
 	})
@@ -112,14 +107,9 @@ func (m *manager) ListServices(ctx context.Context, taskID string) ([]domain.Ser
 	return services, nil
 }
 
-// inspectServiceDir gathers all metadata for a single service subdirectory.
-// Returns (service, true) when the directory is a valid git worktree, and
-// (zero, false) when it should be excluded from the result (non-git dir).
 func (m *manager) inspectServiceDir(ctx context.Context, taskDir string, entry os.DirEntry) (domain.Service, bool) {
 	subdirPath := filepath.Join(taskDir, entry.Name())
 
-	// Stale detection: if the subdir no longer exists (removed after ReadDir),
-	// include it as stale so the panel can show [STALE] rather than silently dropping it.
 	if _, statErr := os.Stat(subdirPath); os.IsNotExist(statErr) {
 		return domain.Service{
 			Name:         entry.Name(),
@@ -143,29 +133,46 @@ func (m *manager) inspectServiceDir(ctx context.Context, taskDir string, entry o
 		RepoPath:     filepath.Dir(commonDir),
 	}
 
-	dirty, dirtyErr := m.git.IsDirty(ctx, subdirPath)
-	if dirtyErr != nil {
-		m.logger.WarnContext(ctx, "could not determine dirty state",
-			slog.String("service", entry.Name()),
-			slog.String("error", dirtyErr.Error()),
-		)
-	}
-	svc.IsDirty = dirty
 	svc.Branch = m.currentBranch(ctx, subdirPath, entry.Name())
 
-	// Ahead/behind counts: best-effort, do not fail ListServices on error.
+	type statusResult struct {
+		dirty          bool
+		ahead          int
+		behind         int
+		dirtyErr       error
+		aheadBehindErr error
+	}
+
+	var status statusResult
+	var statusWG sync.WaitGroup
+	statusWG.Go(func() {
+		status.dirty, status.dirtyErr = m.git.IsDirty(ctx, subdirPath)
+	})
+
 	if svc.Branch != "" {
 		originBranch := "origin/" + svc.Branch
-		ahead, behind, abErr := m.git.RevListAheadBehind(ctx, subdirPath, originBranch)
-		if abErr != nil {
-			m.logger.DebugContext(ctx, "could not determine ahead/behind count",
-				slog.String("service", entry.Name()),
-				slog.String("error", abErr.Error()),
-			)
-		} else {
-			svc.Ahead = ahead
-			svc.Behind = behind
-		}
+		statusWG.Go(func() {
+			status.ahead, status.behind, status.aheadBehindErr = m.git.RevListAheadBehind(ctx, subdirPath, originBranch)
+		})
+	}
+	statusWG.Wait()
+
+	if status.dirtyErr != nil {
+		m.logger.WarnContext(ctx, "could not determine dirty state",
+			slog.String("service", entry.Name()),
+			slog.String("error", status.dirtyErr.Error()),
+		)
+	}
+	svc.IsDirty = status.dirty
+
+	if status.aheadBehindErr != nil {
+		m.logger.DebugContext(ctx, "could not determine ahead/behind count",
+			slog.String("service", entry.Name()),
+			slog.String("error", status.aheadBehindErr.Error()),
+		)
+	} else {
+		svc.Ahead = status.ahead
+		svc.Behind = status.behind
 	}
 
 	return svc, true

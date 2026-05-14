@@ -3,14 +3,10 @@ package git
 import "strings"
 
 type WorktreeEntry struct {
-	// Path is the absolute filesystem path of the worktree.
 	Path string
 
-	// HEAD is the full commit hash currently checked out in this worktree.
 	HEAD string
 
-	// Branch is the full ref name (e.g., "refs/heads/main") or the literal
-	// string "(detached)" when the worktree is in detached-HEAD state.
 	Branch string
 }
 

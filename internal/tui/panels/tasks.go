@@ -12,8 +12,6 @@ import (
 	"github.com/diss0x/wtui/internal/domain"
 )
 
-// tasksColorNormal, tasksColorDim and tasksColorInactive are aliases to the
-// shared panel palette defined in theme.go, kept for readability at call sites.
 const (
 	tasksColorInactive = colorInactive
 	tasksColorNormal   = colorNormal
@@ -43,7 +41,6 @@ func (d taskDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	isSelected := index == m.Index()
 	isStale := ti.task.Stale
 
-	// Build the label: task ID + service count.
 	label := ti.task.ID
 	if n := len(ti.task.Services); n > 0 {
 		serviceWord := "service"
@@ -55,7 +52,7 @@ func (d taskDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 
 	var line string
 	if isStale {
-		// Stale tasks render in dim/muted style regardless of selection.
+
 		line = lipgloss.NewStyle().
 			Foreground(tasksColorDim).
 			Render("  [?] " + label)
@@ -220,29 +217,13 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 			id := task.ID
 			return p, func() tea.Msg { return OpenRemoveDialogMsg{TaskID: id} }
 
-		case "c":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			id := task.ID
-			return p, func() tea.Msg { return CloneTaskMsg{SrcTaskID: id} }
-
-		case "s":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			id := task.ID
-			return p, func() tea.Msg { return GenerateSlnMsg{TaskID: id} }
-
 		case "S":
 			task := p.SelectedTask()
 			if task == nil {
 				return p, nil
 			}
 			id := task.ID
-			return p, func() tea.Msg { return SyncTaskMsg{TaskID: id} }
+			return p, func() tea.Msg { return OpenSyncStrategyDialogMsg{TaskID: id} }
 
 		case "P":
 			task := p.SelectedTask()
@@ -253,19 +234,19 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 			return p, func() tea.Msg { return PushTaskMsg{TaskID: id} }
 
 		case "h":
-			// Go to previous page if not on the first page
+
 			if p.list.Paginator.Page > 0 {
 				p.list.Paginator.PrevPage()
-				// Set cursor to first item on new page
+
 				p.list.Select(p.list.Paginator.Page * p.list.Paginator.PerPage)
 			}
 			return p, nil
 
 		case "l":
-			// Go to next page if not on the last page
+
 			if p.list.Paginator.Page < p.list.Paginator.TotalPages-1 {
 				p.list.Paginator.NextPage()
-				// Set cursor to first item on new page
+
 				p.list.Select(p.list.Paginator.Page * p.list.Paginator.PerPage)
 			}
 			return p, nil
@@ -278,16 +259,25 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 			dir := task.Dir
 			return p, func() tea.Msg { return ShellExecMsg{TaskDir: dir} }
 
+		case "R":
+			task := p.SelectedTask()
+			if task == nil {
+				return p, nil
+			}
+			taskID := task.ID
+			dir := task.Dir
+			return p, func() tea.Msg { return RiderTaskMsg{TaskID: taskID, TaskDir: dir} }
+
 		case ",":
 			return p, func() tea.Msg { return OpenConfigModalMsg{} }
 
 		case "f":
-			// Toggle filter mode: enter if not filtering, exit if filtering
+
 			if p.list.FilterState() == list.Filtering {
 				p.list.ResetFilter()
 				return p, nil
 			}
-			// Enter filter mode by sending '/' key to the list (list uses '/' as filter key)
+
 			filterKey := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
 			var cmd tea.Cmd
 			p.list, cmd = p.list.Update(filterKey)

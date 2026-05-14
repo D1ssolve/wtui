@@ -8,14 +8,8 @@ import (
 	"testing"
 )
 
-// ─── IsAvailable tests ────────────────────────────────────────────────────────
-
-// TestIsAvailable_DotnetNotInPATH verifies that IsAvailable returns false (and
-// does not panic or error) when the dotnet binary is not reachable in PATH.
-//
-// Note: t.Setenv must not be combined with t.Parallel (Go stdlib restriction).
 func TestIsAvailable_DotnetNotInPATH(t *testing.T) {
-	// Override PATH to an empty directory so that exec.LookPath("dotnet") fails.
+
 	t.Setenv("PATH", "")
 
 	c := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
@@ -25,18 +19,12 @@ func TestIsAvailable_DotnetNotInPATH(t *testing.T) {
 	}
 }
 
-// TestIsAvailable_NoPanicOnEmptyPATH ensures the function is safe to call
-// and never panics even under unusual PATH conditions.
-//
-// Note: t.Setenv must not be combined with t.Parallel (Go stdlib restriction).
 func TestIsAvailable_NoPanicOnEmptyPATH(t *testing.T) {
 	t.Setenv("PATH", "/no/such/directory")
 	c := NewCommandClient(slog.Default())
-	// Should not panic.
+
 	_ = c.IsAvailable(context.Background())
 }
-
-// ─── ExecError tests ──────────────────────────────────────────────────────────
 
 func TestExecError_Error_WithStderr(t *testing.T) {
 	t.Parallel()
@@ -70,17 +58,12 @@ func TestExecError_Error_WithoutStderr(t *testing.T) {
 	if !strings.Contains(msg, "exit 2") {
 		t.Errorf("expected 'exit 2' in error string; got: %q", msg)
 	}
-	// Stderr section should not appear when empty.
+
 	if strings.Contains(msg, ":  ") {
 		t.Errorf("unexpected trailing colon-space in error string; got: %q", msg)
 	}
 }
 
-// ─── CommandClient argument-passing tests ────────────────────────────────────
-
-// mockRecorder is a helper that captures the dotnet.Client calls made during a
-// test without actually spawning the dotnet process. It is defined in the test
-// file (unexported) so it stays close to the tests that use it.
 type mockRecorder struct {
 	newSlnCalls []newSlnCall
 	slnAddCalls []slnAddCall
@@ -102,14 +85,11 @@ func (m *mockRecorder) SlnAdd(_ context.Context, workDir, slnPath, projPath stri
 	return nil
 }
 
-// TestMockClient_NewSln_RecordsCorrectArgs verifies that the mock correctly
-// captures the workDir and name arguments — used as a sanity check that the
-// interface contract is exercisable in tests.
 func TestMockClient_NewSln_RecordsCorrectArgs(t *testing.T) {
 	t.Parallel()
 
 	rec := &mockRecorder{available: true}
-	var c Client = rec // assert interface satisfaction at compile time
+	var c Client = rec
 
 	err := c.NewSln(context.Background(), "/tmp/task", "IN-6748")
 	if err != nil {
@@ -127,8 +107,6 @@ func TestMockClient_NewSln_RecordsCorrectArgs(t *testing.T) {
 	}
 }
 
-// TestMockClient_SlnAdd_RecordsCorrectArgs verifies that SlnAdd captures all
-// three arguments with the correct values.
 func TestMockClient_SlnAdd_RecordsCorrectArgs(t *testing.T) {
 	t.Parallel()
 
@@ -154,7 +132,4 @@ func TestMockClient_SlnAdd_RecordsCorrectArgs(t *testing.T) {
 	}
 }
 
-// ─── CommandClient implements Client (compile-time assertion) ─────────────────
-
-// Compile-time check: *CommandClient must satisfy the Client interface.
 var _ Client = (*CommandClient)(nil)

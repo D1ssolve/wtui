@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 )
 
-// StashService runs git stash or git stash pop for a single service worktree.
 func (m *manager) StashService(ctx context.Context, taskID, serviceName string, pop bool) error {
 	if err := validateTaskID(taskID); err != nil {
 		return err

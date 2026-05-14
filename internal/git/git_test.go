@@ -2,11 +2,12 @@ package git
 
 import (
 	"errors"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
-
-// ─── parseWorktreeListPorcelain unit tests ────────────────────────────────────
 
 func TestParseWorktreeListPorcelain(t *testing.T) {
 	t.Parallel()
@@ -76,7 +77,7 @@ HEAD 0000000000000000000000000000000000000000
 bare
 
 `,
-			// bare repos don't have a branch line; we still capture path and HEAD.
+
 			want: []WorktreeEntry{
 				{Path: "/path/to/bare.git", HEAD: "0000000000000000000000000000000000000000", Branch: ""},
 			},
@@ -100,7 +101,7 @@ branch refs/heads/main`,
 	}
 
 	for _, tc := range tests {
-		tc := tc // capture range variable
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := parseWorktreeListPorcelain(tc.input)
@@ -111,8 +112,6 @@ branch refs/heads/main`,
 	}
 }
 
-// worktreeSlicesEqual compares two []WorktreeEntry for deep equality without
-// importing reflect, keeping this file dependency-free.
 func worktreeSlicesEqual(a, b []WorktreeEntry) bool {
 	if len(a) != len(b) {
 		return false
@@ -124,8 +123,6 @@ func worktreeSlicesEqual(a, b []WorktreeEntry) bool {
 	}
 	return true
 }
-
-// ─── ExecError unit tests ────────────────────────────────────────────────────
 
 func TestExecError_Error(t *testing.T) {
 	t.Parallel()
@@ -167,14 +164,66 @@ func TestExecError_Is_SentinelCheck(t *testing.T) {
 		t.Error("errors.Is(execErr, ErrExec) should return true")
 	}
 
-	// Wrapping in a chain should still be detectable via errors.Is.
 	wrapped := &wrappedErr{inner: e}
 	if !errors.Is(wrapped, ErrExec) {
 		t.Error("errors.Is(wrapped execErr, ErrExec) should return true through chain")
 	}
 }
 
-// wrappedErr is a minimal error wrapper used in tests to exercise chain unwrapping.
+func TestCommandClient_RemoteBranchExistsUsesLiveRemoteLookup(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	exists, err := client.RemoteBranchExists(t.Context(), "/repo", "feature/ABC-123")
+	if err != nil {
+		t.Fatalf("RemoteBranchExists returned error: %v", err)
+	}
+	if !exists {
+		t.Fatal("RemoteBranchExists = false, want true")
+	}
+
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read args file: %v", err)
+	}
+	want := "-C /repo ls-remote --exit-code --heads origin feature/ABC-123\n"
+	if string(args) != want {
+		t.Fatalf("git args = %q, want %q", string(args), want)
+	}
+}
+
+func TestCommandClient_RemoteBranchExistsReturnsFalseWhenLiveRemoteHasNoMatch(t *testing.T) {
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+exit 2
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	exists, err := client.RemoteBranchExists(t.Context(), "/repo", "feature/missing")
+	if err != nil {
+		t.Fatalf("RemoteBranchExists returned error: %v", err)
+	}
+	if exists {
+		t.Fatal("RemoteBranchExists = true, want false")
+	}
+}
+
 type wrappedErr struct{ inner error }
 
 func (w *wrappedErr) Error() string { return w.inner.Error() }

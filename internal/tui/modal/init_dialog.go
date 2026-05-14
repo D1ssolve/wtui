@@ -13,41 +13,27 @@ import (
 	"github.com/diss0x/wtui/internal/domain"
 )
 
-// ── InitDialog ────────────────────────────────────────────────────────────────
-
-// InitDialog is a 4-field form for initializing a new task group.
-//
-// Fields (in Tab order):
-//
-//	0: Task ID         — placeholder "IN-6748"
-//	1: Services        — repo picker (when repos available) or text input
-//	2: Branch Prefix   — pre-filled from defaultBranchPrefix; placeholder "feature/"
-//	3: Base Branch     — placeholder "main (leave empty for auto-detect)"
 type InitDialog struct {
 	fields              [4]textinput.Model
 	focusIndex          int
 	defaultBranchPrefix string
+	errorMsg            string
 
-	// Terminal dimensions for list sizing.
 	terminalHeight int
 	terminalWidth  int
 
-	// Repo picker (replaces Services text input when repos are available).
 	repoList          list.Model
 	repoPickerFocused bool
 	hasRepos          bool
 }
 
-// repoPickerItem implements list.Item for the repo picker.
 type repoPickerItem struct {
 	name    string
 	checked bool
 }
 
-// FilterValue implements list.Item.
 func (r repoPickerItem) FilterValue() string { return r.name }
 
-// repoPickerDelegate renders repo picker items with checkbox style.
 type repoPickerDelegate struct{}
 
 func (d repoPickerDelegate) Height() int                             { return 1 }
@@ -76,7 +62,6 @@ func (d repoPickerDelegate) Render(w io.Writer, m list.Model, index int, item li
 	}
 }
 
-// field labels rendered in the dialog view.
 var initFieldLabels = [4]string{
 	"Task ID:",
 	"Services:",
@@ -84,10 +69,6 @@ var initFieldLabels = [4]string{
 	"Base Branch:",
 }
 
-// NewInitDialog creates an InitDialog pre-filled with defaultBranchPrefix.
-// When repos is non-empty, the Services field becomes a checkboxed repo picker.
-// When repos is empty, a plain text input is shown for services.
-// termWidth and termHeight are used to calculate the visible window size for the repo picker.
 func NewInitDialog(defaultBranchPrefix string, repos []domain.Repo, termWidth, termHeight int) *InitDialog {
 	d := &InitDialog{
 		defaultBranchPrefix: defaultBranchPrefix,
@@ -130,7 +111,7 @@ func NewInitDialog(defaultBranchPrefix string, repos []domain.Repo, termWidth, t
 		d.repoList.SetShowHelp(false)
 		d.repoList.SetShowPagination(true)
 		d.repoList.SetFilteringEnabled(true)
-		d.repoList.SetShowFilter(false) // rendered manually in View() to avoid blank title bar
+		d.repoList.SetShowFilter(false)
 		d.repoList.DisableQuitKeybindings()
 		d.repoList.Styles.NoItems = lipgloss.NewStyle().Foreground(modalColorDim).PaddingLeft(2)
 	}
@@ -140,10 +121,8 @@ func NewInitDialog(defaultBranchPrefix string, repos []domain.Repo, termWidth, t
 	return d
 }
 
-// Title implements Modal.
 func (d *InitDialog) Title() string { return "New Task" }
 
-// SetTerminalSize implements Modal.
 func (d *InitDialog) SetTerminalSize(width, height int) {
 	d.terminalWidth = width
 	d.terminalHeight = height
@@ -152,15 +131,13 @@ func (d *InitDialog) SetTerminalSize(width, height int) {
 	}
 }
 
-// Update implements Modal.
 func (d *InitDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return d.handleKey(msg)
 
 	default:
-		// Forward non-key messages (e.g. list.FilterMatchesMsg, spinner.TickMsg)
-		// to the repo list so async filter results are applied.
+
 		if d.hasRepos {
 			var cmd tea.Cmd
 			d.repoList, cmd = d.repoList.Update(msg)
@@ -175,12 +152,10 @@ func (d *InitDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	}
 }
 
-// handleKey routes a key event to the repo picker or text input depending on
-// current focus and filter state.
 func (d *InitDialog) handleKey(msg tea.KeyMsg) (Modal, tea.Cmd) {
-	// When the repo picker is filtering, forward all keys to the list — the
-	// built-in filter input handles typing, backspace, enter (accept), and esc
-	// (cancel). We only intercept esc to also reset our own state cleanly.
+
+	d.errorMsg = ""
+
 	if d.repoPickerFocused && d.hasRepos && d.repoList.FilterState() == list.Filtering {
 		switch msg.String() {
 		case "esc":
@@ -219,34 +194,27 @@ func (d *InitDialog) handleKey(msg tea.KeyMsg) (Modal, tea.Cmd) {
 		}
 
 	case "f":
-		// Enter filter mode when repo picker is focused.
+
 		if d.repoPickerFocused && d.hasRepos {
 			filterKey := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
 			var cmd tea.Cmd
 			d.repoList, cmd = d.repoList.Update(filterKey)
 			return d, cmd
 		}
-		// Otherwise fall through to the text-input handler below.
+
 	}
 
-	// When repo picker is focused, delegate navigation (j/k/h/l/page keys) and
-	// any other unhandled key to the list component directly.
 	if d.repoPickerFocused && d.hasRepos {
 		var cmd tea.Cmd
 		d.repoList, cmd = d.repoList.Update(msg)
 		return d, cmd
 	}
 
-	// Text field is focused — forward to the active input.
 	var cmd tea.Cmd
 	d.fields[d.focusIndex], cmd = d.fields[d.focusIndex].Update(msg)
 	return d, cmd
 }
 
-// toggleSelectedRepo toggles the checked state of the item under the cursor.
-// It uses GlobalIndex() and SetItem() so it works correctly when a filter is active.
-// Returns the command from SetItem, which triggers a filter recomputation when a
-// filter is applied — without it filteredItems would not reflect the updated checked state.
 func (d *InitDialog) toggleSelectedRepo() tea.Cmd {
 	globalIdx := d.repoList.GlobalIndex()
 	item := d.repoList.SelectedItem()
@@ -258,7 +226,6 @@ func (d *InitDialog) toggleSelectedRepo() tea.Cmd {
 	return d.repoList.SetItem(globalIdx, ri)
 }
 
-// View implements Modal.
 func (d *InitDialog) View() string {
 	labelStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -294,7 +261,13 @@ func (d *InitDialog) View() string {
 		}
 	}
 
-	// Hint bar.
+	if d.errorMsg != "" {
+		errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+		sb.WriteString("\n")
+		sb.WriteString(errorStyle.Render("Error: " + d.errorMsg))
+		sb.WriteString("\n")
+	}
+
 	hintStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 	sb.WriteString("\n")
 	if d.hasRepos {
@@ -306,9 +279,6 @@ func (d *InitDialog) View() string {
 	return sb.String()
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-// focusField focuses field i and blurs all others.
 func (d *InitDialog) focusField(i int) tea.Cmd {
 	d.focusIndex = i
 	d.repoPickerFocused = d.hasRepos && i == 1
@@ -324,20 +294,24 @@ func (d *InitDialog) focusField(i int) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// nextField advances to the next field (wrapping 3 → 0).
 func (d *InitDialog) nextField() tea.Cmd {
 	next := (d.focusIndex + 1) % 4
 	return d.focusField(next)
 }
 
-// prevField moves to the previous field (wrapping 0 → 3).
 func (d *InitDialog) prevField() tea.Cmd {
-	prev := (d.focusIndex + 3) % 4 // +3 == -1 mod 4
+	prev := (d.focusIndex + 3) % 4
 	return d.focusField(prev)
 }
 
-// submit builds and emits a SubmitInitMsg.
 func (d *InitDialog) submit() tea.Cmd {
+	taskID := strings.TrimSpace(d.fields[0].Value())
+
+	if err := validateTaskID(taskID); err != nil {
+		d.errorMsg = err.Error()
+		return nil
+	}
+
 	var services []string
 	if d.hasRepos {
 		for _, it := range d.repoList.Items() {
@@ -350,7 +324,7 @@ func (d *InitDialog) submit() tea.Cmd {
 	}
 
 	msg := SubmitInitMsg{
-		TaskID:       strings.TrimSpace(d.fields[0].Value()),
+		TaskID:       taskID,
 		Services:     services,
 		BranchPrefix: strings.TrimSpace(d.fields[2].Value()),
 		BaseBranch:   strings.TrimSpace(d.fields[3].Value()),
@@ -358,9 +332,28 @@ func (d *InitDialog) submit() tea.Cmd {
 	return func() tea.Msg { return msg }
 }
 
-// parseServices splits raw input on whitespace and commas, trimming and
-// discarding empty tokens.  This is the canonical service-list parser used by
-// Init and Add dialogs.
+func validateTaskID(taskID string) error {
+	if taskID == "" {
+		return fmt.Errorf("task ID must not be empty")
+	}
+	if taskID == "." {
+		return fmt.Errorf("invalid task ID %q: single dot is not allowed", taskID)
+	}
+
+	const banned = `/\<>:"|?*`
+	for _, ch := range banned {
+		if strings.ContainsRune(taskID, ch) {
+			return fmt.Errorf("invalid task ID %q: contains forbidden character %q", taskID, string(ch))
+		}
+	}
+
+	if strings.Contains(taskID, "..") {
+		return fmt.Errorf("invalid task ID %q: contains path traversal sequence", taskID)
+	}
+
+	return nil
+}
+
 func parseServices(raw string) []string {
 	fields := strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ' ' || r == ','
@@ -377,7 +370,6 @@ func parseServices(raw string) []string {
 	return result
 }
 
-// visibleListHeight returns the height for the repo list based on terminal dimensions.
 func (d *InitDialog) visibleListHeight() int {
 	if d.terminalHeight > 0 {
 		size := d.terminalHeight - 16

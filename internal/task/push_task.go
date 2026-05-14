@@ -6,9 +6,6 @@ import (
 	"sync"
 )
 
-// PushTask pushes all service worktrees of taskID in parallel.
-// Analogous to SyncTask but for push operations.
-// Lines written to lineCh describe progress. lineCh is closed when done.
 func (m *manager) PushTask(ctx context.Context, taskID string, lineCh chan<- string) error {
 	defer close(lineCh)
 
@@ -33,10 +30,16 @@ func (m *manager) PushTask(ctx context.Context, taskID string, lineCh chan<- str
 
 	for _, svc := range services {
 		wg.Go(func() {
-
-			lineCh <- fmt.Sprintf("[%s] pushing...", svc.Name)
+			if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] pushing...", svc.Name)) {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = ctx.Err()
+				}
+				mu.Unlock()
+				return
+			}
 			if err := m.git.Push(ctx, svc.WorktreePath, lineCh); err != nil {
-				lineCh <- fmt.Sprintf("[%s] push error: %v", svc.Name, err)
+				sendLine(ctx, lineCh, fmt.Sprintf("[%s] push error: %v", svc.Name, err))
 
 				mu.Lock()
 				if firstErr == nil {
@@ -46,7 +49,7 @@ func (m *manager) PushTask(ctx context.Context, taskID string, lineCh chan<- str
 				return
 			}
 
-			lineCh <- fmt.Sprintf("[%s] pushed.", svc.Name)
+			sendLine(ctx, lineCh, fmt.Sprintf("[%s] pushed.", svc.Name))
 		})
 	}
 

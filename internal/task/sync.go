@@ -6,13 +6,39 @@ import (
 	"sync"
 )
 
-// SyncTask fetches and rebases all service worktrees of taskID in parallel.
-// Progress lines are written to lineCh. lineCh is closed when all goroutines finish.
-func (m *manager) SyncTask(ctx context.Context, taskID string, lineCh chan<- string) error {
+type SyncStrategy int
+
+const (
+	SyncStrategyMerge SyncStrategy = iota
+
+	SyncStrategyRebase
+
+	SyncStrategyNoop
+)
+
+func (s SyncStrategy) String() string {
+	switch s {
+	case SyncStrategyMerge:
+		return "merge"
+	case SyncStrategyRebase:
+		return "rebase"
+	case SyncStrategyNoop:
+		return "noop"
+	default:
+		return "unknown"
+	}
+}
+
+func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStrategy, lineCh chan<- string) error {
 	defer close(lineCh)
 
 	if err := validateTaskID(taskID); err != nil {
 		return err
+	}
+
+	if strategy == SyncStrategyNoop {
+		sendLine(ctx, lineCh, "sync skipped.")
+		return nil
 	}
 
 	services, err := m.ListServices(ctx, taskID)
@@ -32,10 +58,16 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, lineCh chan<- str
 
 	for _, svc := range services {
 		wg.Go(func() {
-
-			lineCh <- fmt.Sprintf("[%s] fetching...", svc.Name)
+			if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] fetching...", svc.Name)) {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = ctx.Err()
+				}
+				mu.Unlock()
+				return
+			}
 			if err := m.git.Fetch(ctx, svc.WorktreePath); err != nil {
-				lineCh <- fmt.Sprintf("[%s] fetch error: %v", svc.Name, err)
+				sendLine(ctx, lineCh, fmt.Sprintf("[%s] fetch error: %v", svc.Name, err))
 
 				mu.Lock()
 				if firstErr == nil {
@@ -50,19 +82,49 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, lineCh chan<- str
 				baseBranch = "develop"
 			}
 			upstream := "origin/" + baseBranch
-			lineCh <- fmt.Sprintf("[%s] rebasing onto %s...", svc.Name, upstream)
-			if err := m.git.Rebase(ctx, svc.WorktreePath, upstream); err != nil {
-				lineCh <- fmt.Sprintf("[%s] rebase error: %v", svc.Name, err)
 
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
+			switch strategy {
+			case SyncStrategyMerge:
+				if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] merging %s...", svc.Name, upstream)) {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = ctx.Err()
+					}
+					mu.Unlock()
+					return
 				}
-				mu.Unlock()
-				return
+				if err := m.git.Merge(ctx, svc.WorktreePath, upstream); err != nil {
+					sendLine(ctx, lineCh, fmt.Sprintf("[%s] merge error: %v", svc.Name, err))
+
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+					return
+				}
+			case SyncStrategyRebase:
+				if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] rebasing onto %s...", svc.Name, upstream)) {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = ctx.Err()
+					}
+					mu.Unlock()
+					return
+				}
+				if err := m.git.Rebase(ctx, svc.WorktreePath, upstream); err != nil {
+					sendLine(ctx, lineCh, fmt.Sprintf("[%s] rebase error: %v", svc.Name, err))
+
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+					return
+				}
 			}
 
-			lineCh <- fmt.Sprintf("[%s] done.", svc.Name)
+			sendLine(ctx, lineCh, fmt.Sprintf("[%s] done.", svc.Name))
 		})
 	}
 

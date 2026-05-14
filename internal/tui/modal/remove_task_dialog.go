@@ -24,7 +24,6 @@ func NewRemoveTaskDialog(taskID string, serviceCount int, dirtyServices []string
 
 func (d *RemoveTaskDialog) Title() string { return "Remove Task" }
 
-// SetTerminalSize implements Modal.
 func (d *RemoveTaskDialog) SetTerminalSize(width, height int) {}
 
 func (d *RemoveTaskDialog) UpdateInfo(serviceCount int, dirtyServices []string) {

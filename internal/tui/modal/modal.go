@@ -9,17 +9,16 @@ type Modal interface {
 	Update(msg tea.Msg) (Modal, tea.Cmd)
 	View() string
 	Title() string
-	// SetTerminalSize updates the terminal dimensions used for scroll calculations.
+
 	SetTerminalSize(width, height int)
 }
 
 const (
-	// modalColorBorder matches tui.ColorPrimary (#7C3AED) — the app-wide violet accent.
 	modalColorBorder  = lipgloss.Color("#7C3AED")
-	modalColorDim     = lipgloss.Color("#6B7280") // muted gray — secondary text / hints
-	modalColorNormal  = lipgloss.Color("#D1D5DB") // light gray — body text
-	modalColorWarning = lipgloss.Color("#F59E0B") // amber — dirty service warnings
-	modalColorGray    = lipgloss.Color("#4A4A4A") // dark gray — disabled text
+	modalColorDim     = lipgloss.Color("#6B7280")
+	modalColorNormal  = lipgloss.Color("#D1D5DB")
+	modalColorWarning = lipgloss.Color("#F59E0B")
+	modalColorGray    = lipgloss.Color("#4A4A4A")
 )
 
 func boxStyle(innerWidth int) lipgloss.Style {
@@ -37,7 +36,6 @@ func OverlayView(content string, termW, termH, maxContentH int) string {
 		innerW = maxInnerW
 	}
 
-	// Constrain height similar to width: proportional (70%) with min/max bounds.
 	innerH := maxContentH
 	if innerH > termH-2 {
 		innerH = termH - 2

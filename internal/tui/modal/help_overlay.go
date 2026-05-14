@@ -13,7 +13,6 @@ func NewHelpOverlay() *HelpOverlay { return &HelpOverlay{} }
 
 func (h *HelpOverlay) Title() string { return "Keyboard Shortcuts" }
 
-// SetTerminalSize implements Modal.
 func (h *HelpOverlay) SetTerminalSize(width, height int) {}
 
 func (h *HelpOverlay) Update(msg tea.Msg) (Modal, tea.Cmd) {
@@ -59,15 +58,13 @@ func (h *HelpOverlay) View() string {
 	sb.WriteString("\n")
 	sb.WriteString(row("d/Del", "Remove task group"))
 	sb.WriteString("\n")
-	sb.WriteString(row("c", "Clone task group"))
-	sb.WriteString("\n")
-	sb.WriteString(row("s", "Generate .sln"))
-	sb.WriteString("\n")
-	sb.WriteString(row("S", "Sync task (fetch + rebase)"))
+	sb.WriteString(row("S", "Open sync strategy selection"))
 	sb.WriteString("\n")
 	sb.WriteString(row("P", "Push task (git push)"))
 	sb.WriteString("\n")
-	sb.WriteString(row(";", "Run shell command in task dir"))
+	sb.WriteString(row("R", "Open <taskID>.sln in Rider"))
+	sb.WriteString("\n")
+	sb.WriteString(row(";", "Run shell command in selected task directory"))
 	sb.WriteString("\n")
 	sb.WriteString(row(",", "Show effective config"))
 	sb.WriteString("\n")
@@ -75,7 +72,7 @@ func (h *HelpOverlay) View() string {
 	sb.WriteString("\n")
 	sb.WriteString(row("Enter", "View services (opens Services panel)"))
 	sb.WriteString("\n")
-	sb.WriteString(row("r", "Refresh"))
+	sb.WriteString(row("r", "Refresh tasks and repository cache"))
 	sb.WriteString("\n\n")
 
 	sb.WriteString(sectionStyle.Render("Services Panel:"))
@@ -83,6 +80,12 @@ func (h *HelpOverlay) View() string {
 	sb.WriteString(row("a", "Add service to task"))
 	sb.WriteString("\n")
 	sb.WriteString(row("p", "Push service (git push -u)"))
+	sb.WriteString("\n")
+	sb.WriteString(row("d/Del", "Remove service from task"))
+	sb.WriteString("\n")
+	sb.WriteString(row("Ctrl+s", "Stash service changes"))
+	sb.WriteString("\n")
+	sb.WriteString(row("Ctrl+u", "Unstash service changes"))
 	sb.WriteString("\n")
 	sb.WriteString(row("Esc", "Back to tasks"))
 	sb.WriteString("\n\n")

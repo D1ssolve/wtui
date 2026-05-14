@@ -11,8 +11,6 @@ import (
 	"github.com/diss0x/wtui/internal/domain"
 )
 
-// svcColor* are aliases to the shared panel palette defined in theme.go,
-// kept for readability at call sites.
 const (
 	svcColorNormal = colorNormal
 	svcColorDim    = colorDim
@@ -41,7 +39,6 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	}
 	svc := si.service
 
-	// Stale services: show a [STALE] badge and skip git details.
 	if svc.Stale {
 		staleStyle := lipgloss.NewStyle().Bold(true).Foreground(svcColorDirty)
 		dimStyle := lipgloss.NewStyle().Foreground(svcColorDim)
@@ -77,12 +74,11 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		branchInfo = fmt.Sprintf("%s ← %s", svc.Branch, svc.BaseBranch)
 	}
 
-	// Append ↑N ↓N badges when non-zero to show ahead/behind status.
 	dimStyle := lipgloss.NewStyle().Foreground(svcColorDim)
 	aheadBehindSuffix := ""
 	if svc.Ahead > 0 || svc.Behind > 0 {
-		aheadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399"))  // green for ahead
-		behindStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F87171")) // red for behind
+		aheadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399"))
+		behindStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F87171"))
 		aheadBehindSuffix = fmt.Sprintf("  %s %s",
 			aheadStyle.Render(fmt.Sprintf("↑%d", svc.Ahead)),
 			behindStyle.Render(fmt.Sprintf("↓%d", svc.Behind)),
@@ -182,7 +178,7 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Handle filter mode first
+
 		if p.list.FilterState() == list.Filtering {
 			switch msg.String() {
 			case "esc":
@@ -269,30 +265,30 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			}
 
 		case "h":
-			// Go to previous page if not on the first page
+
 			if p.list.Paginator.Page > 0 {
 				p.list.Paginator.PrevPage()
-				// Set cursor to first item on new page
+
 				p.list.Select(p.list.Paginator.Page * p.list.Paginator.PerPage)
 			}
 			return p, nil
 
 		case "l":
-			// Go to next page if not on the last page
+
 			if p.list.Paginator.Page < p.list.Paginator.TotalPages-1 {
 				p.list.Paginator.NextPage()
-				// Set cursor to first item on new page
+
 				p.list.Select(p.list.Paginator.Page * p.list.Paginator.PerPage)
 			}
 			return p, nil
 
 		case "f":
-			// Toggle filter mode: enter if not filtering, exit if filtering
+
 			if p.list.FilterState() == list.Filtering {
 				p.list.ResetFilter()
 				return p, nil
 			}
-			// Enter filter mode by sending '/' key to the list (list uses '/' as filter key)
+
 			filterKey := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
 			var cmd tea.Cmd
 			p.list, cmd = p.list.Update(filterKey)
