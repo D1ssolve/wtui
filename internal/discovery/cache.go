@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/diss0x/wtui/internal/domain"
@@ -25,6 +26,18 @@ func NewCached(wrapped repoResolver) *CachedDiscoverer {
 }
 
 func (c *CachedDiscoverer) Resolve(ctx context.Context, token string) (string, error) {
+	c.mu.Lock()
+	if c.loaded {
+		repos := c.repos
+		c.mu.Unlock()
+		for _, r := range repos {
+			if r.Name == token {
+				return r.Path, nil
+			}
+		}
+		return "", fmt.Errorf("%w: %s", errServiceNotFound, token)
+	}
+	c.mu.Unlock()
 	return c.wrapped.Resolve(ctx, token)
 }
 

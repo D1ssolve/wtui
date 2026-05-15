@@ -219,3 +219,47 @@ func TestCachedDiscovererResolveDelegatesToWrappedResolver(t *testing.T) {
 	}
 }
 
+func TestCachedDiscovererResolveUsesFindAllCache(t *testing.T) {
+	repos := []domain.Repo{
+		{Name: "api", Path: "/repo/api"},
+		{Name: "web", Path: "/repo/web"},
+	}
+	wrapped := &fakeResolver{repos: repos, resolvePath: "/repo/fallback"}
+	cached := NewCached(wrapped)
+
+	if _, err := cached.FindAll(context.Background()); err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+
+	got, err := cached.Resolve(context.Background(), "api")
+	if err != nil {
+		t.Fatalf("Resolve from cache: %v", err)
+	}
+	if got != "/repo/api" {
+		t.Fatalf("Resolve from cache got %q, want %q", got, "/repo/api")
+	}
+	if wrapped.resolveCalls != 0 {
+		t.Fatalf("Resolve should not call wrapped when cache is loaded, calls=%d", wrapped.resolveCalls)
+	}
+
+	_, err = cached.Resolve(context.Background(), "missing")
+	if err == nil {
+		t.Fatal("Resolve for missing token should return error")
+	}
+}
+
+func TestCachedDiscovererResolveFallsBackWhenCacheNotLoaded(t *testing.T) {
+	wrapped := &fakeResolver{resolvePath: "/repo/api"}
+	cached := NewCached(wrapped)
+
+	got, err := cached.Resolve(context.Background(), "api")
+	if err != nil {
+		t.Fatalf("Resolve fallback: %v", err)
+	}
+	if got != "/repo/api" {
+		t.Fatalf("Resolve fallback got %q, want %q", got, "/repo/api")
+	}
+	if wrapped.resolveCalls != 1 {
+		t.Fatalf("Resolve fallback should call wrapped once, calls=%d", wrapped.resolveCalls)
+	}
+}
