@@ -217,6 +217,17 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			name := svc.Name
 			return p, func() tea.Msg { return PushServiceMsg{TaskID: tid, ServiceName: name} }
 
+		case "s":
+			svc := p.SelectedService()
+			if svc == nil {
+				return p, nil
+			}
+			tid := p.taskID
+			name := svc.Name
+			return p, func() tea.Msg {
+				return OpenSyncServiceStrategyDialogMsg{TaskID: tid, ServiceName: name}
+			}
+
 		case "ctrl+s":
 			svc := p.SelectedService()
 			if svc == nil {
@@ -225,7 +236,7 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			tid := p.taskID
 			name := svc.Name
 			return p, func() tea.Msg {
-				return StashServiceMsg{TaskID: tid, ServiceName: name, Pop: false}
+				return OpenStashDialogMsg{TaskID: tid, ServiceName: name, Pop: false}
 			}
 
 		case "ctrl+u":
@@ -236,7 +247,7 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			tid := p.taskID
 			name := svc.Name
 			return p, func() tea.Msg {
-				return StashServiceMsg{TaskID: tid, ServiceName: name, Pop: true}
+				return OpenStashDialogMsg{TaskID: tid, ServiceName: name, Pop: true}
 			}
 
 		case "esc":

@@ -52,7 +52,7 @@ type Client interface {
 
 	Push(ctx context.Context, worktreePath string, lineCh chan<- string) error
 
-	Stash(ctx context.Context, worktreePath string, pop bool) error
+Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error
 
 	DeleteBranch(ctx context.Context, repoPath, branch string) error
 }
@@ -370,10 +370,14 @@ func (c *CommandClient) Push(ctx context.Context, worktreePath string, lineCh ch
 	return nil
 }
 
-func (c *CommandClient) Stash(ctx context.Context, worktreePath string, pop bool) error {
+func (c *CommandClient) Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error {
 	args := []string{"-C", worktreePath, "stash"}
 	if pop {
 		args = append(args, "pop")
+	} else {
+		if includeUntracked {
+			args = append(args, "--include-untracked")
+		}
 	}
 	_, err := c.execGit(ctx, args...)
 	return err

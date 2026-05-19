@@ -83,6 +83,8 @@ func (h *HelpOverlay) View() string {
 	sb.WriteString("\n")
 	sb.WriteString(row("p", "Push service (git push -u)"))
 	sb.WriteString("\n")
+	sb.WriteString(row("s", "Sync service (fetch + merge/rebase)"))
+	sb.WriteString("\n")
 	sb.WriteString(row("d/Del", "Remove service from task"))
 	sb.WriteString("\n")
 	sb.WriteString(row("Ctrl+s", "Stash service changes"))

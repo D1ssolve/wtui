@@ -262,6 +262,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = modal.NewSyncStrategyDialog(msg.TaskID)
 		return m, nil
 
+	case panels.OpenSyncServiceStrategyDialogMsg:
+		m.modal = modal.NewSyncServiceStrategyDialog(msg.TaskID, msg.ServiceName)
+		return m, nil
+
 	case panels.OpenConfigModalMsg:
 		m.modal = modal.NewConfigModal(m.cfg)
 		return m, nil
@@ -283,7 +287,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.opRunning = true
 		m.outputPanel.AppendLine(op + " service " + msg.ServiceName + " for task " + msg.TaskID + "...")
-		return m, tea.Batch(stashServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Pop), m.spinner.Tick)
+		return m, tea.Batch(stashServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Pop, false), m.spinner.Tick)
+
+	case panels.OpenStashDialogMsg:
+		m.modal = modal.NewStashDialog(msg.TaskID, msg.ServiceName, msg.Pop)
+		return m, nil
+
+	case modal.SubmitStashMsg:
+		m.modal = nil
+		op := "Stashing"
+		if msg.Pop {
+			op = "Unstashing"
+		}
+		untracked := ""
+		if msg.IncludeUntracked {
+			untracked = " (including untracked)"
+		}
+		m.opRunning = true
+		m.outputPanel.AppendLine(op + " service " + msg.ServiceName + " for task " + msg.TaskID + untracked + "...")
+		return m, tea.Batch(stashServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Pop, msg.IncludeUntracked), m.spinner.Tick)
 
 	case panels.OpenRemoveServiceDialogMsg:
 		m.modal = modal.NewRemoveServiceDialog(msg.TaskID, msg.ServiceName, msg.BranchName)
@@ -307,6 +329,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = true
 		m.outputPanel.AppendLine("Syncing task " + msg.TaskID + " with " + msg.Strategy.String() + " strategy...")
 		return m, tea.Batch(syncTaskCmd(m.mgr, msg.TaskID, msg.Strategy), m.spinner.Tick)
+
+	case modal.SubmitSyncServiceStrategyMsg:
+		m.modal = nil
+		if msg.Strategy == task.SyncStrategyNoop {
+			m.outputPanel.AppendLine("Sync cancelled for service " + msg.ServiceName + ".")
+			return m, nil
+		}
+		m.opRunning = true
+		m.outputPanel.AppendLine("Syncing service " + msg.ServiceName + " with " + msg.Strategy.String() + " strategy...")
+		return m, tea.Batch(syncServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Strategy), m.spinner.Tick)
 
 	case panels.RiderTaskMsg:
 		m.opRunning = true

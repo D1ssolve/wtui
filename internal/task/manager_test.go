@@ -126,8 +126,9 @@ type removeWorktreeCall struct {
 }
 
 type stashCall struct {
-	WorktreePath string
-	Pop          bool
+	WorktreePath    string
+	Pop             bool
+	IncludeUntracked bool
 }
 
 type rebaseCall struct {
@@ -257,12 +258,13 @@ func (m *mockGitClient) Push(_ context.Context, path string, lineCh chan<- strin
 	return m.pushErr
 }
 
-func (m *mockGitClient) Stash(_ context.Context, worktreePath string, pop bool) error {
+func (m *mockGitClient) Stash(_ context.Context, worktreePath string, pop bool, includeUntracked bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stashCalls = append(m.stashCalls, stashCall{
-		WorktreePath: worktreePath,
-		Pop:          pop,
+		WorktreePath:    worktreePath,
+		Pop:             pop,
+		IncludeUntracked: includeUntracked,
 	})
 	return m.stashErr
 }
@@ -939,6 +941,9 @@ func TestSyncTask_FetchFailureReturnsFirstError(t *testing.T) {
 			}
 			return nil
 		},
+		revListAheadBehindFn: func(path, originBranch string) (int, int, error) {
+			return 0, 3, nil // behind upstream, needs sync
+		},
 	}
 	gitMock.listWorktreesRes = []git.WorktreeEntry{
 		{Path: servicePaths["svc-a"], Branch: "refs/heads/feature/IN-SYNC"},
@@ -1020,6 +1025,9 @@ func TestSyncTask_RebasesOntoConfigBaseBranch(t *testing.T) {
 			{Path: servicePaths["svc-x"], Branch: "refs/heads/feature/IN-BB"},
 			{Path: servicePaths["svc-y"], Branch: "refs/heads/feature/IN-BB"},
 		},
+		revListAheadBehindFn: func(path, originBranch string) (int, int, error) {
+			return 0, 3, nil // behind upstream, needs sync
+		},
 	}
 
 	cfg := &config.Config{
@@ -1082,6 +1090,9 @@ func TestSyncTask_RebasesOntoMainWhenBaseBranchEmpty(t *testing.T) {
 		},
 		listWorktreesRes: []git.WorktreeEntry{
 			{Path: svcPath, Branch: "refs/heads/feature/IN-EMPTY-BB"},
+		},
+		revListAheadBehindFn: func(path, originBranch string) (int, int, error) {
+			return 0, 3, nil // behind upstream, needs sync
 		},
 	}
 
@@ -1201,7 +1212,7 @@ func TestStashService_Stash(t *testing.T) {
 	gitMock := &mockGitClient{}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	if err := mgr.StashService(context.Background(), "IN-STASH", "svcA", false); err != nil {
+	if err := mgr.StashService(context.Background(), "IN-STASH", "svcA", false, false); err != nil {
 		t.Fatalf("StashService returned unexpected error: %v", err)
 	}
 
@@ -1231,7 +1242,7 @@ func TestStashService_Pop(t *testing.T) {
 	gitMock := &mockGitClient{}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	if err := mgr.StashService(context.Background(), "IN-POP", "svcA", true); err != nil {
+	if err := mgr.StashService(context.Background(), "IN-POP", "svcA", true, false); err != nil {
 		t.Fatalf("StashService returned unexpected error: %v", err)
 	}
 
@@ -1260,7 +1271,7 @@ func TestStashService_ErrServiceNotFound(t *testing.T) {
 
 	mgr := newTestManager(t, tasksRoot, rootDir, &mockGitClient{})
 
-	err := mgr.StashService(context.Background(), "IN-MISSING-SVC", "svcA", false)
+	err := mgr.StashService(context.Background(), "IN-MISSING-SVC", "svcA", false, false)
 	if !errors.Is(err, ErrServiceNotFound) {
 		t.Errorf("StashService error = %v, want ErrServiceNotFound", err)
 	}
@@ -1402,6 +1413,9 @@ func TestSyncTask_MergesWithMergeStrategy(t *testing.T) {
 		listWorktreesRes: []git.WorktreeEntry{
 			{Path: svcPath, Branch: "refs/heads/feature/IN-MERGE"},
 		},
+		revListAheadBehindFn: func(path, originBranch string) (int, int, error) {
+			return 0, 3, nil // behind upstream, needs sync
+		},
 	}
 
 	cfg := &config.Config{
@@ -1471,6 +1485,9 @@ func TestSyncTask_RebasesWithRebaseStrategy(t *testing.T) {
 		listWorktreesRes: []git.WorktreeEntry{
 			{Path: svcPath, Branch: "refs/heads/feature/IN-REBASE"},
 		},
+		revListAheadBehindFn: func(path, originBranch string) (int, int, error) {
+			return 0, 3, nil // behind upstream, needs sync
+		},
 	}
 
 	cfg := &config.Config{
@@ -1512,6 +1529,195 @@ func TestSyncTask_RebasesWithRebaseStrategy(t *testing.T) {
 
 	if len(mergeCalls) != 0 {
 		t.Errorf("Merge call count = %d, want 0 (rebase strategy should not call merge)", len(mergeCalls))
+	}
+}
+
+func TestSyncTask_SkipsUpToDateService(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-SKIP-UP2DATE")
+
+	svcPath := filepath.Join(taskDir, "svc-ok")
+	if err := os.MkdirAll(svcPath, 0o755); err != nil {
+		t.Fatalf("setup: create service dir: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-ok", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: create fake common dir: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == svcPath {
+				return fakeCommonDir, nil
+			}
+			return "", errors.New("not a git worktree")
+		},
+		listWorktreesRes: []git.WorktreeEntry{
+			{Path: svcPath, Branch: "refs/heads/feature/IN-SKIP-UP2DATE"},
+		},
+		revListAheadBehindFn: func(path, originBranch string) (int, int, error) {
+			return 0, 0, nil // already up to date
+		},
+	}
+
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+	lineCh := make(chan string, 16)
+
+	if err := mgr.SyncTask(context.Background(), "IN-SKIP-UP2DATE", SyncStrategyMerge, lineCh); err != nil {
+		t.Fatalf("SyncTask returned unexpected error: %v", err)
+	}
+
+	var lines []string
+	for line := range lineCh {
+		lines = append(lines, line)
+	}
+
+	assertContainsLine(t, lines, "[svc-ok] fetching...")
+	assertContainsLine(t, lines, "[svc-ok] already up to date.")
+
+	gitMock.mu.Lock()
+	mergeCalls := gitMock.mergeCalls
+	rebaseCalls := gitMock.rebaseCalls
+	gitMock.mu.Unlock()
+
+	if len(mergeCalls) != 0 {
+		t.Errorf("Merge call count = %d, want 0 (up-to-date service should not be merged)", len(mergeCalls))
+	}
+	if len(rebaseCalls) != 0 {
+		t.Errorf("Rebase call count = %d, want 0 (up-to-date service should not be rebased)", len(rebaseCalls))
+	}
+}
+
+func TestSyncTask_SkipsDirtyService(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-SKIP-DIRTY")
+
+	svcPath := filepath.Join(taskDir, "svc-dirty")
+	if err := os.MkdirAll(svcPath, 0o755); err != nil {
+		t.Fatalf("setup: create service dir: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-dirty", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: create fake common dir: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == svcPath {
+				return fakeCommonDir, nil
+			}
+			return "", errors.New("not a git worktree")
+		},
+		listWorktreesRes: []git.WorktreeEntry{
+			{Path: svcPath, Branch: "refs/heads/feature/IN-SKIP-DIRTY"},
+		},
+		isDirtyRes: true, // dirty working tree
+		revListAheadBehindFn: func(path, originBranch string) (int, int, error) {
+			return 0, 3, nil // behind upstream
+		},
+	}
+
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+	lineCh := make(chan string, 16)
+
+	if err := mgr.SyncTask(context.Background(), "IN-SKIP-DIRTY", SyncStrategyMerge, lineCh); err != nil {
+		t.Fatalf("SyncTask returned unexpected error: %v", err)
+	}
+
+	var lines []string
+	for line := range lineCh {
+		lines = append(lines, line)
+	}
+
+	assertContainsLine(t, lines, "[svc-dirty] dirty working tree, stash or commit first.")
+
+	gitMock.mu.Lock()
+	fetchCalls := gitMock.fetchCalls
+	mergeCalls := gitMock.mergeCalls
+	gitMock.mu.Unlock()
+
+	if len(fetchCalls) != 0 {
+		t.Errorf("Fetch call count = %d, want 0 (dirty service should not be fetched)", len(fetchCalls))
+	}
+	if len(mergeCalls) != 0 {
+		t.Errorf("Merge call count = %d, want 0 (dirty service should not be merged)", len(mergeCalls))
+	}
+}
+
+func TestSyncService_SkipsUpToDateService(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	worktreePath := filepath.Join(tasksRoot, "IN-SVC-UP2DATE", "svc-a")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	gitMock := &mockGitClient{}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	lineCh := make(chan string, 16)
+
+	if err := mgr.SyncService(context.Background(), "IN-SVC-UP2DATE", "svc-a", SyncStrategyMerge, lineCh); err != nil {
+		t.Fatalf("SyncService returned unexpected error: %v", err)
+	}
+
+	var lines []string
+	for line := range lineCh {
+		lines = append(lines, line)
+	}
+
+	assertContainsLine(t, lines, "[svc-a] fetching...")
+	assertContainsLine(t, lines, "[svc-a] already up to date.")
+
+	gitMock.mu.Lock()
+	mergeCalls := gitMock.mergeCalls
+	gitMock.mu.Unlock()
+
+	if len(mergeCalls) != 0 {
+		t.Errorf("Merge call count = %d, want 0 (up-to-date service should not be merged)", len(mergeCalls))
+	}
+}
+
+func TestSyncService_SkipsDirtyService(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	worktreePath := filepath.Join(tasksRoot, "IN-SVC-DIRTY", "svc-a")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		isDirtyRes: true,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	lineCh := make(chan string, 16)
+
+	if err := mgr.SyncService(context.Background(), "IN-SVC-DIRTY", "svc-a", SyncStrategyRebase, lineCh); err != nil {
+		t.Fatalf("SyncService returned unexpected error: %v", err)
+	}
+
+	var lines []string
+	for line := range lineCh {
+		lines = append(lines, line)
+	}
+
+	assertContainsLine(t, lines, "[svc-a] dirty working tree, stash or commit first.")
+
+	gitMock.mu.Lock()
+	fetchCalls := gitMock.fetchCalls
+	rebaseCalls := gitMock.rebaseCalls
+	gitMock.mu.Unlock()
+
+	if len(fetchCalls) != 0 {
+		t.Errorf("Fetch call count = %d, want 0 (dirty service should not be fetched)", len(fetchCalls))
+	}
+	if len(rebaseCalls) != 0 {
+		t.Errorf("Rebase call count = %d, want 0 (dirty service should not be rebased)", len(rebaseCalls))
 	}
 }
 

@@ -64,11 +64,13 @@ type Manager interface {
 
 	SyncTask(ctx context.Context, taskID string, strategy SyncStrategy, lineCh chan<- string) error
 
+	SyncService(ctx context.Context, taskID, serviceName string, strategy SyncStrategy, lineCh chan<- string) error
+
 	PushTask(ctx context.Context, taskID string, lineCh chan<- string) error
 
 	PushService(ctx context.Context, taskID, serviceName string, lineCh chan<- string) error
 
-	StashService(ctx context.Context, taskID, serviceName string, pop bool) error
+	StashService(ctx context.Context, taskID, serviceName string, pop bool, includeUntracked bool) error
 
 	RemoveService(ctx context.Context, taskID string, serviceName string, removeBranch bool) error
 }

@@ -77,7 +77,7 @@ func (m *mockGitClient) Push(_ context.Context, _ string, _ chan<- string) error
 	panic("mockGitClient.Push called unexpectedly")
 }
 
-func (m *mockGitClient) Stash(_ context.Context, _ string, _ bool) error {
+func (m *mockGitClient) Stash(_ context.Context, _ string, _ bool, _ bool) error {
 	panic("mockGitClient.Stash called unexpectedly")
 }
 

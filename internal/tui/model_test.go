@@ -49,6 +49,11 @@ func (m *mockManager) SyncTask(_ context.Context, _ string, _ task.SyncStrategy,
 	return nil
 }
 
+func (m *mockManager) SyncService(_ context.Context, _, _ string, _ task.SyncStrategy, lineCh chan<- string) error {
+	close(lineCh)
+	return nil
+}
+
 func (m *mockManager) PushTask(_ context.Context, _ string, lineCh chan<- string) error {
 	close(lineCh)
 	return nil
@@ -56,7 +61,7 @@ func (m *mockManager) PushTask(_ context.Context, _ string, lineCh chan<- string
 
 func (m *mockManager) PushService(_ context.Context, _, _ string, _ chan<- string) error { return nil }
 
-func (m *mockManager) StashService(_ context.Context, _, _ string, _ bool) error { return nil }
+func (m *mockManager) StashService(_ context.Context, _, _ string, _, _ bool) error { return nil }
 
 func (m *mockManager) RemoveService(_ context.Context, _, _ string, _ bool) error { return nil }
 

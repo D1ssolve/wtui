@@ -194,11 +194,23 @@ func pushServiceCmd(mgr task.Manager, taskID, serviceName string) tea.Cmd {
 	)
 }
 
-func stashServiceCmd(mgr task.Manager, taskID, serviceName string, pop bool) tea.Cmd {
+func syncServiceCmd(mgr task.Manager, taskID, serviceName string, strategy task.SyncStrategy) tea.Cmd {
+	statusCh := make(chan string, 32)
+	return tea.Batch(
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
+			defer cancel()
+			return CommandDoneMsg{Err: mgr.SyncService(ctx, taskID, serviceName, strategy, statusCh)}
+		},
+		readNextLine(statusCh),
+	)
+}
+
+func stashServiceCmd(mgr task.Manager, taskID, serviceName string, pop bool, includeUntracked bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
 		defer cancel()
-		return CommandDoneMsg{Err: mgr.StashService(ctx, taskID, serviceName, pop)}
+		return CommandDoneMsg{Err: mgr.StashService(ctx, taskID, serviceName, pop, includeUntracked)}
 	}
 }
 

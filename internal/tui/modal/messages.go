@@ -33,6 +33,12 @@ type SubmitSyncStrategyMsg struct {
 	Strategy task.SyncStrategy
 }
 
+type SubmitSyncServiceStrategyMsg struct {
+	TaskID      string
+	ServiceName string
+	Strategy    task.SyncStrategy
+}
+
 type SubmitRemoteBranchStrategyMsg struct {
 	TaskID       string
 	ServiceName  string
@@ -45,4 +51,11 @@ type RemoteBranchConflictMsg struct {
 	ServiceName string
 	BranchName  string
 	RepoPath    string
+}
+
+type SubmitStashMsg struct {
+	TaskID           string
+	ServiceName      string
+	Pop              bool
+	IncludeUntracked bool
 }

@@ -276,7 +276,7 @@ func TestServicesPanel_SelectedService_ReturnsSecondAfterMove(t *testing.T) {
 	}
 }
 
-func TestServicesPanel_CtrlS_EmitsStashServiceMsg(t *testing.T) {
+func TestServicesPanel_CtrlS_EmitsOpenStashDialogMsg(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection")
 	p.SetServices(tid, svcs)
@@ -287,9 +287,9 @@ func TestServicesPanel_CtrlS_EmitsStashServiceMsg(t *testing.T) {
 		t.Fatal("ctrl+s should return a cmd")
 	}
 	msg := cmd()
-	got, ok := msg.(StashServiceMsg)
+	got, ok := msg.(OpenStashDialogMsg)
 	if !ok {
-		t.Fatalf("expected StashServiceMsg, got %T", msg)
+		t.Fatalf("expected OpenStashDialogMsg, got %T", msg)
 	}
 	if got.TaskID != "IN-001" {
 		t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
@@ -302,7 +302,7 @@ func TestServicesPanel_CtrlS_EmitsStashServiceMsg(t *testing.T) {
 	}
 }
 
-func TestServicesPanel_CtrlU_EmitsStashServiceMsgPop(t *testing.T) {
+func TestServicesPanel_CtrlU_EmitsOpenStashDialogMsgPop(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection")
 	p.SetServices(tid, svcs)
@@ -313,9 +313,9 @@ func TestServicesPanel_CtrlU_EmitsStashServiceMsgPop(t *testing.T) {
 		t.Fatal("ctrl+u should return a cmd")
 	}
 	msg := cmd()
-	got, ok := msg.(StashServiceMsg)
+	got, ok := msg.(OpenStashDialogMsg)
 	if !ok {
-		t.Fatalf("expected StashServiceMsg, got %T", msg)
+		t.Fatalf("expected OpenStashDialogMsg, got %T", msg)
 	}
 	if got.TaskID != "IN-001" {
 		t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
@@ -335,8 +335,8 @@ func TestServicesPanel_CtrlS_NoServiceSelected_ReturnsNil(t *testing.T) {
 	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if cmd != nil {
 		msg := cmd()
-		if _, ok := msg.(StashServiceMsg); ok {
-			t.Error("ctrl+s with no service should not emit StashServiceMsg")
+		if _, ok := msg.(OpenStashDialogMsg); ok {
+			t.Error("ctrl+s with no service should not emit OpenStashDialogMsg")
 		}
 	}
 }
@@ -348,8 +348,8 @@ func TestServicesPanel_CtrlU_NoServiceSelected_ReturnsNil(t *testing.T) {
 	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
 	if cmd != nil {
 		msg := cmd()
-		if _, ok := msg.(StashServiceMsg); ok {
-			t.Error("ctrl+u with no service should not emit StashServiceMsg")
+		if _, ok := msg.(OpenStashDialogMsg); ok {
+			t.Error("ctrl+u with no service should not emit OpenStashDialogMsg")
 		}
 	}
 }

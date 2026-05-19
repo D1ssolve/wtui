@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-func (m *manager) StashService(ctx context.Context, taskID, serviceName string, pop bool) error {
+func (m *manager) StashService(ctx context.Context, taskID, serviceName string, pop bool, includeUntracked bool) error {
 	if err := validateTaskID(taskID); err != nil {
 		return err
 	}
@@ -19,7 +19,7 @@ func (m *manager) StashService(ctx context.Context, taskID, serviceName string, 
 		return fmt.Errorf("stash service: stat worktree %s: %w", worktreePath, err)
 	}
 
-	if err := m.git.Stash(ctx, worktreePath, pop); err != nil {
+	if err := m.git.Stash(ctx, worktreePath, pop, includeUntracked); err != nil {
 		op := "stash"
 		if pop {
 			op = "stash pop"

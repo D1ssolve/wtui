@@ -31,6 +31,11 @@ type CodeWorkspaceTaskMsg struct {
 
 type OpenSyncStrategyDialogMsg struct{ TaskID string }
 
+type OpenSyncServiceStrategyDialogMsg struct {
+	TaskID      string
+	ServiceName string
+}
+
 type PushTaskMsg struct{ TaskID string }
 
 type PushServiceMsg struct {
@@ -39,6 +44,12 @@ type PushServiceMsg struct {
 }
 
 type StashServiceMsg struct {
+	TaskID      string
+	ServiceName string
+	Pop         bool
+}
+
+type OpenStashDialogMsg struct {
 	TaskID      string
 	ServiceName string
 	Pop         bool

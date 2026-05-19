@@ -50,6 +50,12 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 		return nil
 	}
 
+	baseBranch := m.cfg.BaseBranch
+	if baseBranch == "" {
+		baseBranch = "develop"
+	}
+	upstream := "origin/" + baseBranch
+
 	var (
 		wg       sync.WaitGroup
 		mu       sync.Mutex
@@ -58,6 +64,18 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 
 	for _, svc := range services {
 		wg.Go(func() {
+			// Skip stale services (worktree path missing)
+			if svc.Stale {
+				sendLine(ctx, lineCh, fmt.Sprintf("[%s] worktree missing, skipping.", svc.Name))
+				return
+			}
+
+			// Skip dirty services — merge/rebase will fail on dirty working tree
+			if svc.IsDirty {
+				sendLine(ctx, lineCh, fmt.Sprintf("[%s] dirty working tree, stash or commit first.", svc.Name))
+				return
+			}
+
 			if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] fetching...", svc.Name)) {
 				mu.Lock()
 				if firstErr == nil {
@@ -77,11 +95,15 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 				return
 			}
 
-			baseBranch := m.cfg.BaseBranch
-			if baseBranch == "" {
-				baseBranch = "develop"
+			// Re-check behind count after fetch
+			_, behind, abErr := m.git.RevListAheadBehind(ctx, svc.WorktreePath, upstream)
+			if abErr != nil {
+				// Can't determine status, proceed with merge/rebase anyway
+				sendLine(ctx, lineCh, fmt.Sprintf("[%s] could not determine ahead/behind, proceeding...", svc.Name))
+			} else if behind == 0 {
+				sendLine(ctx, lineCh, fmt.Sprintf("[%s] already up to date.", svc.Name))
+				return
 			}
-			upstream := "origin/" + baseBranch
 
 			switch strategy {
 			case SyncStrategyMerge:

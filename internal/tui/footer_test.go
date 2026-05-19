@@ -47,6 +47,7 @@ func TestRenderFooter_FocusServices_IncludesServiceActionHints(t *testing.T) {
 	footer := renderFooter(m)
 	for _, want := range []string{
 		"[a] add service",
+		"[s] sync service",
 		"[p] push service",
 		"[d] remove service",
 		"[ctrl+s] stash",
