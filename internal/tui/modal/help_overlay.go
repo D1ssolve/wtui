@@ -56,6 +56,8 @@ func (h *HelpOverlay) View() string {
 	sb.WriteString("\n")
 	sb.WriteString(row("i", "Init new task group"))
 	sb.WriteString("\n")
+	sb.WriteString(row("c", "Clone selected task group"))
+	sb.WriteString("\n")
 	sb.WriteString(row("d/Del", "Remove task group"))
 	sb.WriteString("\n")
 	sb.WriteString(row("S", "Open sync strategy selection"))

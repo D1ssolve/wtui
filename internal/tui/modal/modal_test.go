@@ -298,6 +298,7 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		"Output Panel",
 		"Global",
 		"Init new task group",
+		"Clone selected task group",
 		"Remove task group",
 		"Add service to task",
 		"Open <taskID>.sln in Rider",
@@ -730,6 +731,77 @@ func TestInitDialog_RepoPicker_Filter_SubmitIncludesAllChecked(t *testing.T) {
 
 	if len(sub.Services) != 2 {
 		t.Errorf("expected 2 services (api-gateway+backend-app), got %d: %v", len(sub.Services), sub.Services)
+	}
+}
+
+func TestCloneInitDialog_SubmitUsesSourceBranchAsBaseBranch(t *testing.T) {
+	services := []domain.Service{
+		{Name: "api", Branch: "feature/SOURCE-1"},
+		{Name: "worker", Branch: "feature/SOURCE-1"},
+	}
+	d := NewCloneInitDialog("SOURCE-1", "feature/", services, 80, 24)
+	d.fields[0].SetValue("TARGET-1")
+	d.focusField(3)
+
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("Enter on base branch field must submit in clone mode")
+	}
+
+	sub, ok := execCmd(cmd).(SubmitInitMsg)
+	if !ok {
+		t.Fatalf("expected SubmitInitMsg, got %T", execCmd(cmd))
+	}
+	if sub.TaskID != "TARGET-1" {
+		t.Errorf("TaskID: expected TARGET-1, got %q", sub.TaskID)
+	}
+	if sub.BaseBranch != "feature/SOURCE-1" {
+		t.Errorf("BaseBranch: expected source branch, got %q", sub.BaseBranch)
+	}
+	if len(sub.Services) != 2 {
+		t.Fatalf("expected 2 selected services, got %d: %v", len(sub.Services), sub.Services)
+	}
+}
+
+func TestCloneInitDialog_MismatchedSelectedBranchesBlocksSubmit(t *testing.T) {
+	services := []domain.Service{
+		{Name: "api", Branch: "feature/SOURCE-1"},
+		{Name: "worker", Branch: "feature/OTHER"},
+	}
+	d := NewCloneInitDialog("SOURCE-1", "feature/", services, 80, 24)
+	d.fields[0].SetValue("TARGET-1")
+	d.focusField(3)
+
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd != nil {
+		t.Fatal("mismatched selected branches must not submit")
+	}
+	if !strings.Contains(d.errorMsg, "selected source services must share one branch") {
+		t.Fatalf("expected clear mismatch error, got %q", d.errorMsg)
+	}
+}
+
+func TestCloneInitDialog_AllowsSubsetWithUniformBranch(t *testing.T) {
+	services := []domain.Service{
+		{Name: "api", Branch: "feature/SOURCE-1"},
+		{Name: "worker", Branch: "feature/OTHER"},
+	}
+	d := NewCloneInitDialog("SOURCE-1", "feature/", services, 80, 24)
+	d.fields[0].SetValue("TARGET-1")
+	d.repoList.Select(1)
+	d.toggleSelectedRepo()
+	d.focusField(3)
+
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("uniform selected subset should submit")
+	}
+	sub := execCmd(cmd).(SubmitInitMsg)
+	if sub.BaseBranch != "feature/SOURCE-1" {
+		t.Errorf("BaseBranch: expected selected source branch feature/SOURCE-1, got %q", sub.BaseBranch)
+	}
+	if len(sub.Services) != 1 || sub.Services[0] != "api" {
+		t.Fatalf("expected only api selected, got %v", sub.Services)
 	}
 }
 

@@ -25,6 +25,12 @@ type ServicesLoadedMsg struct {
 	Services []domain.Service
 }
 
+type CloneSourceServicesLoadedMsg struct {
+	SourceTaskID string
+	Services     []domain.Service
+	Err          error
+}
+
 type OutputLineMsg struct {
 	Line string
 	Next tea.Cmd
@@ -64,6 +70,15 @@ func loadServicesCmd(mgr task.Manager, taskID string) tea.Cmd {
 			return CommandDoneMsg{Err: err}
 		}
 		return ServicesLoadedMsg{TaskID: taskID, Services: services}
+	}
+}
+
+func loadCloneSourceServicesCmd(mgr task.Manager, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
+		defer cancel()
+		services, err := mgr.ListServices(ctx, taskID)
+		return CloneSourceServicesLoadedMsg{SourceTaskID: taskID, Services: services, Err: err}
 	}
 }
 

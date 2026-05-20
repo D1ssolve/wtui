@@ -209,6 +209,14 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 		case "i":
 			return p, func() tea.Msg { return OpenInitDialogMsg{} }
 
+		case "c":
+			task := p.SelectedTask()
+			if task == nil {
+				return p, nil
+			}
+			id := task.ID
+			return p, func() tea.Msg { return OpenCloneDialogMsg{TaskID: id} }
+
 		case "d", "delete":
 			task := p.SelectedTask()
 			if task == nil {

@@ -244,6 +244,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.initDialogPending = true
 		return m, loadReposCmd(m.mgr, false)
 
+	case panels.OpenCloneDialogMsg:
+		m.outputPanel.AppendLine("Loading source task " + msg.TaskID + " services for clone...")
+		return m, loadCloneSourceServicesCmd(m.mgr, msg.TaskID)
+
 	case panels.OpenAddServiceMsg:
 		if len(m.repos) == 0 {
 			pending := msg
@@ -465,6 +469,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ServicesLoadedMsg:
 		m.servicesPanel.SetServices(msg.TaskID, msg.Services)
+		return m, nil
+
+	case CloneSourceServicesLoadedMsg:
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Error: could not load source task " + msg.SourceTaskID + ": " + msg.Err.Error())
+			return m, nil
+		}
+		if len(msg.Services) == 0 {
+			m.outputPanel.AppendLine("Error: source task " + msg.SourceTaskID + " has no services to clone.")
+			return m, nil
+		}
+		m.modal = modal.NewCloneInitDialog(msg.SourceTaskID, m.cfg.BranchPrefix, msg.Services, m.width, m.height)
 		return m, nil
 
 	case ReposLoadedMsg:

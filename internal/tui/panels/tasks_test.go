@@ -220,6 +220,35 @@ func TestTasksPanel_KeyD_EmitsOpenRemoveDialogMsg(t *testing.T) {
 	}
 }
 
+func TestTasksPanel_KeyC_EmitsOpenCloneDialogMsg(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetTasks(makeTasks("IN-001"))
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("c"))
+	if cmd == nil {
+		t.Fatal("c key should return a cmd")
+	}
+	msg := cmd()
+	got, ok := msg.(OpenCloneDialogMsg)
+	if !ok {
+		t.Fatalf("expected OpenCloneDialogMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" {
+		t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
+	}
+}
+
+func TestTasksPanel_KeyC_EmptyList_NoOp(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("c"))
+	if cmd != nil {
+		t.Error("c on empty list should be a no-op")
+	}
+}
+
 func TestTasksPanel_KeyD_EmptyList_NoOp(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetFocused(true)

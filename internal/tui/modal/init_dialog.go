@@ -18,6 +18,8 @@ type InitDialog struct {
 	focusIndex          int
 	defaultBranchPrefix string
 	errorMsg            string
+	title               string
+	cloneSourceBranches map[string]string
 
 	terminalHeight int
 	terminalWidth  int
@@ -121,7 +123,37 @@ func NewInitDialog(defaultBranchPrefix string, repos []domain.Repo, termWidth, t
 	return d
 }
 
-func (d *InitDialog) Title() string { return "New Task" }
+func NewCloneInitDialog(sourceTaskID, defaultBranchPrefix string, services []domain.Service, termWidth, termHeight int) *InitDialog {
+	repos := make([]domain.Repo, 0, len(services))
+	branches := make(map[string]string, len(services))
+	for _, svc := range services {
+		repos = append(repos, domain.Repo{Name: svc.Name, Path: svc.RepoPath})
+		branches[svc.Name] = svc.Branch
+	}
+
+	d := NewInitDialog(defaultBranchPrefix, repos, termWidth, termHeight)
+	d.title = "Clone Task from " + sourceTaskID
+	d.cloneSourceBranches = branches
+	for i, it := range d.repoList.Items() {
+		if ri, ok := it.(repoPickerItem); ok {
+			ri.checked = true
+			d.repoList.SetItem(i, ri)
+		}
+	}
+	d.fields[3].SetValue(d.selectedCloneBranch())
+	if err := d.validateCloneSelection(); err != nil {
+		d.errorMsg = err.Error()
+	}
+	d.focusField(0)
+	return d
+}
+
+func (d *InitDialog) Title() string {
+	if d.title != "" {
+		return d.title
+	}
+	return "New Task"
+}
 
 func (d *InitDialog) SetTerminalSize(width, height int) {
 	d.terminalWidth = width
@@ -223,7 +255,16 @@ func (d *InitDialog) toggleSelectedRepo() tea.Cmd {
 		return nil
 	}
 	ri.checked = !ri.checked
-	return d.repoList.SetItem(globalIdx, ri)
+	cmd := d.repoList.SetItem(globalIdx, ri)
+	if d.cloneSourceBranches != nil {
+		d.fields[3].SetValue(d.selectedCloneBranch())
+		if err := d.validateCloneSelection(); err != nil {
+			d.errorMsg = err.Error()
+		} else {
+			d.errorMsg = ""
+		}
+	}
+	return cmd
 }
 
 func (d *InitDialog) View() string {
@@ -237,7 +278,7 @@ func (d *InitDialog) View() string {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(modalColorBorder)
-	sb.WriteString(titleStyle.Render("New Task"))
+	sb.WriteString(titleStyle.Render(d.Title()))
 	sb.WriteString("\n\n")
 
 	for i := range d.fields {
@@ -329,7 +370,59 @@ func (d *InitDialog) submit() tea.Cmd {
 		BranchPrefix: strings.TrimSpace(d.fields[2].Value()),
 		BaseBranch:   strings.TrimSpace(d.fields[3].Value()),
 	}
+	if d.cloneSourceBranches != nil {
+		if err := d.validateCloneSelection(); err != nil {
+			d.errorMsg = err.Error()
+			return nil
+		}
+		msg.BaseBranch = d.selectedCloneBranch()
+	}
 	return func() tea.Msg { return msg }
+}
+
+func (d *InitDialog) selectedCloneBranch() string {
+	if d.cloneSourceBranches == nil {
+		return ""
+	}
+	branch := ""
+	for _, it := range d.repoList.Items() {
+		ri, ok := it.(repoPickerItem)
+		if !ok || !ri.checked {
+			continue
+		}
+		if branch == "" {
+			branch = d.cloneSourceBranches[ri.name]
+		}
+	}
+	return branch
+}
+
+func (d *InitDialog) validateCloneSelection() error {
+	if d.cloneSourceBranches == nil {
+		return nil
+	}
+	branch := ""
+	for _, it := range d.repoList.Items() {
+		ri, ok := it.(repoPickerItem)
+		if !ok || !ri.checked {
+			continue
+		}
+		current := strings.TrimSpace(d.cloneSourceBranches[ri.name])
+		if current == "" {
+			return fmt.Errorf("selected source service %s has no branch", ri.name)
+		}
+		if branch == "" {
+			branch = current
+			continue
+		}
+		if current != branch {
+			return fmt.Errorf("selected source services must share one branch (found %q and %q)", branch, current)
+		}
+	}
+	if branch == "" {
+		return fmt.Errorf("select at least one source service")
+	}
+	return nil
 }
 
 func validateTaskID(taskID string) error {

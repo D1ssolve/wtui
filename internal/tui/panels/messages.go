@@ -6,6 +6,8 @@ type FocusTasksMsg struct{}
 
 type OpenInitDialogMsg struct{}
 
+type OpenCloneDialogMsg struct{ TaskID string }
+
 type OpenRemoveDialogMsg struct{ TaskID string }
 
 type OpenConfigModalMsg struct{}

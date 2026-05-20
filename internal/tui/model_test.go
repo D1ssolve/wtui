@@ -20,6 +20,7 @@ type mockManager struct {
 	listTasksErr       error
 	listServicesResult []domain.Service
 	listServicesErr    error
+	listServicesTaskID string
 	reposResult        []domain.Repo
 	reposErr           error
 	repoRefreshArgs    []bool
@@ -35,7 +36,8 @@ func (m *mockManager) List(_ context.Context) ([]domain.Task, error) {
 	return m.listTasksResult, m.listTasksErr
 }
 
-func (m *mockManager) ListServices(_ context.Context, _ string) ([]domain.Service, error) {
+func (m *mockManager) ListServices(_ context.Context, taskID string) ([]domain.Service, error) {
+	m.listServicesTaskID = taskID
 	return m.listServicesResult, m.listServicesErr
 }
 
@@ -90,6 +92,25 @@ func newTestModel(t *testing.T, mgr task.Manager) Model {
 func sendWindowSize(m Model, w, h int) Model {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	return updated.(Model)
+}
+
+func stripANSIForModel(s string) string {
+	var result strings.Builder
+	inEscape := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
 }
 
 func TestModelInit(t *testing.T) {
@@ -291,6 +312,75 @@ func TestUpdate_OpenInitDialogMsg_OpensInitDialog(t *testing.T) {
 	}
 	if _, ok := m.modal.(*modal.InitDialog); !ok {
 		t.Errorf("expected *modal.InitDialog, got %T", m.modal)
+	}
+}
+
+func TestUpdate_OpenCloneDialogMsg_LoadsSourceServices(t *testing.T) {
+	mgr := &mockManager{
+		listServicesResult: []domain.Service{{Name: "api", Branch: "feature/SOURCE-1"}},
+	}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(panels.OpenCloneDialogMsg{TaskID: "SOURCE-1"})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("OpenCloneDialogMsg must return cmd to load source services")
+	}
+	msg := cmd()
+	loaded, ok := msg.(CloneSourceServicesLoadedMsg)
+	if !ok {
+		t.Fatalf("expected CloneSourceServicesLoadedMsg, got %T", msg)
+	}
+	if loaded.SourceTaskID != "SOURCE-1" {
+		t.Errorf("SourceTaskID = %q, want SOURCE-1", loaded.SourceTaskID)
+	}
+	if mgr.listServicesTaskID != "SOURCE-1" {
+		t.Errorf("ListServices taskID = %q, want SOURCE-1", mgr.listServicesTaskID)
+	}
+	if !strings.Contains(m.outputPanel.View(), "Loading source task SOURCE-1 services for clone") {
+		t.Fatalf("output should mention loading clone source, got %q", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_CloneSourceServicesLoadedMsg_OpensCloneInitDialog(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, _ := m.Update(CloneSourceServicesLoadedMsg{
+		SourceTaskID: "SOURCE-1",
+		Services:     []domain.Service{{Name: "api", Branch: "feature/SOURCE-1"}},
+	})
+	m = updated.(Model)
+
+	d, ok := m.modal.(*modal.InitDialog)
+	if !ok {
+		t.Fatalf("expected clone init dialog, got %T", m.modal)
+	}
+	view := d.View()
+	if !strings.Contains(view, "feature/SOURCE-1") {
+		t.Fatalf("clone dialog should show source branch, got %q", view)
+	}
+}
+
+func TestUpdate_CloneSourceServicesLoadedMsg_MismatchedBranchesShowsError(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, _ := m.Update(CloneSourceServicesLoadedMsg{
+		SourceTaskID: "SOURCE-1",
+		Services: []domain.Service{
+			{Name: "api", Branch: "feature/SOURCE-1"},
+			{Name: "worker", Branch: "feature/OTHER"},
+		},
+	})
+	m = updated.(Model)
+
+	if m.modal == nil {
+		t.Fatal("model should still open dialog so user can choose a valid subset")
+	}
+	if !strings.Contains(stripANSIForModel(m.modal.View()), "selected source services must share one branch") {
+		t.Fatalf("dialog should show mismatch error, got %q", m.modal.View())
 	}
 }
 
