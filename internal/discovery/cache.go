@@ -64,13 +64,6 @@ func (c *CachedDiscoverer) Refresh(ctx context.Context) ([]domain.Repo, error) {
 	return c.scanAndStoreLocked(ctx)
 }
 
-func (c *CachedDiscoverer) Invalidate() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.loaded = false
-	c.repos = nil
-}
-
 func (c *CachedDiscoverer) scanAndStoreLocked(ctx context.Context) ([]domain.Repo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

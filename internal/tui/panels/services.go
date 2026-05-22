@@ -12,10 +12,9 @@ import (
 )
 
 const (
-	svcColorNormal = colorNormal
-	svcColorDim    = colorDim
-	svcColorBold   = colorBold
-	svcColorDirty  = colorDirty
+	svcColorDim   = colorDim
+	svcColorBold  = colorBold
+	svcColorDirty = colorDirty
 )
 
 type serviceItem struct {

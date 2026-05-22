@@ -180,33 +180,6 @@ func TestCachedDiscovererRefreshBypassesMemoryAndRescans(t *testing.T) {
 	}
 }
 
-func TestCachedDiscovererInvalidateClearsMemory(t *testing.T) {
-	wrapped := &fakeResolver{repos: []domain.Repo{{Name: "first", Path: "/repo/first"}}}
-	cached := NewCached(wrapped)
-	if _, err := cached.FindAll(context.Background()); err != nil {
-		t.Fatalf("seed cache: %v", err)
-	}
-
-	cached.Invalidate()
-
-	wrapped.repos = []domain.Repo{{Name: "second", Path: "/repo/second"}}
-	got, err := cached.FindAll(context.Background())
-	if err != nil {
-		t.Fatalf("FindAll after invalidate: %v", err)
-	}
-	if len(got) != 1 || got[0].Name != "second" {
-		t.Fatalf("repos after invalidate = %#v", got)
-	}
-	if wrapped.findAllCalls != 2 {
-		t.Fatalf("expected 2 scans (seed + post-invalidate), got %d", wrapped.findAllCalls)
-	}
-
-	cached.Invalidate()
-	if wrapped.findAllCalls != 2 {
-		t.Fatalf("second Invalidate should not trigger scan, got %d calls", wrapped.findAllCalls)
-	}
-}
-
 func TestCachedDiscovererResolveDelegatesToWrappedResolver(t *testing.T) {
 	wrapped := &fakeResolver{resolvePath: "/repo/api"}
 	cached := NewCached(wrapped)

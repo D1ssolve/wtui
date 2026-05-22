@@ -9,26 +9,15 @@ import (
 
 func TestOutputPanel_New_EmptyViewport(t *testing.T) {
 	p := NewOutputPanel(80, 10)
-	if p.lineCount() != 0 {
-		t.Errorf("expected 0 lines on new panel, got %d", p.lineCount())
-	}
 	if p.width != 80 || p.height != 10 {
 		t.Errorf("expected 80×10, got %d×%d", p.width, p.height)
-	}
-}
-
-func TestOutputPanel_AppendLine_IncreasesLineCount(t *testing.T) {
-	p := NewOutputPanel(80, 10)
-	p.AppendLine("hello world")
-	if p.lineCount() != 1 {
-		t.Errorf("expected 1 line after AppendLine, got %d", p.lineCount())
 	}
 }
 
 func TestOutputPanel_AppendLine_PrefixedWithArrow(t *testing.T) {
 	p := NewOutputPanel(80, 10)
 	p.AppendLine("build started")
-	lines := p.rawLines()
+	lines := p.lines
 	if len(lines) == 0 {
 		t.Fatal("expected at least 1 raw line")
 	}
@@ -47,8 +36,8 @@ func TestOutputPanel_AppendLine_MultipleLines(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		p.AppendLine("line")
 	}
-	if p.lineCount() != 5 {
-		t.Errorf("expected 5 lines, got %d", p.lineCount())
+	if len(p.lines) != 5 {
+		t.Errorf("expected 5 lines, got %d", len(p.lines))
 	}
 }
 
@@ -61,16 +50,6 @@ func TestOutputPanel_AppendLine_AutoScrollsToBottom(t *testing.T) {
 
 	if !p.viewport.AtBottom() {
 		t.Error("AppendLine should auto-scroll to bottom")
-	}
-}
-
-func TestOutputPanel_Clear_RemovesAllLines(t *testing.T) {
-	p := NewOutputPanel(80, 10)
-	p.AppendLine("line 1")
-	p.AppendLine("line 2")
-	p.Clear()
-	if p.lineCount() != 0 {
-		t.Errorf("Clear should remove all lines, got %d", p.lineCount())
 	}
 }
 
@@ -95,20 +74,6 @@ func TestOutputPanel_SetFocused(t *testing.T) {
 	p.SetFocused(false)
 	if p.focused {
 		t.Error("SetFocused(false) should clear focused")
-	}
-}
-
-func TestOutputPanel_ScrollToBottom(t *testing.T) {
-	p := NewOutputPanel(80, 5)
-	for i := 0; i < 20; i++ {
-		p.AppendLine("line")
-	}
-
-	p.viewport.GotoTop()
-
-	p.ScrollToBottom()
-	if !p.viewport.AtBottom() {
-		t.Error("ScrollToBottom should move viewport to bottom")
 	}
 }
 

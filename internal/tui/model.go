@@ -705,34 +705,6 @@ func (m Model) cycleFocusForward() Model {
 	return m
 }
 
-func (m Model) cycleFocusBackward() Model {
-	m.focus = m.focus.Prev()
-	m.tasksPanel.SetFocused(m.focus == FocusTasks)
-	m.servicesPanel.SetFocused(m.focus == FocusServices)
-	m.outputPanel.SetFocused(m.focus == FocusOutput)
-	return m
-}
-
-func (m Model) moveFocusLeft() Model {
-	if m.focus == FocusServices {
-		m.focus = FocusTasks
-		m.tasksPanel.SetFocused(true)
-		m.servicesPanel.SetFocused(false)
-		m.outputPanel.SetFocused(false)
-	}
-	return m
-}
-
-func (m Model) moveFocusRight() Model {
-	if m.focus == FocusTasks {
-		m.focus = FocusServices
-		m.tasksPanel.SetFocused(false)
-		m.servicesPanel.SetFocused(true)
-		m.outputPanel.SetFocused(false)
-	}
-	return m
-}
-
 func (m Model) maybeLoadServicesCmd() tea.Cmd {
 	t := m.tasksPanel.SelectedTask()
 	if t == nil {

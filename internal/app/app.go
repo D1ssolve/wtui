@@ -30,10 +30,6 @@ func BuildDependencies(cfg *config.Config, logger *slog.Logger) Dependencies {
 	}
 }
 
-func BuildManager(cfg *config.Config, logger *slog.Logger) task.Manager {
-	return buildManager(cfg, logger)
-}
-
 func buildManager(cfg *config.Config, logger *slog.Logger) task.Manager {
 	gitClient := git.NewCommandClient(logger)
 	disc := discovery.NewCached(discovery.New(cfg, gitClient, logger))

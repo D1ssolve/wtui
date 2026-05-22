@@ -10,21 +10,23 @@ Working on a feature that spans several microservices usually means manually cre
 
 **wtui** treats all of that as a single unit — one task, one command. You pick which services belong to the feature, and wtui creates the branches and worktrees, wires up the workspace files, and lets you push or sync every service at once from a single screen.
 
-```
-┌─ Tasks ──────────────┐ ┌─ Services ────────────────────────────────┐
-│                      │ │                                            │
-│  > PROJ-1234         │ │  > api-gateway          [✓] on PROJ-1234  │
-│    PROJ-5678         │ │    user-service          [✓] on PROJ-1234  │
-│                      │ │    notification-service  [✓] on PROJ-1234  │
-└──────────────────────┘ └────────────────────────────────────────────┘
-```
+┌──────────────────────────────┐  ┌──────────────────────────────┐
+│ [1] Tasks          [3/20]    │  │ [2] Services – ITPR-347 [1/1]│
+│                              │  │                              │
+│  ITPR-209                    │  │  ✓  collection               │
+│  ITPR-228                    │  │     branch: feature/ITPR-347 │
+│  ITPR-347  ◄── selected      │  │     path:   ITPR-347/collect │
+│  ITPR-367                    │  │                              │
+│  ...                         │  │                              │
+│  • •  ◄── pagination dots    │  │                              │
+└──────────────────────────────┘  └──────────────────────────────┘
 
 ---
 
 ## How It Works
 
 1. **Tasks** are the top-level unit. A task maps to a ticket ID (e.g. `PROJ-1234`) and holds a set of service worktrees that all share the same branch name.
-2. **Services** are repositories you configure in `config.yaml`. When you add a service to a task, wtui creates a new git worktree in that repo on a branch derived from the task ID.
+2. **Services** are repositories. When you add a service to a task, wtui creates a new git worktree in that repo on a branch derived from the task ID.
 3. **Workspace files** are generated automatically: a `.code-workspace` for VS Code and a `.sln` for .NET solutions, scoped to only the services in the current task. This means your IDE — and AI tools running inside it — only see the code relevant to what you are working on.
 4. **Sync and push** propagate across all services in a task at once, with per-service override available when needed.
 
@@ -73,21 +75,37 @@ make install
 
 ## Configuration
 
-Config file: `~/.config/wtui/config.yaml`  
-Log file: `~/.local/state/wtui/wtui.log`
+Config file search order (first match wins):
+
+1. `--config` flag
+2. `$XDG_CONFIG_HOME/wtui/config.yaml`
+3. `~/.config/wtui/config.yaml`
+4. `config.yaml` next to the binary
+
+Log file: `$XDG_STATE_HOME/wtui/wtui.log` (default: `~/.local/state/wtui/wtui.log`)
 
 ```yaml
 # Example config.yaml
-worktrees_root: ~/worktrees   # root directory where worktrees are created
-
-services:
-  - name: api-gateway
-    path: ~/repos/api-gateway
-  - name: user-service
-    path: ~/repos/user-service
-  - name: notification-service
-    path: ~/repos/notification-service
+root_dir: ~/repos              # monorepo root — services auto-discovered below this path
+tasks_root: ~/repos/.tasks     # where task worktrees live (default: <root_dir>/.tasks)
+branch_prefix: feature/        # prefix for new branches (default: feature/)
+base_branch: develop           # branch to sync/rebase against (default: develop)
+editor: code                   # editor command for opening workspaces (default: code)
+discovery_depth: 4              # max directory depth to scan for repos (default: 4, min: 2)
+output_panel_lines: 12          # height of the TUI output panel (default: 12, range: 3–40)
+log_level: INFO                # DEBUG | INFO | WARN | ERROR (default: INFO)
 ```
+
+Services are discovered automatically by scanning `root_dir` for git repositories and cached in memory on startup. Press `r` in the tasks panel to rescan and refresh the cache.
+
+### Environment variable overrides
+
+| Variable | Overrides |
+|----------|-----------|
+| `WTUI_ROOT` | `root_dir` |
+| `TASKFLOW_ROOT` | `tasks_root` |
+| `EDITOR` | `editor` |
+| `WTUI_BASE_BRANCH` | `base_branch` |
 
 ---
 

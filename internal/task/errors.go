@@ -10,8 +10,6 @@ var (
 
 	ErrTaskExists = errors.New("task already exists")
 
-	ErrWorktreeExists = errors.New("worktree already exists")
-
 	ErrServiceNotFound = errors.New("service not found")
 )
 

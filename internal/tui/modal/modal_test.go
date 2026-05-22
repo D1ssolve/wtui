@@ -288,7 +288,7 @@ func TestRemoveDialog_B_DeletesBranches(t *testing.T) {
 }
 
 func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
-	h := NewHelpOverlay()
+	h := NewHelpOverlayWithOptions(false)
 	view := stripAnsi(h.View())
 
 	mustContain := []string{
@@ -345,7 +345,7 @@ func TestHelpOverlay_LazygitUnavailableExcludesServiceRow(t *testing.T) {
 }
 
 func TestHelpOverlay_Esc_Closes(t *testing.T) {
-	h := NewHelpOverlay()
+	h := NewHelpOverlayWithOptions(false)
 	_, cmd := h.Update(sendSpecialKey(tea.KeyEsc))
 	if cmd == nil {
 		t.Fatal("Esc must return a cmd")
@@ -357,7 +357,7 @@ func TestHelpOverlay_Esc_Closes(t *testing.T) {
 }
 
 func TestHelpOverlay_QuestionMark_Closes(t *testing.T) {
-	h := NewHelpOverlay()
+	h := NewHelpOverlayWithOptions(false)
 	_, cmd := h.Update(sendKey("?"))
 	if cmd == nil {
 		t.Fatal("? must return a cmd")

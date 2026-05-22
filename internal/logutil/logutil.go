@@ -52,14 +52,6 @@ func XDGStateDir(app string) string {
 	return filepath.Join(home, ".local", "state", app)
 }
 
-func XDGCacheDir(app string) string {
-	if base := os.Getenv("XDG_CACHE_HOME"); base != "" {
-		return filepath.Join(base, app)
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache", app)
-}
-
 func ParseLogLevel(level string) slog.Level {
 	switch level {
 	case "DEBUG":

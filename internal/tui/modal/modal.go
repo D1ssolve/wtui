@@ -18,7 +18,6 @@ const (
 	modalColorDim     = lipgloss.Color("#6B7280")
 	modalColorNormal  = lipgloss.Color("#D1D5DB")
 	modalColorWarning = lipgloss.Color("#F59E0B")
-	modalColorGray    = lipgloss.Color("#4A4A4A")
 )
 
 func boxStyle(innerWidth int) lipgloss.Style {

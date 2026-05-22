@@ -9,9 +9,8 @@ import (
 )
 
 const (
-	outColorInactive = colorInactive
-	outColorDim      = colorDim
-	outColorNormal   = colorNormal
+	outColorDim    = colorDim
+	outColorNormal = colorNormal
 )
 
 type OutputPanel struct {
@@ -40,11 +39,6 @@ func (p *OutputPanel) AppendLine(line string) {
 	p.lines = append(p.lines, formatted)
 	p.rebuildContent()
 	p.viewport.GotoBottom()
-}
-
-func (p *OutputPanel) Clear() {
-	p.lines = nil
-	p.rebuildContent()
 }
 
 func (p *OutputPanel) SetSize(width, height int) {
@@ -120,24 +114,10 @@ func (p *OutputPanel) rebuildContent() {
 	p.viewport.SetContent(strings.Join(p.lines, "\n"))
 }
 
-func (p OutputPanel) lineCount() int { return len(p.lines) }
-
-func (p OutputPanel) rawLines() []string {
-	return p.lines
-}
-
-func (p *OutputPanel) ScrollToBottom() {
-	p.viewport.GotoBottom()
-}
-
 func (p *OutputPanel) ScrollUp(lines int) {
 	p.viewport.ScrollUp(lines)
 }
 
 func (p *OutputPanel) ScrollDown(lines int) {
 	p.viewport.ScrollDown(lines)
-}
-
-func (p OutputPanel) ViewportContent() string {
-	return p.viewport.View()
 }

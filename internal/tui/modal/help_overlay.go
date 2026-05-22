@@ -11,8 +11,6 @@ type HelpOverlay struct {
 	lazygitAvailable bool
 }
 
-func NewHelpOverlay() *HelpOverlay { return NewHelpOverlayWithOptions(false) }
-
 func NewHelpOverlayWithOptions(lazygitAvailable bool) *HelpOverlay {
 	return &HelpOverlay{lazygitAvailable: lazygitAvailable}
 }

@@ -58,27 +58,6 @@ func TestXDGStateDir(t *testing.T) {
 	})
 }
 
-func TestXDGCacheDir(t *testing.T) {
-	t.Run("uses_XDG_CACHE_HOME_when_set", func(t *testing.T) {
-		t.Setenv("XDG_CACHE_HOME", "/custom/cache")
-		got := XDGCacheDir("myapp")
-		want := filepath.Join("/custom/cache", "myapp")
-		if got != want {
-			t.Errorf("XDGCacheDir = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("falls_back_to_home_cache", func(t *testing.T) {
-		t.Setenv("XDG_CACHE_HOME", "")
-		t.Setenv("HOME", "/testhome")
-		got := XDGCacheDir("myapp")
-		want := filepath.Join("/testhome", ".cache", "myapp")
-		if got != want {
-			t.Errorf("XDGCacheDir = %q, want %q", got, want)
-		}
-	})
-}
-
 func TestInitLogger_CreatesLogFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", tmp)
