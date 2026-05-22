@@ -16,10 +16,29 @@ import (
 var Version = "dev"
 
 func main() {
+	if versionRequested(os.Args[1:]) {
+		fmt.Print(versionOutput(Version))
+		return
+	}
+
 	if err := runTUI(); err != nil {
 		slog.Error("TUI failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+func versionRequested(args []string) bool {
+	for _, arg := range args {
+		if arg == "--version" || arg == "-v" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func versionOutput(version string) string {
+	return fmt.Sprintf("wtui %s\n", version)
 }
 
 func runTUI() error {

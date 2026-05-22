@@ -13,6 +13,8 @@ export CGO_ENABLED=0
 .PHONY: build test lint install clean \
         build-linux-amd64 build-linux-arm64 \
         build-darwin-amd64 build-darwin-arm64 \
+        build-windows-amd64 build-windows-arm64 build-all \
+        release-snapshot \
         test-integration
 
 build:
@@ -49,3 +51,16 @@ build-darwin-amd64: ## Build for macOS/amd64
 build-darwin-arm64: ## Build for macOS/arm64 (Apple Silicon)
 	@mkdir -p $(BIN_DIR)
 	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY)-darwin-arm64 $(CMD_PATH)
+
+build-windows-amd64: ## Build for Windows/amd64
+	@mkdir -p $(BIN_DIR)
+	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY)-windows-amd64.exe $(CMD_PATH)
+
+build-windows-arm64: ## Build for Windows/arm64
+	@mkdir -p $(BIN_DIR)
+	GOOS=windows GOARCH=arm64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY)-windows-arm64.exe $(CMD_PATH)
+
+build-all: build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64 build-windows-amd64 build-windows-arm64
+
+release-snapshot: ## Build local GoReleaser snapshot artifacts without publishing
+	goreleaser release --snapshot --clean --skip=publish
