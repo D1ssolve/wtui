@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime/debug"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -13,11 +14,33 @@ import (
 	"github.com/D1ssolve/wtui/internal/tui"
 )
 
-var Version = "dev"
+// Version is set via -ldflags at release build time.
+// When installed via go install, resolveVersion falls back to module info.
+var Version = ""
+
+// resolveVersion returns the ldflag-injected version if set,
+// otherwise falls back to the module version from runtime/debug.ReadBuildInfo
+// (available when installed via go install).
+func resolveVersion() string {
+	if Version != "" {
+		return Version
+	}
+
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+
+	if bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+
+	return "dev"
+}
 
 func main() {
 	if versionRequested(os.Args[1:]) {
-		fmt.Print(versionOutput(Version))
+		fmt.Print(versionOutput(resolveVersion()))
 		return
 	}
 

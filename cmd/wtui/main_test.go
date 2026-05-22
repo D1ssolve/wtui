@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestVersionRequested(t *testing.T) {
 	tests := []struct {
@@ -30,5 +33,41 @@ func TestVersionOutput(t *testing.T) {
 	want := "wtui v0.1.0\n"
 	if got != want {
 		t.Fatalf("versionOutput() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		want    func(string) bool
+	}{
+		{
+			name:    "ldflag version takes precedence",
+			version: "v1.2.3",
+			want: func(got string) bool {
+				return got == "v1.2.3"
+			},
+		},
+		{
+			name:    "empty version falls back to module info",
+			version: "",
+			want: func(got string) bool {
+				return got != "" && got != "dev" || strings.HasPrefix(got, "v") || got == "dev"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orig := Version
+			Version = tt.version
+			defer func() { Version = orig }()
+
+			got := resolveVersion()
+			if !tt.want(got) {
+				t.Fatalf("resolveVersion() = %q, unexpected", got)
+			}
+		})
 	}
 }
