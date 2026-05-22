@@ -191,13 +191,13 @@ func (c *Config) Effective() *Config {
 	}
 
 	if c.OutputPanelLines == 0 {
-		c.OutputPanelLines = 6
+		c.OutputPanelLines = 12
 	}
 	if c.OutputPanelLines < 3 {
 		c.OutputPanelLines = 3
 	}
-	if c.OutputPanelLines > 20 {
-		c.OutputPanelLines = 20
+	if c.OutputPanelLines > 40 {
+		c.OutputPanelLines = 40
 	}
 
 	if c.LogLevel == "" {
@@ -250,7 +250,7 @@ editor: %q
 discovery_depth: %d
 
 # output_panel_lines: Number of visible lines in the TUI output panel.
-# Range: [3, 20].  Default: 6
+# Range: [3, 40].  Default: 12
 output_panel_lines: %d
 
 # log_level: Logging verbosity.  Values: DEBUG, INFO, WARN, ERROR

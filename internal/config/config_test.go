@@ -183,8 +183,8 @@ func TestEffective_AllDefaults(t *testing.T) {
 	if cfg.DiscoveryDepth != 4 {
 		t.Errorf("DiscoveryDepth default: got %d, want 4", cfg.DiscoveryDepth)
 	}
-	if cfg.OutputPanelLines != 6 {
-		t.Errorf("OutputPanelLines default: got %d, want 6", cfg.OutputPanelLines)
+	if cfg.OutputPanelLines != 12 {
+		t.Errorf("OutputPanelLines default: got %d, want 12", cfg.OutputPanelLines)
 	}
 	if cfg.LogLevel != "INFO" {
 		t.Errorf("LogLevel default: got %q, want INFO", cfg.LogLevel)
@@ -334,14 +334,15 @@ func TestEffective_OutputPanelLines(t *testing.T) {
 		want  int
 		label string
 	}{
-		{0, 6, "zero → default 6"},
+		{0, 12, "zero → default 12"},
 		{1, 3, "1 → clamped to 3"},
 		{2, 3, "2 → clamped to 3"},
 		{3, 3, "3 → minimum"},
 		{6, 6, "6 → unchanged"},
-		{20, 20, "20 → maximum"},
-		{21, 20, "21 → clamped to 20"},
-		{100, 20, "100 → clamped to 20"},
+		{20, 20, "20 → unchanged"},
+		{40, 40, "40 → maximum"},
+		{41, 40, "41 → clamped to 40"},
+		{100, 40, "100 → clamped to 40"},
 	}
 
 	for _, tc := range cases {
@@ -390,8 +391,8 @@ func TestWriteDefault_CreatesValidYAMLFile(t *testing.T) {
 	if reloaded.DiscoveryDepth != 4 {
 		t.Errorf("DiscoveryDepth: got %d, want 4", reloaded.DiscoveryDepth)
 	}
-	if reloaded.OutputPanelLines != 6 {
-		t.Errorf("OutputPanelLines: got %d, want 6", reloaded.OutputPanelLines)
+	if reloaded.OutputPanelLines != 12 {
+		t.Errorf("OutputPanelLines: got %d, want 12", reloaded.OutputPanelLines)
 	}
 	if reloaded.LogLevel != "INFO" {
 		t.Errorf("LogLevel: got %q, want INFO", reloaded.LogLevel)

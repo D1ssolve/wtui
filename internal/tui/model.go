@@ -44,8 +44,9 @@ type Model struct {
 	logOverlay *LogOverlay
 	logPath    string
 
-	spinner   spinner.Model
-	opRunning bool
+	spinner    spinner.Model
+	opRunning  bool
+	refreshing bool
 
 	keymap KeyMap
 
@@ -197,6 +198,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keymap.Refresh):
 			m.outputPanel.AppendLine("Refreshing tasks and repository cache...")
+			m.refreshing = true
 			cmds := []tea.Cmd{loadTasksCmd(m.mgr), loadReposCmd(m.mgr, true)}
 			return m, tea.Batch(cmds...)
 		}
@@ -465,6 +467,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TasksLoadedMsg:
 		m.tasksPanel.SetTasks(msg.Tasks)
+		if m.refreshing {
+			m.outputPanel.AppendLine("Tasks refreshed.")
+		}
 		return m, m.maybeLoadServicesCmd()
 
 	case ServicesLoadedMsg:
@@ -488,11 +493,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logger.ErrorContext(context.Background(), "failed to discover repos",
 				slog.String("error", msg.Err.Error()))
 			m.outputPanel.AppendLine("Error: could not discover repos: " + msg.Err.Error())
+			m.refreshing = false
 			m.initDialogPending = false
 			m.addDialogPending = nil
 			return m, nil
 		}
 		m.repos = msg.Repos
+		if m.refreshing {
+			m.outputPanel.AppendLine("Repository cache refreshed.")
+			m.refreshing = false
+		}
 		if m.initDialogPending {
 			m.initDialogPending = false
 			m.modal = modal.NewInitDialog(m.cfg.BranchPrefix, msg.Repos, m.width, m.height)
@@ -524,7 +534,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var conflictErr *task.ErrRemoteBranchConflict
 			if errors.As(msg.Err, &conflictErr) {
 
-				m.outputPanel.AppendLine("Remote branch conflict detected for " + conflictErr.ServiceName + "...")
+				m.outputPanel.AppendLine(msg.Op + ": remote branch conflict for " + conflictErr.ServiceName)
 				return m, func() tea.Msg {
 					return modal.RemoteBranchConflictMsg{
 						TaskID:      conflictErr.TaskID,
@@ -535,13 +545,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			m.outputPanel.AppendLine("Error: " + msg.Err.Error())
+			m.outputPanel.AppendLine(msg.Op + " failed: " + msg.Err.Error())
 			m.logger.Error("command failed", slog.String("err", msg.Err.Error()))
 
 			m.pendingInitParams = nil
 			m.pendingAddParams = nil
 		} else {
-			m.outputPanel.AppendLine("Done.")
+			m.outputPanel.AppendLine(msg.Op + " done.")
 
 			m.pendingInitParams = nil
 			m.pendingAddParams = nil

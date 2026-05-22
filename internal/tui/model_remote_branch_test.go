@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/diss0x/wtui/internal/task"
@@ -217,7 +218,7 @@ func TestUpdate_CommandDoneMsg_RemoteBranchConflict(t *testing.T) {
 		BranchName:  "feature/TASK-123",
 		RepoPath:    "/path/to/repo",
 	}
-	msg := CommandDoneMsg{Err: conflictErr}
+	msg := CommandDoneMsg{Op: "Init task TASK-123", Err: conflictErr}
 	newModel, cmd := m.Update(msg)
 	m = newModel.(Model)
 
@@ -227,6 +228,9 @@ func TestUpdate_CommandDoneMsg_RemoteBranchConflict(t *testing.T) {
 
 	if m.pendingInitParams == nil {
 		t.Error("Expected pendingInitParams to still be set")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Init task TASK-123: remote branch conflict for service-a") {
+		t.Fatalf("expected contextual remote branch conflict log, got %q", m.outputPanel.View())
 	}
 
 	if cmd == nil {

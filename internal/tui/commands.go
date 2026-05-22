@@ -36,7 +36,10 @@ type OutputLineMsg struct {
 	Next tea.Cmd
 }
 
-type CommandDoneMsg struct{ Err error }
+type CommandDoneMsg struct {
+	Err error
+	Op  string
+}
 
 type channelDrainedMsg struct{}
 
@@ -51,7 +54,7 @@ func loadTasksCmd(mgr task.Manager) tea.Cmd {
 		defer cancel()
 		tasks, err := mgr.List(ctx)
 		if err != nil {
-			return CommandDoneMsg{Err: err}
+			return CommandDoneMsg{Err: err, Op: "Load tasks"}
 		}
 		return TasksLoadedMsg{Tasks: tasks}
 	}
@@ -67,7 +70,7 @@ func loadServicesCmd(mgr task.Manager, taskID string) tea.Cmd {
 			if errors.Is(err, task.ErrTaskNotFound) {
 				return ServicesLoadedMsg{TaskID: taskID, Services: nil}
 			}
-			return CommandDoneMsg{Err: err}
+			return CommandDoneMsg{Err: err, Op: "Load services for task " + taskID}
 		}
 		return ServicesLoadedMsg{TaskID: taskID, Services: services}
 	}
@@ -124,7 +127,7 @@ func initTaskCmd(mgr task.Manager, params task.InitParams) tea.Cmd {
 			defer cancel()
 			err := mgr.Init(ctx, params)
 			close(statusCh)
-			return CommandDoneMsg{Err: err}
+			return CommandDoneMsg{Err: err, Op: "Init task " + params.TaskID}
 		},
 		readNextLine(statusCh),
 	)
@@ -139,7 +142,7 @@ func addServiceCmd(mgr task.Manager, params task.AddParams) tea.Cmd {
 			defer cancel()
 			err := mgr.Add(ctx, params)
 			close(statusCh)
-			return CommandDoneMsg{Err: err}
+			return CommandDoneMsg{Err: err, Op: "Add services to " + params.TaskID}
 		},
 		readNextLine(statusCh),
 	)
@@ -149,7 +152,7 @@ func removeTaskCmd(mgr task.Manager, taskID string, force, deleteBranches bool) 
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
 		defer cancel()
-		return CommandDoneMsg{Err: mgr.Remove(ctx, taskID, force, deleteBranches)}
+		return CommandDoneMsg{Err: mgr.Remove(ctx, taskID, force, deleteBranches), Op: "Remove task " + taskID}
 	}
 }
 
@@ -159,7 +162,7 @@ func syncTaskCmd(mgr task.Manager, taskID string, strategy task.SyncStrategy) te
 		func() tea.Msg {
 			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
 			defer cancel()
-			return CommandDoneMsg{Err: mgr.SyncTask(ctx, taskID, strategy, statusCh)}
+			return CommandDoneMsg{Err: mgr.SyncTask(ctx, taskID, strategy, statusCh), Op: "Sync task " + taskID}
 		},
 		readNextLine(statusCh),
 	)
@@ -167,7 +170,7 @@ func syncTaskCmd(mgr task.Manager, taskID string, strategy task.SyncStrategy) te
 
 func riderTaskCmd(taskID, dir string) tea.Cmd {
 	name, args := riderTaskArgs(taskID)
-	return execProcessCmd(name, args, dir)
+	return execProcessCmd(name, args, dir, "Open Rider for "+taskID)
 }
 
 func riderTaskArgs(taskID string) (string, []string) {
@@ -176,7 +179,7 @@ func riderTaskArgs(taskID string) (string, []string) {
 
 func codeWorkspaceTaskCmd(editor, taskID, dir string) tea.Cmd {
 	name, args := codeWorkspaceTaskArgs(editor, taskID)
-	return execProcessCmd(name, args, dir)
+	return execProcessCmd(name, args, dir, "Open "+editor+" for "+taskID)
 }
 
 func codeWorkspaceTaskArgs(editor, taskID string) (string, []string) {
@@ -189,7 +192,7 @@ func pushTaskCmd(mgr task.Manager, taskID string) tea.Cmd {
 		func() tea.Msg {
 			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
 			defer cancel()
-			return CommandDoneMsg{Err: mgr.PushTask(ctx, taskID, statusCh)}
+			return CommandDoneMsg{Err: mgr.PushTask(ctx, taskID, statusCh), Op: "Push task " + taskID}
 		},
 		readNextLine(statusCh),
 	)
@@ -203,7 +206,7 @@ func pushServiceCmd(mgr task.Manager, taskID, serviceName string) tea.Cmd {
 			defer cancel()
 			err := mgr.PushService(ctx, taskID, serviceName, statusCh)
 			close(statusCh)
-			return CommandDoneMsg{Err: err}
+			return CommandDoneMsg{Err: err, Op: "Push service " + serviceName}
 		},
 		readNextLine(statusCh),
 	)
@@ -215,7 +218,7 @@ func syncServiceCmd(mgr task.Manager, taskID, serviceName string, strategy task.
 		func() tea.Msg {
 			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
 			defer cancel()
-			return CommandDoneMsg{Err: mgr.SyncService(ctx, taskID, serviceName, strategy, statusCh)}
+			return CommandDoneMsg{Err: mgr.SyncService(ctx, taskID, serviceName, strategy, statusCh), Op: "Sync service " + serviceName}
 		},
 		readNextLine(statusCh),
 	)
@@ -225,7 +228,11 @@ func stashServiceCmd(mgr task.Manager, taskID, serviceName string, pop bool, inc
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
 		defer cancel()
-		return CommandDoneMsg{Err: mgr.StashService(ctx, taskID, serviceName, pop, includeUntracked)}
+		op := "Stashing service " + serviceName
+		if pop {
+			op = "Unstashing service " + serviceName
+		}
+		return CommandDoneMsg{Err: mgr.StashService(ctx, taskID, serviceName, pop, includeUntracked), Op: op}
 	}
 }
 
@@ -233,7 +240,7 @@ func removeServiceCmd(mgr task.Manager, taskID, serviceName string, removeBranch
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
 		defer cancel()
-		return CommandDoneMsg{Err: mgr.RemoveService(ctx, taskID, serviceName, removeBranch)}
+		return CommandDoneMsg{Err: mgr.RemoveService(ctx, taskID, serviceName, removeBranch), Op: "Remove service " + serviceName}
 	}
 }
 
@@ -247,16 +254,18 @@ func readNextLine(ch <-chan string) tea.Cmd {
 	}
 }
 
-func execProcessCmd(name string, args []string, dir string) tea.Cmd {
+func execProcessCmd(name string, args []string, dir string, op string) tea.Cmd {
 	c := exec.Command(name, args...)
 	c.Dir = dir
-	return execTeaProcess(c)
+	return execTeaProcess(c, op)
 }
 
-func execTeaProcess(c *exec.Cmd) tea.Cmd {
-	return tea.ExecProcess(c, execProcessDoneMsg)
+func execTeaProcess(c *exec.Cmd, op string) tea.Cmd {
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return execProcessDoneMsg(op, err)
+	})
 }
 
-func execProcessDoneMsg(err error) tea.Msg {
-	return CommandDoneMsg{Err: err}
+func execProcessDoneMsg(op string, err error) tea.Msg {
+	return CommandDoneMsg{Err: err, Op: op}
 }

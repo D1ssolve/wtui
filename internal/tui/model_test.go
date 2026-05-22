@@ -74,7 +74,7 @@ func newTestConfig() *config.Config {
 		BranchPrefix:     "feature/",
 		Editor:           "code",
 		DiscoveryDepth:   4,
-		OutputPanelLines: 6,
+		OutputPanelLines: 12,
 		LogLevel:         "INFO",
 	}
 	return cfg.Effective()
@@ -535,7 +535,7 @@ func TestUpdate_CommandDoneMsg_WithError_AppendsError(t *testing.T) {
 	m = sendWindowSize(m, 120, 40)
 	m.opRunning = true
 
-	updated, _ := m.Update(CommandDoneMsg{Err: &mockError{"something went wrong"}})
+	updated, _ := m.Update(CommandDoneMsg{Op: "Sync task IN-1", Err: &mockError{"something went wrong"}})
 	m = updated.(Model)
 
 	if m.opRunning {
@@ -543,17 +543,17 @@ func TestUpdate_CommandDoneMsg_WithError_AppendsError(t *testing.T) {
 	}
 
 	view := m.outputPanel.View()
-	if !strings.Contains(view, "something went wrong") {
-		t.Errorf("output panel should contain error message after CommandDoneMsg with error")
+	if !strings.Contains(view, "Sync task IN-1 failed: something went wrong") {
+		t.Errorf("output panel should contain contextual error message after CommandDoneMsg with error, got %q", view)
 	}
 }
 
-func TestUpdate_CommandDoneMsg_NoError_AppendsDone(t *testing.T) {
+func TestUpdate_CommandDoneMsg_NoError_AppendsOperationDone(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
 	m.opRunning = true
 
-	updated, _ := m.Update(CommandDoneMsg{Err: nil})
+	updated, _ := m.Update(CommandDoneMsg{Op: "Push task IN-1", Err: nil})
 	m = updated.(Model)
 
 	if m.opRunning {
@@ -561,8 +561,44 @@ func TestUpdate_CommandDoneMsg_NoError_AppendsDone(t *testing.T) {
 	}
 
 	view := m.outputPanel.View()
-	if !strings.Contains(view, "Done.") {
-		t.Errorf("output panel should contain 'Done.' after successful CommandDoneMsg")
+	if !strings.Contains(view, "Push task IN-1 done.") {
+		t.Errorf("output panel should contain contextual done message after successful CommandDoneMsg, got %q", view)
+	}
+}
+
+func TestUpdate_RefreshCompletionLogsTasksAndRepos(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	m.refreshing = true
+
+	updated, _ := m.Update(TasksLoadedMsg{Tasks: []domain.Task{{ID: "IN-1"}}})
+	m = updated.(Model)
+	if !strings.Contains(m.outputPanel.View(), "Tasks refreshed.") {
+		t.Fatalf("output should contain task refresh completion, got %q", m.outputPanel.View())
+	}
+	if !m.refreshing {
+		t.Fatal("refreshing should remain true until repos load")
+	}
+
+	updated, _ = m.Update(ReposLoadedMsg{Repos: []domain.Repo{{Name: "api", Path: "/repo/api"}}})
+	m = updated.(Model)
+	if !strings.Contains(m.outputPanel.View(), "Repository cache refreshed.") {
+		t.Fatalf("output should contain repo refresh completion, got %q", m.outputPanel.View())
+	}
+	if m.refreshing {
+		t.Fatal("refreshing should reset after repos load")
+	}
+}
+
+func TestUpdate_ServicesLoadedMsg_DoesNotAppendCompletionLog(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	m.refreshing = true
+
+	updated, _ := m.Update(ServicesLoadedMsg{TaskID: "IN-1", Services: []domain.Service{{Name: "api"}}})
+	m = updated.(Model)
+	if strings.Contains(m.outputPanel.View(), "Services loaded for task IN-1.") {
+		t.Fatalf("services load should not append noisy completion log, got %q", m.outputPanel.View())
 	}
 }
 

@@ -35,9 +35,9 @@ func TestCodeWorkspaceTaskArgsUsesConfiguredEditor(t *testing.T) {
 	}
 }
 
-func TestExecTeaProcessReturnsOriginalError(t *testing.T) {
+func TestExecTeaProcessReturnsOriginalErrorAndOp(t *testing.T) {
 	original := errors.New("rider failed")
-	msg := execProcessDoneMsg(original)
+	msg := execProcessDoneMsg("Open Rider for IN-001", original)
 	done, ok := msg.(CommandDoneMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want CommandDoneMsg", msg)
@@ -48,8 +48,11 @@ func TestExecTeaProcessReturnsOriginalError(t *testing.T) {
 	if strings.Contains(done.Err.Error(), "shell:") {
 		t.Fatalf("err = %q, must not add shell-specific context", done.Err.Error())
 	}
+	if done.Op != "Open Rider for IN-001" {
+		t.Fatalf("op = %q, want Open Rider for IN-001", done.Op)
+	}
 
-	msg = execProcessDoneMsg(nil)
+	msg = execProcessDoneMsg("Open Rider for IN-001", nil)
 	done, ok = msg.(CommandDoneMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want CommandDoneMsg", msg)
