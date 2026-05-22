@@ -10,6 +10,7 @@ Working on a feature that spans several microservices usually means manually cre
 
 **wtui** treats all of that as a single unit — one task, one command. You pick which services belong to the feature, and wtui creates the branches and worktrees, wires up the workspace files, and lets you push or sync every service at once from a single screen.
 
+```txt
 ┌──────────────────────────────┐  ┌──────────────────────────────┐
 │ [1] Tasks          [3/20]    │  │ [2] Services – ITPR-347 [1/1]│
 │                              │  │                              │
@@ -20,6 +21,7 @@ Working on a feature that spans several microservices usually means manually cre
 │  ...                         │  │                              │
 │  • •  ◄── pagination dots    │  │                              │
 └──────────────────────────────┘  └──────────────────────────────┘
+```
 
 ---
 
@@ -34,39 +36,31 @@ Working on a feature that spans several microservices usually means manually cre
 
 ## Install
 
-### macOS / Linux
+### go install (macOS / Linux / Windows)
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/D1ssolve/wtui/main/scripts/install.sh | sh
-```
-
-The installer picks the right binary for your OS and architecture, verifies the checksum, and places `wtui` in `/usr/local/bin` or `$HOME/.local/bin`.
-
-**Pin to a specific version:**
-
-```bash
-WTUI_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/D1ssolve/wtui/main/scripts/install.sh | sh
-```
-
-**Install to a custom directory:**
-
-```bash
-WTUI_INSTALL_DIR=/path/to/bin curl -fsSL https://raw.githubusercontent.com/D1ssolve/wtui/main/scripts/install.sh | sh
-```
-
-### Windows
-
-Download the appropriate archive from the [Releases](https://github.com/D1ssolve/wtui/releases) page (`windows_amd64` or `windows_arm64`), extract it, and add the folder to your `PATH`.
-
-### Go
+Requires [Go 1.21+](https://go.dev/dl/).
 
 ```bash
 go install github.com/D1ssolve/wtui/cmd/wtui@latest
 ```
 
+Pin to a specific version:
+
+```bash
+go install github.com/D1ssolve/wtui/cmd/wtui@v0.1.0
+```
+
+The binary lands in `$GOPATH/bin` (or `$HOME/go/bin`). Make sure that directory is on your `PATH`.
+
+### Pre-built binaries
+
+Download from the [Releases](https://github.com/D1ssolve/wtui/releases) page for your OS and architecture, extract, and add to `PATH`.
+
 ### From source
 
 ```bash
+git clone https://github.com/D1ssolve/wtui.git
+cd wtui
 make build
 make install
 ```
