@@ -62,3 +62,10 @@ type OpenRemoveServiceDialogMsg struct {
 	ServiceName string
 	BranchName  string
 }
+
+type OpenLazygitServiceMsg struct {
+	TaskID       string
+	ServiceName  string
+	WorktreePath string
+	Stale        bool
+}

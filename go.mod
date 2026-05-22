@@ -1,4 +1,4 @@
-module github.com/diss0x/wtui
+module github.com/D1ssolve/wtui
 
 go 1.26.1
 

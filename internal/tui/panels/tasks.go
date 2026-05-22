@@ -9,7 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/diss0x/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 const (
@@ -315,7 +315,7 @@ func (p TasksPanel) View() string {
 	if total > 0 {
 		current = p.list.Index() + 1
 	}
-	title := fmt.Sprintf("Tasks  [%d/%d]", current, total)
+	title := fmt.Sprintf("[1] Tasks  [%d/%d]", current, total)
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).

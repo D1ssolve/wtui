@@ -1,6 +1,6 @@
 package modal
 
-import "github.com/diss0x/wtui/internal/task"
+import "github.com/D1ssolve/wtui/internal/task"
 
 type SubmitInitMsg struct {
 	TaskID       string

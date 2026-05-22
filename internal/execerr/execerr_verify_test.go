@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/diss0x/wtui/internal/dotnet"
-	"github.com/diss0x/wtui/internal/execerr"
-	"github.com/diss0x/wtui/internal/git"
+	"github.com/D1ssolve/wtui/internal/dotnet"
+	"github.com/D1ssolve/wtui/internal/execerr"
+	"github.com/D1ssolve/wtui/internal/git"
 )
 
 func TestCrossPackageErrorsIs(t *testing.T) {

@@ -7,10 +7,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/diss0x/wtui/internal/app"
-	"github.com/diss0x/wtui/internal/config"
-	"github.com/diss0x/wtui/internal/logutil"
-	"github.com/diss0x/wtui/internal/tui"
+	"github.com/D1ssolve/wtui/internal/app"
+	"github.com/D1ssolve/wtui/internal/config"
+	"github.com/D1ssolve/wtui/internal/logutil"
+	"github.com/D1ssolve/wtui/internal/tui"
 )
 
 var Version = "dev"
@@ -53,14 +53,16 @@ func runTUI() error {
 		fmt.Fprintf(os.Stderr, "Warning: could not open log file: %v\n", logErr)
 	}
 
-	mgr := app.BuildManager(cfg, logger)
+	deps := app.BuildDependencies(cfg, logger)
 
-	model, err := tui.New(cfg, mgr, logger)
+	model, err := tui.NewWithOptions(cfg, deps.Manager, logger, tui.Options{
+		LazygitAvailable: deps.Features.LazygitAvailable,
+	})
 	if err != nil {
 		return fmt.Errorf("create TUI model: %w", err)
 	}
 
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = p.Run()
 	return err
 }

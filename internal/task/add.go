@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/diss0x/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 func (m *manager) Add(ctx context.Context, params AddParams) error {

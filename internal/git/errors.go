@@ -1,6 +1,6 @@
 package git
 
-import "github.com/diss0x/wtui/internal/execerr"
+import "github.com/D1ssolve/wtui/internal/execerr"
 
 var ErrExec = execerr.ErrExec
 

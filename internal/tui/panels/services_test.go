@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/diss0x/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 func makeServices(taskID string, names ...string) (string, []domain.Service) {
@@ -103,6 +103,97 @@ func TestServicesPanel_KeyA_EmitsOpenAddServiceMsg(t *testing.T) {
 	}
 	if got.ExistingServices[0] != "collection" || got.ExistingServices[1] != "databridge" {
 		t.Errorf("expected ExistingServices=[collection, databridge], got %v", got.ExistingServices)
+	}
+}
+
+func TestServicesPanel_KeyG_WhenLazygitAvailable_EmitsOpenLazygitServiceMsg(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	p.SetLazygitAvailable(true)
+	tid, svcs := makeServices("IN-001", "collection", "databridge")
+	svcs[0].Stale = true
+	p.SetServices(tid, svcs)
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("g"))
+	if cmd == nil {
+		t.Fatal("g key should return a cmd when lazygit is available")
+	}
+
+	msg := cmd()
+	got, ok := msg.(OpenLazygitServiceMsg)
+	if !ok {
+		t.Fatalf("expected OpenLazygitServiceMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" {
+		t.Errorf("TaskID = %q, want IN-001", got.TaskID)
+	}
+	if got.ServiceName != "collection" {
+		t.Errorf("ServiceName = %q, want collection", got.ServiceName)
+	}
+	if got.WorktreePath != "/tmp/.tasks/IN-001/collection" {
+		t.Errorf("WorktreePath = %q, want /tmp/.tasks/IN-001/collection", got.WorktreePath)
+	}
+	if !got.Stale {
+		t.Error("Stale = false, want true")
+	}
+}
+
+func TestServicesPanel_KeyG_WhenLazygitAvailableNoServiceSelected_EmitsNoSelectionMessage(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	p.SetLazygitAvailable(true)
+	p.SetServices("IN-001", nil)
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("g"))
+	if cmd == nil {
+		t.Fatal("g key should return a cmd when lazygit is available but no service is selected")
+	}
+
+	msg := cmd()
+	got, ok := msg.(OpenLazygitServiceMsg)
+	if !ok {
+		t.Fatalf("expected OpenLazygitServiceMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" {
+		t.Errorf("TaskID = %q, want IN-001", got.TaskID)
+	}
+	if got.ServiceName != "" {
+		t.Errorf("ServiceName = %q, want empty", got.ServiceName)
+	}
+	if got.WorktreePath != "" {
+		t.Errorf("WorktreePath = %q, want empty", got.WorktreePath)
+	}
+}
+
+func TestServicesPanel_KeyG_WhenLazygitUnavailable_EmitsNoLazygitMessage(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	tid, svcs := makeServices("IN-001", "collection")
+	p.SetServices(tid, svcs)
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("g"))
+	if cmd == nil {
+		return
+	}
+	if _, ok := cmd().(OpenLazygitServiceMsg); ok {
+		t.Fatal("g key emitted OpenLazygitServiceMsg when lazygit unavailable")
+	}
+}
+
+func TestServicesPanel_KeyG_FilterMode_DoesNotEmitLazygitMessage(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	p.SetLazygitAvailable(true)
+	tid, svcs := makeServices("IN-001", "collection")
+	p.SetServices(tid, svcs)
+	p.SetFocused(true)
+	p, _ = p.Update(sendKey("f"))
+
+	_, cmd := p.Update(sendKey("g"))
+	if cmd == nil {
+		return
+	}
+	if _, ok := cmd().(OpenLazygitServiceMsg); ok {
+		t.Fatal("filter mode g emitted OpenLazygitServiceMsg")
 	}
 }
 

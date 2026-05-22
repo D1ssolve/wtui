@@ -8,9 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/diss0x/wtui/internal/domain"
-	"github.com/diss0x/wtui/internal/logutil"
-	"github.com/diss0x/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/logutil"
+	"github.com/D1ssolve/wtui/internal/task"
 )
 
 type TasksLoadedMsg struct{ Tasks []domain.Task }
@@ -39,6 +39,13 @@ type OutputLineMsg struct {
 type CommandDoneMsg struct {
 	Err error
 	Op  string
+}
+
+type LazygitDoneMsg struct {
+	TaskID       string
+	ServiceName  string
+	WorktreePath string
+	Err          error
 }
 
 type channelDrainedMsg struct{}
@@ -184,6 +191,33 @@ func codeWorkspaceTaskCmd(editor, taskID, dir string) tea.Cmd {
 
 func codeWorkspaceTaskArgs(editor, taskID string) (string, []string) {
 	return editor, []string{taskID + ".code-workspace"}
+}
+
+func lazygitServiceCmd(taskID, serviceName, worktreePath string) tea.Cmd {
+	c := lazygitServiceExecCmd(worktreePath)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return lazygitServiceDoneMsg(taskID, serviceName, worktreePath, err)
+	})
+}
+
+func lazygitServiceExecCmd(worktreePath string) *exec.Cmd {
+	name, args := lazygitServiceArgs(worktreePath)
+	c := exec.Command(name, args...)
+	c.Dir = worktreePath
+	return c
+}
+
+func lazygitServiceArgs(worktreePath string) (string, []string) {
+	return "lazygit", []string{"-p", worktreePath}
+}
+
+func lazygitServiceDoneMsg(taskID, serviceName, worktreePath string, err error) tea.Msg {
+	return LazygitDoneMsg{
+		TaskID:       taskID,
+		ServiceName:  serviceName,
+		WorktreePath: worktreePath,
+		Err:          err,
+	}
 }
 
 func pushTaskCmd(mgr task.Manager, taskID string) tea.Cmd {

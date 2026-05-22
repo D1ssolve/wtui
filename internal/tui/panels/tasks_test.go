@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/diss0x/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 func makeTasks(ids ...string) []domain.Task {

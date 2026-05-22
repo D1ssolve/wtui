@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/diss0x/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 type fakeResolver struct {

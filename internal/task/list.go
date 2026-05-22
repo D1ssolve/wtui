@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/diss0x/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 func (m *manager) List(ctx context.Context) ([]domain.Task, error) {

@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/diss0x/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/task"
 )
 
 type SyncServiceStrategyDialog struct {

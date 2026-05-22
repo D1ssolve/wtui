@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/diss0x/wtui/internal/config"
+	"github.com/D1ssolve/wtui/internal/config"
 )
 
 var _ Modal = (*ConfigModal)(nil)

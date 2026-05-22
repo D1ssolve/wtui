@@ -7,9 +7,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type HelpOverlay struct{}
+type HelpOverlay struct {
+	lazygitAvailable bool
+}
 
-func NewHelpOverlay() *HelpOverlay { return &HelpOverlay{} }
+func NewHelpOverlay() *HelpOverlay { return NewHelpOverlayWithOptions(false) }
+
+func NewHelpOverlayWithOptions(lazygitAvailable bool) *HelpOverlay {
+	return &HelpOverlay{lazygitAvailable: lazygitAvailable}
+}
 
 func (h *HelpOverlay) Title() string { return "Keyboard Shortcuts" }
 
@@ -83,16 +89,21 @@ func (h *HelpOverlay) View() string {
 	sb.WriteString("\n")
 	sb.WriteString(row("a", "Add service to task"))
 	sb.WriteString("\n")
-	sb.WriteString(row("p", "Push service (git push -u)"))
-	sb.WriteString("\n")
-	sb.WriteString(row("s", "Sync service (fetch + merge/rebase)"))
-	sb.WriteString("\n")
 	sb.WriteString(row("d/Del", "Remove service from task"))
 	sb.WriteString("\n")
-	sb.WriteString(row("Ctrl+s", "Stash service changes"))
-	sb.WriteString("\n")
-	sb.WriteString(row("Ctrl+u", "Unstash service changes"))
-	sb.WriteString("\n")
+	if h.lazygitAvailable {
+		sb.WriteString(row("g", "Open lazygit for selected service"))
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString(row("p", "Push service (git push -u)"))
+		sb.WriteString("\n")
+		sb.WriteString(row("s", "Sync service (fetch + merge/rebase)"))
+		sb.WriteString("\n")
+		sb.WriteString(row("Ctrl+s", "Stash service changes"))
+		sb.WriteString("\n")
+		sb.WriteString(row("Ctrl+u", "Unstash service changes"))
+		sb.WriteString("\n")
+	}
 	sb.WriteString(row("Esc", "Back to tasks"))
 	sb.WriteString("\n\n")
 
@@ -102,14 +113,12 @@ func (h *HelpOverlay) View() string {
 	sb.WriteString("\n")
 	sb.WriteString(row("g/G", "Top/bottom"))
 	sb.WriteString("\n")
+	sb.WriteString(row("mouse wheel", "Scroll (always active)"))
+	sb.WriteString("\n")
 	sb.WriteString(row("Esc", "Back to tasks"))
 	sb.WriteString("\n\n")
 
 	sb.WriteString(sectionStyle.Render("Global:"))
-	sb.WriteString("\n")
-	sb.WriteString(row("Tab", "Tasks ↔ Output"))
-	sb.WriteString("\n")
-	sb.WriteString(row("Shift+Tab", "Output ↔ Tasks"))
 	sb.WriteString("\n")
 	sb.WriteString(row("L", "Toggle log overlay"))
 	sb.WriteString("\n")

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -12,18 +14,20 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/diss0x/wtui/internal/config"
-	"github.com/diss0x/wtui/internal/domain"
-	"github.com/diss0x/wtui/internal/logutil"
-	"github.com/diss0x/wtui/internal/task"
-	"github.com/diss0x/wtui/internal/tui/modal"
-	"github.com/diss0x/wtui/internal/tui/panels"
+	"github.com/D1ssolve/wtui/internal/config"
+	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/logutil"
+	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tui/modal"
+	"github.com/D1ssolve/wtui/internal/tui/panels"
 )
 
 type Model struct {
 	cfg    *config.Config
 	logger *slog.Logger
 	mgr    task.Manager
+
+	lazygitAvailable bool
 
 	focus         FocusPanel
 	previousFocus FocusPanel
@@ -60,7 +64,15 @@ type Model struct {
 	pendingAddParams *task.AddParams
 }
 
+type Options struct {
+	LazygitAvailable bool
+}
+
 func New(cfg *config.Config, mgr task.Manager, logger *slog.Logger) (Model, error) {
+	return NewWithOptions(cfg, mgr, logger, Options{})
+}
+
+func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, opts Options) (Model, error) {
 	if cfg == nil {
 		return Model{}, errorf("tui.New: cfg must not be nil")
 	}
@@ -79,20 +91,22 @@ func New(cfg *config.Config, mgr task.Manager, logger *slog.Logger) (Model, erro
 	logPath := filepath.Join(logutil.XDGStateDir("wtui"), "wtui.log")
 
 	m := Model{
-		cfg:           cfg,
-		logger:        logger,
-		mgr:           mgr,
-		keymap:        DefaultKeyMap(),
-		styles:        NewStyles(),
-		focus:         FocusTasks,
-		spinner:       sp,
-		logPath:       logPath,
-		tasksPanel:    panels.NewTasksPanel(25, 10),
-		servicesPanel: panels.NewServicesPanel(55, 10),
-		outputPanel:   panels.NewOutputPanel(80, cfg.OutputPanelLines+2),
+		cfg:              cfg,
+		logger:           logger,
+		mgr:              mgr,
+		keymap:           DefaultKeyMap(),
+		styles:           NewStyles(),
+		focus:            FocusTasks,
+		lazygitAvailable: opts.LazygitAvailable,
+		spinner:          sp,
+		logPath:          logPath,
+		tasksPanel:       panels.NewTasksPanel(25, 10),
+		servicesPanel:    panels.NewServicesPanel(55, 10),
+		outputPanel:      panels.NewOutputPanel(80, cfg.OutputPanelLines+2),
 	}
 
 	m.tasksPanel.SetFocused(true)
+	m.servicesPanel.SetLazygitAvailable(opts.LazygitAvailable)
 
 	return m, nil
 }
@@ -173,19 +187,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case key.Matches(msg, m.keymap.Tab):
-			m = m.toggleOutputFocus()
+			m = m.cycleFocusForward()
 			m.logger.Debug("focus changed", slog.String("panel", m.focus.String()))
 			return m, nil
 
-		case key.Matches(msg, m.keymap.ShiftTab):
-			if m.focus != FocusServices {
-				m = m.cycleFocusBackward()
-				m.logger.Debug("focus changed", slog.String("panel", m.focus.String()))
-			}
+		case key.Matches(msg, m.keymap.PanelTasks):
+			m.focus = FocusTasks
+			m.tasksPanel.SetFocused(true)
+			m.servicesPanel.SetFocused(false)
+			m.outputPanel.SetFocused(false)
+			m.logger.Debug("focus changed", slog.String("panel", m.focus.String()))
+			return m, nil
+
+		case key.Matches(msg, m.keymap.PanelServices):
+			m.focus = FocusServices
+			m.tasksPanel.SetFocused(false)
+			m.servicesPanel.SetFocused(true)
+			m.outputPanel.SetFocused(false)
+			m.logger.Debug("focus changed", slog.String("panel", m.focus.String()))
+			return m, nil
+
+		case key.Matches(msg, m.keymap.PanelOutput):
+			m.focus = FocusOutput
+			m.tasksPanel.SetFocused(false)
+			m.servicesPanel.SetFocused(false)
+			m.outputPanel.SetFocused(true)
+			m.logger.Debug("focus changed", slog.String("panel", m.focus.String()))
 			return m, nil
 
 		case key.Matches(msg, m.keymap.Help):
-			m.modal = modal.NewHelpOverlay()
+			m.modal = modal.NewHelpOverlayWithOptions(m.lazygitAvailable)
 			return m, nil
 
 		case key.Matches(msg, m.keymap.ToggleLogs):
@@ -271,6 +302,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panels.OpenSyncServiceStrategyDialogMsg:
 		m.modal = modal.NewSyncServiceStrategyDialog(msg.TaskID, msg.ServiceName)
 		return m, nil
+
+	case panels.OpenLazygitServiceMsg:
+		return m.handleOpenLazygitServiceMsg(msg)
 
 	case panels.OpenConfigModalMsg:
 		m.modal = modal.NewConfigModal(m.cfg)
@@ -527,6 +561,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.outputPanel.AppendLine(msg.Line)
 		return m, msg.Next
 
+	case LazygitDoneMsg:
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Open lazygit for " + msg.ServiceName + " failed: " + msg.Err.Error())
+			if isExecutableNotFoundErr(msg.Err) {
+				m.outputPanel.AppendLine("lazygit not found on PATH. Install lazygit or add it to PATH.")
+			}
+		} else {
+			m.outputPanel.AppendLine("Open lazygit for " + msg.ServiceName + " done.")
+		}
+
+		return m, tea.Batch(loadTasksCmd(m.mgr), loadServicesCmd(m.mgr, msg.TaskID))
+
 	case CommandDoneMsg:
 		m.opRunning = false
 		if msg.Err != nil {
@@ -589,6 +636,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+
+	case tea.MouseMsg:
+		// Allow mouse wheel scrolling on the output panel regardless of focus.
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.outputPanel.ScrollUp(3)
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			m.outputPanel.ScrollDown(3)
+			return m, nil
+		}
 	}
 
 	return m, nil
@@ -655,21 +713,6 @@ func (m Model) cycleFocusBackward() Model {
 	return m
 }
 
-func (m Model) toggleOutputFocus() Model {
-	if m.focus == FocusOutput {
-
-		m.focus = m.previousFocus
-	} else {
-
-		m.previousFocus = m.focus
-		m.focus = FocusOutput
-	}
-	m.tasksPanel.SetFocused(m.focus == FocusTasks)
-	m.servicesPanel.SetFocused(m.focus == FocusServices)
-	m.outputPanel.SetFocused(m.focus == FocusOutput)
-	return m
-}
-
 func (m Model) moveFocusLeft() Model {
 	if m.focus == FocusServices {
 		m.focus = FocusTasks
@@ -696,6 +739,52 @@ func (m Model) maybeLoadServicesCmd() tea.Cmd {
 		return nil
 	}
 	return loadServicesCmd(m.mgr, t.ID)
+}
+
+func (m Model) handleOpenLazygitServiceMsg(msg panels.OpenLazygitServiceMsg) (Model, tea.Cmd) {
+	if msg.ServiceName == "" {
+		m.outputPanel.AppendLine("No service selected.")
+		return m, nil
+	}
+
+	if msg.Stale {
+		m.outputPanel.AppendLine("Cannot open lazygit for service " + msg.ServiceName + ": worktree path is missing or stale: " + msg.WorktreePath)
+		return m, nil
+	}
+
+	if msg.WorktreePath == "" {
+		m.outputPanel.AppendLine("Cannot open lazygit for service " + msg.ServiceName + ": selected service has no worktree path.")
+		return m, nil
+	}
+
+	info, err := os.Stat(msg.WorktreePath)
+	if err != nil {
+		m.outputPanel.AppendLine("Cannot open lazygit for service " + msg.ServiceName + ": worktree path is missing or inaccessible: " + msg.WorktreePath + " (" + err.Error() + ")")
+		return m, nil
+	}
+	if !info.IsDir() {
+		m.outputPanel.AppendLine("Cannot open lazygit for service " + msg.ServiceName + ": worktree path is not a directory: " + msg.WorktreePath)
+		return m, nil
+	}
+
+	m.opRunning = true
+	m.outputPanel.AppendLine("Opening lazygit for service " + msg.ServiceName + " from " + msg.WorktreePath + "...")
+	return m, tea.Batch(lazygitServiceCmd(msg.TaskID, msg.ServiceName, msg.WorktreePath), m.spinner.Tick)
+}
+
+func isExecutableNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return false
+	}
+	var execErr *exec.Error
+	if errors.As(err, &execErr) {
+		return execErr.Name == "lazygit" && errors.Is(execErr.Err, exec.ErrNotFound)
+	}
+	return errors.Is(err, exec.ErrNotFound)
 }
 
 func errorf(msg string) error {

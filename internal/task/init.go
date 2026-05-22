@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/diss0x/wtui/internal/git"
+	"github.com/D1ssolve/wtui/internal/git"
 )
 
 func (m *manager) Init(ctx context.Context, params InitParams) error {

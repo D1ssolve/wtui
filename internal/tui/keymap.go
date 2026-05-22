@@ -3,8 +3,11 @@ package tui
 import "github.com/charmbracelet/bubbles/key"
 
 type KeyMap struct {
-	Tab      key.Binding
-	ShiftTab key.Binding
+	Tab key.Binding
+
+	PanelTasks    key.Binding
+	PanelServices key.Binding
+	PanelOutput   key.Binding
 
 	Quit      key.Binding
 	ForceQuit key.Binding
@@ -21,9 +24,17 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("tab"),
 			key.WithHelp("tab", "next panel"),
 		),
-		ShiftTab: key.NewBinding(
-			key.WithKeys("shift+tab"),
-			key.WithHelp("shift+tab", "prev panel"),
+		PanelTasks: key.NewBinding(
+			key.WithKeys("1"),
+			key.WithHelp("1", "focus tasks"),
+		),
+		PanelServices: key.NewBinding(
+			key.WithKeys("2"),
+			key.WithHelp("2", "focus services"),
+		),
+		PanelOutput: key.NewBinding(
+			key.WithKeys("0"),
+			key.WithHelp("0", "focus output"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("q"),

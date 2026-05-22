@@ -3,24 +3,29 @@ package tui
 import (
 	"context"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/diss0x/wtui/internal/config"
-	"github.com/diss0x/wtui/internal/domain"
-	"github.com/diss0x/wtui/internal/task"
-	"github.com/diss0x/wtui/internal/tui/modal"
-	"github.com/diss0x/wtui/internal/tui/panels"
+	"github.com/D1ssolve/wtui/internal/config"
+	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tui/modal"
+	"github.com/D1ssolve/wtui/internal/tui/panels"
 )
 
 type mockManager struct {
 	listTasksResult    []domain.Task
 	listTasksErr       error
+	listTasksCalls     int
 	listServicesResult []domain.Service
 	listServicesErr    error
 	listServicesTaskID string
+	listServicesCalls  int
 	reposResult        []domain.Repo
 	reposErr           error
 	repoRefreshArgs    []bool
@@ -33,10 +38,12 @@ func (m *mockManager) Add(_ context.Context, _ task.AddParams) error       { ret
 func (m *mockManager) Remove(_ context.Context, _ string, _, _ bool) error { return nil }
 
 func (m *mockManager) List(_ context.Context) ([]domain.Task, error) {
+	m.listTasksCalls++
 	return m.listTasksResult, m.listTasksErr
 }
 
 func (m *mockManager) ListServices(_ context.Context, taskID string) ([]domain.Service, error) {
+	m.listServicesCalls++
 	m.listServicesTaskID = taskID
 	return m.listServicesResult, m.listServicesErr
 }
@@ -94,6 +101,14 @@ func sendWindowSize(m Model, w, h int) Model {
 	return updated.(Model)
 }
 
+func newLazygitUpdateTestModel(t *testing.T, mgr task.Manager) Model {
+	t.Helper()
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 1000, 40)
+	m.outputPanel.SetSize(1000, 12)
+	return m
+}
+
 func stripANSIForModel(s string) string {
 	var result strings.Builder
 	inEscape := false
@@ -130,6 +145,25 @@ func TestModelInit(t *testing.T) {
 	}
 	if m.ready {
 		t.Error("model must not be ready before receiving the first WindowSizeMsg")
+	}
+}
+
+func TestNewWithOptions_SetsLazygitAvailable(t *testing.T) {
+	m, err := NewWithOptions(newTestConfig(), &mockManager{}, slog.Default(), Options{LazygitAvailable: true})
+	if err != nil {
+		t.Fatalf("NewWithOptions: unexpected error: %v", err)
+	}
+
+	if !m.lazygitAvailable {
+		t.Fatal("lazygitAvailable = false, want true")
+	}
+}
+
+func TestNew_DefaultsLazygitUnavailable(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+
+	if m.lazygitAvailable {
+		t.Fatal("lazygitAvailable = true, want false")
 	}
 }
 
@@ -250,24 +284,14 @@ func TestUpdate_Tab_CyclesFocusForward(t *testing.T) {
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
-	if m.focus != FocusOutput {
-		t.Errorf("after Tab: expected FocusOutput, got %v", m.focus)
+	if m.focus != FocusServices {
+		t.Errorf("after Tab: expected FocusServices, got %v", m.focus)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	if m.focus != FocusTasks {
 		t.Errorf("after Tab×2 (wrap): expected FocusTasks, got %v", m.focus)
-	}
-}
-
-func TestUpdate_ShiftTab_CyclesFocusBackward(t *testing.T) {
-	m := newTestModel(t, &mockManager{})
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
-	m = updated.(Model)
-	if m.focus != FocusOutput {
-		t.Errorf("Shift+Tab from FocusTasks: expected FocusOutput, got %v", m.focus)
 	}
 }
 
@@ -676,26 +700,26 @@ func TestFocusPanel_String(t *testing.T) {
 
 func TestFocusPanel_NextPrev(t *testing.T) {
 
-	if got := FocusTasks.Next(); got != FocusOutput {
-		t.Errorf("FocusTasks.Next(): expected FocusOutput, got %v", got)
+	if got := FocusTasks.Next(); got != FocusServices {
+		t.Errorf("FocusTasks.Next(): expected FocusServices, got %v", got)
 	}
-	if got := FocusOutput.Next(); got != FocusTasks {
-		t.Errorf("FocusOutput.Next(): expected FocusTasks, got %v", got)
-	}
-
 	if got := FocusServices.Next(); got != FocusTasks {
-		t.Errorf("FocusServices.Next(): expected FocusTasks (safe default), got %v", got)
+		t.Errorf("FocusServices.Next(): expected FocusTasks, got %v", got)
 	}
 
-	if got := FocusTasks.Prev(); got != FocusOutput {
-		t.Errorf("FocusTasks.Prev(): expected FocusOutput, got %v", got)
-	}
-	if got := FocusOutput.Prev(); got != FocusTasks {
-		t.Errorf("FocusOutput.Prev(): expected FocusTasks, got %v", got)
+	if got := FocusOutput.Next(); got != FocusTasks {
+		t.Errorf("FocusOutput.Next(): expected FocusTasks (safe default), got %v", got)
 	}
 
 	if got := FocusServices.Prev(); got != FocusTasks {
-		t.Errorf("FocusServices.Prev(): expected FocusTasks (safe default), got %v", got)
+		t.Errorf("FocusServices.Prev(): expected FocusTasks, got %v", got)
+	}
+	if got := FocusTasks.Prev(); got != FocusServices {
+		t.Errorf("FocusTasks.Prev(): expected FocusServices, got %v", got)
+	}
+
+	if got := FocusOutput.Prev(); got != FocusServices {
+		t.Errorf("FocusOutput.Prev(): expected FocusServices (safe default), got %v", got)
 	}
 }
 
@@ -786,6 +810,244 @@ func TestUpdate_StashServiceMsg_Unstash_StartsOperation(t *testing.T) {
 	view := m.outputPanel.View()
 	if !strings.Contains(view, "Unstashing service svc-a for task IN-001...") {
 		t.Errorf("output panel should contain unstash message, got:\n%s", view)
+	}
+}
+
+func TestUpdate_OpenLazygitServiceMsg_StaleService_AppendsOutputAndReturnsNoCommand(t *testing.T) {
+	mgr := &mockManager{}
+	m := newLazygitUpdateTestModel(t, mgr)
+
+	updated, cmd := m.Update(panels.OpenLazygitServiceMsg{
+		TaskID:       "IN-001",
+		ServiceName:  "svc-a",
+		WorktreePath: "/tmp/missing-svc-a",
+		Stale:        true,
+	})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("stale lazygit service must not return a command")
+	}
+	if m.opRunning {
+		t.Fatal("stale lazygit service must not start operation")
+	}
+	assertNoManagerRefresh(t, mgr)
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "Cannot open lazygit for service svc-a") || !strings.Contains(view, "stale") {
+		t.Fatalf("output should mention stale service, got:\n%s", view)
+	}
+}
+
+func TestUpdate_OpenLazygitServiceMsg_NoServiceSelected_AppendsOutputAndReturnsNoCommand(t *testing.T) {
+	mgr := &mockManager{}
+	m := newLazygitUpdateTestModel(t, mgr)
+
+	updated, cmd := m.Update(panels.OpenLazygitServiceMsg{TaskID: "IN-001"})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("empty lazygit service selection must not return a command")
+	}
+	if m.opRunning {
+		t.Fatal("empty lazygit service selection must not start operation")
+	}
+	assertNoManagerRefresh(t, mgr)
+	if !strings.Contains(m.outputPanel.View(), "No service selected.") {
+		t.Fatalf("output should mention no service selection, got:\n%s", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_OpenLazygitServiceMsg_EmptyWorktreePath_AppendsOutputAndReturnsNoCommand(t *testing.T) {
+	mgr := &mockManager{}
+	m := newLazygitUpdateTestModel(t, mgr)
+
+	updated, cmd := m.Update(panels.OpenLazygitServiceMsg{
+		TaskID:      "IN-001",
+		ServiceName: "svc-a",
+	})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("empty lazygit worktree path must not return a command")
+	}
+	if m.opRunning {
+		t.Fatal("empty lazygit worktree path must not start operation")
+	}
+	assertNoManagerRefresh(t, mgr)
+	if !strings.Contains(m.outputPanel.View(), "selected service has no worktree path") {
+		t.Fatalf("output should mention empty worktree path, got:\n%s", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_OpenLazygitServiceMsg_MissingPath_AppendsOutputAndReturnsNoCommand(t *testing.T) {
+	mgr := &mockManager{}
+	m := newLazygitUpdateTestModel(t, mgr)
+	missingPath := filepath.Join(t.TempDir(), "missing-service")
+
+	updated, cmd := m.Update(panels.OpenLazygitServiceMsg{
+		TaskID:       "IN-001",
+		ServiceName:  "svc-a",
+		WorktreePath: missingPath,
+	})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("missing lazygit worktree path must not return a command")
+	}
+	if m.opRunning {
+		t.Fatal("missing lazygit worktree path must not start operation")
+	}
+	assertNoManagerRefresh(t, mgr)
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "worktree path is missing or inaccessible") || !strings.Contains(view, missingPath) {
+		t.Fatalf("output should mention missing worktree path, got:\n%s", view)
+	}
+}
+
+func TestUpdate_OpenLazygitServiceMsg_ValidDirectory_StartsOperation(t *testing.T) {
+	m := newLazygitUpdateTestModel(t, &mockManager{})
+	worktreePath := t.TempDir()
+
+	updated, cmd := m.Update(panels.OpenLazygitServiceMsg{
+		TaskID:       "IN-001",
+		ServiceName:  "svc-a",
+		WorktreePath: worktreePath,
+	})
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("valid lazygit worktree path must return a command")
+	}
+	if !m.opRunning {
+		t.Fatal("valid lazygit worktree path must start operation")
+	}
+	want := "Opening lazygit for service svc-a from " + worktreePath + "..."
+	if !strings.Contains(m.outputPanel.View(), want) {
+		t.Fatalf("output should mention lazygit launch, want %q, got:\n%s", want, m.outputPanel.View())
+	}
+}
+
+func assertNoManagerRefresh(t *testing.T, mgr *mockManager) {
+	t.Helper()
+	if mgr.listTasksCalls != 0 {
+		t.Fatalf("validation failure List calls = %d, want 0", mgr.listTasksCalls)
+	}
+	if mgr.listServicesCalls != 0 {
+		t.Fatalf("validation failure ListServices calls = %d, want 0", mgr.listServicesCalls)
+	}
+}
+
+func TestUpdate_LazygitDoneMsg_SuccessAppendsDoneStopsOperationAndRefreshes(t *testing.T) {
+	mgr := &mockManager{
+		listTasksResult:    []domain.Task{{ID: "TASK-6"}},
+		listServicesResult: []domain.Service{{Name: "api"}},
+	}
+	m := newLazygitUpdateTestModel(t, mgr)
+	m.opRunning = true
+
+	updated, cmd := m.Update(LazygitDoneMsg{TaskID: "TASK-6", ServiceName: "api", WorktreePath: "/tmp/api"})
+	m = updated.(Model)
+
+	if m.opRunning {
+		t.Fatal("opRunning must be false after LazygitDoneMsg")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Open lazygit for api done.") {
+		t.Fatalf("output should contain lazygit done message, got %q", m.outputPanel.View())
+	}
+	assertLazygitRefreshCommands(t, cmd, mgr, "TASK-6")
+}
+
+func TestUpdate_LazygitDoneMsg_ErrorAppendsFailureStopsOperationAndRefreshes(t *testing.T) {
+	mgr := &mockManager{
+		listTasksResult:    []domain.Task{{ID: "TASK-6"}},
+		listServicesResult: []domain.Service{{Name: "api"}},
+	}
+	m := newLazygitUpdateTestModel(t, mgr)
+	m.opRunning = true
+
+	updated, cmd := m.Update(LazygitDoneMsg{
+		TaskID:       "TASK-6",
+		ServiceName:  "api",
+		WorktreePath: "/tmp/api",
+		Err:          &mockError{"exit status 1"},
+	})
+	m = updated.(Model)
+
+	if m.opRunning {
+		t.Fatal("opRunning must be false after LazygitDoneMsg error")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Open lazygit for api failed: exit status 1") {
+		t.Fatalf("output should contain lazygit failure message, got %q", m.outputPanel.View())
+	}
+	assertLazygitRefreshCommands(t, cmd, mgr, "TASK-6")
+}
+
+func TestUpdate_LazygitDoneMsg_ExecutableNotFoundAppendsPathGuidance(t *testing.T) {
+	m := newLazygitUpdateTestModel(t, &mockManager{})
+
+	updated, _ := m.Update(LazygitDoneMsg{
+		TaskID:      "TASK-6",
+		ServiceName: "api",
+		Err:         &exec.Error{Name: "lazygit", Err: exec.ErrNotFound},
+	})
+	m = updated.(Model)
+
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "Open lazygit for api failed:") {
+		t.Fatalf("output should contain lazygit failure message, got %q", view)
+	}
+	if !strings.Contains(view, "lazygit not found on PATH. Install lazygit or add it to PATH.") {
+		t.Fatalf("output should contain PATH guidance, got %q", view)
+	}
+}
+
+func TestUpdate_LazygitDoneMsg_WorktreeMissingDoesNotAppendPathGuidance(t *testing.T) {
+	m := newLazygitUpdateTestModel(t, &mockManager{})
+
+	updated, _ := m.Update(LazygitDoneMsg{
+		TaskID:      "TASK-6",
+		ServiceName: "api",
+		Err:         &os.PathError{Op: "chdir", Path: "/tmp/api", Err: os.ErrNotExist},
+	})
+	m = updated.(Model)
+
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "Open lazygit for api failed:") {
+		t.Fatalf("output should contain lazygit failure message, got %q", view)
+	}
+	if strings.Contains(view, "lazygit not found on PATH. Install lazygit or add it to PATH.") {
+		t.Fatalf("output should not contain PATH guidance for missing worktree path, got %q", view)
+	}
+}
+
+func assertLazygitRefreshCommands(t *testing.T, cmd tea.Cmd, mgr *mockManager, wantTaskID string) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("LazygitDoneMsg must return refresh commands")
+	}
+
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("refresh command returned %T, want tea.BatchMsg", msg)
+	}
+	if len(batch) != 2 {
+		t.Fatalf("refresh batch command count = %d, want 2", len(batch))
+	}
+	for _, refreshCmd := range batch {
+		if refreshCmd == nil {
+			t.Fatal("refresh batch contains nil command")
+		}
+		refreshCmd()
+	}
+	if mgr.listTasksCalls != 1 {
+		t.Fatalf("List calls = %d, want 1", mgr.listTasksCalls)
+	}
+	if mgr.listServicesCalls != 1 {
+		t.Fatalf("ListServices calls = %d, want 1", mgr.listServicesCalls)
+	}
+	if mgr.listServicesTaskID != wantTaskID {
+		t.Fatalf("ListServices taskID = %q, want %q", mgr.listServicesTaskID, wantTaskID)
 	}
 }
 

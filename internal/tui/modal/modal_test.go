@@ -9,8 +9,8 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/diss0x/wtui/internal/config"
-	"github.com/diss0x/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/config"
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 func makeTestRepos(names ...string) []domain.Repo {
@@ -323,6 +323,24 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		if strings.Contains(view, forbidden+"  ") || strings.Contains(view, forbidden+"\t") {
 			t.Errorf("HelpOverlay.View() should not advertise fast navigation key %q", forbidden)
 		}
+	}
+}
+
+func TestHelpOverlay_LazygitAvailableIncludesServiceRow(t *testing.T) {
+	h := NewHelpOverlayWithOptions(true)
+	view := stripAnsi(h.View())
+
+	if !strings.Contains(view, "Open lazygit for selected service") {
+		t.Fatalf("help overlay should include lazygit service row when available, got %q", view)
+	}
+}
+
+func TestHelpOverlay_LazygitUnavailableExcludesServiceRow(t *testing.T) {
+	h := NewHelpOverlayWithOptions(false)
+	view := stripAnsi(h.View())
+
+	if strings.Contains(view, "Open lazygit for selected service") || strings.Contains(view, "lazygit") {
+		t.Fatalf("help overlay should omit lazygit service row when unavailable, got %q", view)
 	}
 }
 

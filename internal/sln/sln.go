@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/diss0x/wtui/internal/domain"
-	"github.com/diss0x/wtui/internal/dotnet"
+	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/dotnet"
 )
 
 type Manager struct {

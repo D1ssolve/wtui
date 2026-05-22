@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/diss0x/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/task"
 )
 
 func TestRemoteBranchConflictDialog_DefaultSelectionIsFetchAndSwitch(t *testing.T) {

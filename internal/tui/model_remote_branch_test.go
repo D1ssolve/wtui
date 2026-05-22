@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/diss0x/wtui/internal/task"
-	"github.com/diss0x/wtui/internal/tui/modal"
+	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tui/modal"
 )
 
 func TestUpdate_RemoteBranchConflictMsg_ShowsDialog(t *testing.T) {

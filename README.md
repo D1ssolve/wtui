@@ -1,87 +1,95 @@
 # wtui
 
-`wtui` is a Go TUI tool for managing **git worktree groups** (called *tasks*) across
-microservice monorepos — creating, listing, and removing linked worktrees for multiple repositories
-under a single ticket/feature ID — and automates generation of VS Code `.code-workspace` and
-.NET `.sln` files for each task group.
+**wtui** is a terminal UI for managing git worktrees across microservice monorepos. It groups multiple worktrees under a single ticket or feature ID — called a **task** — and automates the setup of VS Code `.code-workspace` and .NET `.sln` files so you can jump straight into development.
+
+---
+
+## Why wtui?
+
+Working on a feature that spans several microservices usually means manually creating a worktree in each repository, keeping branch names consistent, and wiring up IDE workspace files by hand. With enough services this becomes tedious and error-prone.
+
+**wtui** treats all of that as a single unit — one task, one command. You pick which services belong to the feature, and wtui creates the branches and worktrees, wires up the workspace files, and lets you push or sync every service at once from a single screen.
+
+```
+┌─ Tasks ──────────────┐ ┌─ Services ────────────────────────────────┐
+│                      │ │                                            │
+│  > PROJ-1234         │ │  > api-gateway          [✓] on PROJ-1234  │
+│    PROJ-5678         │ │    user-service          [✓] on PROJ-1234  │
+│                      │ │    notification-service  [✓] on PROJ-1234  │
+└──────────────────────┘ └────────────────────────────────────────────┘
+```
+
+---
+
+## How It Works
+
+1. **Tasks** are the top-level unit. A task maps to a ticket ID (e.g. `PROJ-1234`) and holds a set of service worktrees that all share the same branch name.
+2. **Services** are repositories you configure in `config.yaml`. When you add a service to a task, wtui creates a new git worktree in that repo on a branch derived from the task ID.
+3. **Workspace files** are generated automatically: a `.code-workspace` for VS Code and a `.sln` for .NET solutions, scoped to only the services in the current task. This means your IDE — and AI tools running inside it — only see the code relevant to what you are working on.
+4. **Sync and push** propagate across all services in a task at once, with per-service override available when needed.
+
+---
 
 ## Install
 
-### macOS/Linux Quick Install
-
-Install latest release:
+### macOS / Linux
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/D1ssolve/wtui/main/scripts/install.sh | sh
 ```
 
-Install pinned version:
+The installer picks the right binary for your OS and architecture, verifies the checksum, and places `wtui` in `/usr/local/bin` or `$HOME/.local/bin`.
+
+**Pin to a specific version:**
 
 ```bash
 WTUI_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/D1ssolve/wtui/main/scripts/install.sh | sh
 ```
 
-Install into custom directory:
+**Install to a custom directory:**
 
 ```bash
 WTUI_INSTALL_DIR=/path/to/bin curl -fsSL https://raw.githubusercontent.com/D1ssolve/wtui/main/scripts/install.sh | sh
 ```
 
-Installer downloads matching macOS/Linux release archive from GitHub Releases, verifies it with release `checksums.txt` when available, and installs `wtui` into `WTUI_INSTALL_DIR`, `/usr/local/bin`, or `$HOME/.local/bin`.
+### Windows
 
-### Windows Install
+Download the appropriate archive from the [Releases](https://github.com/D1ssolve/wtui/releases) page (`windows_amd64` or `windows_arm64`), extract it, and add the folder to your `PATH`.
 
-1. Open the [GitHub Releases](https://github.com/D1ssolve/wtui/releases) page.
-2. Download the correct `wtui_*_windows_*.zip` archive for your system:
-   - `windows_amd64` for most Intel/AMD Windows machines.
-   - `windows_arm64` for ARM64 Windows machines.
-3. Extract the zip to your chosen folder.
-4. Add that folder to your user `PATH` manually.
-5. Reopen your terminal.
-6. Verify install:
-
-```powershell
-wtui.exe --version
-```
-
-### Go Install Fallback
-
-Requires Go installed locally:
+### Go
 
 ```bash
-go install github.com/diss0x/wtui/cmd/wtui@latest
+go install github.com/D1ssolve/wtui/cmd/wtui@latest
 ```
 
-### Source Build Fallback
-
-Requires Go and Make:
+### From source
 
 ```bash
 make build
 make install
 ```
 
-## Verification
-
-Verify installed binary without launching the interactive TUI:
-
-```bash
-wtui --version
-wtui -v
-```
-
-Expected output includes release version, for example:
-
-```text
-wtui vX.Y.Z
-```
+---
 
 ## Configuration
 
-Default config location: `~/.config/wtui/config.yaml`  
+Config file: `~/.config/wtui/config.yaml`  
 Log file: `~/.local/state/wtui/wtui.log`
 
-Installer and upgrades do not create, delete, or move these files.
+```yaml
+# Example config.yaml
+worktrees_root: ~/worktrees   # root directory where worktrees are created
+
+services:
+  - name: api-gateway
+    path: ~/repos/api-gateway
+  - name: user-service
+    path: ~/repos/user-service
+  - name: notification-service
+    path: ~/repos/notification-service
+```
+
+---
 
 ## Usage
 
@@ -89,45 +97,37 @@ Installer and upgrades do not create, delete, or move these files.
 wtui
 ```
 
-Running `wtui` launches the interactive TUI. Running `wtui --version` or `wtui -v` prints version information and exits without launching the TUI. Task initialization and service addition generate `.sln` files automatically.
+This opens the interactive TUI. Use arrow keys or `j`/`k` to navigate, `Tab` to switch panels.
 
-Useful task actions:
+### Key Bindings
 
-- `i`: init task group
-- `a`: add service from Services panel
-- `S`: sync task
-- `P`/`p`: push task/service
-- `R`: run `rider <taskID>.sln` from the selected task directory
-- `;`: run a shell command from the selected task directory
+#### Tasks panel
 
-## Maintainer Release
+| Key | Action |
+|-----|--------|
+| `i` | Init a new task (create worktrees for selected services) |
+| `d` | Remove a task and its worktrees |
+| `S` | Sync all services in the task against the base branch |
+| `P` | Push all services in the task |
+| `R` | Open Rider with the task's `.sln` file |
+| `;` | Run a shell command from the task directory |
 
-Release workflow publishes GitHub Release artifacts from semantic version tags.
+#### Services panel
 
-1. Ensure local `main` branch is clean and up to date.
-2. Create release tag:
+| Key | Action |
+|-----|--------|
+| `a` | Add a service to the current task |
+| `d` | Remove a service from the current task |
+| `p` | Push the selected service |
+| `s` | Sync the selected service |
+| `Ctrl+s` | Stash changes in the selected service |
+| `Ctrl+u` | Unstash changes in the selected service |
+| `g` | Open lazygit for the selected service (when installed) |
 
-```bash
-git tag vX.Y.Z
-```
+---
 
-3. Push tag:
+## Lazygit Integration
 
-```bash
-git push origin vX.Y.Z
-```
+When [lazygit](https://github.com/jesseduffield/lazygit) is available on `PATH`, wtui switches to lazygit-first mode automatically. Pressing `g` on any service opens lazygit scoped to that service's worktree directory. The built-in `p`, `s`, `Ctrl+s`, and `Ctrl+u` bindings are hidden in this mode since lazygit covers all of them.
 
-4. Confirm GitHub Actions `Release` workflow succeeds.
-5. Confirm GitHub Release has six archives plus checksum file attached:
-
-```text
-wtui_vX.Y.Z_linux_amd64.tar.gz
-wtui_vX.Y.Z_linux_arm64.tar.gz
-wtui_vX.Y.Z_darwin_amd64.tar.gz
-wtui_vX.Y.Z_darwin_arm64.tar.gz
-wtui_vX.Y.Z_windows_amd64.zip
-wtui_vX.Y.Z_windows_arm64.zip
-checksums.txt
-```
-
-Release is not complete until all six target archives and `checksums.txt` are present.
+This pairs well with AI-assisted development: each worktree is an isolated directory, so agents and AI tools see only the files for the current task, not your entire monorepo.

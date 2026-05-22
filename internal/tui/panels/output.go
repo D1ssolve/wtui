@@ -97,7 +97,7 @@ func (p OutputPanel) Update(msg tea.Msg) (OutputPanel, tea.Cmd) {
 
 func (p OutputPanel) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary)
-	title := titleStyle.Render("Output")
+	title := titleStyle.Render("[0] Output")
 
 	inner := innerDimensions(p.width, p.height)
 	content := lipgloss.JoinVertical(lipgloss.Left,
@@ -128,6 +128,14 @@ func (p OutputPanel) rawLines() []string {
 
 func (p *OutputPanel) ScrollToBottom() {
 	p.viewport.GotoBottom()
+}
+
+func (p *OutputPanel) ScrollUp(lines int) {
+	p.viewport.ScrollUp(lines)
+}
+
+func (p *OutputPanel) ScrollDown(lines int) {
+	p.viewport.ScrollDown(lines)
 }
 
 func (p OutputPanel) ViewportContent() string {

@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/diss0x/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 const (
@@ -43,9 +43,6 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		staleStyle := lipgloss.NewStyle().Bold(true).Foreground(svcColorDirty)
 		dimStyle := lipgloss.NewStyle().Foreground(svcColorDim)
 		nameStyle := lipgloss.NewStyle().Foreground(svcColorDim)
-		if index == m.Index() {
-			nameStyle = nameStyle.Underline(true)
-		}
 		line1 := fmt.Sprintf("  ✗ %s %s", nameStyle.Render(svc.Name), staleStyle.Render("[STALE]"))
 		line2 := fmt.Sprintf("    %s", dimStyle.Render("worktree path no longer exists"))
 		shortPath := truncatePath(svc.WorktreePath)
@@ -65,7 +62,7 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	}
 
 	if index == m.Index() {
-		nameStyle = nameStyle.Underline(true)
+		nameStyle = nameStyle.Foreground(panelColorPrimary)
 	}
 	line1 := fmt.Sprintf("  %s %s", icon, nameStyle.Render(svc.Name))
 
@@ -101,6 +98,8 @@ type ServicesPanel struct {
 	focused bool
 	width   int
 	height  int
+
+	lazygitAvailable bool
 
 	services []domain.Service
 }
@@ -144,6 +143,10 @@ func (p *ServicesPanel) SetSize(width, height int) {
 
 func (p *ServicesPanel) SetFocused(focused bool) {
 	p.focused = focused
+}
+
+func (p *ServicesPanel) SetLazygitAvailable(available bool) {
+	p.lazygitAvailable = available
 }
 
 func (p *ServicesPanel) SelectedService() *domain.Service {
@@ -209,6 +212,9 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			return p, func() tea.Msg { return OpenAddServiceMsg{TaskID: tid, ExistingServices: existing} }
 
 		case "p":
+			if p.lazygitAvailable {
+				return p, nil
+			}
 			svc := p.SelectedService()
 			if svc == nil {
 				return p, nil
@@ -217,7 +223,29 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			name := svc.Name
 			return p, func() tea.Msg { return PushServiceMsg{TaskID: tid, ServiceName: name} }
 
+		case "g":
+			if !p.lazygitAvailable {
+				return p, nil
+			}
+			svc := p.SelectedService()
+			if svc == nil {
+				return p, func() tea.Msg {
+					return OpenLazygitServiceMsg{TaskID: p.taskID}
+				}
+			}
+			return p, func() tea.Msg {
+				return OpenLazygitServiceMsg{
+					TaskID:       p.taskID,
+					ServiceName:  svc.Name,
+					WorktreePath: svc.WorktreePath,
+					Stale:        svc.Stale,
+				}
+			}
+
 		case "s":
+			if p.lazygitAvailable {
+				return p, nil
+			}
 			svc := p.SelectedService()
 			if svc == nil {
 				return p, nil
@@ -229,6 +257,9 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			}
 
 		case "ctrl+s":
+			if p.lazygitAvailable {
+				return p, nil
+			}
 			svc := p.SelectedService()
 			if svc == nil {
 				return p, nil
@@ -240,6 +271,9 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			}
 
 		case "ctrl+u":
+			if p.lazygitAvailable {
+				return p, nil
+			}
 			svc := p.SelectedService()
 			if svc == nil {
 				return p, nil
@@ -322,7 +356,7 @@ func (p ServicesPanel) View() string {
 		if total > 0 {
 			current = p.list.Index() + 1
 		}
-		titleText = fmt.Sprintf("Services — %s  [%d/%d]", p.taskID, current, total)
+		titleText = fmt.Sprintf("[2] Services — %s  [%d/%d]", p.taskID, current, total)
 	}
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary)

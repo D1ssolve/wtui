@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/diss0x/wtui/internal/config"
-	"github.com/diss0x/wtui/internal/domain"
-	"github.com/diss0x/wtui/internal/git"
+	"github.com/D1ssolve/wtui/internal/config"
+	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/git"
 )
 
 type mockGitClient struct {

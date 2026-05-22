@@ -19,8 +19,7 @@ func TestRenderFooter_FocusTasks_IncludesConfigHint(t *testing.T) {
 		"[C] VS Code",
 		"[,] config",
 		"[/] filter",
-		"[Tab] output",
-		"[Enter] services",
+		"[Tab] services",
 		"[?] help",
 		"[q] quit",
 	} {
@@ -61,6 +60,28 @@ func TestRenderFooter_FocusServices_IncludesServiceActionHints(t *testing.T) {
 	}
 }
 
+func TestRenderFooter_FocusServices_LazygitAvailableIncludesHint(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.focus = FocusServices
+	m.lazygitAvailable = true
+
+	footer := renderFooter(m)
+	if !strings.Contains(footer, "[g] lazygit") {
+		t.Fatalf("services footer should include lazygit hint when available, got %q", footer)
+	}
+}
+
+func TestRenderFooter_FocusServices_LazygitUnavailableExcludesHint(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.focus = FocusServices
+	m.lazygitAvailable = false
+
+	footer := renderFooter(m)
+	if strings.Contains(footer, "lazygit") {
+		t.Fatalf("services footer should not include lazygit hint when unavailable, got %q", footer)
+	}
+}
+
 func TestRenderFooter_FocusOutput_IncludesOutputNavigationHints(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m.focus = FocusOutput
@@ -69,24 +90,10 @@ func TestRenderFooter_FocusOutput_IncludesOutputNavigationHints(t *testing.T) {
 	for _, want := range []string{
 		"[j/k] scroll",
 		"[g/G] top/bottom",
-		"[Esc] tasks",
-		"[Tab] back",
+		"[Esc] back",
 	} {
 		if !strings.Contains(footer, want) {
 			t.Errorf("output footer should include %q, got %q", want, footer)
-		}
-	}
-}
-
-func TestRenderFooter_DoesNotAdvertiseFastNavigation(t *testing.T) {
-	for _, focus := range []FocusPanel{FocusTasks, FocusServices, FocusOutput} {
-		m := newTestModel(t, &mockManager{})
-		m.focus = focus
-		footer := renderFooter(m)
-		for _, forbidden := range []string{"[1]", "[2]", "[3]", "[h]", "[l]"} {
-			if strings.Contains(footer, forbidden) {
-				t.Errorf("footer for %s should not advertise %s navigation: %q", focus, forbidden, footer)
-			}
 		}
 	}
 }

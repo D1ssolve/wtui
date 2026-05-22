@@ -6,10 +6,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/diss0x/wtui/internal/domain"
-	"github.com/diss0x/wtui/internal/task"
-	"github.com/diss0x/wtui/internal/tui/modal"
-	"github.com/diss0x/wtui/internal/tui/panels"
+	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tui/modal"
+	"github.com/D1ssolve/wtui/internal/tui/panels"
 )
 
 func TestE2E_Init_RemoteConflict_FetchAndSwitch(t *testing.T) {
