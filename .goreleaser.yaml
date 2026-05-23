@@ -2,6 +2,10 @@ version: 2
 
 project_name: wtui
 
+before:
+  hooks:
+    - go run github.com/tc-hib/go-winres@v0.3.3 make --in cmd/wtui/winres/winres.json --out cmd/wtui/rsrc --arch amd64,arm64 --product-version git-tag --file-version git-tag
+
 builds:
   - id: wtui
     main: ./cmd/wtui

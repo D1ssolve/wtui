@@ -8,6 +8,7 @@
 *.so
 *.dylib
 bin/
+dist/
 
 # Test binary, built with `go test -c`
 *.test
@@ -37,3 +38,6 @@ go.work.sum
 .ai/
 AGENTS.md
 CLAUDE.md
+
+# Generated Windows resource objects
+cmd/wtui/rsrc_windows_*.syso
