@@ -14,9 +14,12 @@ func TestRenderFooter_FocusTasks_IncludesConfigHint(t *testing.T) {
 		"[i] init",
 		"[d] remove",
 		"[S] sync",
-		"[P] push",
+		"[C] close",
+		"[P] prune",
+		"[V] validate",
+		"[T] tags",
 		"[R] Rider",
-		"[C] VS Code",
+		"[O] VS Code",
 		"[,] config",
 		"[/] filter",
 		"[Tab] services",
@@ -47,7 +50,10 @@ func TestRenderFooter_FocusServices_IncludesServiceActionHints(t *testing.T) {
 	for _, want := range []string{
 		"[a] add service",
 		"[s] sync service",
-		"[p] push service",
+		"[P] push service",
+		"[m] forge menu",
+		"[p] pipeline",
+		"[v] validate",
 		"[d] remove service",
 		"[ctrl+s] stash",
 		"[ctrl+u] unstash",
@@ -68,6 +74,11 @@ func TestRenderFooter_FocusServices_LazygitAvailableIncludesHint(t *testing.T) {
 	footer := renderFooter(m)
 	if !strings.Contains(footer, "[g] lazygit") {
 		t.Fatalf("services footer should include lazygit hint when available, got %q", footer)
+	}
+	for _, want := range []string{"[m] forge menu", "[p] pipeline", "[v] validate"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("services footer should include %q when lazygit available, got %q", want, footer)
+		}
 	}
 }
 

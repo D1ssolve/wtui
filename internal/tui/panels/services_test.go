@@ -7,7 +7,10 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 func makeServices(taskID string, names ...string) (string, []domain.Service) {
@@ -21,6 +24,16 @@ func makeServices(taskID string, names ...string) (string, []domain.Service) {
 		}
 	}
 	return taskID, svcs
+}
+
+func testResolvedFlow() *gitflow.ResolvedGitFlow {
+	return &gitflow.ResolvedGitFlow{
+		DefaultBranchType: gitflow.BranchTypeFeature,
+		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
+		},
+	}
 }
 
 func TestServicesPanel_New_EmptyByDefault(t *testing.T) {
@@ -103,6 +116,90 @@ func TestServicesPanel_KeyA_EmitsOpenAddServiceMsg(t *testing.T) {
 	}
 	if got.ExistingServices[0] != "collection" || got.ExistingServices[1] != "databridge" {
 		t.Errorf("expected ExistingServices=[collection, databridge], got %v", got.ExistingServices)
+	}
+}
+
+func TestServicesPanel_KeyV_EmitsValidateTaskMsg(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	tid, svcs := makeServices("IN-001", "collection")
+	p.SetServices(tid, svcs)
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("v"))
+	if cmd == nil {
+		t.Fatal("v key should return a cmd")
+	}
+	msg := cmd()
+	got, ok := msg.(ValidateTaskMsg)
+	if !ok {
+		t.Fatalf("expected ValidateTaskMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" {
+		t.Fatalf("TaskID=%q, want IN-001", got.TaskID)
+	}
+}
+
+func TestServicesPanel_KeyM_EmitsOpenForgeMenuMsg(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	tid, svcs := makeServices("IN-001", "collection")
+	p.SetServices(tid, svcs)
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("m"))
+	if cmd == nil {
+		t.Fatal("m key should return a cmd")
+	}
+	msg := cmd()
+	got, ok := msg.(OpenForgeMenuMsg)
+	if !ok {
+		t.Fatalf("expected OpenForgeMenuMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" || got.ServiceName != "collection" {
+		t.Fatalf("unexpected payload: %+v", got)
+	}
+	if got.Provider != forge.ForgeProviderUnknown {
+		t.Fatalf("Provider=%q, want unknown", got.Provider)
+	}
+}
+
+func TestServicesPanel_KeyP_EmitsForgePipelineStatusMsg(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	tid, svcs := makeServices("IN-001", "collection")
+	p.SetServices(tid, svcs)
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("p"))
+	if cmd == nil {
+		t.Fatal("p key should return a cmd")
+	}
+	msg := cmd()
+	got, ok := msg.(ForgePipelineStatusMsg)
+	if !ok {
+		t.Fatalf("expected ForgePipelineStatusMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" || got.ServiceName != "collection" {
+		t.Fatalf("unexpected payload: %+v", got)
+	}
+}
+
+func TestServicesPanel_KeyShiftP_EmitsPushServiceMsgWhenNoLazygit(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	tid, svcs := makeServices("IN-001", "collection")
+	p.SetServices(tid, svcs)
+	p.SetFocused(true)
+	p.SetLazygitAvailable(false)
+
+	_, cmd := p.Update(sendKey("P"))
+	if cmd == nil {
+		t.Fatal("P key should return push command")
+	}
+	msg := cmd()
+	got, ok := msg.(PushServiceMsg)
+	if !ok {
+		t.Fatalf("expected PushServiceMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" || got.ServiceName != "collection" {
+		t.Fatalf("unexpected payload: %+v", got)
 	}
 }
 
@@ -327,6 +424,79 @@ func TestServicesPanel_View_CleanService_ShowsCheckIcon(t *testing.T) {
 	view := p.View()
 	if !strings.Contains(view, "✓") {
 		t.Errorf("clean service should show ✓ icon, got: %q", view)
+	}
+}
+
+func TestServicesPanel_View_GitFlowFeatureBadgeVisible(t *testing.T) {
+	p := NewServicesPanel(100, 20)
+	p.SetGitFlow(testResolvedFlow(), "git-flow", true)
+	p.SetServices("IN-001", []domain.Service{{
+		Name:         "collection",
+		Branch:       "feature/ABC-123",
+		BaseBranch:   "develop",
+		WorktreePath: "/tmp/.tasks/IN-001/collection",
+	}})
+
+	view := stripAnsi(p.View())
+	if !strings.Contains(view, "[git-flow]") {
+		t.Fatalf("expected git-flow preset badge, got: %q", view)
+	}
+	if !strings.Contains(view, "[feature]") {
+		t.Fatalf("expected feature branch type badge, got: %q", view)
+	}
+}
+
+func TestServicesPanel_View_GitFlowHotfixBadgeVisible(t *testing.T) {
+	p := NewServicesPanel(100, 20)
+	p.SetGitFlow(testResolvedFlow(), "git-flow", true)
+	p.SetServices("IN-001", []domain.Service{{
+		Name:         "collection",
+		Branch:       "hotfix/1.2.1",
+		BaseBranch:   "master",
+		WorktreePath: "/tmp/.tasks/IN-001/collection",
+	}})
+
+	view := stripAnsi(p.View())
+	if !strings.Contains(view, "[hotfix]") {
+		t.Fatalf("expected hotfix branch type badge, got: %q", view)
+	}
+}
+
+func TestServicesPanel_View_ForgeIndicatorVisibleWhenProviderAvailable(t *testing.T) {
+	p := NewServicesPanel(100, 20)
+	p.SetForgeClients(
+		map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitLab: nil},
+		&config.ForgeConfig{GitLabHost: "gitlab.com", GitHubHost: "github.com"},
+	)
+	p.SetServices("IN-001", []domain.Service{{
+		Name:         "collection",
+		RemoteURL:    "git@gitlab.com:group/collection.git",
+		Branch:       "feature/ABC-123",
+		BaseBranch:   "develop",
+		WorktreePath: "/tmp/.tasks/IN-001/collection",
+	}})
+
+	view := stripAnsi(p.View())
+	if !strings.Contains(view, "[forge]") {
+		t.Fatalf("expected forge indicator, got: %q", view)
+	}
+}
+
+func TestServicesPanel_View_NoGitFlowConfig_NoBadges(t *testing.T) {
+	p := NewServicesPanel(100, 20)
+	p.SetServices("IN-001", []domain.Service{{
+		Name:         "collection",
+		Branch:       "feature/ABC-123",
+		BaseBranch:   "develop",
+		WorktreePath: "/tmp/.tasks/IN-001/collection",
+	}})
+
+	view := stripAnsi(p.View())
+	if strings.Contains(view, "[git-flow]") {
+		t.Fatalf("unexpected preset badge without git_flow config: %q", view)
+	}
+	if strings.Contains(view, "[feature]") {
+		t.Fatalf("unexpected branch badge without git_flow config: %q", view)
 	}
 }
 

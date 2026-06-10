@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/logutil"
 	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
@@ -23,9 +26,10 @@ import (
 )
 
 type Model struct {
-	cfg    *config.Config
-	logger *slog.Logger
-	mgr    task.Manager
+	cfg          *config.Config
+	logger       *slog.Logger
+	mgr          task.Manager
+	flow         *gitflow.ResolvedGitFlow
 
 	lazygitAvailable bool
 
@@ -62,10 +66,13 @@ type Model struct {
 	pendingInitParams *task.InitParams
 
 	pendingAddParams *task.AddParams
+	pendingSyncTask  *modal.SubmitSyncStrategyMsg
 }
 
 type Options struct {
 	LazygitAvailable bool
+	ForgeClients     map[forge.ForgeProvider]forge.ForgeClient
+	ResolvedFlow     *gitflow.ResolvedGitFlow
 }
 
 func New(cfg *config.Config, mgr task.Manager, logger *slog.Logger) (Model, error) {
@@ -94,6 +101,7 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 		cfg:              cfg,
 		logger:           logger,
 		mgr:              mgr,
+		flow:             opts.ResolvedFlow,
 		keymap:           DefaultKeyMap(),
 		styles:           NewStyles(),
 		focus:            FocusTasks,
@@ -107,9 +115,39 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 
 	m.tasksPanel.SetFocused(true)
 	m.servicesPanel.SetLazygitAvailable(opts.LazygitAvailable)
+	m.servicesPanel.SetForgeClients(opts.ForgeClients, cfg.Forge)
+
+	flow := opts.ResolvedFlow
+	preset := ""
+	if cfg.GitFlow != nil {
+		preset = cfg.GitFlow.Preset
+	}
+	m.servicesPanel.SetGitFlow(flow, preset, shouldShowGitFlowBadges(cfg.GitFlow))
 
 	return m, nil
 }
+
+func shouldShowGitFlowBadges(cfg *config.GitFlowConfig) bool {
+	if cfg == nil {
+		return false
+	}
+
+	if len(cfg.BranchTypes) != 1 {
+		return true
+	}
+
+	featureRule, ok := cfg.BranchTypes["feature"]
+	if !ok {
+		return true
+	}
+
+	legacyOnly := cfg.Preset == "git-flow" && cfg.DefaultBranchType == "feature"
+	legacyOnly = legacyOnly && len(featureRule.Prefixes) > 0
+	legacyOnly = legacyOnly && featureRule.CloseStrategy == "direct_merge" && featureRule.MergeStrategy == "merge_commit"
+
+	return !legacyOnly
+}
+
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		loadTasksCmd(m.mgr),
@@ -269,8 +307,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case panels.OpenInitDialogMsg:
+		flow := m.flow
 		if len(m.repos) > 0 {
-			m.modal = modal.NewInitDialog(m.cfg.BranchPrefix, m.repos, m.width, m.height)
+			m.modal = modal.NewInitDialogWithFlow(m.cfg.BranchPrefix, flow, m.repos, m.width, m.height)
 			return m, nil
 		}
 		m.outputPanel.AppendLine("Loading repository cache for init dialog...")
@@ -282,13 +321,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadCloneSourceServicesCmd(m.mgr, msg.TaskID)
 
 	case panels.OpenAddServiceMsg:
+		flow := m.flow
 		if len(m.repos) == 0 {
 			pending := msg
 			m.addDialogPending = &pending
 			m.outputPanel.AppendLine("Loading repository cache for add service dialog...")
 			return m, loadReposCmd(m.mgr, false)
 		}
-		m.modal = modal.NewAddDialog(msg.TaskID, m.repos, msg.ExistingServices, m.width, m.height)
+		m.modal = modal.NewAddDialogWithFlow(msg.TaskID, flow, m.repos, msg.ExistingServices, m.width, m.height)
 		return m, nil
 
 	case panels.OpenRemoveDialogMsg:
@@ -309,6 +349,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panels.OpenConfigModalMsg:
 		m.modal = modal.NewConfigModal(m.cfg)
 		return m, nil
+
+	case panels.PlanCloseTaskMsg:
+		m.opRunning = true
+		m.outputPanel.AppendLine("Planning close for task " + msg.TaskID + "...")
+		return m, tea.Batch(planCloseTaskCmd(m.mgr, msg.TaskID), m.spinner.Tick)
+
+	case panels.ScanPrunableTasksMsg:
+		m.opRunning = true
+		m.outputPanel.AppendLine("Scanning for prunable tasks...")
+		return m, tea.Batch(scanPrunableTasksCmd(m.mgr), m.spinner.Tick)
+
+	case panels.ValidateTaskMsg:
+		m.opRunning = true
+		m.outputPanel.AppendLine("Validating task " + msg.TaskID + "...")
+		return m, tea.Batch(validateTaskCmd(m.mgr, msg.TaskID), m.spinner.Tick)
+
+	case panels.OpenTagBrowserMsg:
+		m.opRunning = true
+		m.outputPanel.AppendLine("Loading tags for task " + msg.TaskID + "...")
+		return m, tea.Batch(listTagsCmd(m.mgr, msg.TaskID), m.spinner.Tick)
+
+	case panels.OpenForgeMenuMsg:
+		provider := msg.Provider
+		fm := modal.NewForgeMenuModal(msg.ServiceName, provider, m.width, m.height)
+		fm.SetTaskID(msg.TaskID)
+		m.modal = fm
+		return m, nil
+
+	case panels.ForgePipelineStatusMsg:
+		m.opRunning = true
+		m.outputPanel.AppendLine("Loading pipeline status for " + msg.ServiceName + "...")
+		return m, tea.Batch(
+			forgeOpCmd(m.mgr, "pipeline_status", msg.TaskID, msg.ServiceName, forgePipelineStatusParams{Branch: msg.Branch}),
+			m.spinner.Tick,
+		)
 
 	case panels.PushTaskMsg:
 		m.opRunning = true
@@ -364,11 +439,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = nil
 		if msg.Strategy == task.SyncStrategyNoop {
 			m.outputPanel.AppendLine("Sync cancelled for task " + msg.TaskID + ".")
+			m.pendingSyncTask = nil
 			return m, nil
 		}
+		pending := msg
+		m.pendingSyncTask = &pending
 		m.opRunning = true
-		m.outputPanel.AppendLine("Syncing task " + msg.TaskID + " with " + msg.Strategy.String() + " strategy...")
-		return m, tea.Batch(syncTaskCmd(m.mgr, msg.TaskID, msg.Strategy), m.spinner.Tick)
+		m.outputPanel.AppendLine("Validating task " + msg.TaskID + " before sync...")
+		return m, tea.Batch(validateTaskCmd(m.mgr, msg.TaskID), m.spinner.Tick)
 
 	case modal.SubmitSyncServiceStrategyMsg:
 		m.modal = nil
@@ -467,6 +545,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingInitParams = &task.InitParams{
 			TaskID:       msg.TaskID,
 			Services:     msg.Services,
+			BranchType:   msg.BranchType,
 			BranchPrefix: msg.BranchPrefix,
 			BaseBranch:   msg.BaseBranch,
 		}
@@ -481,8 +560,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = true
 		m.outputPanel.AppendLine("Adding services to " + msg.TaskID + "...")
 		m.pendingAddParams = &task.AddParams{
-			TaskID:   msg.TaskID,
-			Services: msg.Services,
+			TaskID:     msg.TaskID,
+			Services:   msg.Services,
+			BranchType: msg.BranchType,
 		}
 		m.pendingInitParams = nil
 		return m, tea.Batch(
@@ -496,6 +576,71 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.outputPanel.AppendLine("Removing task " + msg.TaskID + "...")
 		return m, tea.Batch(
 			removeTaskCmd(m.mgr, msg.TaskID, msg.Force, msg.DeleteBranches),
+			m.spinner.Tick,
+		)
+
+	case modal.SubmitCloseTaskMsg:
+		m.modal = nil
+		m.opRunning = true
+		m.outputPanel.AppendLine("Closing task " + msg.TaskID + "...")
+		return m, tea.Batch(
+			closeTaskCmd(m.mgr, task.CloseTaskParams{TaskID: msg.TaskID, TagVersion: msg.TagVersion}),
+			m.spinner.Tick,
+		)
+
+	case modal.SubmitPruneMsg:
+		m.modal = nil
+		if len(msg.SelectedTaskIDs) == 0 {
+			m.outputPanel.AppendLine("Prune cancelled: no tasks selected.")
+			return m, nil
+		}
+		m.opRunning = true
+		m.outputPanel.AppendLine("Pruning selected tasks...")
+		return m, tea.Batch(pruneTasksCmd(m.mgr, msg.SelectedTaskIDs), m.spinner.Tick)
+
+	case modal.ForgeCreateMRMsg:
+		m.modal = nil
+		svc := m.servicesPanel.SelectedService()
+		if svc == nil || svc.Name != msg.ServiceName {
+			m.outputPanel.AppendLine("Create MR failed: selected service not found.")
+			return m, nil
+		}
+		m.opRunning = true
+		m.outputPanel.AppendLine("Creating review request for " + msg.ServiceName + "...")
+		return m, tea.Batch(
+			forgeOpCmd(m.mgr, "create_mr", msg.TaskID, msg.ServiceName, forge.CreateMRParams{
+				WorktreePath: svc.WorktreePath,
+				SourceBranch: svc.Branch,
+				TargetBranch: svc.BaseBranch,
+			}),
+			m.spinner.Tick,
+		)
+
+	case modal.ForgePipelineStatusMsg:
+		m.modal = nil
+		svc := m.servicesPanel.SelectedService()
+		if svc == nil || svc.Name != msg.ServiceName {
+			m.outputPanel.AppendLine("Pipeline status failed: selected service not found.")
+			return m, nil
+		}
+		m.opRunning = true
+		m.outputPanel.AppendLine("Loading pipeline status for " + msg.ServiceName + "...")
+		return m, tea.Batch(
+			forgeOpCmd(m.mgr, "pipeline_status", msg.TaskID, msg.ServiceName, forgePipelineStatusParams{Branch: svc.Branch}),
+			m.spinner.Tick,
+		)
+
+	case modal.ForgeListIssuesMsg:
+		m.modal = nil
+		svc := m.servicesPanel.SelectedService()
+		if svc == nil || svc.Name != msg.ServiceName {
+			m.outputPanel.AppendLine("List issues failed: selected service not found.")
+			return m, nil
+		}
+		m.opRunning = true
+		m.outputPanel.AppendLine("Loading issues for " + msg.ServiceName + "...")
+		return m, tea.Batch(
+			forgeOpCmd(m.mgr, "list_issues", msg.TaskID, msg.ServiceName, forge.ListIssuesParams{WorktreePath: svc.WorktreePath, State: "open"}),
 			m.spinner.Tick,
 		)
 
@@ -519,7 +664,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outputPanel.AppendLine("Error: source task " + msg.SourceTaskID + " has no services to clone.")
 			return m, nil
 		}
-		m.modal = modal.NewCloneInitDialog(msg.SourceTaskID, m.cfg.BranchPrefix, msg.Services, m.width, m.height)
+		m.modal = modal.NewCloneInitDialogWithFlow(msg.SourceTaskID, m.cfg.BranchPrefix, m.flow, msg.Services, m.width, m.height)
 		return m, nil
 
 	case ReposLoadedMsg:
@@ -539,12 +684,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.initDialogPending {
 			m.initDialogPending = false
-			m.modal = modal.NewInitDialog(m.cfg.BranchPrefix, msg.Repos, m.width, m.height)
+			m.modal = modal.NewInitDialogWithFlow(m.cfg.BranchPrefix, m.flow, msg.Repos, m.width, m.height)
 		}
 		if m.addDialogPending != nil {
 			pending := *m.addDialogPending
 			m.addDialogPending = nil
-			m.modal = modal.NewAddDialog(pending.TaskID, msg.Repos, pending.ExistingServices, m.width, m.height)
+			m.modal = modal.NewAddDialogWithFlow(pending.TaskID, m.flow, msg.Repos, pending.ExistingServices, m.width, m.height)
 		}
 		return m, nil
 
@@ -560,6 +705,77 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case OutputLineMsg:
 		m.outputPanel.AppendLine(msg.Line)
 		return m, msg.Next
+
+	case ValidationResultMsg:
+		m.opRunning = false
+		if msg.Validation.Blocking {
+			m.pendingSyncTask = nil
+			m.modal = modal.NewValidationErrorModal(msg.Validation, m.width, m.height)
+			return m, nil
+		}
+		if m.pendingSyncTask != nil {
+			pending := *m.pendingSyncTask
+			m.pendingSyncTask = nil
+			m.opRunning = true
+			m.outputPanel.AppendLine("Syncing task " + pending.TaskID + " with " + pending.Strategy.String() + " strategy...")
+			return m, tea.Batch(syncTaskCmd(m.mgr, pending.TaskID, pending.Strategy), m.spinner.Tick)
+		}
+		m.outputPanel.AppendLine("All services clean.")
+		return m, nil
+
+	case ClosePlanReadyMsg:
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Plan close task failed: " + msg.Err.Error())
+			return m, nil
+		}
+		m.modal = modal.NewCloseTaskConfirmModal(msg.Plan, m.width, m.height)
+		return m, nil
+
+	case CloseTaskFinishedMsg:
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Close task failed: " + msg.Err.Error())
+		}
+		m.modal = modal.NewCloseTaskSummaryModal(msg.Result, m.width, m.height)
+		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
+
+	case PrunePlanReadyMsg:
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Prune scan failed: " + msg.Err.Error())
+			return m, nil
+		}
+		m.modal = modal.NewPruneConfirmModal(msg.Candidates, m.width, m.height)
+		return m, nil
+
+	case PruneFinishedMsg:
+		m.opRunning = false
+		m.outputPanel.AppendLine(fmt.Sprintf("Prune summary: removed=%d, errors=%d", len(msg.Removed), len(msg.Errors)))
+		for _, err := range msg.Errors {
+			if err != nil {
+				m.outputPanel.AppendLine("Prune error: " + err.Error())
+			}
+		}
+		return m, loadTasksCmd(m.mgr)
+
+	case TagListMsg:
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("List tags failed: " + msg.Err.Error())
+			return m, nil
+		}
+		m.modal = modal.NewTagBrowserModal(msg.Tags, m.width, m.height)
+		return m, nil
+
+	case ForgeResultMsg:
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Forge " + msg.Op + " failed for " + msg.ServiceName + ": " + msg.Err.Error())
+			return m, nil
+		}
+		m.outputPanel.AppendLine(fmt.Sprintf("Forge %s done for %s: %+v", msg.Op, msg.ServiceName, msg.Data))
+		return m, nil
 
 	case LazygitDoneMsg:
 		m.opRunning = false

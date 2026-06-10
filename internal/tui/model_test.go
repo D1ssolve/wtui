@@ -13,6 +13,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
@@ -29,6 +30,14 @@ type mockManager struct {
 	reposResult        []domain.Repo
 	reposErr           error
 	repoRefreshArgs    []bool
+
+	validateTaskID string
+	validateResult domain.TaskValidation
+	validateErr    error
+
+	syncTaskCalls    int
+	syncTaskTaskID   string
+	syncTaskStrategy task.SyncStrategy
 }
 
 var _ task.Manager = (*mockManager)(nil)
@@ -53,7 +62,10 @@ func (m *mockManager) Repos(_ context.Context, refresh bool) ([]domain.Repo, err
 	return m.reposResult, m.reposErr
 }
 
-func (m *mockManager) SyncTask(_ context.Context, _ string, _ task.SyncStrategy, lineCh chan<- string) error {
+func (m *mockManager) SyncTask(_ context.Context, taskID string, strategy task.SyncStrategy, lineCh chan<- string) error {
+	m.syncTaskCalls++
+	m.syncTaskTaskID = taskID
+	m.syncTaskStrategy = strategy
 	close(lineCh)
 	return nil
 }
@@ -74,6 +86,39 @@ func (m *mockManager) StashService(_ context.Context, _, _ string, _, _ bool) er
 
 func (m *mockManager) RemoveService(_ context.Context, _, _ string, _ bool) error { return nil }
 
+func (m *mockManager) ValidateTask(_ context.Context, taskID string) (domain.TaskValidation, error) {
+	m.validateTaskID = taskID
+	return m.validateResult, m.validateErr
+}
+
+func (m *mockManager) PlanCloseTask(_ context.Context, _ string) (task.ClosePlan, error) {
+	return task.ClosePlan{}, nil
+}
+
+func (m *mockManager) CloseTask(_ context.Context, _ task.CloseTaskParams) (task.CloseTaskResult, error) {
+	return task.CloseTaskResult{}, nil
+}
+
+func (m *mockManager) ScanPrunableTasks(_ context.Context) ([]domain.PruneCandidate, error) {
+	return nil, nil
+}
+
+func (m *mockManager) ListTags(_ context.Context, _ string) ([]domain.TagInfo, error) {
+	return nil, nil
+}
+
+func (m *mockManager) ForgeCreateMR(_ context.Context, _, _ string, _ forge.CreateMRParams) (forge.MRInfo, error) {
+	return forge.MRInfo{}, nil
+}
+
+func (m *mockManager) ForgePipelineStatus(_ context.Context, _, _ string, _ string) ([]forge.PipelineStatus, error) {
+	return nil, nil
+}
+
+func (m *mockManager) ForgeListIssues(_ context.Context, _, _ string, _ forge.ListIssuesParams) ([]forge.IssueInfo, error) {
+	return nil, nil
+}
+
 func newTestConfig() *config.Config {
 	cfg := &config.Config{
 		RootDir:          "/tmp/wtui-test",
@@ -84,7 +129,11 @@ func newTestConfig() *config.Config {
 		OutputPanelLines: 12,
 		LogLevel:         "INFO",
 	}
-	return cfg.Effective()
+	effective, err := cfg.Effective()
+	if err != nil {
+		panic(err)
+	}
+	return effective
 }
 
 func newTestModel(t *testing.T, mgr task.Manager) Model {
@@ -92,6 +141,15 @@ func newTestModel(t *testing.T, mgr task.Manager) Model {
 	m, err := New(newTestConfig(), mgr, slog.Default())
 	if err != nil {
 		t.Fatalf("tui.New: unexpected error: %v", err)
+	}
+	return m
+}
+
+func newTestModelWithOptions(t *testing.T, mgr task.Manager, opts Options) Model {
+	t.Helper()
+	m, err := NewWithOptions(newTestConfig(), mgr, slog.Default(), opts)
+	if err != nil {
+		t.Fatalf("tui.NewWithOptions: unexpected error: %v", err)
 	}
 	return m
 }
@@ -1051,6 +1109,148 @@ func assertLazygitRefreshCommands(t *testing.T, cmd tea.Cmd, mgr *mockManager, w
 	}
 }
 
+func runBatchCommands(msg tea.Msg) {
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return
+	}
+	for _, cmd := range batch {
+		if cmd != nil {
+			runBatchCommands(cmd())
+		}
+	}
+}
+
+func extractValidationFromBatch(msg tea.Msg) (ValidationResultMsg, bool) {
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return ValidationResultMsg{}, false
+	}
+	for _, cmd := range batch {
+		if cmd == nil {
+			continue
+		}
+		if vm, ok := cmd().(ValidationResultMsg); ok {
+			return vm, true
+		}
+	}
+	return ValidationResultMsg{}, false
+}
+
+func TestUpdate_ValidationResultMsg_BlockingOpensValidationModal(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(ValidationResultMsg{Validation: domain.TaskValidation{TaskID: "IN-1", Blocking: true}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Fatal("blocking validation should not return cmd")
+	}
+	if _, ok := m.modal.(*modal.ValidationErrorModal); !ok {
+		t.Fatalf("expected ValidationErrorModal, got %T", m.modal)
+	}
+}
+
+func TestUpdate_ValidationResultMsg_NonBlockingAppendsOutput(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, _ := m.Update(ValidationResultMsg{Validation: domain.TaskValidation{TaskID: "IN-1", Blocking: false}})
+	m = updated.(Model)
+	if !strings.Contains(m.outputPanel.View(), "All services clean.") {
+		t.Fatalf("expected clean message in output, got %q", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_ClosePlanReadyMsg_OpensConfirmModal(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, _ := m.Update(ClosePlanReadyMsg{Plan: task.ClosePlan{TaskID: "IN-1"}})
+	m = updated.(Model)
+	if _, ok := m.modal.(*modal.CloseTaskConfirmModal); !ok {
+		t.Fatalf("expected CloseTaskConfirmModal, got %T", m.modal)
+	}
+}
+
+func TestUpdate_CloseTaskFinishedMsg_OpensSummaryAndReloads(t *testing.T) {
+	mgr := &mockManager{listTasksResult: []domain.Task{{ID: "IN-1"}}}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(CloseTaskFinishedMsg{Result: task.CloseTaskResult{TaskID: "IN-1", Success: true}})
+	m = updated.(Model)
+	if _, ok := m.modal.(*modal.CloseTaskSummaryModal); !ok {
+		t.Fatalf("expected CloseTaskSummaryModal, got %T", m.modal)
+	}
+	if cmd == nil {
+		t.Fatal("close finished should reload tasks/services")
+	}
+}
+
+func TestUpdate_PrunePlanReadyMsg_OpensPruneModal(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, _ := m.Update(PrunePlanReadyMsg{Candidates: []domain.PruneCandidate{{TaskID: "IN-1", Prunable: true}}})
+	m = updated.(Model)
+	if _, ok := m.modal.(*modal.PruneConfirmModal); !ok {
+		t.Fatalf("expected PruneConfirmModal, got %T", m.modal)
+	}
+}
+
+func TestUpdate_TagListMsg_OpensTagBrowserModal(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, _ := m.Update(TagListMsg{TaskID: "IN-1", Tags: []domain.TagInfo{{Name: "v1.0.0"}}})
+	m = updated.(Model)
+	if _, ok := m.modal.(*modal.TagBrowserModal); !ok {
+		t.Fatalf("expected TagBrowserModal, got %T", m.modal)
+	}
+}
+
+func TestUpdate_OpenForgeMenuMsg_OpensForgeMenuModal(t *testing.T) {
+	m := newTestModelWithOptions(t, &mockManager{}, Options{ForgeClients: map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitLab: nil}})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, _ := m.Update(panels.OpenForgeMenuMsg{TaskID: "IN-1", ServiceName: "svc-a", Provider: forge.ForgeProviderGitLab})
+	m = updated.(Model)
+	if _, ok := m.modal.(*modal.ForgeMenuModal); !ok {
+		t.Fatalf("expected ForgeMenuModal, got %T", m.modal)
+	}
+}
+
+func TestUpdate_SubmitSyncStrategyMsg_InterceptsWithValidationFirst(t *testing.T) {
+	mgr := &mockManager{validateResult: domain.TaskValidation{TaskID: "IN-1", Blocking: false}}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(modal.SubmitSyncStrategyMsg{TaskID: "IN-1", Strategy: task.SyncStrategyRebase})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("submit sync should start validation cmd")
+	}
+	msg := cmd()
+	vmsg, ok := extractValidationFromBatch(msg)
+	if !ok {
+		t.Fatalf("expected ValidationResultMsg in batch, got %T", msg)
+	}
+	if mgr.syncTaskCalls != 0 {
+		t.Fatalf("sync should not run before validation, got calls=%d", mgr.syncTaskCalls)
+	}
+
+	updated, cmd = m.Update(vmsg)
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("non-blocking validation should continue with sync")
+	}
+	runBatchCommands(cmd())
+	if mgr.syncTaskCalls == 0 {
+		t.Fatal("expected sync task call after successful validation")
+	}
+}
+
 func TestUpdate_SubmitSyncStrategyMsg_StartsOperationWithStrategy(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
@@ -1064,8 +1264,8 @@ func TestUpdate_SubmitSyncStrategyMsg_StartsOperationWithStrategy(t *testing.T) 
 	if cmd == nil {
 		t.Fatal("SubmitSyncStrategyMsg must return a non-nil cmd")
 	}
-	if !strings.Contains(m.outputPanel.View(), "Syncing task IN-010 with rebase strategy...") {
-		t.Errorf("output panel should contain sync strategy message, got:\n%s", m.outputPanel.View())
+	if !strings.Contains(m.outputPanel.View(), "Validating task IN-010 before sync...") {
+		t.Errorf("output panel should contain validation-first sync message, got:\n%s", m.outputPanel.View())
 	}
 }
 

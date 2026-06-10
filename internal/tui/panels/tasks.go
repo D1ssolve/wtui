@@ -238,8 +238,7 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 			if task == nil {
 				return p, nil
 			}
-			id := task.ID
-			return p, func() tea.Msg { return PushTaskMsg{TaskID: id} }
+			return p, func() tea.Msg { return ScanPrunableTasksMsg{} }
 
 		case "h":
 
@@ -273,9 +272,30 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 			if task == nil {
 				return p, nil
 			}
+			return p, func() tea.Msg { return PlanCloseTaskMsg{TaskID: task.ID} }
+
+		case "O":
+			task := p.SelectedTask()
+			if task == nil {
+				return p, nil
+			}
 			taskID := task.ID
 			dir := task.Dir
 			return p, func() tea.Msg { return CodeWorkspaceTaskMsg{TaskID: taskID, TaskDir: dir} }
+
+		case "V":
+			task := p.SelectedTask()
+			if task == nil {
+				return p, nil
+			}
+			return p, func() tea.Msg { return ValidateTaskMsg{TaskID: task.ID} }
+
+		case "T":
+			task := p.SelectedTask()
+			if task == nil {
+				return p, nil
+			}
+			return p, func() tea.Msg { return OpenTagBrowserMsg{TaskID: task.ID} }
 
 		case ",":
 			return p, func() tea.Msg { return OpenConfigModalMsg{} }

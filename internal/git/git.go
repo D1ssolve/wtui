@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 const subprocessTimeout = 30 * time.Second
@@ -38,6 +40,12 @@ type Client interface {
 
 	IsDirty(ctx context.Context, worktreePath string) (bool, error)
 
+	RepoStatus(ctx context.Context, worktreePath string) (RawStatus, error)
+
+	OperationState(ctx context.Context, worktreePath string) ([]domain.RepoState, error)
+
+	IsAncestor(ctx context.Context, repoPath, ancestor, descendant string) (bool, error)
+
 	Version(ctx context.Context) (major, minor int, err error)
 
 	RevListCount(ctx context.Context, worktreePath, tip, base string) (int, error)
@@ -46,13 +54,27 @@ type Client interface {
 
 	Fetch(ctx context.Context, worktreePath string) error
 
+	RemoteURL(ctx context.Context, worktreePath, remote string) (string, error)
+
+	Checkout(ctx context.Context, worktreePath, branch string) error
+
 	Merge(ctx context.Context, worktreePath, branch string) error
 
 	Rebase(ctx context.Context, worktreePath, upstream string) error
 
 	Push(ctx context.Context, worktreePath string, lineCh chan<- string) error
 
-Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error
+	Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error
+
+	CreateTag(ctx context.Context, repoPath, tag, ref, message string) error
+
+	PushTag(ctx context.Context, worktreePath, tag string) error
+
+	ListTags(ctx context.Context, repoPath string) ([]domain.TagInfo, error)
+
+	TagExists(ctx context.Context, repoPath, tag string) (bool, error)
+
+	LatestSemverTag(ctx context.Context, repoPath, branch string) (string, error)
 
 	DeleteBranch(ctx context.Context, repoPath, branch string) error
 }
@@ -290,6 +312,22 @@ func (c *CommandClient) RevListAheadBehind(ctx context.Context, worktreePath, or
 
 func (c *CommandClient) Fetch(ctx context.Context, worktreePath string) error {
 	_, err := c.execGit(ctx, "-C", worktreePath, "fetch", "origin")
+	return err
+}
+
+func (c *CommandClient) RemoteURL(ctx context.Context, worktreePath, remote string) (string, error) {
+	if strings.TrimSpace(remote) == "" {
+		remote = "origin"
+	}
+	out, err := c.execGit(ctx, "-C", worktreePath, "remote", "get-url", remote)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (c *CommandClient) Checkout(ctx context.Context, worktreePath, branch string) error {
+	_, err := c.execGit(ctx, "-C", worktreePath, "checkout", branch)
 	return err
 }
 

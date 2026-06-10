@@ -1,5 +1,7 @@
 package panels
 
+import "github.com/D1ssolve/wtui/internal/forge"
+
 type FocusServicesMsg struct{ TaskID string }
 
 type FocusTasksMsg struct{}
@@ -66,4 +68,25 @@ type OpenLazygitServiceMsg struct {
 	ServiceName  string
 	WorktreePath string
 	Stale        bool
+}
+
+type PlanCloseTaskMsg struct{ TaskID string }
+
+type ScanPrunableTasksMsg struct{}
+
+type ValidateTaskMsg struct{ TaskID string }
+
+type OpenTagBrowserMsg struct{ TaskID string }
+
+type OpenForgeMenuMsg struct {
+	TaskID      string
+	ServiceName string
+	Provider    forge.ForgeProvider
+}
+
+type ForgePipelineStatusMsg struct {
+	TaskID      string
+	ServiceName string
+	Branch      string
+	RepoPath    string
 }

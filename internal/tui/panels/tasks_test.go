@@ -239,6 +239,25 @@ func TestTasksPanel_KeyC_EmitsOpenCloneDialogMsg(t *testing.T) {
 	}
 }
 
+func TestTasksPanel_KeyCUpper_EmitsPlanCloseTaskMsg(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetTasks(makeTasks("IN-001"))
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("C"))
+	if cmd == nil {
+		t.Fatal("C key should return a cmd")
+	}
+	msg := cmd()
+	got, ok := msg.(PlanCloseTaskMsg)
+	if !ok {
+		t.Fatalf("expected PlanCloseTaskMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" {
+		t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
+	}
+}
+
 func TestTasksPanel_KeyC_EmptyList_NoOp(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetFocused(true)
@@ -246,6 +265,58 @@ func TestTasksPanel_KeyC_EmptyList_NoOp(t *testing.T) {
 	_, cmd := p.Update(sendKey("c"))
 	if cmd != nil {
 		t.Error("c on empty list should be a no-op")
+	}
+}
+
+func TestTasksPanel_KeyP_EmitsScanPrunableTasksMsg(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetTasks(makeTasks("IN-001"))
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("P"))
+	if cmd == nil {
+		t.Fatal("P key should return a cmd")
+	}
+	if _, ok := cmd().(ScanPrunableTasksMsg); !ok {
+		t.Fatalf("expected ScanPrunableTasksMsg, got %T", cmd())
+	}
+}
+
+func TestTasksPanel_KeyV_EmitsValidateTaskMsg(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetTasks(makeTasks("IN-001"))
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("V"))
+	if cmd == nil {
+		t.Fatal("V key should return a cmd")
+	}
+	msg := cmd()
+	got, ok := msg.(ValidateTaskMsg)
+	if !ok {
+		t.Fatalf("expected ValidateTaskMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" {
+		t.Fatalf("TaskID=%q, want IN-001", got.TaskID)
+	}
+}
+
+func TestTasksPanel_KeyT_EmitsOpenTagBrowserMsg(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetTasks(makeTasks("IN-001"))
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("T"))
+	if cmd == nil {
+		t.Fatal("T key should return a cmd")
+	}
+	msg := cmd()
+	got, ok := msg.(OpenTagBrowserMsg)
+	if !ok {
+		t.Fatalf("expected OpenTagBrowserMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001" {
+		t.Fatalf("TaskID=%q, want IN-001", got.TaskID)
 	}
 }
 

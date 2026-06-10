@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/logutil"
 	"github.com/D1ssolve/wtui/internal/task"
 )
@@ -276,6 +277,178 @@ func removeServiceCmd(mgr task.Manager, taskID, serviceName string, removeBranch
 		defer cancel()
 		return CommandDoneMsg{Err: mgr.RemoveService(ctx, taskID, serviceName, removeBranch), Op: "Remove service " + serviceName}
 	}
+}
+
+func validateTaskCmd(mgr task.Manager, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
+		defer cancel()
+
+		validation, err := mgr.ValidateTask(ctx, taskID)
+		if err != nil {
+			return CommandDoneMsg{Err: err, Op: "Validate task " + taskID}
+		}
+
+		return ValidationResultMsg{Validation: validation}
+	}
+}
+
+func planCloseTaskCmd(mgr task.Manager, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
+		defer cancel()
+
+		plan, err := mgr.PlanCloseTask(ctx, taskID)
+		return ClosePlanReadyMsg{Plan: plan, Err: err}
+	}
+}
+
+func closeTaskCmd(mgr task.Manager, params task.CloseTaskParams) tea.Cmd {
+	statusCh := make(chan string, 32)
+	doneCh := make(chan CloseTaskFinishedMsg, 1)
+	params.StatusCh = statusCh
+
+	go func() {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), params.TaskID), 10*time.Minute)
+		defer cancel()
+		result, err := mgr.CloseTask(ctx, params)
+		doneCh <- CloseTaskFinishedMsg{Result: result, Err: err}
+		close(doneCh)
+	}()
+
+	return readStatusOrDone(statusCh, doneCh)
+}
+
+func scanPrunableTasksCmd(mgr task.Manager) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		candidates, err := mgr.ScanPrunableTasks(ctx)
+		return PrunePlanReadyMsg{Candidates: candidates, Err: err}
+	}
+}
+
+func pruneTasksCmd(mgr task.Manager, taskIDs []string) tea.Cmd {
+	statusCh := make(chan string, 32)
+	doneCh := make(chan PruneFinishedMsg, 1)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		removed := make([]string, 0, len(taskIDs))
+		errList := make([]error, 0)
+
+		for _, taskID := range taskIDs {
+			if taskID == "" {
+				continue
+			}
+
+			statusCh <- "Pruning task " + taskID + "..."
+			if err := mgr.Remove(logutil.WithTaskID(ctx, taskID), taskID, true, false); err != nil {
+				errList = append(errList, err)
+				statusCh <- "Prune task " + taskID + " failed: " + err.Error()
+				continue
+			}
+
+			removed = append(removed, taskID)
+			statusCh <- "Prune task " + taskID + " done."
+		}
+
+		close(statusCh)
+		doneCh <- PruneFinishedMsg{Removed: removed, Errors: errList}
+		close(doneCh)
+	}()
+
+	return readStatusOrDone(statusCh, doneCh)
+}
+
+func listTagsCmd(mgr task.Manager, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
+		defer cancel()
+
+		tags, err := mgr.ListTags(ctx, taskID)
+		return TagListMsg{TaskID: taskID, Tags: tags, Err: err}
+	}
+}
+
+type forgePipelineStatusParams struct {
+	Branch string
+}
+
+func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, params any) tea.Cmd {
+	return func() tea.Msg {
+		ctxBase := context.Background()
+		if taskID != "" {
+			ctxBase = logutil.WithTaskID(ctxBase, taskID)
+		}
+		ctx, cancel := context.WithTimeout(ctxBase, 2*time.Minute)
+		defer cancel()
+
+		switch op {
+		case "create_mr":
+			p, ok := params.(forge.CreateMRParams)
+			if !ok {
+				return ForgeResultMsg{ServiceName: serviceName, Op: op, Err: errors.New("invalid params for create_mr")}
+			}
+			result, err := mgr.ForgeCreateMR(ctx, taskID, serviceName, p)
+			return ForgeResultMsg{ServiceName: serviceName, Op: op, Data: result, Err: err}
+
+		case "pipeline_status":
+			p, ok := params.(forgePipelineStatusParams)
+			if !ok {
+				return ForgeResultMsg{ServiceName: serviceName, Op: op, Err: errors.New("invalid params for pipeline_status")}
+			}
+			result, err := mgr.ForgePipelineStatus(ctx, taskID, serviceName, p.Branch)
+			return ForgeResultMsg{ServiceName: serviceName, Op: op, Data: result, Err: err}
+
+		case "list_issues":
+			p, ok := params.(forge.ListIssuesParams)
+			if !ok {
+				return ForgeResultMsg{ServiceName: serviceName, Op: op, Err: errors.New("invalid params for list_issues")}
+			}
+			result, err := mgr.ForgeListIssues(ctx, taskID, serviceName, p)
+			return ForgeResultMsg{ServiceName: serviceName, Op: op, Data: result, Err: err}
+
+		default:
+			return ForgeResultMsg{ServiceName: serviceName, Op: op, Err: errors.New("unsupported forge operation: " + op)}
+		}
+	}
+}
+
+func readStatusOrDone[T any](statusCh <-chan string, doneCh <-chan T) tea.Cmd {
+	var next func() tea.Cmd
+	next = func() tea.Cmd {
+		return func() tea.Msg {
+			ch := statusCh
+			if ch != nil {
+				select {
+				case line, ok := <-ch:
+					if ok {
+						return OutputLineMsg{Line: line, Next: next()}
+					}
+					ch = nil
+				default:
+				}
+			}
+
+			select {
+			case line, ok := <-ch:
+				if ok {
+					return OutputLineMsg{Line: line, Next: next()}
+				}
+			case msg := <-doneCh:
+				return any(msg).(tea.Msg)
+			}
+
+			msg := <-doneCh
+			return any(msg).(tea.Msg)
+		}
+	}
+
+	return next()
 }
 
 func readNextLine(ch <-chan string) tea.Cmd {

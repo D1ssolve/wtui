@@ -127,10 +127,13 @@ func (m *manager) inspectServiceDir(ctx context.Context, taskDir string, entry o
 		return domain.Service{}, false
 	}
 
+	remoteURL, _ := m.git.RemoteURL(ctx, subdirPath, "origin")
+
 	svc := domain.Service{
 		Name:         entry.Name(),
 		WorktreePath: subdirPath,
 		RepoPath:     filepath.Dir(commonDir),
+		RemoteURL:    remoteURL,
 	}
 
 	svc.Branch = m.currentBranch(ctx, subdirPath, entry.Name())

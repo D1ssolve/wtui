@@ -11,6 +11,14 @@ var (
 	ErrTaskExists = errors.New("task already exists")
 
 	ErrServiceNotFound = errors.New("service not found")
+
+	ErrValidationFailed = errors.New("task validation failed")
+
+	ErrNoMergeTargets = errors.New("no merge targets configured")
+
+	ErrMixedBranchTypes = errors.New("mixed branch types are not allowed")
+
+	ErrTagAlreadyExists = errors.New("tag already exists")
 )
 
 type ErrRemoteBranchConflict struct {

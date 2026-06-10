@@ -5,13 +5,15 @@ import "github.com/D1ssolve/wtui/internal/task"
 type SubmitInitMsg struct {
 	TaskID       string
 	Services     []string
+	BranchType   string
 	BranchPrefix string
 	BaseBranch   string
 }
 
 type SubmitAddMsg struct {
-	TaskID   string
-	Services []string
+	TaskID     string
+	Services   []string
+	BranchType string
 }
 
 type SubmitRemoveTaskMsg struct {
@@ -37,6 +39,11 @@ type SubmitSyncServiceStrategyMsg struct {
 	TaskID      string
 	ServiceName string
 	Strategy    task.SyncStrategy
+}
+
+type SubmitCloseTaskMsg struct {
+	TaskID     string
+	TagVersion string
 }
 
 type SubmitRemoteBranchStrategyMsg struct {

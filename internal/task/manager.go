@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/git"
+	"github.com/D1ssolve/wtui/internal/gitflow"
+	"github.com/D1ssolve/wtui/internal/validation"
 )
 
 type Resolver interface {
@@ -28,6 +32,7 @@ type SlnGenerator interface {
 type InitParams struct {
 	TaskID       string
 	Services     []string
+	BranchType   string
 	BranchPrefix string
 	BaseBranch   string
 
@@ -39,8 +44,9 @@ type InitParams struct {
 }
 
 type AddParams struct {
-	TaskID   string
-	Services []string
+	TaskID     string
+	Services   []string
+	BranchType string
 
 	StatusCh chan<- string
 
@@ -73,14 +79,33 @@ type Manager interface {
 	StashService(ctx context.Context, taskID, serviceName string, pop bool, includeUntracked bool) error
 
 	RemoveService(ctx context.Context, taskID string, serviceName string, removeBranch bool) error
+
+	ValidateTask(ctx context.Context, taskID string) (domain.TaskValidation, error)
+
+	PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, error)
+
+	CloseTask(ctx context.Context, params CloseTaskParams) (CloseTaskResult, error)
+
+	ScanPrunableTasks(ctx context.Context) ([]domain.PruneCandidate, error)
+
+	ListTags(ctx context.Context, taskID string) ([]domain.TagInfo, error)
+
+	ForgeCreateMR(ctx context.Context, taskID, serviceName string, params forge.CreateMRParams) (forge.MRInfo, error)
+
+	ForgePipelineStatus(ctx context.Context, taskID, serviceName string, branch string) ([]forge.PipelineStatus, error)
+
+	ForgeListIssues(ctx context.Context, taskID, serviceName string, params forge.ListIssuesParams) ([]forge.IssueInfo, error)
 }
 
 type manager struct {
-	cfg        *config.Config
-	git        git.Client
-	discoverer Resolver
-	slnMgr     SlnGenerator
-	logger     *slog.Logger
+	cfg          *config.Config
+	git          git.Client
+	discoverer   Resolver
+	slnMgr       SlnGenerator
+	validator    *validation.TaskValidator
+	flow         *gitflow.ResolvedGitFlow
+	forgeClients map[forge.ForgeProvider]forge.ForgeClient
+	logger       *slog.Logger
 }
 
 func New(
@@ -88,14 +113,20 @@ func New(
 	gitClient git.Client,
 	disc Resolver,
 	slnMgr SlnGenerator,
+	validator *validation.TaskValidator,
+	flow *gitflow.ResolvedGitFlow,
+	forgeClients map[forge.ForgeProvider]forge.ForgeClient,
 	logger *slog.Logger,
 ) Manager {
 	return &manager{
-		cfg:        cfg,
-		git:        gitClient,
-		discoverer: disc,
-		slnMgr:     slnMgr,
-		logger:     logger,
+		cfg:          cfg,
+		git:          gitClient,
+		discoverer:   disc,
+		slnMgr:       slnMgr,
+		validator:    validator,
+		flow:         flow,
+		forgeClients: forgeClients,
+		logger:       logger,
 	}
 }
 
@@ -133,4 +164,45 @@ func validateTaskID(taskID string) error {
 	}
 
 	return nil
+}
+
+func (m *manager) ListTags(ctx context.Context, taskID string) ([]domain.TagInfo, error) {
+	services, err := m.ListServices(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]domain.TagInfo)
+	for _, svc := range services {
+		tags, listErr := m.git.ListTags(ctx, svc.RepoPath)
+		if listErr != nil {
+			return nil, fmt.Errorf("list tags for service %s: %w", svc.Name, listErr)
+		}
+
+		for _, tag := range tags {
+			if _, ok := seen[tag.Name]; !ok {
+				seen[tag.Name] = tag
+			}
+		}
+	}
+
+	aggregated := make([]domain.TagInfo, 0, len(seen))
+	for _, tag := range seen {
+		aggregated = append(aggregated, tag)
+	}
+
+	slices.SortStableFunc(aggregated, func(a, b domain.TagInfo) int {
+		switch {
+		case a.IsSemver && b.IsSemver:
+			return b.Version.Compare(a.Version)
+		case a.IsSemver:
+			return -1
+		case b.IsSemver:
+			return 1
+		default:
+			return strings.Compare(a.Name, b.Name)
+		}
+	})
+
+	return aggregated, nil
 }

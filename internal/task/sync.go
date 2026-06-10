@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 )
 
@@ -39,6 +40,25 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 	if strategy == SyncStrategyNoop {
 		sendLine(ctx, lineCh, "sync skipped.")
 		return nil
+	}
+
+	validationResult, err := m.ValidateTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+
+	m.logger.InfoContext(ctx, "sync task validation finished",
+		slog.String("task_id", taskID),
+		slog.Bool("blocking", validationResult.Blocking),
+		slog.Bool("all_clean", validationResult.AllClean),
+		slog.Int("services", len(validationResult.Services)),
+	)
+
+	if validationResult.Blocking {
+		m.logger.WarnContext(ctx, "sync task blocked by validation",
+			slog.String("task_id", taskID),
+		)
+		return fmt.Errorf("sync task %s: %w", taskID, ErrValidationFailed)
 	}
 
 	services, err := m.ListServices(ctx, taskID)

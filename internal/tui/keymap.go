@@ -16,6 +16,14 @@ type KeyMap struct {
 	Escape    key.Binding
 
 	ToggleLogs key.Binding
+
+	CloseTask      key.Binding
+	PruneTask      key.Binding
+	ValidateTask   key.Binding
+	TagBrowser     key.Binding
+	ForgeMenu      key.Binding
+	PipelineStatus key.Binding
+	ServiceValidate key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -59,6 +67,34 @@ func DefaultKeyMap() KeyMap {
 		ToggleLogs: key.NewBinding(
 			key.WithKeys("L"),
 			key.WithHelp("L", "logs"),
+		),
+		CloseTask: key.NewBinding(
+			key.WithKeys("C"),
+			key.WithHelp("C", "close task"),
+		),
+		PruneTask: key.NewBinding(
+			key.WithKeys("P"),
+			key.WithHelp("P", "prune tasks"),
+		),
+		ValidateTask: key.NewBinding(
+			key.WithKeys("V"),
+			key.WithHelp("V", "validate task"),
+		),
+		TagBrowser: key.NewBinding(
+			key.WithKeys("T"),
+			key.WithHelp("T", "browse tags"),
+		),
+		ForgeMenu: key.NewBinding(
+			key.WithKeys("m"),
+			key.WithHelp("m", "forge menu"),
+		),
+		PipelineStatus: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "pipeline status"),
+		),
+		ServiceValidate: key.NewBinding(
+			key.WithKeys("v"),
+			key.WithHelp("v", "validate task"),
 		),
 	}
 }

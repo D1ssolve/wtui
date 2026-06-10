@@ -69,7 +69,10 @@ func runTUI() error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	cfg = cfg.Effective()
+	cfg, err = cfg.Effective()
+	if err != nil {
+		return fmt.Errorf("normalize config: %w", err)
+	}
 
 	logger, logErr := logutil.InitLogger("wtui", logutil.ParseLogLevel(cfg.LogLevel))
 	if logErr != nil {
@@ -80,6 +83,8 @@ func runTUI() error {
 
 	model, err := tui.NewWithOptions(cfg, deps.Manager, logger, tui.Options{
 		LazygitAvailable: deps.Features.LazygitAvailable,
+		ForgeClients:     deps.ForgeClients,
+		ResolvedFlow:     deps.ResolvedFlow,
 	})
 	if err != nil {
 		return fmt.Errorf("create TUI model: %w", err)

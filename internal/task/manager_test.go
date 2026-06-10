@@ -17,8 +17,11 @@ import (
 	"github.com/D1ssolve/wtui/internal/discovery"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/dotnet"
+	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/git"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/sln"
+	"github.com/D1ssolve/wtui/internal/validation"
 )
 
 type fakeRepoResolver struct {
@@ -62,6 +65,7 @@ type mockGitClient struct {
 	baseBranchErr    error
 	branchExistsRes  bool
 	branchExistsErr  error
+	branchExistsFn   func(repoPath, branch string) (bool, error)
 
 	remoteBranchExistsRes bool
 	remoteBranchExistsErr error
@@ -91,6 +95,9 @@ type mockGitClient struct {
 	versionErr           error
 	isDirtyFn            func(path string) (bool, error)
 	revListAheadBehindFn func(path, originBranch string) (int, int, error)
+	repoStatusFn         func(path string) (git.RawStatus, error)
+	operationStateFn     func(path string) ([]domain.RepoState, error)
+	isAncestorFn         func(repoPath, ancestor, descendant string) (bool, error)
 
 	addWorktreeWithTrackingErr error
 
@@ -102,6 +109,21 @@ type mockGitClient struct {
 	mergeCalls                   []mergeCall
 	pushCalls                    []string
 	stashCalls                   []stashCall
+	isAncestorCalls              []isAncestorCall
+	createTagCalls               int
+	pushTagCalls                 int
+	deleteBranchCalls            int
+	createTagErr                 error
+	pushTagErr                   error
+	listTagsRes                  []domain.TagInfo
+	listTagsErr                  error
+	latestSemverTagRes           string
+	latestSemverTagErr           error
+	remoteURLRes                 string
+	remoteURLErr                 error
+	checkoutErr                  error
+	tagExistsRes                 bool
+	tagExistsErr                 error
 }
 
 type addWorktreeCall struct {
@@ -126,8 +148,8 @@ type removeWorktreeCall struct {
 }
 
 type stashCall struct {
-	WorktreePath    string
-	Pop             bool
+	WorktreePath     string
+	Pop              bool
 	IncludeUntracked bool
 }
 
@@ -141,6 +163,12 @@ type mergeCall struct {
 	Branch       string
 }
 
+type isAncestorCall struct {
+	RepoPath   string
+	Ancestor   string
+	Descendant string
+}
+
 func (m *mockGitClient) IsValidRepo(_ context.Context, _ string) error {
 	return m.isValidRepoErr
 }
@@ -149,7 +177,10 @@ func (m *mockGitClient) BaseBranch(_ context.Context, _ string) (string, error) 
 	return m.baseBranchResult, m.baseBranchErr
 }
 
-func (m *mockGitClient) BranchExists(_ context.Context, _, _ string) (bool, error) {
+func (m *mockGitClient) BranchExists(_ context.Context, repoPath, branch string) (bool, error) {
+	if m.branchExistsFn != nil {
+		return m.branchExistsFn(repoPath, branch)
+	}
 	return m.branchExistsRes, m.branchExistsErr
 }
 
@@ -193,6 +224,35 @@ func (m *mockGitClient) IsDirty(_ context.Context, path string) (bool, error) {
 		return m.isDirtyFn(path)
 	}
 	return m.isDirtyRes, m.isDirtyErr
+}
+
+func (m *mockGitClient) RepoStatus(_ context.Context, path string) (git.RawStatus, error) {
+	if m.repoStatusFn != nil {
+		return m.repoStatusFn(path)
+	}
+	return git.RawStatus{}, nil
+}
+
+func (m *mockGitClient) OperationState(_ context.Context, path string) ([]domain.RepoState, error) {
+	if m.operationStateFn != nil {
+		return m.operationStateFn(path)
+	}
+	return nil, nil
+}
+
+func (m *mockGitClient) IsAncestor(_ context.Context, repoPath, ancestor, descendant string) (bool, error) {
+	m.mu.Lock()
+	m.isAncestorCalls = append(m.isAncestorCalls, isAncestorCall{
+		RepoPath:   repoPath,
+		Ancestor:   ancestor,
+		Descendant: descendant,
+	})
+	m.mu.Unlock()
+
+	if m.isAncestorFn != nil {
+		return m.isAncestorFn(repoPath, ancestor, descendant)
+	}
+	return false, nil
 }
 
 func (m *mockGitClient) Version(_ context.Context) (int, int, error) {
@@ -262,11 +322,40 @@ func (m *mockGitClient) Stash(_ context.Context, worktreePath string, pop bool, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stashCalls = append(m.stashCalls, stashCall{
-		WorktreePath:    worktreePath,
-		Pop:             pop,
+		WorktreePath:     worktreePath,
+		Pop:              pop,
 		IncludeUntracked: includeUntracked,
 	})
 	return m.stashErr
+}
+
+func (m *mockGitClient) CreateTag(_ context.Context, _, _, _, _ string) error {
+	m.mu.Lock()
+	m.createTagCalls++
+	m.mu.Unlock()
+	return m.createTagErr
+}
+
+func (m *mockGitClient) PushTag(_ context.Context, _, _ string) error {
+	m.mu.Lock()
+	m.pushTagCalls++
+	m.mu.Unlock()
+	return m.pushTagErr
+}
+
+func (m *mockGitClient) ListTags(_ context.Context, _ string) ([]domain.TagInfo, error) {
+	if m.listTagsRes == nil {
+		return nil, m.listTagsErr
+	}
+	return append([]domain.TagInfo(nil), m.listTagsRes...), m.listTagsErr
+}
+
+func (m *mockGitClient) LatestSemverTag(_ context.Context, _, _ string) (string, error) {
+	return m.latestSemverTagRes, m.latestSemverTagErr
+}
+
+func (m *mockGitClient) TagExists(_ context.Context, _, _ string) (bool, error) {
+	return m.tagExistsRes, m.tagExistsErr
 }
 
 func (m *mockGitClient) GetWorktreeBranch(_ context.Context, _ string) (string, error) {
@@ -274,7 +363,18 @@ func (m *mockGitClient) GetWorktreeBranch(_ context.Context, _ string) (string, 
 }
 
 func (m *mockGitClient) DeleteBranch(_ context.Context, _, _ string) error {
+	m.mu.Lock()
+	m.deleteBranchCalls++
+	m.mu.Unlock()
 	return nil
+}
+
+func (m *mockGitClient) RemoteURL(_ context.Context, _, _ string) (string, error) {
+	return m.remoteURLRes, m.remoteURLErr
+}
+
+func (m *mockGitClient) Checkout(_ context.Context, _, _ string) error {
+	return m.checkoutErr
 }
 
 func (m *mockGitClient) RemoteBranchExists(_ context.Context, repoPath, branch string) (bool, error) {
@@ -321,7 +421,9 @@ func newTestManager(t *testing.T, tasksRoot, rootDir string, gitMock *mockGitCli
 		BranchPrefix: "feature/",
 		Editor:       "code",
 	}
-	cfg.Effective()
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
 
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
@@ -329,8 +431,9 @@ func newTestManager(t *testing.T, tasksRoot, rootDir string, gitMock *mockGitCli
 	logger := newTestLogger()
 	disc := discovery.New(cfg, gitMock, logger)
 	slnMgr := sln.NewManager(&mockDotnetClient{}, logger)
+	validator := validation.NewTaskValidator(gitMock)
 
-	return New(cfg, gitMock, disc, slnMgr, logger)
+	return New(cfg, gitMock, disc, slnMgr, validator, nil, nil, logger)
 }
 
 func newTestManagerWithCfg(t *testing.T, cfg *config.Config, gitMock *mockGitClient) Manager {
@@ -339,8 +442,9 @@ func newTestManagerWithCfg(t *testing.T, cfg *config.Config, gitMock *mockGitCli
 	logger := newTestLogger()
 	disc := discovery.New(cfg, gitMock, logger)
 	slnMgr := sln.NewManager(&mockDotnetClient{}, logger)
+	validator := validation.NewTaskValidator(gitMock)
 
-	return New(cfg, gitMock, disc, slnMgr, logger)
+	return New(cfg, gitMock, disc, slnMgr, validator, nil, nil, logger)
 }
 
 func makeGitDir(t *testing.T, repoDir string) {
@@ -490,6 +594,98 @@ func TestInit_UsesExistingBranch(t *testing.T) {
 	}
 }
 
+func TestInit_BranchTypeHotfix_UsesHotfixPrefixAndProductionBase(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	svcRepo := filepath.Join(rootDir, "svcA")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:   nil,
+		baseBranchResult: "develop",
+		branchExistsRes:  false,
+		listWorktreesRes: nil,
+	}
+
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", Editor: "code"}
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
+	logger := newTestLogger()
+	disc := discovery.New(cfg, gitMock, logger)
+	slnMgr := sln.NewManager(&mockDotnetClient{}, logger)
+	validator := validation.NewTaskValidator(gitMock)
+	flow := &gitflow.ResolvedGitFlow{
+		ProductionBranch:  "master",
+		IntegrationBranch: "develop",
+		DefaultBranchType: gitflow.BranchTypeFeature,
+		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "develop"},
+		},
+	}
+	mgr := New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
+
+	if err := mgr.Init(context.Background(), InitParams{TaskID: "IN-900", Services: []string{"svcA"}, BranchType: "hotfix"}); err != nil {
+		t.Fatalf("Init returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktree call, got %d", len(calls))
+	}
+	if got := calls[0].Branch; got != "hotfix/IN-900" {
+		t.Fatalf("AddWorktree branch = %q, want %q", got, "hotfix/IN-900")
+	}
+	if got := calls[0].Base; got != "master" {
+		t.Fatalf("AddWorktree base = %q, want %q", got, "master")
+	}
+}
+
+func TestInit_EmptyBranchType_DefaultsToFeature(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	svcRepo := filepath.Join(rootDir, "svcA")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{isValidRepoErr: nil, branchExistsRes: false, listWorktreesRes: nil}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", Editor: "code"}
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
+	logger := newTestLogger()
+	disc := discovery.New(cfg, gitMock, logger)
+	slnMgr := sln.NewManager(&mockDotnetClient{}, logger)
+	validator := validation.NewTaskValidator(gitMock)
+	flow := &gitflow.ResolvedGitFlow{
+		ProductionBranch:  "master",
+		IntegrationBranch: "develop",
+		DefaultBranchType: gitflow.BranchTypeFeature,
+		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
+		},
+	}
+	mgr := New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
+
+	if err := mgr.Init(context.Background(), InitParams{TaskID: "IN-901", Services: []string{"svcA"}}); err != nil {
+		t.Fatalf("Init returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktree call, got %d", len(calls))
+	}
+	if got := calls[0].Branch; got != "feature/IN-901" {
+		t.Fatalf("AddWorktree branch = %q, want %q", got, "feature/IN-901")
+	}
+}
+
 func TestAdd_ErrTaskNotFound(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -500,6 +696,55 @@ func TestAdd_ErrTaskNotFound(t *testing.T) {
 	err := mgr.Add(context.Background(), AddParams{TaskID: "IN-999", Services: []string{"svc"}})
 	if !errors.Is(err, ErrTaskNotFound) {
 		t.Errorf("Add error = %v, want ErrTaskNotFound", err)
+	}
+}
+
+func TestAdd_BranchTypeHotfix_UsesHotfixPrefixAndProductionBase(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "ADD-HOTFIX")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	svcRepo := filepath.Join(rootDir, "svcA")
+	makeGitDir(t, svcRepo)
+
+	gitMock := &mockGitClient{isValidRepoErr: nil, branchExistsRes: false, listWorktreesRes: nil}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", Editor: "code"}
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
+	logger := newTestLogger()
+	disc := discovery.New(cfg, gitMock, logger)
+	slnMgr := sln.NewManager(&mockDotnetClient{}, logger)
+	validator := validation.NewTaskValidator(gitMock)
+	flow := &gitflow.ResolvedGitFlow{
+		ProductionBranch:  "master",
+		IntegrationBranch: "develop",
+		DefaultBranchType: gitflow.BranchTypeFeature,
+		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "develop"},
+		},
+	}
+	mgr := New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
+
+	if err := mgr.Add(context.Background(), AddParams{TaskID: "ADD-HOTFIX", Services: []string{"svcA"}, BranchType: "hotfix"}); err != nil {
+		t.Fatalf("Add returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 AddWorktree call, got %d", len(calls))
+	}
+	if got := calls[0].Branch; got != "hotfix/ADD-HOTFIX" {
+		t.Fatalf("AddWorktree branch = %q, want %q", got, "hotfix/ADD-HOTFIX")
+	}
+	if got := calls[0].Base; got != "master" {
+		t.Fatalf("AddWorktree base = %q, want %q", got, "master")
 	}
 }
 
@@ -1037,7 +1282,9 @@ func TestSyncTask_RebasesOntoConfigBaseBranch(t *testing.T) {
 		BaseBranch:   "develop",
 		Editor:       "code",
 	}
-	cfg.Effective()
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
 	cfg.BaseBranch = "develop"
@@ -1104,7 +1351,9 @@ func TestSyncTask_RebasesOntoMainWhenBaseBranchEmpty(t *testing.T) {
 		Editor:       "code",
 	}
 
-	cfg.Effective()
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
 	cfg.BaseBranch = ""
@@ -1281,7 +1530,7 @@ var _ git.Client = (*mockGitClient)(nil)
 
 func TestManagerReposCachedUsesFindAll(t *testing.T) {
 	resolver := &fakeRepoResolver{findAllRepos: []domain.Repo{{Name: "api", Path: "/repo/api"}}}
-	mgr := New(&config.Config{}, &mockGitClient{}, resolver, nil, slog.Default())
+	mgr := New(&config.Config{}, &mockGitClient{}, resolver, nil, nil, nil, nil, slog.Default())
 
 	got, err := mgr.Repos(context.Background(), false)
 	if err != nil {
@@ -1297,7 +1546,7 @@ func TestManagerReposCachedUsesFindAll(t *testing.T) {
 
 func TestManagerReposForcedUsesRefreshWhenAvailable(t *testing.T) {
 	resolver := &fakeRepoResolver{refreshRepos: []domain.Repo{{Name: "fresh", Path: "/repo/fresh"}}}
-	mgr := New(&config.Config{}, &mockGitClient{}, resolver, nil, slog.Default())
+	mgr := New(&config.Config{}, &mockGitClient{}, resolver, nil, nil, nil, nil, slog.Default())
 
 	got, err := mgr.Repos(context.Background(), true)
 	if err != nil {
@@ -1313,7 +1562,7 @@ func TestManagerReposForcedUsesRefreshWhenAvailable(t *testing.T) {
 
 func TestManagerReposForcedFallsBackToFindAll(t *testing.T) {
 	resolver := &fakeFindAllRepoResolver{findAllRepos: []domain.Repo{{Name: "cached", Path: "/repo/cached"}}}
-	mgr := New(&config.Config{}, &mockGitClient{}, resolver, nil, slog.Default())
+	mgr := New(&config.Config{}, &mockGitClient{}, resolver, nil, nil, nil, nil, slog.Default())
 
 	got, err := mgr.Repos(context.Background(), true)
 	if err != nil {
@@ -1388,6 +1637,215 @@ func TestSyncTask_NoopStrategyDoesNotFetchOrMergeOrRebase(t *testing.T) {
 	}
 }
 
+func TestValidateTask_DelegatesToValidatorWithResolvedServices(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "IN-VALIDATE-DELEGATE"
+	taskDir := filepath.Join(tasksRoot, taskID)
+
+	serviceAPath := filepath.Join(taskDir, "service-a")
+	serviceBPath := filepath.Join(taskDir, "service-b")
+	nonGitPath := filepath.Join(taskDir, "notes")
+	for _, dir := range []string{serviceAPath, serviceBPath, nonGitPath} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("setup: create dir %s: %v", dir, err)
+		}
+	}
+
+	commonA := filepath.Join(rootDir, "repos", "service-a", ".git")
+	commonB := filepath.Join(rootDir, "repos", "service-b", ".git")
+	for _, dir := range []string{commonA, commonB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("setup: create common dir %s: %v", dir, err)
+		}
+	}
+
+	var repoStatusCalls []string
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			switch path {
+			case serviceAPath:
+				return commonA, nil
+			case serviceBPath:
+				return commonB, nil
+			default:
+				return "", errors.New("not a git repo")
+			}
+		},
+		listWorktreesRes: []git.WorktreeEntry{
+			{Path: serviceAPath, Branch: "refs/heads/feature/IN-VALIDATE-DELEGATE"},
+			{Path: serviceBPath, Branch: "refs/heads/feature/IN-VALIDATE-DELEGATE"},
+		},
+		repoStatusFn: func(path string) (git.RawStatus, error) {
+			repoStatusCalls = append(repoStatusCalls, path)
+			return git.RawStatus{Branch: "feature/IN-VALIDATE-DELEGATE"}, nil
+		},
+	}
+
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	validationResult, err := mgr.ValidateTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("ValidateTask returned unexpected error: %v", err)
+	}
+
+	slices.Sort(repoStatusCalls)
+	wantCalls := []string{serviceAPath, serviceBPath}
+	if !slices.Equal(repoStatusCalls, wantCalls) {
+		t.Fatalf("RepoStatus called with %v, want %v", repoStatusCalls, wantCalls)
+	}
+
+	if len(validationResult.Services) != 2 {
+		t.Fatalf("validationResult.Services len = %d, want 2", len(validationResult.Services))
+	}
+	if validationResult.Services[0].ServiceName != "service-a" || validationResult.Services[1].ServiceName != "service-b" {
+		t.Fatalf("service order = [%s, %s], want [service-a, service-b]",
+			validationResult.Services[0].ServiceName,
+			validationResult.Services[1].ServiceName,
+		)
+	}
+}
+
+func TestValidateTask_ReturnsAllCleanTrueForCleanScenario(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "IN-VALIDATE-CLEAN"
+	servicePath := filepath.Join(tasksRoot, taskID, "svc-clean")
+	if err := os.MkdirAll(servicePath, 0o755); err != nil {
+		t.Fatalf("setup: create service dir: %v", err)
+	}
+
+	commonDir := filepath.Join(rootDir, "repos", "svc-clean", ".git")
+	if err := os.MkdirAll(commonDir, 0o755); err != nil {
+		t.Fatalf("setup: create common dir: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirResult: commonDir,
+		listWorktreesRes: []git.WorktreeEntry{{
+			Path:   servicePath,
+			Branch: "refs/heads/feature/IN-VALIDATE-CLEAN",
+		}},
+		repoStatusFn: func(path string) (git.RawStatus, error) {
+			if path != servicePath {
+				t.Fatalf("RepoStatus path = %q, want %q", path, servicePath)
+			}
+			return git.RawStatus{Branch: "feature/IN-VALIDATE-CLEAN"}, nil
+		},
+	}
+
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	validationResult, err := mgr.ValidateTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("ValidateTask returned unexpected error: %v", err)
+	}
+
+	if !validationResult.AllClean {
+		t.Fatalf("AllClean = false, want true")
+	}
+	if validationResult.Blocking {
+		t.Fatalf("Blocking = true, want false")
+	}
+}
+
+func TestValidateTask_ReturnsBlockingTrueWhenAnyServiceDirty(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "IN-VALIDATE-DIRTY"
+	servicePath := filepath.Join(tasksRoot, taskID, "svc-dirty")
+	if err := os.MkdirAll(servicePath, 0o755); err != nil {
+		t.Fatalf("setup: create service dir: %v", err)
+	}
+
+	commonDir := filepath.Join(rootDir, "repos", "svc-dirty", ".git")
+	if err := os.MkdirAll(commonDir, 0o755); err != nil {
+		t.Fatalf("setup: create common dir: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirResult: commonDir,
+		listWorktreesRes: []git.WorktreeEntry{{
+			Path:   servicePath,
+			Branch: "refs/heads/feature/IN-VALIDATE-DIRTY",
+		}},
+		repoStatusFn: func(path string) (git.RawStatus, error) {
+			if path != servicePath {
+				t.Fatalf("RepoStatus path = %q, want %q", path, servicePath)
+			}
+			return git.RawStatus{
+				Branch: "feature/IN-VALIDATE-DIRTY",
+				ChangedEntries: []git.StatusEntry{{
+					XY:   "M.",
+					Path: "file.txt",
+				}},
+			}, nil
+		},
+	}
+
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	validationResult, err := mgr.ValidateTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("ValidateTask returned unexpected error: %v", err)
+	}
+
+	if !validationResult.Blocking {
+		t.Fatalf("Blocking = false, want true")
+	}
+	if validationResult.AllClean {
+		t.Fatalf("AllClean = true, want false")
+	}
+}
+
+func TestManager_ClosePlanAndCloseTaskRequireTask(t *testing.T) {
+	mgr := New(&config.Config{}, &mockGitClient{}, &fakeFindAllRepoResolver{}, nil, nil, nil, nil, slog.Default())
+
+	if _, err := mgr.PlanCloseTask(context.Background(), "T-1"); err == nil {
+		t.Fatal("PlanCloseTask error = nil, want not implemented")
+	}
+
+	if _, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: "T-1"}); err == nil {
+		t.Fatal("CloseTask error = nil, want not implemented")
+	}
+
+	if _, err := mgr.ListTags(context.Background(), "T-1"); err == nil {
+		t.Fatal("ListTags error = nil, want task-not-found error")
+	}
+}
+
+func TestManagerForgeMethods_WithoutClients_ReturnUnavailable(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "IN-FORGE"
+	servicePath := filepath.Join(tasksRoot, taskID, "svc")
+	if err := os.MkdirAll(servicePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn:      func(path string) (string, error) { return fakeCommonDir, nil },
+		listWorktreesRes: []git.WorktreeEntry{{Path: servicePath, Branch: "refs/heads/feature/IN-FORGE"}},
+		repoStatusFn:     func(string) (git.RawStatus, error) { return git.RawStatus{Branch: "feature/IN-FORGE"}, nil },
+	}
+
+	cfg := &config.Config{RootDir: rootDir, TasksRoot: tasksRoot, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code"}
+	effective, err := cfg.Effective()
+	if err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
+	mgr := newTestManagerWithCfg(t, effective, gitMock)
+
+	if _, err := mgr.ForgeCreateMR(context.Background(), taskID, "svc", forge.CreateMRParams{}); !errors.Is(err, forge.ErrForgeUnavailable) {
+		t.Fatalf("ForgeCreateMR error = %v, want ErrForgeUnavailable", err)
+	}
+}
+
 func TestSyncTask_MergesWithMergeStrategy(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -1425,7 +1883,9 @@ func TestSyncTask_MergesWithMergeStrategy(t *testing.T) {
 		BaseBranch:   "main",
 		Editor:       "code",
 	}
-	cfg.Effective()
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
 	cfg.BaseBranch = "main"
@@ -1497,7 +1957,9 @@ func TestSyncTask_RebasesWithRebaseStrategy(t *testing.T) {
 		BaseBranch:   "develop",
 		Editor:       "code",
 	}
-	cfg.Effective()
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
 	cfg.BaseBranch = "develop"
@@ -1648,6 +2110,75 @@ func TestSyncTask_SkipsDirtyService(t *testing.T) {
 	}
 }
 
+func TestSyncTask_DirtyServiceReturnsErrValidationFailedAndNoMutation(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "IN-SYNC-BLOCKED"
+	taskDir := filepath.Join(tasksRoot, taskID)
+
+	svcPath := filepath.Join(taskDir, "svc-dirty")
+	if err := os.MkdirAll(svcPath, 0o755); err != nil {
+		t.Fatalf("setup: create service dir: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-dirty", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: create fake common dir: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == svcPath {
+				return fakeCommonDir, nil
+			}
+			return "", errors.New("not a git worktree")
+		},
+		listWorktreesRes: []git.WorktreeEntry{{
+			Path:   svcPath,
+			Branch: "refs/heads/feature/IN-SYNC-BLOCKED",
+		}},
+		repoStatusFn: func(path string) (git.RawStatus, error) {
+			if path != svcPath {
+				t.Fatalf("RepoStatus path = %q, want %q", path, svcPath)
+			}
+			return git.RawStatus{
+				Branch: "feature/IN-SYNC-BLOCKED",
+				ChangedEntries: []git.StatusEntry{{
+					XY:   "M.",
+					Path: "dirty.txt",
+				}},
+			}, nil
+		},
+	}
+
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+	lineCh := make(chan string, 16)
+
+	err := mgr.SyncTask(context.Background(), taskID, SyncStrategyMerge, lineCh)
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("SyncTask error = %v, want ErrValidationFailed", err)
+	}
+
+	for range lineCh {
+	}
+
+	gitMock.mu.Lock()
+	fetchCalls := append([]string(nil), gitMock.fetchCalls...)
+	mergeCalls := append([]mergeCall(nil), gitMock.mergeCalls...)
+	rebaseCalls := append([]rebaseCall(nil), gitMock.rebaseCalls...)
+	gitMock.mu.Unlock()
+
+	if len(fetchCalls) != 0 {
+		t.Fatalf("Fetch call count = %d, want 0", len(fetchCalls))
+	}
+	if len(mergeCalls) != 0 {
+		t.Fatalf("Merge call count = %d, want 0", len(mergeCalls))
+	}
+	if len(rebaseCalls) != 0 {
+		t.Fatalf("Rebase call count = %d, want 0", len(rebaseCalls))
+	}
+}
+
 func TestSyncService_SkipsUpToDateService(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -1718,6 +2249,73 @@ func TestSyncService_SkipsDirtyService(t *testing.T) {
 	}
 	if len(rebaseCalls) != 0 {
 		t.Errorf("Rebase call count = %d, want 0 (dirty service should not be rebased)", len(rebaseCalls))
+	}
+}
+
+func TestSyncService_DirtyServiceReturnsErrValidationFailedAndNoMutation(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "IN-SVC-BLOCKED"
+	worktreePath := filepath.Join(tasksRoot, taskID, "svc-a")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-a", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: create fake common dir: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == worktreePath {
+				return fakeCommonDir, nil
+			}
+			return "", errors.New("not a git worktree")
+		},
+		listWorktreesRes: []git.WorktreeEntry{{
+			Path:   worktreePath,
+			Branch: "refs/heads/feature/IN-SVC-BLOCKED",
+		}},
+		repoStatusFn: func(path string) (git.RawStatus, error) {
+			if path != worktreePath {
+				t.Fatalf("RepoStatus path = %q, want %q", path, worktreePath)
+			}
+			return git.RawStatus{
+				Branch: "feature/IN-SVC-BLOCKED",
+				ChangedEntries: []git.StatusEntry{{
+					XY:   "M.",
+					Path: "dirty.txt",
+				}},
+			}, nil
+		},
+	}
+
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+	lineCh := make(chan string, 16)
+
+	err := mgr.SyncService(context.Background(), taskID, "svc-a", SyncStrategyRebase, lineCh)
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("SyncService error = %v, want ErrValidationFailed", err)
+	}
+
+	for range lineCh {
+	}
+
+	gitMock.mu.Lock()
+	fetchCalls := append([]string(nil), gitMock.fetchCalls...)
+	mergeCalls := append([]mergeCall(nil), gitMock.mergeCalls...)
+	rebaseCalls := append([]rebaseCall(nil), gitMock.rebaseCalls...)
+	gitMock.mu.Unlock()
+
+	if len(fetchCalls) != 0 {
+		t.Fatalf("Fetch call count = %d, want 0", len(fetchCalls))
+	}
+	if len(mergeCalls) != 0 {
+		t.Fatalf("Merge call count = %d, want 0", len(mergeCalls))
+	}
+	if len(rebaseCalls) != 0 {
+		t.Fatalf("Rebase call count = %d, want 0", len(rebaseCalls))
 	}
 }
 
