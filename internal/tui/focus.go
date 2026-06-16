@@ -7,20 +7,33 @@ const (
 
 	FocusServices
 	FocusOutput
+	FocusReleases
 )
 
 func (f FocusPanel) Next() FocusPanel {
-	if f == FocusTasks {
+	switch f {
+	case FocusTasks:
 		return FocusServices
+	case FocusServices:
+		return FocusOutput
+	case FocusOutput:
+		return FocusReleases
+	default:
+		return FocusTasks
 	}
-	return FocusTasks
 }
 
 func (f FocusPanel) Prev() FocusPanel {
-	if f == FocusServices {
+	switch f {
+	case FocusTasks:
+		return FocusReleases
+	case FocusServices:
 		return FocusTasks
+	case FocusOutput:
+		return FocusServices
+	default:
+		return FocusOutput
 	}
-	return FocusServices
 }
 
 func (f FocusPanel) String() string {
@@ -31,6 +44,8 @@ func (f FocusPanel) String() string {
 		return "services"
 	case FocusOutput:
 		return "output"
+	case FocusReleases:
+		return "releases"
 	default:
 		return "unknown"
 	}

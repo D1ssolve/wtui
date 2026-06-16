@@ -3,8 +3,11 @@ package task
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 func (m *manager) RemoveService(
@@ -50,6 +53,44 @@ func (m *manager) RemoveService(
 
 	if _, err := os.Stat(m.taskDir(taskID)); err != nil {
 		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
+	}
+
+	taskDir := m.taskDir(taskID)
+	remainingServices, err := discoverServicesFromTaskDir(taskDir)
+	if err != nil {
+		return fmt.Errorf("remove service: discover remaining services in %s: %w", taskDir, err)
+	}
+
+	if len(remainingServices) == 0 {
+		if err := removeGeneratedTaskFiles(taskDir, taskID); err != nil {
+			m.logger.WarnContext(ctx, "failed to remove generated task files after removing last service",
+				slog.String("task_id", taskID),
+				slog.String("error", err.Error()),
+			)
+		}
+		return nil
+	}
+
+	if err := generateWorkspaceFile(taskID, taskDir); err != nil {
+		m.logger.WarnContext(ctx, "failed to regenerate workspace file after service removal",
+			slog.String("task_id", taskID),
+			slog.String("error", err.Error()),
+		)
+	}
+
+	services := make([]domain.Service, 0, len(remainingServices))
+	for _, svc := range remainingServices {
+		services = append(services, domain.Service{
+			Name:         svc.Name,
+			WorktreePath: svc.RepoPath,
+		})
+	}
+
+	if err := m.slnMgr.Generate(ctx, taskDir, taskID, services); err != nil {
+		m.logger.WarnContext(ctx, "sln generation failed after service removal",
+			slog.String("task_id", taskID),
+			slog.String("error", err.Error()),
+		)
 	}
 
 	return nil

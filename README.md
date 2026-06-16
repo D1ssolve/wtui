@@ -16,6 +16,7 @@ Terminal UI for task-scoped git worktree orchestration across multi-repo/microse
 - [Development / Contributing](#development--contributing)
 - [TUI Key Bindings](#tui-key-bindings)
 - [Task Lifecycle Example](#task-lifecycle-example)
+- [Release Workflow Example](#release-workflow-example)
 - [FAQ](#faq)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
@@ -30,22 +31,24 @@ _Badge placeholders removed. Add real CI/release badges when URLs are available.
 
 - Create matching branches and worktrees in every repo automatically
 - Sync, stash, push, validate, and close everything as one unit
-- Promote feature tasks to release tasks with per-service versions
+- Create releases from the Releases panel (`3` to focus, `N` to create) with per-service versions
 - Auto-generate VS Code workspace and .NET solution files scoped to only the services you need
 
-A **task** groups multiple service worktrees under a single ticket ID. Tasks can have **phases** — for example a feature task `TASK-123` can have a matching release task `TASK-123-release` created on demand.
+A **task** groups multiple service worktrees under a single ticket ID. Releases are managed as first-class release entities in the Releases panel and can aggregate one or more ready feature tasks.
 
 ```text
-┌──────────────────────────────┐   ┌─────────────────────────────────┐
-│ [1] Tasks                    │   │ [2] Services — TASK-123         │
-│                              │   │                                 │
-│ ▼ TASK-123                   │   │  ✓ api-gateway                  │
-│   ├─ feature/TASK-123        │   │    branch: feature/TASK-123     │
-│   └─ release/1.2.0           │   │    path:   TASK-123/api-gateway │
-│                              │   │                                 │
-│  TASK-124                    │   │  ✓ billing                      │
-│                              │   │    branch: hotfix/1.2.1         │
-└──────────────────────────────┘   └─────────────────────────────────┘
+┌─────────────────────────┐ ┌──────────────────────────────┐ ┌──────────────────────────────┐
+│ [1] Tasks               │ │ [2] Services — PAY-442       │ │ [3] Releases (optional)      │
+│                         │ │                              │ │                              │
+│ ▼ PAY-442               │ │ ✓ gateway                    │ │ rel-1.2.0-20260610  released │
+│   └─ feature/PAY-442    │ │   branch: feature/PAY-442    │ │ rel-1.2.1-20260616  failed   │
+│ PAY-443                 │ │ ✓ billing                    │ │                              │
+│                         │ │ ✓ ledger                     │ │                              │
+└─────────────────────────┘ └──────────────────────────────┘ └──────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────────────────────────────┐
+│ [0] Output: validation, close, release progress, git errors                               │
+└────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -56,7 +59,7 @@ A **task** groups multiple service worktrees under a single ticket ID. Tasks can
 
 - `cmd/wtui` — binary entrypoint (`main.go`), config+logging bootstrap, dependency wiring, TUI startup.
 - `internal/app` — composition root that builds concrete dependencies (`git`, `discovery`, `dotnet`, `sln`, `task`) and detects optional tools (like `lazygit`).
-- `internal/task` — core orchestration layer (init/add/remove/list/sync/push/stash/close/prune/promote/workspace).
+- `internal/task` — core orchestration layer (init/add/remove/list/sync/push/stash/close/prune/workspace/release workflows).
 - `internal/tui` (+ `panels`, `modal`) — Bubble Tea UI model, messages, dialogs, and panel rendering.
 - `internal/config` — config loading, defaults, env overrides, and effective normalization.
 - `internal/git`, `internal/dotnet`, `internal/forge` — CLI-backed adapters for external tools (`git`, `dotnet`, `gh`/`glab`).
@@ -75,7 +78,7 @@ Dependency rules (high-level):
 
 - **Task-scoped worktrees** — one ticket ID, many services, one screen
 - **Task phases** — feature/release/hotfix support with tree grouping when `git_flow` has release/hotfix branch types
-- **Promote to release** — press `Q` on a feature task to create a release task with per-service versions
+- **Releases panel workflow** — press `3` to focus Releases and `N` to create a release with selected tasks and per-service versions
 - **Service auto-discovery** — scans `root_dir` for git repos on startup
 - **Bulk operations** — sync, push, stash across all services in a task
 - **Pre-flight validation** — blocks sync/close if any repo is dirty or in a broken state
@@ -134,10 +137,23 @@ tasks_root: /Users/you/dev/.tasks
 branch_prefix: feature/
 base_branch: develop
 editor: code
+
+git_flow:
+  preset: git-flow
+
+release:
+  enabled: true
+  root_dir: /Users/you/dev/.tasks/.releases
+  id_format: rel-{{.Version}}-{{.Timestamp}}
+  release_branch_prefix: release/
+  shared_version: false
+  push_integration: true
+  push_release_branches: true
+  push_tags: true
 EOF
 ```
 
-> `git_flow` and all other blocks are **optional**. If you omit them, wtui behaves like before: branches are `feature/<task>` based on `develop`.
+If you omit `git_flow` and `release`, wtui still works with defaults (`feature/<task>` from `develop`).
 
 ### 2. Run wtui
 
@@ -145,7 +161,7 @@ EOF
 wtui
 ```
 
-### 3. Create your first task
+### 3. Create first task
 
 In the Tasks panel:
 
@@ -154,29 +170,28 @@ In the Tasks panel:
 3. Select the services that belong to this task
 4. Confirm
 
-wtui creates worktrees, branches, and generates `PROJ-101.code-workspace` and `PROJ-101.sln`.
+wtui creates task directory like `/Users/you/dev/.tasks/PROJ-101`, creates service worktrees, checks out branches, and generates `PROJ-101.code-workspace` + `PROJ-101.sln`.
 
-### 4. Promote to release (optional)
+### 4. Create release (optional)
 
-If your config defines a `release` branch type:
+1. Finish feature work and close feature tasks (`C`) so they are ready for release
+2. Press `3` to focus the Releases panel
+3. Press `N` to open Create Release
+4. Select one or more tasks (example: `PROJ-101`, `PROJ-103`)
+5. Enter versions per affected service (example: `gateway=1.2.0`, `billing=1.2.0`, `ledger=2.4.1`)
+6. Confirm
 
-1. Finish feature work and close the feature task (`C`) to merge it into `develop`
-2. Select the feature task in the Tasks panel
-3. Press `Q`
-4. Enter a version for each service (e.g. `1.2.0`)
-5. Confirm
-
-wtui creates `PROJ-101-release` worktrees on `release/<version>` branches, ready for regression and release close.
+wtui writes release manifest under `.tasks/.releases/<release-id>/release.json` and executes release workflow per service.
 
 ### 5. Validate and close
 
-When you are done:
+When you are done with normal task flow:
 
 1. Press `V` to validate task state
-2. Press `C` to open the close-task plan
-3. Review the plan and confirm
+2. Press `C` to open close-task plan
+3. Review plan and confirm
 4. wtui merges (or opens MR/PR), creates tags when configured, pushes, and optionally triggers pipelines
-5. Press `P` later to scan and remove merged task directories
+5. Press `P` later to scan/remove merged task directories
 
 ---
 
@@ -289,6 +304,47 @@ git_flow:
       tag_source: master
 ```
 
+### `release:` block
+
+`release` controls Releases panel workflow (`3` → `N`) and how wtui executes release git operations.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `bool` | auto | Enable release workflow. Auto-enables when git_flow has `release` branch type. |
+| `root_dir` | `string` | `<tasks_root>/.releases` | Directory where release manifests/worktrees are stored. |
+| `id_format` | `string` | `rel-{{.Version}}-{{.Timestamp}}` | Release ID template. |
+| `integration_branch` | `string` | from `git_flow.integration_branch` or `base_branch` | Integration branch used for release merge stage. |
+| `release_branch_prefix` | `string` | release prefix from git_flow or `release/` | Prefix for generated release branches. |
+| `shared_version` | `bool` | from `tag.shared_version` or `false` | Single version for all services (`true`) or per-service versions (`false`). |
+| `push_integration` | `bool` | `true` | Push integration branch updates during release flow. |
+| `push_release_branches` | `bool` | `true` | Push generated release branches. |
+| `push_tags` | `bool` | from `tag.push` or `true` | Push created release tags. |
+| `create_release_worktrees` | `bool` | `true` | Keep dedicated worktrees for generated release branches. |
+| `keep_integration_worktrees` | `bool` | `false` | Keep temp integration worktrees after run (for debugging). |
+| `allow_task_reuse` | `bool` | `false` | Allow task to participate in more than one active release. |
+| `require_clean_before_merge` | `bool` | `true` | Require clean source worktrees before release merge. |
+
+Example:
+
+```yaml
+release:
+  enabled: true
+  root_dir: /Users/you/dev/.tasks/.releases
+  id_format: rel-{{.Version}}-{{.Timestamp}}
+  integration_branch: develop
+  release_branch_prefix: release/
+  shared_version: false
+  push_integration: true
+  push_release_branches: true
+  push_tags: true
+  create_release_worktrees: true
+  keep_integration_worktrees: false
+  allow_task_reuse: false
+  require_clean_before_merge: true
+```
+
+> `release.keep_promote_key` removed. wtui ignores this legacy key. Use Releases panel flow: `3` then `N`.
+
 ### Full config with all optional blocks
 
 ```yaml
@@ -346,6 +402,22 @@ git_flow:
       requires_clean: true
       tag_on_close: true
       tag_source: master
+
+# Release workflow (optional)
+release:
+  enabled: true
+  root_dir: ~/.tasks/.releases
+  id_format: rel-{{.Version}}-{{.Timestamp}}
+  integration_branch: develop
+  release_branch_prefix: release/
+  shared_version: false
+  push_integration: true
+  push_release_branches: true
+  push_tags: true
+  create_release_worktrees: true
+  keep_integration_worktrees: false
+  allow_task_reuse: false
+  require_clean_before_merge: true
 
 # Forge CLI integration (optional)
 forge:
@@ -440,7 +512,7 @@ When `git_flow.branch_types` contains `release` or `hotfix`, the Tasks panel ren
 ```
 
 - Feature tasks are created with `i`
-- Release tasks are created with `Q` on a feature task
+- Release entities are created from Releases panel (`3` then `N`)
 - Hotfix support is gated by the `hotfix` branch type
 
 **Hotfix behavior:**
@@ -505,6 +577,8 @@ Notes:
 
 | Context | Key | Action | Notes |
 |---|---|---|---|
+| Global | `Tab` | Focus next panel | cycle: Tasks → Services → Output → Releases |
+| Global | `1` / `2` / `0` / `3` | Focus Tasks / Services / Output / Releases | Output is key `0` |
 | Tasks | `Enter` | Open selected task in Services panel | |
 | Tasks | `i` | Init new task | |
 | Tasks | `c` | Clone selected task | |
@@ -514,20 +588,14 @@ Notes:
 | Tasks | `P` | Prune merged tasks | scan + remove flow |
 | Tasks | `V` | Validate task | |
 | Tasks | `T` | Browse tags for selected task | |
-| Tasks | `Q` | Promote feature task to release | requires `release` branch type |
 | Tasks | `O` | Open `<task>.code-workspace` in VS Code | |
 | Tasks | `R` | Open `<task>.sln` in Rider | |
 | Tasks | `,` | Show effective config | |
 | Tasks | `;` | Run shell command in selected task directory | |
 | Tasks | `/` | Filter tasks | |
 | Tasks | `r` | Refresh repos/tasks | |
-| Tasks | `L` | Toggle log overlay | global |
-| Tasks | `Tab` / `1` / `2` / `0` | Focus panels | Tab = next; 1/2/0 = tasks/services/output |
-| Tasks | `?` | Help overlay | global |
-| Tasks | `.` | System status (tools / forge / git flow) | global |
-| Tasks | `q` / `Ctrl+c` | Quit | global |
 | Services | `a` | Add service to current task | |
-| Services | `d` | Remove service from task | |
+| Services | `d` | Remove service from task | regenerates `<task>.sln` + `<task>.code-workspace` |
 | Services | `m` | Open forge actions menu | |
 | Services | `p` | Pipeline status | via forge |
 | Services | `v` | Validate current task | |
@@ -540,6 +608,13 @@ Notes:
 | Output | `j/k` | Scroll up/down | |
 | Output | `g/G` | Jump top/bottom | |
 | Output | `Esc` | Back to tasks | |
+| Releases | `j/k` or arrows | Move release selection | |
+| Releases | `N` | Open Create Release dialog | |
+| Releases | `r` | Refresh releases | |
+| Global | `L` | Toggle log overlay | |
+| Global | `?` | Help overlay | |
+| Global | `.` | System status (tools / forge / git flow) | |
+| Global | `q` / `Ctrl+c` | Quit | |
 
 ---
 
@@ -550,63 +625,111 @@ Working on ticket `PAY-442` that touches `gateway`, `billing`, and `ledger`:
 1. **Init task**
    - Press `i` in Tasks panel
    - Enter `PAY-442`
-   - Select the three services
+   - Select three services
 
 2. **Develop**
    - Switch to Services panel
    - Use `g` for lazygit, or `s` / stash bindings
-   - Commit in each repo worktree
+   - Commit in each service worktree
 
-3. **Validate**
+3. **Adjust service scope (optional)**
+   - In Services panel select service no longer needed
+   - Press `d` to remove from task
+   - wtui regenerates `PAY-442.sln` and `PAY-442.code-workspace` using remaining services
+
+4. **Validate**
    - Press `V` (or `v` from Services panel)
-   - Fix any dirty state or conflicts before closing
+   - Fix dirty state/conflicts before close
 
-4. **Close feature task**
+5. **Close feature task**
    - Press `C`
-   - Review the generated close plan
-   - Confirm execution to merge `feature/PAY-442` into `develop`
+   - Review generated close plan
+   - Confirm execution to merge `feature/PAY-442` into integration branch (usually `develop`)
 
-5. **Promote to release** (when configured)
-   - Select `PAY-442` in Tasks panel
-   - Press `Q`
-   - Enter version (e.g. `1.2.0`)
-   - wtui creates `PAY-442-release` worktrees on `release/1.2.0`
+6. **Create release entry from Releases panel**
+   - Press `3` to focus Releases
+   - Press `N`
+   - Select release-ready task(s), for example `PAY-442`
+   - Enter per-service versions, for example:
+     - `gateway: 1.2.0`
+     - `billing: 1.2.0`
+     - `ledger: 2.4.1`
+   - Confirm to execute release workflow
 
-6. **Close release task**
-   - Select `PAY-442-release`
-   - Press `C`
-   - Confirm to merge `release/1.2.0` into `master` and `develop`, create tag, push
+7. **Clean up old tasks**
+   - Press `P` to scan merged tasks
+   - Confirm removals you want
 
-7. **Clean up**
-    - Press `P` to scan for merged tasks
-    - Select merged tasks and confirm removal
+---
+
+## Release Workflow Example
+
+Example goal: release two ready tasks (`PAY-442`, `PAY-447`) with per-service versions.
+
+Config snippet:
+
+```yaml
+git_flow:
+  preset: git-flow
+
+release:
+  enabled: true
+  integration_branch: develop
+  release_branch_prefix: release/
+  shared_version: false
+  push_integration: true
+  push_release_branches: true
+  push_tags: true
+```
+
+Flow:
+
+1. Close feature tasks first (`C`) so branches are merged and clean.
+2. Press `3` to focus Releases panel.
+3. Press `N`.
+4. In phase 1, select `PAY-442` and `PAY-447`.
+5. In phase 2, set versions per affected service:
+   - `gateway = 1.3.0`
+   - `billing = 1.9.0`
+   - `ledger = 2.5.0`
+6. Confirm.
+7. Watch Output panel for stages: validate → merge → branch → tag → push.
+8. Verify new release row appears in Releases panel with `released` status.
 
 ---
 
 ## FAQ
 
-### How do I merge a feature branch into `develop`?
+### How do I merge feature branch into `develop`?
 
-Close feature task with `C` in Tasks panel. Close flow prepares and executes plan that merges feature branches according to configured close strategy (for `git-flow`, this is direct merge into `develop` by default).
+Close feature task with `C` in Tasks panel. Close flow prepares and executes merge according to configured close strategy (for `git-flow`, default direct merge into `develop`).
 
 ### Does Close task work for release branches?
 
-Yes. With a `release` branch type configured, close flow merges release branches into production (`master` by default) and integration (`develop` by default), then creates/pushes a release tag when the branch rule has `tag_on_close: true`.
+Yes. With `release` branch type configured, close flow merges release branch into production (`master` by default) and integration (`develop` by default), then creates/pushes tag when branch rule has `tag_on_close: true`.
 
-### When should I promote a feature to a release?
+### When should I create release entity in Releases panel?
 
-After feature task is merged into integration branch (`develop` in git-flow). Then select root feature task and press `Q` to create matching release task/worktrees.
+After one or more feature tasks are ready and you want single release run across affected services. Use `3` then `N`.
 
-### Why is promote to release disabled?
+### Why is Create Release (`N`) unavailable?
 
-Promotion (`Q`) is available only when:
+- Releases panel not focused (press `3` first)
+- No eligible tasks selected (child/non-feature tasks are blocked)
+- Validation failed (dirty repos or interrupted git operations)
+- `release.enabled: false` in config
 
-- `git_flow.branch_types.release` exists, and
-- selected task is root feature task (not already release/hotfix child phase).
+### What does release workflow actually create?
+
+- Release manifest: `<tasks_root>/.releases/<release-id>/release.json`
+- Integration merge commits (if configured)
+- Release branch per service
+- Release tag per service
+- Optional release worktrees
 
 ### What does validation block?
 
-Validation can block task operations when repos are in unsafe states according to `validation` config. By default this includes dirty working tree, detached HEAD, and interrupted git operations (merge/rebase/cherry-pick). Untracked files do not block unless `validation.block_untracked: true` is set.
+Validation can block task/release operations when repos are unsafe per `validation` config. Default blockers: detached HEAD and interrupted git operations. Dirty/untracked behavior depends on your `validation` and `release.require_clean_before_merge` settings.
 
 ---
 
@@ -614,7 +737,7 @@ Validation can block task operations when repos are in unsafe states according t
 
 ### Config not found
 
-- Check the search order above
+- Check search order above
 - Run with explicit path:
 
 ```bash
@@ -631,27 +754,34 @@ glab auth login
 gh auth login
 ```
 
-- Verify the repo remote host matches your `forge.gitlab_host` / `forge.github_host` config
+- Verify repo remote host matches `forge.gitlab_host` / `forge.github_host`
 
-### Dirty repos block sync or close
+### Dirty repos block sync/close/release
 
 - Stash or commit changes in each service
-- Resolve any interrupted git operations (merge, rebase, cherry-pick)
+- Resolve interrupted git ops (merge/rebase/cherry-pick)
 
 ### Task not prunable
 
-- At least one service branch is not merged into the target branch
-- Run `git fetch` in the affected repos and retry
+- At least one service branch not merged into target branch
+- Run `git fetch` in affected repos and retry
 
 ### Tag creation skipped
 
-- The proposed tag already exists locally
-- Check your tag format and existing semver history
+- Proposed tag already exists locally/remotely
+- Check `tag.format` and existing semver history
 
-### Release promote is disabled
+### Release creation fails or unavailable
 
-- `Q` only appears when the selected task is a root feature task and `git_flow.branch_types.release` exists
-- Check your config and press `.` to verify the detected Git Flow preset
+- Press `3` then `N` (release creation exists only in Releases panel)
+- Check `release.enabled` and `release.integration_branch`
+- Ensure selected tasks are root feature tasks and not already blocked by active release policy
+- Check Output panel for exact stage failure (`validating`, `merging`, `branching`, `tagging`, `pushing`)
+- Use `.` to verify detected Git Flow + tool availability
+
+### Legacy `keep_promote_key` in config
+
+`release.keep_promote_key` no longer used. Safe to remove from config.
 
 ---
 

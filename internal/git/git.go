@@ -64,6 +64,8 @@ type Client interface {
 
 	Merge(ctx context.Context, worktreePath, branch string) error
 
+	MergeAbort(ctx context.Context, worktreePath string) error
+
 	Rebase(ctx context.Context, worktreePath, upstream string) error
 
 	Push(ctx context.Context, worktreePath string, lineCh chan<- string) error
@@ -348,6 +350,11 @@ func (c *CommandClient) Checkout(ctx context.Context, worktreePath, branch strin
 
 func (c *CommandClient) Merge(ctx context.Context, worktreePath, branch string) error {
 	_, err := c.execGit(ctx, "-C", worktreePath, "merge", branch)
+	return err
+}
+
+func (c *CommandClient) MergeAbort(ctx context.Context, worktreePath string) error {
+	_, err := c.execGit(ctx, "-C", worktreePath, "merge", "--abort")
 	return err
 }
 

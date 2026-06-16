@@ -8,6 +8,7 @@ type KeyMap struct {
 	PanelTasks    key.Binding
 	PanelServices key.Binding
 	PanelOutput   key.Binding
+	PanelReleases key.Binding
 
 	Quit      key.Binding
 	ForceQuit key.Binding
@@ -17,13 +18,13 @@ type KeyMap struct {
 
 	ToggleLogs key.Binding
 
-	CloseTask      key.Binding
-	PruneTask      key.Binding
-	ValidateTask   key.Binding
-	TagBrowser     key.Binding
-	ForgeMenu      key.Binding
-	PipelineStatus key.Binding
-	Promote        key.Binding
+	CloseTask       key.Binding
+	PruneTask       key.Binding
+	ValidateTask    key.Binding
+	TagBrowser      key.Binding
+	ForgeMenu       key.Binding
+	PipelineStatus  key.Binding
+	NewRelease      key.Binding
 	ServiceValidate key.Binding
 }
 
@@ -44,6 +45,10 @@ func DefaultKeyMap() KeyMap {
 		PanelOutput: key.NewBinding(
 			key.WithKeys("0"),
 			key.WithHelp("0", "focus output"),
+		),
+		PanelReleases: key.NewBinding(
+			key.WithKeys("3"),
+			key.WithHelp("3", "focus releases"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("q"),
@@ -93,9 +98,9 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("p"),
 			key.WithHelp("p", "pipeline status"),
 		),
-		Promote: key.NewBinding(
-			key.WithKeys("Q"),
-			key.WithHelp("Q", "promote to release"),
+		NewRelease: key.NewBinding(
+			key.WithKeys("N"),
+			key.WithHelp("N", "new release"),
 		),
 		ServiceValidate: key.NewBinding(
 			key.WithKeys("v"),

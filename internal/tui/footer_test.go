@@ -24,13 +24,13 @@ func TestRenderFooter_FocusTasks_IncludesCoreHints(t *testing.T) {
 	}
 }
 
-func TestRenderFooter_FocusTasks_PromoteHintHiddenWithoutReleaseConfig(t *testing.T) {
+func TestRenderFooter_FocusTasks_DoesNotShowLegacyQHint(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m.focus = FocusTasks
 
 	footer := renderFooter(m)
 	if strings.Contains(footer, "[Q] promote") {
-		t.Errorf("tasks footer should not show promote hint without release config, got %q", footer)
+		t.Errorf("tasks footer should not show legacy Q hint, got %q", footer)
 	}
 }
 
@@ -106,6 +106,23 @@ func TestRenderFooter_FocusOutput_IncludesOutputNavigationHints(t *testing.T) {
 	} {
 		if !strings.Contains(footer, want) {
 			t.Errorf("output footer should include %q, got %q", want, footer)
+		}
+	}
+}
+
+func TestRenderFooter_FocusReleases_IncludesReleaseHints(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.focus = FocusReleases
+
+	footer := renderFooter(m)
+	for _, want := range []string{
+		"[N] new release",
+		"[r] refresh",
+		"[?] help",
+		"[q] quit",
+	} {
+		if !strings.Contains(footer, want) {
+			t.Errorf("releases footer should include %q, got %q", want, footer)
 		}
 	}
 }

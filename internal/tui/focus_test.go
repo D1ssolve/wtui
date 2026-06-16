@@ -9,8 +9,9 @@ func TestFocusPanel_Next(t *testing.T) {
 		want  FocusPanel
 	}{
 		{"tasks→services", FocusTasks, FocusServices},
-		{"services→tasks", FocusServices, FocusTasks},
-		{"output→tasks (safe default)", FocusOutput, FocusTasks},
+		{"services→output", FocusServices, FocusOutput},
+		{"output→releases", FocusOutput, FocusReleases},
+		{"releases→tasks", FocusReleases, FocusTasks},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
@@ -27,9 +28,10 @@ func TestFocusPanel_Prev(t *testing.T) {
 		input FocusPanel
 		want  FocusPanel
 	}{
+		{"tasks→releases", FocusTasks, FocusReleases},
 		{"services→tasks", FocusServices, FocusTasks},
-		{"tasks→services", FocusTasks, FocusServices},
-		{"output→services (safe default)", FocusOutput, FocusServices},
+		{"output→services", FocusOutput, FocusServices},
+		{"releases→output", FocusReleases, FocusOutput},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {

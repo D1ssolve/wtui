@@ -20,9 +20,33 @@ type Config struct {
 	GitFlow          *GitFlowConfig    `yaml:"git_flow"`
 	Forge            *ForgeConfig      `yaml:"forge"`
 	Tag              *TagConfig        `yaml:"tag"`
+	Release          *ReleaseConfig    `yaml:"release"`
 	Validation       *ValidationConfig `yaml:"validation"`
 	Close            *CloseConfig      `yaml:"close"`
 	Prune            *PruneConfig      `yaml:"prune"`
+}
+
+type ReleaseConfig struct {
+	Enabled                  *bool `yaml:"enabled"`
+	RootDir                  string `yaml:"root_dir"`
+	IDFormat                 string `yaml:"id_format"`
+	IntegrationBranch        string `yaml:"integration_branch"`
+	ReleaseBranchPrefix      string `yaml:"release_branch_prefix"`
+	SharedVersion            *bool  `yaml:"shared_version"`
+	PushIntegration          *bool  `yaml:"push_integration"`
+	PushReleaseBranches      *bool  `yaml:"push_release_branches"`
+	PushTags                 *bool  `yaml:"push_tags"`
+	CreateReleaseWorktrees   *bool  `yaml:"create_release_worktrees"`
+	KeepIntegrationWorktrees *bool  `yaml:"keep_integration_worktrees"`
+	AllowTaskReuse           *bool  `yaml:"allow_task_reuse"`
+	RequireCleanBeforeMerge  *bool  `yaml:"require_clean_before_merge"`
+
+	// Legacy aliases for backward compatibility.
+	LegacyPushBranch              *bool `yaml:"push_branch"`
+	LegacyPushTag                 *bool `yaml:"push_tag"`
+	LegacyCreateWorktree          *bool `yaml:"create_worktree"`
+	LegacyKeepIntegrationWorktree *bool `yaml:"keep_integration_worktree"`
+	LegacyCleanSourceCheck        *bool `yaml:"clean_source_check"`
 }
 
 type GitFlowConfig struct {
@@ -179,11 +203,130 @@ func (c *Config) Effective() (*Config, error) {
 
 	c.effectiveForge()
 	c.effectiveTag()
+	c.effectiveRelease()
 	c.effectiveValidation()
 	c.effectiveClose()
 	c.effectivePrune()
 
 	return c, nil
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func (c *Config) effectiveRelease() {
+	if c.Release == nil {
+		c.Release = &ReleaseConfig{}
+	}
+
+	r := c.Release
+
+	if r.RootDir == "" {
+		r.RootDir = filepath.Join(c.TasksRoot, ".releases")
+	}
+
+	if r.IDFormat == "" {
+		r.IDFormat = "rel-{{.Version}}-{{.Timestamp}}"
+	}
+
+	if r.IntegrationBranch == "" {
+		switch {
+		case c.GitFlow != nil && c.GitFlow.IntegrationBranch != "":
+			r.IntegrationBranch = c.GitFlow.IntegrationBranch
+		case c.BaseBranch != "":
+			r.IntegrationBranch = c.BaseBranch
+		default:
+			r.IntegrationBranch = "develop"
+		}
+	}
+
+	if r.ReleaseBranchPrefix == "" {
+		r.ReleaseBranchPrefix = "release/"
+		if c.GitFlow != nil {
+			if releaseRule, ok := c.GitFlow.BranchTypes["release"]; ok && len(releaseRule.Prefixes) > 0 && releaseRule.Prefixes[0] != "" {
+				r.ReleaseBranchPrefix = releaseRule.Prefixes[0]
+			}
+		}
+	}
+
+	if r.Enabled == nil {
+		r.Enabled = boolPtr(c.hasReleaseRuleConfigured())
+	}
+
+	if r.SharedVersion == nil {
+		if c.Tag != nil {
+			r.SharedVersion = boolPtr(c.Tag.SharedVersion)
+		} else {
+			r.SharedVersion = boolPtr(false)
+		}
+	}
+
+	if r.PushIntegration == nil {
+		if r.LegacyPushBranch != nil {
+			r.PushIntegration = r.LegacyPushBranch
+		} else {
+			r.PushIntegration = boolPtr(true)
+		}
+	}
+
+	if r.PushReleaseBranches == nil {
+		if r.LegacyPushBranch != nil {
+			r.PushReleaseBranches = r.LegacyPushBranch
+		} else {
+			r.PushReleaseBranches = boolPtr(true)
+		}
+	}
+
+	if r.PushTags == nil {
+		if r.LegacyPushTag != nil {
+			r.PushTags = r.LegacyPushTag
+		} else if c.Tag != nil {
+			r.PushTags = boolPtr(c.Tag.Push)
+		} else {
+			r.PushTags = boolPtr(true)
+		}
+	}
+
+	if r.CreateReleaseWorktrees == nil {
+		if r.LegacyCreateWorktree != nil {
+			r.CreateReleaseWorktrees = r.LegacyCreateWorktree
+		} else {
+			r.CreateReleaseWorktrees = boolPtr(true)
+		}
+	}
+
+	if r.KeepIntegrationWorktrees == nil {
+		if r.LegacyKeepIntegrationWorktree != nil {
+			r.KeepIntegrationWorktrees = r.LegacyKeepIntegrationWorktree
+		} else {
+			r.KeepIntegrationWorktrees = boolPtr(false)
+		}
+	}
+
+	if r.AllowTaskReuse == nil {
+		r.AllowTaskReuse = boolPtr(false)
+	}
+
+	if r.RequireCleanBeforeMerge == nil {
+		if r.LegacyCleanSourceCheck != nil {
+			r.RequireCleanBeforeMerge = r.LegacyCleanSourceCheck
+		} else {
+			r.RequireCleanBeforeMerge = boolPtr(true)
+		}
+	}
+
+}
+
+func (c *Config) hasReleaseRuleConfigured() bool {
+	if c == nil || c.GitFlow == nil {
+		return false
+	}
+	releaseRule, ok := c.GitFlow.BranchTypes["release"]
+	if !ok {
+		return false
+	}
+	return len(releaseRule.Prefixes) > 0
 }
 
 func (c *Config) effectivePaths() {

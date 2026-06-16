@@ -656,7 +656,7 @@ func TestTasksPanel_TreeMode_NavigationSkipsGroupHeaders(t *testing.T) {
 	}
 }
 
-func TestTasksPanel_TreeMode_QEmitsOpenPromoteDialog_ForFeatureRoot(t *testing.T) {
+func TestTasksPanel_TreeMode_QNoOp_ForFeatureRoot(t *testing.T) {
 	p := NewTasksPanel(80, 20)
 	p.SetFlow(makeFlow(gitflow.BranchTypeRelease))
 	p.SetFocused(true)
@@ -666,17 +666,8 @@ func TestTasksPanel_TreeMode_QEmitsOpenPromoteDialog_ForFeatureRoot(t *testing.T
 	})
 
 	_, cmd := p.Update(sendKey("Q"))
-	if cmd == nil {
-		t.Fatal("Q must emit command for promotable root feature")
-	}
-
-	msg := cmd()
-	got, ok := msg.(OpenPromoteDialogMsg)
-	if !ok {
-		t.Fatalf("expected OpenPromoteDialogMsg, got %T", msg)
-	}
-	if got.TaskID != "ZA-553" {
-		t.Fatalf("expected TaskID ZA-553, got %q", got.TaskID)
+	if cmd != nil {
+		t.Fatal("Q must be no-op")
 	}
 }
 

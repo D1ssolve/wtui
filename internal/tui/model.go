@@ -46,8 +46,10 @@ type Model struct {
 
 	tasksPanel    panels.TasksPanel
 	servicesPanel panels.ServicesPanel
+	releasesPanel panels.ReleasesPanel
 	outputPanel   panels.OutputPanel
 
+	tasks []domain.Task
 	repos []domain.Repo
 
 	modal modal.Modal
@@ -118,10 +120,11 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 		logPath:          logPath,
 		tasksPanel:       panels.NewTasksPanel(25, 10),
 		servicesPanel:    panels.NewServicesPanel(55, 10),
+		releasesPanel:    panels.NewReleasesPanel(25, 10),
 		outputPanel:      panels.NewOutputPanel(80, cfg.OutputPanelLines+2),
 	}
 
-	m.tasksPanel.SetFocused(true)
+	m.setFocus(FocusTasks)
 	m.tasksPanel.SetFlow(opts.ResolvedFlow)
 	m.servicesPanel.SetLazygitAvailable(opts.LazygitAvailable)
 	m.servicesPanel.SetForgeClients(opts.ForgeClients, cfg.Forge)
@@ -161,6 +164,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		loadTasksCmd(m.mgr),
 		loadReposCmd(m.mgr, false),
+		loadReleasesCmd(m.mgr),
 		m.spinner.Tick,
 	)
 }
@@ -239,26 +243,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keymap.PanelTasks):
-			m.focus = FocusTasks
-			m.tasksPanel.SetFocused(true)
-			m.servicesPanel.SetFocused(false)
-			m.outputPanel.SetFocused(false)
+			m.setFocus(FocusTasks)
 			m.logger.Debug("focus changed", slog.String("panel", m.focus.String()))
 			return m, nil
 
 		case key.Matches(msg, m.keymap.PanelServices):
-			m.focus = FocusServices
-			m.tasksPanel.SetFocused(false)
-			m.servicesPanel.SetFocused(true)
-			m.outputPanel.SetFocused(false)
+			m.setFocus(FocusServices)
 			m.logger.Debug("focus changed", slog.String("panel", m.focus.String()))
 			return m, nil
 
 		case key.Matches(msg, m.keymap.PanelOutput):
-			m.focus = FocusOutput
-			m.tasksPanel.SetFocused(false)
-			m.servicesPanel.SetFocused(false)
-			m.outputPanel.SetFocused(true)
+			m.setFocus(FocusOutput)
+			m.logger.Debug("focus changed", slog.String("panel", m.focus.String()))
+			return m, nil
+
+		case key.Matches(msg, m.keymap.PanelReleases):
+			m.setFocus(FocusReleases)
 			m.logger.Debug("focus changed", slog.String("panel", m.focus.String()))
 			return m, nil
 
@@ -282,7 +282,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keymap.Refresh):
 			m.outputPanel.AppendLine("Refreshing tasks and repository cache...")
 			m.refreshing = true
-			cmds := []tea.Cmd{loadTasksCmd(m.mgr), loadReposCmd(m.mgr, true)}
+			cmds := []tea.Cmd{loadTasksCmd(m.mgr), loadReposCmd(m.mgr, true), loadReleasesCmd(m.mgr)}
 			return m, tea.Batch(cmds...)
 		}
 
@@ -301,23 +301,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			newPanel, cmd := m.outputPanel.Update(msg)
 			m.outputPanel = newPanel
 			return m, cmd
+
+		case FocusReleases:
+			newPanel, cmd := m.releasesPanel.Update(msg)
+			m.releasesPanel = newPanel
+			return m, cmd
 		}
 
 	case panels.TaskSelectionChangedMsg:
 		return m, loadServicesCmd(m.mgr, msg.TaskID)
 
 	case panels.FocusServicesMsg:
-		m.focus = FocusServices
-		m.tasksPanel.SetFocused(false)
-		m.servicesPanel.SetFocused(true)
-		m.outputPanel.SetFocused(false)
+		m.setFocus(FocusServices)
 		return m, loadServicesCmd(m.mgr, msg.TaskID)
 
 	case panels.FocusTasksMsg:
-		m.focus = FocusTasks
-		m.tasksPanel.SetFocused(true)
-		m.servicesPanel.SetFocused(false)
-		m.outputPanel.SetFocused(false)
+		m.setFocus(FocusTasks)
+		return m, nil
+
+	case panels.OpenCreateReleaseDialogMsg:
+		m.modal = modal.NewCreateReleaseDialog(m.tasks, m.width, m.height)
 		return m, nil
 
 	case panels.OpenInitDialogMsg:
@@ -364,31 +367,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = modal.NewConfigModal(m.cfg)
 		return m, nil
 
-	case panels.OpenPromoteDialogMsg:
-		selected := m.tasksPanel.SelectedTask()
-		if selected == nil || selected.ID != msg.TaskID {
-			m.outputPanel.AppendLine("Promote failed: selected task not found.")
+	case panels.ReleaseVersionsLoadedMsg:
+		if m.modal == nil {
 			return m, nil
 		}
-
-		baseBranch := ""
-		if m.flow != nil {
-			if rule, ok := m.flow.BranchTypes[gitflow.BranchTypeRelease]; ok {
-				baseBranch = rule.BaseBranch
-			}
-		}
-
-		m.modal = modal.NewPromoteToReleaseDialog(msg.TaskID, selected.Services, baseBranch, m.width, m.height)
-		return m, loadPromoteVersionsCmd(m.mgr, msg.TaskID)
-
-	case panels.PromoteVersionsLoadedMsg:
-		dialog, ok := m.modal.(*modal.PromoteToReleaseDialog)
-		if !ok {
-			return m, nil
-		}
-		dialog.SetProposedVersions(msg.Versions)
-		m.modal = dialog
-		return m, nil
+		updatedModal, cmd := m.modal.Update(msg)
+		m.modal = updatedModal
+		return m, cmd
 
 	case panels.PlanCloseTaskMsg:
 		if selected := m.tasksPanel.SelectedTask(); selected != nil && selected.ID == msg.TaskID {
@@ -634,11 +619,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner.Tick,
 		)
 
-	case modal.PromoteToReleaseMsg:
+	case modal.SubmitCreateReleaseMsg:
 		m.modal = nil
 		m.opRunning = true
-		m.outputPanel.AppendLine("Promoting task " + msg.TaskID + " to release...")
-		return m, tea.Batch(promoteToReleaseCmd(m.mgr, msg.TaskID, msg.Versions), m.spinner.Tick)
+		m.outputPanel.AppendLine("Creating release from selected tasks...")
+		return m, tea.Batch(createReleaseCmd(m.mgr, task.CreateReleaseParams{
+			TaskIDs:         append([]string(nil), msg.TaskIDs...),
+			ServiceVersions: msg.Versions,
+			StartImmediately: true,
+		}), m.spinner.Tick)
+
+	case modal.RequestReleaseVersionsMsg:
+		if len(msg.TaskIDs) == 0 {
+			return m, nil
+		}
+		return m, loadReleaseVersionsCmd(m.mgr, msg.TaskIDs)
 
 	case modal.SubmitPruneMsg:
 		m.modal = nil
@@ -697,6 +692,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case TasksLoadedMsg:
+		m.tasks = append([]domain.Task(nil), msg.Tasks...)
 		m.tasksPanel.SetTasks(msg.Tasks)
 		if m.refreshing {
 			m.outputPanel.AppendLine("Tasks refreshed.")
@@ -705,6 +701,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ServicesLoadedMsg:
 		m.servicesPanel.SetServices(msg.TaskID, msg.Services)
+		return m, nil
+
+	case ReleasesLoadedMsg:
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Load releases failed: " + msg.Err.Error())
+			return m, nil
+		}
+		m.releasesPanel.SetReleases(msg.Releases)
+		if m.refreshing {
+			m.outputPanel.AppendLine("Releases refreshed.")
+		}
 		return m, nil
 
 	case CloneSourceServicesLoadedMsg:
@@ -832,14 +839,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.outputPanel.AppendLine(fmt.Sprintf("Forge %s done for %s: %+v", msg.Op, msg.ServiceName, msg.Data))
 		return m, nil
 
-	case PromoteToReleaseDoneMsg:
+	case CreateReleaseDoneMsg:
 		m.opRunning = false
 		if msg.Err != nil {
-			m.outputPanel.AppendLine("Promote to release failed: " + msg.Err.Error())
-			return m, nil
+			m.outputPanel.AppendLine("Create release failed: " + msg.Err.Error())
+		} else {
+			releaseID := strings.TrimSpace(msg.Release.ID)
+			if releaseID == "" {
+				releaseID = "(unknown)"
+			}
+			m.outputPanel.AppendLine("Create release done: " + releaseID)
 		}
-		m.outputPanel.AppendLine("Promote to release done: " + msg.Task.ID)
-		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
+		return m, loadReleasesCmd(m.mgr)
 
 	case LazygitDoneMsg:
 		m.opRunning = false
@@ -914,6 +925,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			newPanel, cmd := m.servicesPanel.Update(msg)
 			m.servicesPanel = newPanel
 			return m, cmd
+		case FocusReleases:
+			newPanel, cmd := m.releasesPanel.Update(msg)
+			m.releasesPanel = newPanel
+			return m, cmd
 		}
 		return m, nil
 
@@ -940,9 +955,10 @@ func (m Model) View() string {
 	header := renderHeader(m)
 	footer := renderFooter(m)
 
-	leftView := m.tasksPanel.View()
-	rightView := m.servicesPanel.View()
-	mainRow := lipgloss.JoinHorizontal(lipgloss.Top, leftView, rightView)
+	tasksView := m.tasksPanel.View()
+	servicesView := m.servicesPanel.View()
+	releasesView := m.releasesPanel.View()
+	mainRow := lipgloss.JoinHorizontal(lipgloss.Top, tasksView, servicesView, releasesView)
 	outputView := m.outputPanel.View()
 	fullView := lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -968,21 +984,61 @@ func (m *Model) recalculateDimensions() {
 
 	outputPanelHeight := m.cfg.OutputPanelLines + 2
 	mainPanelHeight := max(m.height-headerHeight-footerHeight-outputPanelHeight, 3)
-	tasksWidth := max(m.width*30/100, 25)
 
-	servicesWidth := max(m.width-tasksWidth, 1)
+	tasksWidth, servicesWidth, releasesWidth := threePanelWidths(m.width)
 
 	m.tasksPanel.SetSize(tasksWidth, mainPanelHeight)
 	m.servicesPanel.SetSize(servicesWidth, mainPanelHeight)
+	m.releasesPanel.SetSize(releasesWidth, mainPanelHeight)
 	m.outputPanel.SetSize(m.width, m.cfg.OutputPanelLines)
 }
 
 func (m Model) cycleFocusForward() Model {
-	m.focus = m.focus.Next()
-	m.tasksPanel.SetFocused(m.focus == FocusTasks)
-	m.servicesPanel.SetFocused(m.focus == FocusServices)
-	m.outputPanel.SetFocused(m.focus == FocusOutput)
+	m.setFocus(m.focus.Next())
 	return m
+}
+
+func (m *Model) setFocus(focus FocusPanel) {
+	m.focus = focus
+	m.tasksPanel.SetFocused(focus == FocusTasks)
+	m.servicesPanel.SetFocused(focus == FocusServices)
+	m.outputPanel.SetFocused(focus == FocusOutput)
+	m.releasesPanel.SetFocused(focus == FocusReleases)
+}
+
+func threePanelWidths(total int) (tasks, services, releases int) {
+	if total <= 0 {
+		return 0, 0, 0
+	}
+
+	tasks = max(total*28/100, 25)
+	releases = max(total*28/100, 25)
+	services = total - tasks - releases
+
+	if services < 1 {
+		deficit := 1 - services
+		reduce := min(deficit, max(releases-1, 0))
+		releases -= reduce
+		deficit -= reduce
+		if deficit > 0 {
+			reduce = min(deficit, max(tasks-1, 0))
+			tasks -= reduce
+			deficit -= reduce
+		}
+		services = 1
+		if deficit > 0 {
+			services = max(0, services-deficit)
+		}
+	}
+
+	if tasks+services+releases != total {
+		services += total - (tasks + services + releases)
+	}
+
+	if services < 0 {
+		services = 0
+	}
+	return tasks, services, releases
 }
 
 func (m Model) maybeLoadServicesCmd() tea.Cmd {

@@ -8,9 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
+
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tui/panels"
 )
 
 func TestRiderTaskArgsUsesTaskIDSolution(t *testing.T) {
@@ -139,8 +142,19 @@ type cmdManager struct {
 	removeErrs  map[string]error
 
 	tagTaskID string
+	tagCalls  []string
 	tagResult []domain.TagInfo
 	tagErr    error
+
+	listReleasesCalled bool
+	listReleasesCtx    context.Context
+	listReleasesResult []domain.Release
+	listReleasesErr    error
+
+	createReleaseCtx    context.Context
+	createReleaseParams task.CreateReleaseParams
+	createReleaseResult domain.Release
+	createReleaseErr    error
 
 	forgeCreateMRArgs      forge.CreateMRParams
 	forgePipelineStatusArg forgePipelineStatusParams
@@ -187,6 +201,7 @@ func (m *cmdManager) Remove(_ context.Context, taskID string, _, _ bool) error {
 
 func (m *cmdManager) ListTags(_ context.Context, taskID string) ([]domain.TagInfo, error) {
 	m.tagTaskID = taskID
+	m.tagCalls = append(m.tagCalls, taskID)
 	return m.tagResult, m.tagErr
 }
 
@@ -205,9 +220,35 @@ func (m *cmdManager) ForgeListIssues(_ context.Context, _, _ string, params forg
 	return m.forgeIssuesResult, m.forgeErr
 }
 
-func (m *cmdManager) PromoteToRelease(_ context.Context, _ task.PromoteToReleaseParams) (domain.Task, error) {
-	return domain.Task{}, nil
+func (m *cmdManager) ListReleases(ctx context.Context) ([]domain.Release, error) {
+	m.listReleasesCalled = true
+	m.listReleasesCtx = ctx
+	return m.listReleasesResult, m.listReleasesErr
 }
+
+func (m *cmdManager) GetRelease(_ context.Context, _ string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *cmdManager) CreateRelease(ctx context.Context, params task.CreateReleaseParams) (domain.Release, error) {
+	m.createReleaseCtx = ctx
+	m.createReleaseParams = params
+	if params.StatusCh != nil {
+		params.StatusCh <- "create release: validating"
+		params.StatusCh <- "create release: tagging"
+	}
+	return m.createReleaseResult, m.createReleaseErr
+}
+
+func (m *cmdManager) RetryRelease(_ context.Context, _ string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *cmdManager) RejectRelease(_ context.Context, _ string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *cmdManager) RemoveRelease(_ context.Context, _ string) error { return nil }
 
 func TestCmdManager_ImplementsTaskManager(t *testing.T) {
 	var _ task.Manager = (*cmdManager)(nil)
@@ -405,4 +446,194 @@ func TestForgeOpCmdManagerWithoutForgeSupport(t *testing.T) {
 	if got.Err == nil {
 		t.Fatal("Err = nil, want error")
 	}
+}
+
+func TestLoadReleasesCmdReturnsReleasesLoadedMsgAndUsesTimeout(t *testing.T) {
+	now := time.Now()
+	mgr := &cmdManager{listReleasesResult: []domain.Release{{ID: "rel-1", CreatedAt: now}}}
+
+	msg := loadReleasesCmd(mgr)()
+	got, ok := msg.(ReleasesLoadedMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want ReleasesLoadedMsg", msg)
+	}
+	if len(got.Releases) != 1 || got.Releases[0].ID != "rel-1" {
+		t.Fatalf("Releases = %#v, want one rel-1", got.Releases)
+	}
+	if got.Err != nil {
+		t.Fatalf("Err = %v, want nil", got.Err)
+	}
+	if !mgr.listReleasesCalled {
+		t.Fatal("ListReleases not called")
+	}
+	deadline, ok := mgr.listReleasesCtx.Deadline()
+	if !ok {
+		t.Fatal("ListReleases ctx has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining > 30*time.Second || remaining < 29*time.Second {
+		t.Fatalf("ListReleases timeout ~30s, got remaining=%s", remaining)
+	}
+}
+
+func TestLoadReleasesCmdReturnsErrorInMessage(t *testing.T) {
+	expectedErr := errors.New("boom")
+	mgr := &cmdManager{listReleasesErr: expectedErr}
+
+	msg := loadReleasesCmd(mgr)()
+	got := msg.(ReleasesLoadedMsg)
+	if !errors.Is(got.Err, expectedErr) {
+		t.Fatalf("Err = %v, want %v", got.Err, expectedErr)
+	}
+}
+
+func TestCreateReleaseCmdStreamsStatusAndReturnsDone(t *testing.T) {
+	expected := domain.Release{ID: "rel-1", Status: domain.ReleaseStatusReleased}
+	mgr := &cmdManager{createReleaseResult: expected}
+
+	cmd := createReleaseCmd(mgr, task.CreateReleaseParams{TaskIDs: []string{"T-1"}})
+
+	msg1 := cmd()
+	line1, ok := msg1.(OutputLineMsg)
+	if !ok {
+		t.Fatalf("msg1 = %T, want OutputLineMsg", msg1)
+	}
+	if line1.Line != "create release: validating" {
+		t.Fatalf("line1 = %q, want first status line", line1.Line)
+	}
+
+	msg2 := line1.Next()
+	line2, ok := msg2.(OutputLineMsg)
+	if !ok {
+		t.Fatalf("msg2 = %T, want OutputLineMsg", msg2)
+	}
+	if line2.Line != "create release: tagging" {
+		t.Fatalf("line2 = %q, want second status line", line2.Line)
+	}
+
+	msg3 := line2.Next()
+	done, ok := msg3.(CreateReleaseDoneMsg)
+	if !ok {
+		t.Fatalf("msg3 = %T, want CreateReleaseDoneMsg", msg3)
+	}
+	if done.Release.ID != "rel-1" {
+		t.Fatalf("done.Release.ID = %q, want rel-1", done.Release.ID)
+	}
+	if done.Err != nil {
+		t.Fatalf("done.Err = %v, want nil", done.Err)
+	}
+	if mgr.createReleaseParams.StatusCh == nil {
+		t.Fatal("CreateRelease params.StatusCh = nil, want non-nil")
+	}
+	deadline, ok := mgr.createReleaseCtx.Deadline()
+	if !ok {
+		t.Fatal("CreateRelease ctx has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining > 10*time.Minute || remaining < 9*time.Minute+59*time.Second {
+		t.Fatalf("CreateRelease timeout ~10m, got remaining=%s", remaining)
+	}
+}
+
+func TestCreateReleaseCmdReturnsErrorInMessage(t *testing.T) {
+	expectedErr := errors.New("create failed")
+	mgr := &cmdManager{createReleaseErr: expectedErr}
+
+	cmd := createReleaseCmd(mgr, task.CreateReleaseParams{TaskIDs: []string{"T-1"}})
+	msg := cmd()
+	line, ok := msg.(OutputLineMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want OutputLineMsg", msg)
+	}
+	msg = line.Next()
+	line, ok = msg.(OutputLineMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want OutputLineMsg", msg)
+	}
+	msg = line.Next()
+	done := msg.(CreateReleaseDoneMsg)
+	if !errors.Is(done.Err, expectedErr) {
+		t.Fatalf("Err = %v, want %v", done.Err, expectedErr)
+	}
+}
+
+func TestLoadReleaseVersionsCmdBuildsVersionMapWithSemverBumpAndFallback(t *testing.T) {
+	mgr := &cmdManager{}
+	mgr.listServicesResult = []domain.Service{{Name: "api"}, {Name: "worker"}}
+	mgr.tagResult = []domain.TagInfo{{Name: "v1.2.3", IsSemver: true, Version: mustSemver(t, "1.2.3")}}
+
+	msg := loadReleaseVersionsCmd(mgr, []string{"T-1"})()
+	loaded, ok := msg.(panels.ReleaseVersionsLoadedMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want panels.ReleaseVersionsLoadedMsg", msg)
+	}
+	if got := loaded.Versions["api"]; got != "1.2.4" {
+		t.Fatalf("api version = %q, want 1.2.4", got)
+	}
+	if got := loaded.Versions["worker"]; got != "1.2.4" {
+		t.Fatalf("worker version = %q, want 1.2.4", got)
+	}
+	if len(mgr.tagCalls) != 1 || mgr.tagCalls[0] != "T-1" {
+		t.Fatalf("ListTags calls = %+v, want [T-1]", mgr.tagCalls)
+	}
+}
+
+func TestLoadReleaseVersionsCmd_DeduplicatesTaskIDs(t *testing.T) {
+	mgr := &cmdManager{}
+	mgr.listServicesResult = []domain.Service{{Name: "api", RepoPath: "/repos/api"}}
+	mgr.tagResult = []domain.TagInfo{{Name: "v1.0.0", IsSemver: true, Version: mustSemver(t, "1.0.0")}}
+
+	msg := loadReleaseVersionsCmd(mgr, []string{"T-1", "T-1", " ", "T-1"})()
+	loaded, ok := msg.(panels.ReleaseVersionsLoadedMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want panels.ReleaseVersionsLoadedMsg", msg)
+	}
+	if got := loaded.Versions["api"]; got != "1.0.1" {
+		t.Fatalf("api version = %q, want 1.0.1", got)
+	}
+	if mgr.listServicesCalls != 1 {
+		t.Fatalf("ListServices calls = %d, want 1", mgr.listServicesCalls)
+	}
+	if len(mgr.tagCalls) != 1 || mgr.tagCalls[0] != "T-1" {
+		t.Fatalf("ListTags calls = %+v, want [T-1]", mgr.tagCalls)
+	}
+}
+
+func TestLoadReleaseVersionsCmdUsesFallbackWhenNoSemverTags(t *testing.T) {
+	mgr := &cmdManager{}
+	mgr.listServicesResult = []domain.Service{{Name: "api"}}
+	mgr.tagResult = []domain.TagInfo{{Name: "not-semver", IsSemver: false}}
+
+	msg := loadReleaseVersionsCmd(mgr, []string{"T-1"})()
+	loaded := msg.(panels.ReleaseVersionsLoadedMsg)
+	if got := loaded.Versions["api"]; got != "0.1.0" {
+		t.Fatalf("api version = %q, want 0.1.0", got)
+	}
+}
+
+func TestLoadReleaseVersionsCmdReturnsCommandDoneOnManagerError(t *testing.T) {
+	expectedErr := errors.New("services failed")
+	mgr := &cmdManager{}
+	mgr.listServicesErr = expectedErr
+
+	msg := loadReleaseVersionsCmd(mgr, []string{"T-1"})()
+	done, ok := msg.(CommandDoneMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want CommandDoneMsg", msg)
+	}
+	if !errors.Is(done.Err, expectedErr) {
+		t.Fatalf("Err = %v, want %v", done.Err, expectedErr)
+	}
+	if done.Op != "Load release versions for task T-1" {
+		t.Fatalf("Op = %q, want task-specific op", done.Op)
+	}
+}
+
+func mustSemver(t *testing.T, raw string) *semver.Version {
+	t.Helper()
+	v, err := semver.NewVersion(raw)
+	if err != nil {
+		t.Fatalf("semver.NewVersion(%q): %v", raw, err)
+	}
+	return v
 }

@@ -106,6 +106,7 @@ func TestLoad_NoFile_ReturnsEmptyConfig(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(tmpDir, "nonexistent"))
+	setenv(t, "HOME", filepath.Join(tmpDir, "nonexistent-home"))
 
 	cfg, err := Load("")
 	if err != nil {
@@ -498,6 +499,20 @@ close:
   continue_on_error: true
 prune:
   dry_run_default: true
+release:
+  enabled: true
+  root_dir: /tmp/releases
+  id_format: "rel-{{.Version}}-{{.Timestamp}}"
+  integration_branch: develop
+  release_branch_prefix: "release/"
+  shared_version: true
+  push_integration: true
+  push_release_branches: true
+  push_tags: false
+  create_release_worktrees: true
+  keep_integration_worktrees: false
+  allow_task_reuse: false
+  require_clean_before_merge: true
 `)
 
 	cfg, err := Load(path)
@@ -522,6 +537,9 @@ prune:
 	}
 	if cfg.Prune == nil || !cfg.Prune.DryRunDefault {
 		t.Fatalf("Prune parsing failed: %+v", cfg.Prune)
+	}
+	if cfg.Release == nil || cfg.Release.RootDir != "/tmp/releases" {
+		t.Fatalf("Release parsing failed: %+v", cfg.Release)
 	}
 }
 
@@ -580,5 +598,185 @@ func TestEffective_NilBlocks_Defaults(t *testing.T) {
 	}
 	if !cfg.Tag.Push {
 		t.Error("Tag.Push default: want true")
+	}
+}
+
+func TestEffective_ReleaseDefaults(t *testing.T) {
+	cfg := &Config{RootDir: "/workspace"}
+	mustEffective(t, cfg)
+
+	if cfg.Release == nil {
+		t.Fatal("Release defaults missing")
+	}
+
+	if cfg.Release.RootDir != "/workspace/.tasks/.releases" {
+		t.Errorf("Release.RootDir default: got %q, want %q", cfg.Release.RootDir, "/workspace/.tasks/.releases")
+	}
+	if cfg.Release.IDFormat != "rel-{{.Version}}-{{.Timestamp}}" {
+		t.Errorf("Release.IDFormat default: got %q", cfg.Release.IDFormat)
+	}
+	if cfg.Release.IntegrationBranch != "develop" {
+		t.Errorf("Release.IntegrationBranch default: got %q, want develop", cfg.Release.IntegrationBranch)
+	}
+	if cfg.Release.ReleaseBranchPrefix != "release/" {
+		t.Errorf("Release.ReleaseBranchPrefix default: got %q, want release/", cfg.Release.ReleaseBranchPrefix)
+	}
+	if cfg.Release.Enabled == nil || *cfg.Release.Enabled {
+		t.Errorf("Release.Enabled default: got %v, want false", cfg.Release.Enabled)
+	}
+	if cfg.Release.SharedVersion == nil || *cfg.Release.SharedVersion {
+		t.Errorf("Release.SharedVersion default: got %v, want false", cfg.Release.SharedVersion)
+	}
+	if cfg.Release.PushIntegration == nil || !*cfg.Release.PushIntegration {
+		t.Errorf("Release.PushIntegration default: got %v, want true", cfg.Release.PushIntegration)
+	}
+	if cfg.Release.PushReleaseBranches == nil || !*cfg.Release.PushReleaseBranches {
+		t.Errorf("Release.PushReleaseBranches default: got %v, want true", cfg.Release.PushReleaseBranches)
+	}
+	if cfg.Release.PushTags == nil || !*cfg.Release.PushTags {
+		t.Errorf("Release.PushTags default: got %v, want true", cfg.Release.PushTags)
+	}
+	if cfg.Release.CreateReleaseWorktrees == nil || !*cfg.Release.CreateReleaseWorktrees {
+		t.Errorf("Release.CreateReleaseWorktrees default: got %v, want true", cfg.Release.CreateReleaseWorktrees)
+	}
+	if cfg.Release.KeepIntegrationWorktrees == nil || *cfg.Release.KeepIntegrationWorktrees {
+		t.Errorf("Release.KeepIntegrationWorktrees default: got %v, want false", cfg.Release.KeepIntegrationWorktrees)
+	}
+	if cfg.Release.AllowTaskReuse == nil || *cfg.Release.AllowTaskReuse {
+		t.Errorf("Release.AllowTaskReuse default: got %v, want false", cfg.Release.AllowTaskReuse)
+	}
+	if cfg.Release.RequireCleanBeforeMerge == nil || !*cfg.Release.RequireCleanBeforeMerge {
+		t.Errorf("Release.RequireCleanBeforeMerge default: got %v, want true", cfg.Release.RequireCleanBeforeMerge)
+	}
+}
+
+func TestLoad_ReleaseKeepPromoteKey_IgnoredAsUnknown(t *testing.T) {
+	path := writeTempConfig(t, `
+release:
+  keep_promote_key: true
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	mustEffective(t, cfg)
+
+	if cfg.Release == nil {
+		t.Fatal("Release defaults missing")
+	}
+}
+
+func TestEffective_ReleaseDefaults_UseGitFlowReleaseRuleAndTagPush(t *testing.T) {
+	cfg := &Config{
+		BaseBranch: "integration-main",
+		GitFlow: &GitFlowConfig{
+			IntegrationBranch: "integration-branch",
+			BranchTypes: map[string]BranchTypeRule{
+				"release": {
+					Prefixes: []string{"rel/"},
+				},
+			},
+		},
+		Tag: &TagConfig{
+			Push: false,
+		},
+	}
+
+	mustEffective(t, cfg)
+
+	if cfg.Release.IntegrationBranch != "integration-branch" {
+		t.Errorf("Release.IntegrationBranch from git_flow: got %q, want integration-branch", cfg.Release.IntegrationBranch)
+	}
+	if cfg.Release.ReleaseBranchPrefix != "rel/" {
+		t.Errorf("Release.ReleaseBranchPrefix from git_flow release rule: got %q, want rel/", cfg.Release.ReleaseBranchPrefix)
+	}
+	if cfg.Release.Enabled == nil || !*cfg.Release.Enabled {
+		t.Errorf("Release.Enabled with release rule: got %v, want true", cfg.Release.Enabled)
+	}
+	if cfg.Release.PushTags == nil || *cfg.Release.PushTags {
+		t.Errorf("Release.PushTags inherited from tag.push: got %v, want false", cfg.Release.PushTags)
+	}
+}
+
+func TestEffective_ReleaseExplicitBoolFalsePreserved(t *testing.T) {
+	path := writeTempConfig(t, `
+release:
+  push_integration: false
+  push_release_branches: false
+  push_tags: false
+  create_release_worktrees: false
+  keep_integration_worktrees: false
+  allow_task_reuse: false
+  require_clean_before_merge: false
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	mustEffective(t, cfg)
+
+	if cfg.Release == nil {
+		t.Fatal("Release is nil after Effective()")
+	}
+
+	if cfg.Release.PushIntegration == nil || *cfg.Release.PushIntegration {
+		t.Errorf("Release.PushIntegration explicit false not preserved: got %v", cfg.Release.PushIntegration)
+	}
+	if cfg.Release.PushReleaseBranches == nil || *cfg.Release.PushReleaseBranches {
+		t.Errorf("Release.PushReleaseBranches explicit false not preserved: got %v", cfg.Release.PushReleaseBranches)
+	}
+	if cfg.Release.PushTags == nil || *cfg.Release.PushTags {
+		t.Errorf("Release.PushTags explicit false not preserved: got %v", cfg.Release.PushTags)
+	}
+	if cfg.Release.CreateReleaseWorktrees == nil || *cfg.Release.CreateReleaseWorktrees {
+		t.Errorf("Release.CreateReleaseWorktrees explicit false not preserved: got %v", cfg.Release.CreateReleaseWorktrees)
+	}
+	if cfg.Release.KeepIntegrationWorktrees == nil || *cfg.Release.KeepIntegrationWorktrees {
+		t.Errorf("Release.KeepIntegrationWorktrees explicit false not preserved: got %v", cfg.Release.KeepIntegrationWorktrees)
+	}
+	if cfg.Release.AllowTaskReuse == nil || *cfg.Release.AllowTaskReuse {
+		t.Errorf("Release.AllowTaskReuse explicit false not preserved: got %v", cfg.Release.AllowTaskReuse)
+	}
+	if cfg.Release.RequireCleanBeforeMerge == nil || *cfg.Release.RequireCleanBeforeMerge {
+		t.Errorf("Release.RequireCleanBeforeMerge explicit false not preserved: got %v", cfg.Release.RequireCleanBeforeMerge)
+	}
+}
+
+func TestEffective_ReleaseLegacyAliases_AreApplied(t *testing.T) {
+	path := writeTempConfig(t, `
+release:
+  push_branch: false
+  push_tag: false
+  create_worktree: false
+  keep_integration_worktree: true
+  clean_source_check: false
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	mustEffective(t, cfg)
+
+	if cfg.Release.PushIntegration == nil || *cfg.Release.PushIntegration {
+		t.Errorf("Release.PushIntegration from legacy push_branch: got %v, want false", cfg.Release.PushIntegration)
+	}
+	if cfg.Release.PushReleaseBranches == nil || *cfg.Release.PushReleaseBranches {
+		t.Errorf("Release.PushReleaseBranches from legacy push_branch: got %v, want false", cfg.Release.PushReleaseBranches)
+	}
+	if cfg.Release.PushTags == nil || *cfg.Release.PushTags {
+		t.Errorf("Release.PushTags from legacy push_tag: got %v, want false", cfg.Release.PushTags)
+	}
+	if cfg.Release.CreateReleaseWorktrees == nil || *cfg.Release.CreateReleaseWorktrees {
+		t.Errorf("Release.CreateReleaseWorktrees from legacy create_worktree: got %v, want false", cfg.Release.CreateReleaseWorktrees)
+	}
+	if cfg.Release.KeepIntegrationWorktrees == nil || !*cfg.Release.KeepIntegrationWorktrees {
+		t.Errorf("Release.KeepIntegrationWorktrees from legacy keep_integration_worktree: got %v, want true", cfg.Release.KeepIntegrationWorktrees)
+	}
+	if cfg.Release.RequireCleanBeforeMerge == nil || *cfg.Release.RequireCleanBeforeMerge {
+		t.Errorf("Release.RequireCleanBeforeMerge from legacy clean_source_check: got %v, want false", cfg.Release.RequireCleanBeforeMerge)
 	}
 }

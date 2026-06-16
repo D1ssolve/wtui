@@ -42,7 +42,12 @@ type ForgeResultMsg struct {
 	Err         error
 }
 
-type PromoteToReleaseDoneMsg struct {
-	Task domain.Task
-	Err  error
+type ReleasesLoadedMsg struct {
+	Releases []domain.Release
+	Err      error
+}
+
+type CreateReleaseDoneMsg struct {
+	Release domain.Release
+	Err     error
 }

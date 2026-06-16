@@ -275,13 +275,6 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 				}
 				return p, nil
 
-			case "Q":
-				task := p.SelectedTask()
-				if !p.canPromote(task) {
-					return p, nil
-				}
-				return p, func() tea.Msg { return OpenPromoteDialogMsg{TaskID: task.ID} }
-
 			case "i":
 				return p, func() tea.Msg { return OpenInitDialogMsg{} }
 
@@ -491,13 +484,6 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 				return p, nil
 			}
 			return p, func() tea.Msg { return OpenTagBrowserMsg{TaskID: task.ID} }
-
-		case "Q":
-			task := p.SelectedTask()
-			if !p.canPromote(task) {
-				return p, nil
-			}
-			return p, func() tea.Msg { return OpenPromoteDialogMsg{TaskID: task.ID} }
 
 		case ",":
 			return p, func() tea.Msg { return OpenConfigModalMsg{} }
@@ -749,16 +735,6 @@ func (p *TasksPanel) moveSelection(delta int) bool {
 		return changed
 	}
 	return false
-}
-
-func (p *TasksPanel) canPromote(task *domain.Task) bool {
-	if task == nil || p.flow == nil {
-		return false
-	}
-	if _, ok := p.flow.BranchTypes[gitflow.BranchTypeRelease]; !ok {
-		return false
-	}
-	return task.ParentID == "" && task.Phase == string(gitflow.BranchTypeFeature)
 }
 
 // treePageJump moves the selection to the first selectable task on the next or

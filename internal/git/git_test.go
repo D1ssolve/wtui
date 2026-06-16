@@ -605,6 +605,35 @@ exit 1
 	})
 }
 
+func TestCommandClient_MergeAbortUsesExpectedArgv(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err := client.MergeAbort(t.Context(), "/worktree"); err != nil {
+		t.Fatalf("MergeAbort returned error: %v", err)
+	}
+
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read args file: %v", err)
+	}
+	want := "-C /worktree merge --abort\n"
+	if string(args) != want {
+		t.Fatalf("git args = %q, want %q", string(args), want)
+	}
+}
+
 func TestCommandClient_ListTagsSortedBySemver(t *testing.T) {
 	binDir := t.TempDir()
 	fakeGit := filepath.Join(binDir, "git")

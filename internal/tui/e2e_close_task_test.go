@@ -54,7 +54,9 @@ func (m *closeTaskE2EManager) ListServices(_ context.Context, taskID string) ([]
 
 func (m *closeTaskE2EManager) Remove(_ context.Context, _ string, _, _ bool) error { return nil }
 
-func (m *closeTaskE2EManager) Repos(_ context.Context, _ bool) ([]domain.Repo, error) { return nil, nil }
+func (m *closeTaskE2EManager) Repos(_ context.Context, _ bool) ([]domain.Repo, error) {
+	return nil, nil
+}
 
 func (m *closeTaskE2EManager) SyncTask(_ context.Context, _ string, _ task.SyncStrategy, lineCh chan<- string) error {
 	close(lineCh)
@@ -76,7 +78,9 @@ func (m *closeTaskE2EManager) PushService(_ context.Context, _, _ string, lineCh
 	return nil
 }
 
-func (m *closeTaskE2EManager) StashService(_ context.Context, _, _ string, _, _ bool) error { return nil }
+func (m *closeTaskE2EManager) StashService(_ context.Context, _, _ string, _, _ bool) error {
+	return nil
+}
 
 func (m *closeTaskE2EManager) RemoveService(_ context.Context, _, _ string, _ bool) error { return nil }
 
@@ -128,13 +132,31 @@ func (m *closeTaskE2EManager) ForgeListIssues(_ context.Context, _, _ string, _ 
 	return nil, nil
 }
 
-func (m *closeTaskE2EManager) PromoteToRelease(_ context.Context, _ task.PromoteToReleaseParams) (domain.Task, error) {
-	return domain.Task{}, nil
+func (m *closeTaskE2EManager) ListReleases(_ context.Context) ([]domain.Release, error) {
+	return nil, nil
 }
+
+func (m *closeTaskE2EManager) GetRelease(_ context.Context, _ string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *closeTaskE2EManager) CreateRelease(_ context.Context, _ task.CreateReleaseParams) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *closeTaskE2EManager) RetryRelease(_ context.Context, _ string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *closeTaskE2EManager) RejectRelease(_ context.Context, _ string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *closeTaskE2EManager) RemoveRelease(_ context.Context, _ string) error { return nil }
 
 func TestE2E_CloseTask_DirtyTask_ShowsValidationModalAndDoesNotExecuteClose(t *testing.T) {
 	mgr := &closeTaskE2EManager{
-		tasks: []domain.Task{{ID: "IN-200", Dir: "/tmp/.tasks/IN-200"}},
+		tasks:   []domain.Task{{ID: "IN-200", Dir: "/tmp/.tasks/IN-200"}},
 		planErr: errors.New("task validation failed"),
 		validation: domain.TaskValidation{
 			TaskID:   "IN-200",
@@ -202,8 +224,8 @@ func TestE2E_CloseTask_CleanTask_ConfirmThenSummaryWithStatuses(t *testing.T) {
 			}},
 		},
 		closeResult: task.CloseTaskResult{
-			TaskID:   "IN-201",
-			Success:  true,
+			TaskID:  "IN-201",
+			Success: true,
 			Steps: []task.CloseTaskStep{
 				{Name: "api:fetch", Status: task.StepStatusOK, Message: "fetched"},
 				{Name: "api:merge:develop", Status: task.StepStatusSkipped, Message: "already merged"},

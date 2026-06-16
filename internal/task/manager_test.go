@@ -85,6 +85,7 @@ type mockGitClient struct {
 	fetchErr             error
 	rebaseErr            error
 	mergeErr             error
+	mergeAbortErr        error
 	pushErr              error
 	worktreeBranchResult string
 	worktreeBranchErr    error
@@ -110,11 +111,12 @@ type mockGitClient struct {
 
 	addWorktreeCalls             []addWorktreeCall
 	addWorktreeWithTrackingCalls []addWorktreeWithTrackingCall
-	createBranchFromBranchCalls []createBranchFromBranchCall
+	createBranchFromBranchCalls  []createBranchFromBranchCall
 	removeWorktreeCalls          []removeWorktreeCall
 	fetchCalls                   []string
 	rebaseCalls                  []rebaseCall
 	mergeCalls                   []mergeCall
+	mergeAbortCalls              []string
 	pushCalls                    []string
 	pushBranchExplicitCalls      []pushBranchExplicitCall
 	stashCalls                   []stashCall
@@ -122,6 +124,7 @@ type mockGitClient struct {
 	createTagCalls               int
 	pushTagCalls                 int
 	deleteBranchCalls            int
+	deleteBranchErr              error
 	deleteTagCalls               int
 	createTagErr                 error
 	pushTagErr                   error
@@ -331,6 +334,13 @@ func (m *mockGitClient) Merge(_ context.Context, path, branch string) error {
 	return m.mergeErr
 }
 
+func (m *mockGitClient) MergeAbort(_ context.Context, worktreePath string) error {
+	m.mu.Lock()
+	m.mergeAbortCalls = append(m.mergeAbortCalls, worktreePath)
+	m.mu.Unlock()
+	return m.mergeAbortErr
+}
+
 func (m *mockGitClient) Push(_ context.Context, path string, lineCh chan<- string) error {
 	m.mu.Lock()
 	m.pushCalls = append(m.pushCalls, path)
@@ -394,7 +404,7 @@ func (m *mockGitClient) DeleteBranch(_ context.Context, _, _ string) error {
 	m.mu.Lock()
 	m.deleteBranchCalls++
 	m.mu.Unlock()
-	return nil
+	return m.deleteBranchErr
 }
 
 func (m *mockGitClient) RemoteURL(_ context.Context, _, _ string) (string, error) {

@@ -55,10 +55,12 @@ type AddParams struct {
 	BranchSuffixes map[string]string
 }
 
-type PromoteToReleaseParams struct {
-	TaskID   string
-	Versions map[string]string
-	StatusCh chan<- string
+type CreateReleaseParams struct {
+	TaskIDs          []string
+	ServiceVersions  map[string]string
+	SharedVersion    string
+	StartImmediately bool
+	StatusCh         chan<- string
 }
 
 type Manager interface {
@@ -92,7 +94,17 @@ type Manager interface {
 
 	CloseTask(ctx context.Context, params CloseTaskParams) (CloseTaskResult, error)
 
-	PromoteToRelease(ctx context.Context, params PromoteToReleaseParams) (domain.Task, error)
+	ListReleases(ctx context.Context) ([]domain.Release, error)
+
+	GetRelease(ctx context.Context, releaseID string) (domain.Release, error)
+
+	CreateRelease(ctx context.Context, params CreateReleaseParams) (domain.Release, error)
+
+	RetryRelease(ctx context.Context, releaseID string) (domain.Release, error)
+
+	RejectRelease(ctx context.Context, releaseID string) (domain.Release, error)
+
+	RemoveRelease(ctx context.Context, releaseID string) error
 
 	ScanPrunableTasks(ctx context.Context) ([]domain.PruneCandidate, error)
 

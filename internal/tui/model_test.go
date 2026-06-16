@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
-	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
@@ -39,6 +39,15 @@ type mockManager struct {
 	syncTaskCalls    int
 	syncTaskTaskID   string
 	syncTaskStrategy task.SyncStrategy
+
+	listReleasesResult []domain.Release
+	listReleasesErr    error
+	listReleasesCalls  int
+
+	createReleaseParams task.CreateReleaseParams
+	createReleaseResult domain.Release
+	createReleaseErr    error
+	createReleaseCalls  int
 }
 
 var _ task.Manager = (*mockManager)(nil)
@@ -120,9 +129,30 @@ func (m *mockManager) ForgeListIssues(_ context.Context, _, _ string, _ forge.Li
 	return nil, nil
 }
 
-func (m *mockManager) PromoteToRelease(_ context.Context, _ task.PromoteToReleaseParams) (domain.Task, error) {
-	return domain.Task{}, nil
+func (m *mockManager) ListReleases(_ context.Context) ([]domain.Release, error) {
+	m.listReleasesCalls++
+	return m.listReleasesResult, m.listReleasesErr
 }
+
+func (m *mockManager) GetRelease(_ context.Context, _ string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *mockManager) CreateRelease(_ context.Context, params task.CreateReleaseParams) (domain.Release, error) {
+	m.createReleaseCalls++
+	m.createReleaseParams = params
+	return m.createReleaseResult, m.createReleaseErr
+}
+
+func (m *mockManager) RetryRelease(_ context.Context, _ string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *mockManager) RejectRelease(_ context.Context, _ string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *mockManager) RemoveRelease(_ context.Context, _ string) error { return nil }
 
 func newTestConfig() *config.Config {
 	cfg := &config.Config{
@@ -285,12 +315,27 @@ func TestView_AfterWindowSize_NotLoading(t *testing.T) {
 	}
 }
 
-func TestInit_ReturnsCmd(t *testing.T) {
+func TestView_AfterWindowSize_IncludesReleasesPanel(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 140, 40)
+
+	view := stripANSIForModel(m.View())
+	if !strings.Contains(view, "[3] Releases") {
+		t.Fatalf("view should include releases panel title, got %q", view)
+	}
+}
+
+func TestInit_ReturnsCmd(t *testing.T) {
+	mgr := &mockManager{}
+	m := newTestModel(t, mgr)
 
 	cmd := m.Init()
 	if cmd == nil {
 		t.Error("Init() must return a non-nil tea.Cmd")
+	}
+	runBatchCommands(cmd())
+	if mgr.listReleasesCalls != 1 {
+		t.Fatalf("ListReleases calls = %d, want 1", mgr.listReleasesCalls)
 	}
 }
 
@@ -353,8 +398,20 @@ func TestUpdate_Tab_CyclesFocusForward(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
+	if m.focus != FocusOutput {
+		t.Errorf("after Tab×2: expected FocusOutput, got %v", m.focus)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(Model)
+	if m.focus != FocusReleases {
+		t.Errorf("after Tab×3: expected FocusReleases, got %v", m.focus)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(Model)
 	if m.focus != FocusTasks {
-		t.Errorf("after Tab×2 (wrap): expected FocusTasks, got %v", m.focus)
+		t.Errorf("after Tab×4 (wrap): expected FocusTasks, got %v", m.focus)
 	}
 }
 
@@ -563,7 +620,8 @@ func TestUpdate_ReposLoadedMsg_ErrorKeepsExistingRepos(t *testing.T) {
 }
 
 func TestUpdate_RefreshKeyStartsTaskAndRepoRefresh(t *testing.T) {
-	m := newTestModel(t, &mockManager{})
+	mgr := &mockManager{}
+	m := newTestModel(t, mgr)
 	m = sendWindowSize(m, 120, 40)
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
@@ -573,6 +631,10 @@ func TestUpdate_RefreshKeyStartsTaskAndRepoRefresh(t *testing.T) {
 	}
 	if !strings.Contains(m.outputPanel.View(), "Refreshing tasks and repository cache...") {
 		t.Fatalf("output should mention tasks and repository cache refresh, got %q", m.outputPanel.View())
+	}
+	runBatchCommands(cmd())
+	if mgr.listReleasesCalls != 1 {
+		t.Fatalf("refresh should load releases once, got %d", mgr.listReleasesCalls)
 	}
 }
 
@@ -675,69 +737,23 @@ func TestUpdate_CommandDoneMsg_NoError_AppendsOperationDone(t *testing.T) {
 	}
 }
 
-func TestUpdate_QKeyOnFeatureRootWithReleaseFlow_OpensPromoteDialog(t *testing.T) {
-	mgr := &mockManager{
-		listServicesResult: []domain.Service{{Name: "api"}},
-	}
-	flow := &gitflow.ResolvedGitFlow{
-		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
-			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
-			gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}, BaseBranch: "develop"},
-		},
-	}
-	m := newTestModelWithOptions(t, mgr, Options{ResolvedFlow: flow})
+func TestUpdate_QKeyInTasksFocus_IsNoOp(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
-	m.tasksPanel.SetTasks([]domain.Task{{
-		ID:       "ZA-553",
-		Phase:    "feature",
-		ParentID: "",
-		Services: []domain.Service{{Name: "api"}},
-	}})
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "ZA-553", Phase: "feature", ParentID: ""}})
 
+	beforeOutput := m.outputPanel.View()
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Q")})
 	m = updated.(Model)
-	if cmd == nil {
-		t.Fatal("Q must emit open promote dialog command")
-	}
 
-	openMsg := cmd()
-	openPromoteMsg, ok := openMsg.(panels.OpenPromoteDialogMsg)
-	if !ok {
-		t.Fatalf("expected OpenPromoteDialogMsg, got %T", openMsg)
+	if cmd != nil {
+		t.Fatal("Q in tasks focus must be no-op and return nil cmd")
 	}
-	if openPromoteMsg.TaskID != "ZA-553" {
-		t.Fatalf("open promote taskID = %q, want ZA-553", openPromoteMsg.TaskID)
+	if m.modal != nil {
+		t.Fatalf("Q in tasks focus must not open modal, got %T", m.modal)
 	}
-
-	updated, cmd = m.Update(openPromoteMsg)
-	m = updated.(Model)
-	if _, ok := m.modal.(*modal.PromoteToReleaseDialog); !ok {
-		t.Fatalf("expected PromoteToReleaseDialog, got %T", m.modal)
-	}
-	if cmd == nil {
-		t.Fatal("open promote dialog should trigger versions load cmd")
-	}
-
-	loadedMsg := cmd()
-	loaded, ok := loadedMsg.(panels.PromoteVersionsLoadedMsg)
-	if !ok {
-		t.Fatalf("expected PromoteVersionsLoadedMsg, got %T", loadedMsg)
-	}
-	if loaded.TaskID != "ZA-553" {
-		t.Fatalf("loaded versions taskID = %q, want ZA-553", loaded.TaskID)
-	}
-	if got := loaded.Versions["api"]; got != "0.1.0" {
-		t.Fatalf("loaded default version = %q, want 0.1.0", got)
-	}
-
-	updated, _ = m.Update(loaded)
-	m = updated.(Model)
-	promoteDialog, ok := m.modal.(*modal.PromoteToReleaseDialog)
-	if !ok {
-		t.Fatalf("expected PromoteToReleaseDialog after versions loaded, got %T", m.modal)
-	}
-	if !strings.Contains(promoteDialog.View(), "0.1.0") {
-		t.Fatalf("promote dialog should render loaded default version, got %q", promoteDialog.View())
+	if got := m.outputPanel.View(); got != beforeOutput {
+		t.Fatalf("Q in tasks focus must not append output, before=%q after=%q", beforeOutput, got)
 	}
 }
 
@@ -762,6 +778,93 @@ func TestUpdate_RefreshCompletionLogsTasksAndRepos(t *testing.T) {
 	}
 	if m.refreshing {
 		t.Fatal("refreshing should reset after repos load")
+	}
+}
+
+func TestUpdate_ReleasesLoadedMsg_UpdatesReleasesPanel(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	releases := []domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusDraft, CreatedAt: time.Now().UTC()}}
+
+	updated, _ := m.Update(ReleasesLoadedMsg{Releases: releases})
+	m = updated.(Model)
+
+	if selected := m.releasesPanel.SelectedRelease(); selected == nil || selected.ID != "rel-1" {
+		t.Fatalf("expected releases panel selected rel-1, got %+v", selected)
+	}
+}
+
+func TestUpdate_FocusReleasesAndNewRelease_OpensCreateReleaseDialog(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	m.tasks = []domain.Task{{ID: "ZA-1", Phase: "feature", Services: []domain.Service{{Name: "api"}}}}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")})
+	m = updated.(Model)
+	if m.focus != FocusReleases {
+		t.Fatalf("focus = %v, want FocusReleases", m.focus)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("N should emit open create release dialog command when releases focused")
+	}
+	openMsg := cmd()
+	open, ok := openMsg.(panels.OpenCreateReleaseDialogMsg)
+	if !ok {
+		t.Fatalf("expected OpenCreateReleaseDialogMsg, got %T", openMsg)
+	}
+
+	updated, _ = m.Update(open)
+	m = updated.(Model)
+	if _, ok := m.modal.(*modal.CreateReleaseDialog); !ok {
+		t.Fatalf("expected CreateReleaseDialog modal, got %T", m.modal)
+	}
+}
+
+func TestUpdate_SubmitCreateRelease_StartsOperation(t *testing.T) {
+	mgr := &mockManager{createReleaseResult: domain.Release{ID: "rel-1", CreatedAt: time.Now().UTC()}}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+
+	updated, cmd := m.Update(modal.SubmitCreateReleaseMsg{
+		TaskIDs:  []string{"ZA-1"},
+		Versions: map[string]string{"api": "1.2.3"},
+	})
+	m = updated.(Model)
+
+	if !m.opRunning {
+		t.Fatal("submit create release should set opRunning=true")
+	}
+	if cmd == nil {
+		t.Fatal("submit create release should return command")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Creating release from selected tasks") {
+		t.Fatalf("output should include create release start line, got %q", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_CreateReleaseDone_AppendsOutputAndRefreshesReleases(t *testing.T) {
+	mgr := &mockManager{}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.opRunning = true
+
+	updated, cmd := m.Update(CreateReleaseDoneMsg{Release: domain.Release{ID: "rel-2"}})
+	m = updated.(Model)
+	if m.opRunning {
+		t.Fatal("create release done should clear opRunning")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Create release done: rel-2") {
+		t.Fatalf("output should include create release done line, got %q", m.outputPanel.View())
+	}
+	if cmd == nil {
+		t.Fatal("create release done should trigger releases refresh command")
+	}
+	_ = cmd()
+	if mgr.listReleasesCalls != 1 {
+		t.Fatalf("create completion should refresh releases once, got %d", mgr.listReleasesCalls)
 	}
 }
 
@@ -840,6 +943,7 @@ func TestFocusPanel_String(t *testing.T) {
 		{FocusTasks, "tasks"},
 		{FocusServices, "services"},
 		{FocusOutput, "output"},
+		{FocusReleases, "releases"},
 		{FocusPanel(99), "unknown"},
 	}
 	for _, tc := range tests {
@@ -854,23 +958,30 @@ func TestFocusPanel_NextPrev(t *testing.T) {
 	if got := FocusTasks.Next(); got != FocusServices {
 		t.Errorf("FocusTasks.Next(): expected FocusServices, got %v", got)
 	}
-	if got := FocusServices.Next(); got != FocusTasks {
-		t.Errorf("FocusServices.Next(): expected FocusTasks, got %v", got)
+	if got := FocusServices.Next(); got != FocusOutput {
+		t.Errorf("FocusServices.Next(): expected FocusOutput, got %v", got)
 	}
 
-	if got := FocusOutput.Next(); got != FocusTasks {
-		t.Errorf("FocusOutput.Next(): expected FocusTasks (safe default), got %v", got)
+	if got := FocusOutput.Next(); got != FocusReleases {
+		t.Errorf("FocusOutput.Next(): expected FocusReleases, got %v", got)
+	}
+	if got := FocusReleases.Next(); got != FocusTasks {
+		t.Errorf("FocusReleases.Next(): expected FocusTasks, got %v", got)
 	}
 
 	if got := FocusServices.Prev(); got != FocusTasks {
 		t.Errorf("FocusServices.Prev(): expected FocusTasks, got %v", got)
 	}
-	if got := FocusTasks.Prev(); got != FocusServices {
-		t.Errorf("FocusTasks.Prev(): expected FocusServices, got %v", got)
+	if got := FocusTasks.Prev(); got != FocusReleases {
+		t.Errorf("FocusTasks.Prev(): expected FocusReleases, got %v", got)
 	}
 
 	if got := FocusOutput.Prev(); got != FocusServices {
-		t.Errorf("FocusOutput.Prev(): expected FocusServices (safe default), got %v", got)
+		t.Errorf("FocusOutput.Prev(): expected FocusServices, got %v", got)
+	}
+
+	if got := FocusReleases.Prev(); got != FocusOutput {
+		t.Errorf("FocusReleases.Prev(): expected FocusOutput, got %v", got)
 	}
 }
 

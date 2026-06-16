@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -68,20 +67,18 @@ func (m *manager) Add(ctx context.Context, params AddParams) error {
 }
 
 func buildServicesFromSubdirs(taskDir string) []domain.Service {
-	entries, err := os.ReadDir(taskDir)
+	discovered, err := discoverServicesFromTaskDir(taskDir)
 	if err != nil {
 		return nil
 	}
 
-	var services []domain.Service
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+	services := make([]domain.Service, 0, len(discovered))
+	for _, svc := range discovered {
 		services = append(services, domain.Service{
-			Name:         entry.Name(),
-			WorktreePath: filepath.Join(taskDir, entry.Name()),
+			Name:         svc.Name,
+			WorktreePath: svc.RepoPath,
 		})
 	}
+
 	return services
 }

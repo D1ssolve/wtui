@@ -27,6 +27,9 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 		if !entry.IsDir() {
 			continue
 		}
+		if m.shouldIgnoreTaskDir(entry.Name()) {
+			continue
+		}
 		taskID := entry.Name()
 		taskDir := filepath.Join(m.cfg.TasksRoot, taskID)
 		task := domain.Task{
@@ -91,6 +94,31 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 	})
 
 	return tasks, nil
+}
+
+func (m *manager) shouldIgnoreTaskDir(name string) bool {
+	if name == ".releases" {
+		return true
+	}
+
+	if m.cfg.Release != nil && m.cfg.Release.RootDir != "" {
+		releaseRoot := filepath.Clean(m.cfg.Release.RootDir)
+		tasksRoot := filepath.Clean(m.cfg.TasksRoot)
+
+		rel, err := filepath.Rel(tasksRoot, releaseRoot)
+		if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			topLevel := strings.Split(rel, string(filepath.Separator))[0]
+			if topLevel == name {
+				return true
+			}
+		}
+	}
+
+	if strings.HasPrefix(name, ".") && strings.Contains(strings.ToLower(name), "release") {
+		return true
+	}
+
+	return false
 }
 
 func (m *manager) ListServices(ctx context.Context, taskID string) ([]domain.Service, error) {

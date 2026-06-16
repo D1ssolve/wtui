@@ -91,9 +91,8 @@ type ForgePipelineStatusMsg struct {
 	RepoPath    string
 }
 
-type OpenPromoteDialogMsg struct{ TaskID string }
+type OpenCreateReleaseDialogMsg struct{}
 
-type PromoteVersionsLoadedMsg struct {
-	TaskID   string
+type ReleaseVersionsLoadedMsg struct {
 	Versions map[string]string // serviceName → proposed version
 }

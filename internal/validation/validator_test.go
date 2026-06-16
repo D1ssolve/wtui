@@ -55,6 +55,7 @@ func (m *mockValidationGitClient) Fetch(context.Context, string) error          
 func (m *mockValidationGitClient) RemoteURL(context.Context, string, string) (string, error) { return "", nil }
 func (m *mockValidationGitClient) Checkout(context.Context, string, string) error            { return nil }
 func (m *mockValidationGitClient) Merge(context.Context, string, string) error               { return nil }
+func (m *mockValidationGitClient) MergeAbort(context.Context, string) error                   { return nil }
 func (m *mockValidationGitClient) Rebase(context.Context, string, string) error              { return nil }
 func (m *mockValidationGitClient) Push(context.Context, string, chan<- string) error         { return nil }
 func (m *mockValidationGitClient) Stash(context.Context, string, bool, bool) error           { return nil }

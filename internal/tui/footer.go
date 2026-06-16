@@ -3,8 +3,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-
-	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 func renderFooter(m Model) string {
@@ -16,9 +14,6 @@ func renderFooter(m Model) string {
 			"[Enter] services",
 			"[i] init",
 			"[C] close",
-		}
-		if shouldShowPromoteHint(m) {
-			parts = append(parts, "[Q] promote")
 		}
 		parts = append(parts, "[.] status", "[?] help", "[q] quit")
 		hints = joinFooterHints(parts)
@@ -35,6 +30,13 @@ func renderFooter(m Model) string {
 		hints = joinFooterHints(parts)
 	case FocusOutput:
 		hints = "[j/k] scroll  [g/G] top/bottom  [Esc] back"
+	case FocusReleases:
+		hints = joinFooterHints([]string{
+			"[N] new release",
+			"[r] refresh",
+			"[?] help",
+			"[q] quit",
+		})
 	default:
 		hints = "[q] quit  [?] help"
 	}
@@ -55,16 +57,4 @@ func joinFooterHints(parts []string) string {
 		b.WriteString(p)
 	}
 	return b.String()
-}
-
-func shouldShowPromoteHint(m Model) bool {
-	selected := m.tasksPanel.SelectedTask()
-	if selected == nil || selected.ParentID != "" || selected.Phase != string(gitflow.BranchTypeFeature) {
-		return false
-	}
-	if m.flow == nil {
-		return false
-	}
-	_, ok := m.flow.BranchTypes[gitflow.BranchTypeRelease]
-	return ok
 }

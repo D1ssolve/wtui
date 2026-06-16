@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/Masterminds/semver/v3"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
@@ -376,48 +377,118 @@ func listTagsCmd(mgr task.Manager, taskID string) tea.Cmd {
 	}
 }
 
-func loadPromoteVersionsCmd(mgr task.Manager, taskID string) tea.Cmd {
+func loadReleasesCmd(mgr task.Manager) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		services, err := mgr.ListServices(ctx, taskID)
-		if err != nil {
-			return CommandDoneMsg{Err: err, Op: "Load promote versions for task " + taskID}
-		}
-
-		versions := make(map[string]string, len(services))
-		for _, svc := range services {
-			name := strings.TrimSpace(svc.Name)
-			if name == "" {
-				continue
-			}
-			versions[name] = "0.1.0"
-		}
-
-		return panels.PromoteVersionsLoadedMsg{TaskID: taskID, Versions: versions}
+		releases, err := mgr.ListReleases(ctx)
+		return ReleasesLoadedMsg{Releases: releases, Err: err}
 	}
 }
 
-func promoteToReleaseCmd(mgr task.Manager, taskID string, versions map[string]string) tea.Cmd {
+func createReleaseCmd(mgr task.Manager, params task.CreateReleaseParams) tea.Cmd {
 	statusCh := make(chan string, 32)
-	params := task.PromoteToReleaseParams{
-		TaskID:   taskID,
-		Versions: versions,
-		StatusCh: statusCh,
+	doneCh := make(chan CreateReleaseDoneMsg, 1)
+	params.StatusCh = statusCh
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		release, err := mgr.CreateRelease(ctx, params)
+		close(statusCh)
+		doneCh <- CreateReleaseDoneMsg{Release: release, Err: err}
+		close(doneCh)
+	}()
+
+	return readStatusOrDone(statusCh, doneCh)
+}
+
+func loadReleaseVersionsCmd(mgr task.Manager, taskIDs []string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		versions := make(map[string]string)
+		repoMax := make(map[string]*semver.Version)
+		seenTasks := make(map[string]struct{})
+
+		for _, taskID := range taskIDs {
+			taskID = strings.TrimSpace(taskID)
+			if taskID == "" {
+				continue
+			}
+			if _, seen := seenTasks[taskID]; seen {
+				continue
+			}
+			seenTasks[taskID] = struct{}{}
+
+			services, err := mgr.ListServices(ctx, taskID)
+			if err != nil {
+				return CommandDoneMsg{Err: err, Op: "Load release versions for task " + taskID}
+			}
+
+			newRepos := make(map[string]struct{})
+			needsTaskFallback := false
+			for _, svc := range services {
+				repoPath := strings.TrimSpace(svc.RepoPath)
+				if repoPath == "" {
+					needsTaskFallback = true
+					continue
+				}
+				if _, known := repoMax[repoPath]; !known {
+					newRepos[repoPath] = struct{}{}
+				}
+			}
+
+			var taskLatest *semver.Version
+			if len(newRepos) > 0 || needsTaskFallback {
+				tags, err := mgr.ListTags(ctx, taskID)
+				if err != nil {
+					return CommandDoneMsg{Err: err, Op: "Load release versions for task " + taskID}
+				}
+
+				for _, tag := range tags {
+					if !tag.IsSemver || tag.Version == nil {
+						continue
+					}
+					if taskLatest == nil || taskLatest.LessThan(tag.Version) {
+						taskLatest = tag.Version
+					}
+				}
+
+				for repoPath := range newRepos {
+					repoMax[repoPath] = taskLatest
+				}
+			}
+
+			for _, svc := range services {
+				name := strings.TrimSpace(svc.Name)
+				if name == "" {
+					continue
+				}
+				repoPath := strings.TrimSpace(svc.RepoPath)
+				if repoPath == "" {
+					if taskLatest == nil {
+						versions[name] = "0.1.0"
+					} else {
+						versions[name] = taskLatest.IncPatch().String()
+					}
+					continue
+				}
+
+				latest := repoMax[repoPath]
+				if latest == nil {
+					versions[name] = "0.1.0"
+					continue
+				}
+				versions[name] = latest.IncPatch().String()
+			}
+		}
+
+		return panels.ReleaseVersionsLoadedMsg{Versions: versions}
 	}
-
-	return tea.Batch(
-		func() tea.Msg {
-			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 10*time.Minute)
-			defer cancel()
-
-			promotedTask, err := mgr.PromoteToRelease(ctx, params)
-			close(statusCh)
-			return PromoteToReleaseDoneMsg{Task: promotedTask, Err: err}
-		},
-		readNextLine(statusCh),
-	)
 }
 
 type forgePipelineStatusParams struct {

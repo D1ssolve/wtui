@@ -73,6 +73,10 @@ func (m *mockGitClient) Merge(_ context.Context, _, _ string) error {
 	panic("mockGitClient.Merge called unexpectedly")
 }
 
+func (m *mockGitClient) MergeAbort(_ context.Context, _ string) error {
+	panic("mockGitClient.MergeAbort called unexpectedly")
+}
+
 func (m *mockGitClient) Push(_ context.Context, _ string, _ chan<- string) error {
 	panic("mockGitClient.Push called unexpectedly")
 }
