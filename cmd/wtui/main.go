@@ -83,6 +83,8 @@ func runTUI() error {
 
 	model, err := tui.NewWithOptions(cfg, deps.Manager, logger, tui.Options{
 		LazygitAvailable: deps.Features.LazygitAvailable,
+		GlabAvailable:    deps.GlabAvailable,
+		GhAvailable:      deps.GhAvailable,
 		ForgeClients:     deps.ForgeClients,
 		ResolvedFlow:     deps.ResolvedFlow,
 	})

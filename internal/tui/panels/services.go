@@ -74,17 +74,7 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	}
 	line1 := fmt.Sprintf("  %s %s", icon, nameStyle.Render(svc.Name))
 
-	if si.showGitFlowBadges && si.preset != "" {
-		line1 += " " + badgeStyle.Render("["+si.preset+"]")
-		branchType := gitflow.DetectBranchType(svc.Branch, si.resolvedFlow)
-		if branchType != gitflow.BranchTypeUnknown {
-			line1 += " " + renderBranchTypeBadge(branchType)
-		}
-	}
 
-	if si.forgeAvailable {
-		line1 += " " + forgeBadgeStyle.Render("[forge]")
-	}
 
 	branchInfo := svc.Branch
 	if svc.BaseBranch != "" {
@@ -203,10 +193,6 @@ func renderBranchTypeBadge(branchType gitflow.BranchType) string {
 		return branchTypeHotfixStyle.Render(text)
 	case gitflow.BranchTypeRelease:
 		return branchTypeReleaseStyle.Render(text)
-	case gitflow.BranchTypeBugfix:
-		return branchTypeBugfixStyle.Render(text)
-	case gitflow.BranchTypeChore:
-		return branchTypeChoreStyle.Render(text)
 	default:
 		return badgeStyle.Render(text)
 	}
@@ -419,21 +405,11 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			}
 
 		case "h":
-
-			if p.list.Paginator.Page > 0 {
-				p.list.Paginator.PrevPage()
-
-				p.list.Select(p.list.Paginator.Page * p.list.Paginator.PerPage)
-			}
+			listMovePage(&p.list, -1)
 			return p, nil
 
 		case "l":
-
-			if p.list.Paginator.Page < p.list.Paginator.TotalPages-1 {
-				p.list.Paginator.NextPage()
-
-				p.list.Select(p.list.Paginator.Page * p.list.Paginator.PerPage)
-			}
+			listMovePage(&p.list, 1)
 			return p, nil
 
 		case "f":

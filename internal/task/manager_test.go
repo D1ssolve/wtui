@@ -78,6 +78,7 @@ type mockGitClient struct {
 	commonDirErr         error
 
 	commonDirFn          func(path string) (string, error)
+	removeWorktreeFn     func(commonDir, worktreePath string, force bool) error
 	removeWorktreeErr    error
 	isDirtyRes           bool
 	isDirtyErr           error
@@ -85,10 +86,13 @@ type mockGitClient struct {
 	rebaseErr            error
 	mergeErr             error
 	pushErr              error
+	worktreeBranchResult string
+	worktreeBranchErr    error
 	fetchFn              func(path string) error
 	rebaseFn             func(path, upstream string) error
 	mergeFn              func(path, branch string) error
 	pushFn               func(path string, lineCh chan<- string) error
+	getWorktreeBranchFn  func(path string) (string, error)
 	stashErr             error
 	versionMajor         int
 	versionMinor         int
@@ -100,19 +104,25 @@ type mockGitClient struct {
 	isAncestorFn         func(repoPath, ancestor, descendant string) (bool, error)
 
 	addWorktreeWithTrackingErr error
+	createBranchFromBranchErr  error
+	pushBranchExplicitErr      error
+	deleteTagErr               error
 
 	addWorktreeCalls             []addWorktreeCall
 	addWorktreeWithTrackingCalls []addWorktreeWithTrackingCall
+	createBranchFromBranchCalls []createBranchFromBranchCall
 	removeWorktreeCalls          []removeWorktreeCall
 	fetchCalls                   []string
 	rebaseCalls                  []rebaseCall
 	mergeCalls                   []mergeCall
 	pushCalls                    []string
+	pushBranchExplicitCalls      []pushBranchExplicitCall
 	stashCalls                   []stashCall
 	isAncestorCalls              []isAncestorCall
 	createTagCalls               int
 	pushTagCalls                 int
 	deleteBranchCalls            int
+	deleteTagCalls               int
 	createTagErr                 error
 	pushTagErr                   error
 	listTagsRes                  []domain.TagInfo
@@ -122,6 +132,7 @@ type mockGitClient struct {
 	remoteURLRes                 string
 	remoteURLErr                 error
 	checkoutErr                  error
+	checkoutFn                   func(worktreePath, branch string) error
 	tagExistsRes                 bool
 	tagExistsErr                 error
 }
@@ -139,6 +150,17 @@ type addWorktreeWithTrackingCall struct {
 	Dest         string
 	LocalBranch  string
 	RemoteBranch string
+}
+
+type createBranchFromBranchCall struct {
+	RepoPath   string
+	NewBranch  string
+	FromBranch string
+}
+
+type pushBranchExplicitCall struct {
+	WorktreePath string
+	Branch       string
 }
 
 type removeWorktreeCall struct {
@@ -216,6 +238,9 @@ func (m *mockGitClient) RemoveWorktree(_ context.Context, commonDir, worktreePat
 		WorktreePath: worktreePath,
 		Force:        force,
 	})
+	if m.removeWorktreeFn != nil {
+		return m.removeWorktreeFn(commonDir, worktreePath, force)
+	}
 	return m.removeWorktreeErr
 }
 
@@ -358,8 +383,11 @@ func (m *mockGitClient) TagExists(_ context.Context, _, _ string) (bool, error) 
 	return m.tagExistsRes, m.tagExistsErr
 }
 
-func (m *mockGitClient) GetWorktreeBranch(_ context.Context, _ string) (string, error) {
-	return "", nil
+func (m *mockGitClient) GetWorktreeBranch(_ context.Context, path string) (string, error) {
+	if m.getWorktreeBranchFn != nil {
+		return m.getWorktreeBranchFn(path)
+	}
+	return m.worktreeBranchResult, m.worktreeBranchErr
 }
 
 func (m *mockGitClient) DeleteBranch(_ context.Context, _, _ string) error {
@@ -373,8 +401,18 @@ func (m *mockGitClient) RemoteURL(_ context.Context, _, _ string) (string, error
 	return m.remoteURLRes, m.remoteURLErr
 }
 
-func (m *mockGitClient) Checkout(_ context.Context, _, _ string) error {
+func (m *mockGitClient) Checkout(_ context.Context, worktreePath, branch string) error {
+	if m.checkoutFn != nil {
+		return m.checkoutFn(worktreePath, branch)
+	}
 	return m.checkoutErr
+}
+
+func (m *mockGitClient) DeleteTag(_ context.Context, _, _ string) error {
+	m.mu.Lock()
+	m.deleteTagCalls++
+	m.mu.Unlock()
+	return m.deleteTagErr
 }
 
 func (m *mockGitClient) RemoteBranchExists(_ context.Context, repoPath, branch string) (bool, error) {
@@ -394,6 +432,27 @@ func (m *mockGitClient) AddWorktreeWithTracking(_ context.Context, repoPath, des
 		RemoteBranch: remoteBranch,
 	})
 	return m.addWorktreeWithTrackingErr
+}
+
+func (m *mockGitClient) CreateBranchFromBranch(_ context.Context, repoPath, newBranch, fromBranch string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createBranchFromBranchCalls = append(m.createBranchFromBranchCalls, createBranchFromBranchCall{
+		RepoPath:   repoPath,
+		NewBranch:  newBranch,
+		FromBranch: fromBranch,
+	})
+	return m.createBranchFromBranchErr
+}
+
+func (m *mockGitClient) PushBranchExplicit(_ context.Context, worktreePath, branch string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pushBranchExplicitCalls = append(m.pushBranchExplicitCalls, pushBranchExplicitCall{
+		WorktreePath: worktreePath,
+		Branch:       branch,
+	})
+	return m.pushBranchExplicitErr
 }
 
 type mockDotnetClient struct{}
@@ -1003,33 +1062,54 @@ func TestRemove_WithoutForce_FailedWorktreePreservesTaskDir(t *testing.T) {
 	}
 }
 
-func TestRemove_WithForce_RemovesTaskDirDespiteErrors(t *testing.T) {
+func TestRemove_WithForce_PartialFailureLeavesRemainingServices(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 
 	taskDir := filepath.Join(tasksRoot, "IN-012")
-	svcDir := filepath.Join(taskDir, "forcedservice")
-	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+	failedSvcDir := filepath.Join(taskDir, "failedservice")
+	successSvcDir := filepath.Join(taskDir, "okservice")
+	if err := os.MkdirAll(failedSvcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.MkdirAll(successSvcDir, 0o755); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 
-	fakeCommonDir := filepath.Join(rootDir, "forcedservice", ".git")
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
 	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 
 	gitMock := &mockGitClient{
-		commonDirResult:   fakeCommonDir,
-		removeWorktreeErr: errors.New("simulated git failure"),
+		commonDirResult: fakeCommonDir,
+		removeWorktreeFn: func(_ string, worktreePath string, _ bool) error {
+			if worktreePath == failedSvcDir {
+				return errors.New("simulated git failure")
+			}
+			return nil
+		},
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	if err := mgr.Remove(context.Background(), "IN-012", true, false); err != nil {
-		t.Fatalf("Remove(force=true) returned unexpected error: %v", err)
+	err := mgr.Remove(context.Background(), "IN-012", true, false)
+	if err == nil {
+		t.Fatal("Remove(force=true) returned nil, want error when services remain")
+	}
+	if !strings.Contains(err.Error(), "remaining services") {
+		t.Fatalf("Remove(force=true) error = %q, want remaining services message", err)
 	}
 
-	if _, err := os.Stat(taskDir); !os.IsNotExist(err) {
-		t.Errorf("task directory still exists after forced Remove")
+	if _, statErr := os.Stat(taskDir); statErr != nil {
+		t.Fatalf("task directory removed unexpectedly: %v", statErr)
+	}
+
+	if _, statErr := os.Stat(failedSvcDir); statErr != nil {
+		t.Errorf("failed service directory removed unexpectedly: %v", statErr)
+	}
+
+	if _, statErr := os.Stat(successSvcDir); !os.IsNotExist(statErr) {
+		t.Errorf("successful service directory still exists, statErr=%v", statErr)
 	}
 }
 
@@ -1139,6 +1219,160 @@ func TestList_StaleFlag_NormalTask(t *testing.T) {
 	}
 	if tasks[0].Stale {
 		t.Errorf("task.Stale = true for a normal existing task dir, want false")
+	}
+}
+
+func TestList_EnrichesPhaseParentAndGroupMetadata(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	for _, taskID := range []string{"ZA-553", "ZA-553-release", "ORPHAN-release", "ZZZ"} {
+		if err := os.MkdirAll(filepath.Join(tasksRoot, taskID), 0o755); err != nil {
+			t.Fatalf("setup task dir %s: %v", taskID, err)
+		}
+	}
+
+	serviceLayout := map[string][]string{
+		"ZA-553":         {"api", "worker"},
+		"ZA-553-release": {"api", "worker"},
+		"ORPHAN-release": {"api"},
+	}
+	for taskID, services := range serviceLayout {
+		for _, svc := range services {
+			if err := os.MkdirAll(filepath.Join(tasksRoot, taskID, svc), 0o755); err != nil {
+				t.Fatalf("setup service dir %s/%s: %v", taskID, svc, err)
+			}
+		}
+	}
+
+	gitMock := &mockGitClient{}
+	gitMock.commonDirFn = func(path string) (string, error) {
+		base := filepath.Base(path)
+		switch base {
+		case "api", "worker":
+			return filepath.Join(rootDir, "repos", base, ".git"), nil
+		default:
+			return "", errors.New("not a git repo")
+		}
+	}
+	gitMock.listWorktreesRes = []git.WorktreeEntry{
+		{Path: filepath.Join(tasksRoot, "ZA-553", "api"), Branch: "refs/heads/feature/ZA-553"},
+		{Path: filepath.Join(tasksRoot, "ZA-553", "worker"), Branch: "refs/heads/feature/ZA-553"},
+		{Path: filepath.Join(tasksRoot, "ZA-553-release", "api"), Branch: "refs/heads/release/1.2.3"},
+		{Path: filepath.Join(tasksRoot, "ZA-553-release", "worker"), Branch: "refs/heads/release/1.2.3"},
+		{Path: filepath.Join(tasksRoot, "ORPHAN-release", "api"), Branch: "refs/heads/release/2.0.0"},
+	}
+
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", Editor: "code"}
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
+	cfg.TasksRoot = tasksRoot
+	cfg.RootDir = rootDir
+
+	flow := &gitflow.ResolvedGitFlow{
+		DefaultBranchType: gitflow.BranchTypeFeature,
+		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
+			gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
+		},
+	}
+
+	logger := newTestLogger()
+	disc := discovery.New(cfg, gitMock, logger)
+	slnMgr := sln.NewManager(&mockDotnetClient{}, logger)
+	validator := validation.NewTaskValidator(gitMock)
+	mgr := New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
+
+	tasks, err := mgr.List(context.Background())
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+
+	if len(tasks) != 4 {
+		t.Fatalf("got %d tasks, want 4", len(tasks))
+	}
+
+	gotByID := make(map[string]domain.Task, len(tasks))
+	for _, task := range tasks {
+		gotByID[task.ID] = task
+	}
+
+	if got := gotByID["ZA-553"]; got.Phase != "feature" || got.Version != "" {
+		t.Fatalf("ZA-553 phase/version = (%q,%q), want (%q,%q)", got.Phase, got.Version, "feature", "")
+	}
+	if !gotByID["ZA-553"].IsGroup {
+		t.Fatalf("ZA-553 IsGroup = false, want true")
+	}
+
+	if got := gotByID["ZA-553-release"]; got.ParentID != "ZA-553" {
+		t.Fatalf("ZA-553-release ParentID = %q, want %q", got.ParentID, "ZA-553")
+	}
+	if got := gotByID["ZA-553-release"]; got.Phase != "release" || got.Version != "1.2.3" {
+		t.Fatalf("ZA-553-release phase/version = (%q,%q), want (%q,%q)", got.Phase, got.Version, "release", "1.2.3")
+	}
+
+	if got := gotByID["ORPHAN-release"]; got.ParentID != "" {
+		t.Fatalf("ORPHAN-release ParentID = %q, want empty", got.ParentID)
+	}
+	if got := gotByID["ORPHAN-release"]; got.Phase != "release" || got.Version != "2.0.0" {
+		t.Fatalf("ORPHAN-release phase/version = (%q,%q), want (%q,%q)", got.Phase, got.Version, "release", "2.0.0")
+	}
+
+	if got := gotByID["ZZZ"]; got.Phase != "" || got.Version != "" {
+		t.Fatalf("ZZZ phase/version = (%q,%q), want empty", got.Phase, got.Version)
+	}
+}
+
+func TestList_WhenListServicesFails_PhaseLeftEmpty(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "BROKEN"
+	taskDir := filepath.Join(tasksRoot, taskID)
+	serviceDir := filepath.Join(taskDir, "api")
+
+	if err := os.MkdirAll(serviceDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirErr: errors.New("git metadata missing"),
+	}
+
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", Editor: "code"}
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
+	cfg.TasksRoot = tasksRoot
+	cfg.RootDir = rootDir
+
+	flow := &gitflow.ResolvedGitFlow{
+		DefaultBranchType: gitflow.BranchTypeFeature,
+		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
+			gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}},
+		},
+	}
+
+	logger := newTestLogger()
+	disc := discovery.New(cfg, gitMock, logger)
+	slnMgr := sln.NewManager(&mockDotnetClient{}, logger)
+	validator := validation.NewTaskValidator(gitMock)
+	mgr := New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
+
+	tasks, err := mgr.List(context.Background())
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	if tasks[0].ID != taskID {
+		t.Fatalf("task ID = %q, want %q", tasks[0].ID, taskID)
+	}
+	if tasks[0].Phase != "" || tasks[0].Version != "" {
+		t.Fatalf("phase/version = (%q,%q), want empty when ListServices fails", tasks[0].Phase, tasks[0].Version)
 	}
 }
 
@@ -1447,6 +1681,41 @@ func TestPushService_ErrServiceNotFound(t *testing.T) {
 	err := mgr.PushService(context.Background(), "IN-PUSH-MISSING", "svcA", lineCh)
 	if !errors.Is(err, ErrServiceNotFound) {
 		t.Errorf("PushService error = %v, want ErrServiceNotFound", err)
+	}
+}
+
+func TestPushService_ProtectedBranch_RefusesPush(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	worktreePath := filepath.Join(tasksRoot, "IN-PUSH-PROTECTED", "svcA")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		worktreeBranchResult: "develop",
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	lineCh := make(chan string, 8)
+	err := mgr.PushService(context.Background(), "IN-PUSH-PROTECTED", "svcA", lineCh)
+	if err == nil {
+		t.Fatal("PushService error = nil, want protected-branch error")
+	}
+	if got := err.Error(); !strings.Contains(got, "refusing to push protected branch develop") {
+		t.Fatalf("PushService error = %q, want protected-branch error", got)
+	}
+
+	gitMock.mu.Lock()
+	pushCalls := append([]string(nil), gitMock.pushCalls...)
+	gitMock.mu.Unlock()
+	if len(pushCalls) != 0 {
+		t.Fatalf("expected 0 Push calls, got %d", len(pushCalls))
+	}
+
+	line := <-lineCh
+	if line != "[svcA] pushing..." {
+		t.Fatalf("line = %q, want %q", line, "[svcA] pushing...")
 	}
 }
 

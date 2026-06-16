@@ -2,7 +2,25 @@
 
 Terminal UI for task-scoped git worktree orchestration across multi-repo/microservice codebases.
 
-[![CI](#)](#) [![Release](#)](#) [![Go Version](#)](#) [![License: MIT](#)](#)
+## Table of Contents
+
+- [What is wtui?](#what-is-wtui)
+- [Architecture / Package Overview](#architecture--package-overview)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Git Flow Setup](#git-flow-setup)
+- [Forge CLI Setup](#forge-cli-setup)
+- [Development / Contributing](#development--contributing)
+- [TUI Key Bindings](#tui-key-bindings)
+- [Task Lifecycle Example](#task-lifecycle-example)
+- [FAQ](#faq)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
+_Badge placeholders removed. Add real CI/release badges when URLs are available._
 
 ---
 
@@ -12,27 +30,52 @@ Terminal UI for task-scoped git worktree orchestration across multi-repo/microse
 
 - Create matching branches and worktrees in every repo automatically
 - Sync, stash, push, validate, and close everything as one unit
+- Promote feature tasks to release tasks with per-service versions
 - Auto-generate VS Code workspace and .NET solution files scoped to only the services you need
 
-A **task** groups multiple service worktrees under a single ticket ID.
+A **task** groups multiple service worktrees under a single ticket ID. Tasks can have **phases** — for example a feature task `TASK-123` can have a matching release task `TASK-123-release` created on demand.
 
 ```text
 ┌──────────────────────────────┐   ┌─────────────────────────────────┐
 │ [1] Tasks                    │   │ [2] Services — TASK-123         │
 │                              │   │                                 │
-│  TASK-120                    │   │  ✓ api-gateway  [git-flow]      │
-│  TASK-121                    │   │    branch: feature/TASK-123     │
-│ ▶ TASK-123                   │   │    path:   TASK-123/api-gateway │
-│  TASK-124                    │   │                                 │
-│                              │   │  ✓ billing      [hotfix]        │
+│ ▼ TASK-123                   │   │  ✓ api-gateway                  │
+│   ├─ feature/TASK-123        │   │    branch: feature/TASK-123     │
+│   └─ release/1.2.0           │   │    path:   TASK-123/api-gateway │
+│                              │   │                                 │
+│  TASK-124                    │   │  ✓ billing                      │
+│                              │   │    branch: hotfix/1.2.1         │
 └──────────────────────────────┘   └─────────────────────────────────┘
 ```
 
 ---
 
+## Architecture / Package Overview
+
+`wtui` is organized as a layered Go application with clear boundaries between entrypoint, orchestration, infrastructure wrappers, and TUI.
+
+- `cmd/wtui` — binary entrypoint (`main.go`), config+logging bootstrap, dependency wiring, TUI startup.
+- `internal/app` — composition root that builds concrete dependencies (`git`, `discovery`, `dotnet`, `sln`, `task`) and detects optional tools (like `lazygit`).
+- `internal/task` — core orchestration layer (init/add/remove/list/sync/push/stash/close/prune/promote/workspace).
+- `internal/tui` (+ `panels`, `modal`) — Bubble Tea UI model, messages, dialogs, and panel rendering.
+- `internal/config` — config loading, defaults, env overrides, and effective normalization.
+- `internal/git`, `internal/dotnet`, `internal/forge` — CLI-backed adapters for external tools (`git`, `dotnet`, `gh`/`glab`).
+- `internal/gitflow`, `internal/validation` — shared branch-rule resolution and task/repo validation logic.
+- `internal/discovery`, `internal/sln` — repo discovery/cache and task-scoped `.sln` generation.
+- `internal/domain` — shared data structs (`Task`, `Service`, `Repo`, etc.), behavior-free.
+
+Dependency rules (high-level):
+
+- `cmd/wtui` depends downward on `internal/*` only.
+- `internal/task` orchestrates through abstractions; it does not depend on TUI internals.
+- `internal/tui` consumes `task.Manager` + domain models; it should not call `git`/`dotnet` adapters directly.
+- `internal/discovery` and `internal/sln` stay outside UI concerns.
+
 ## Features
 
 - **Task-scoped worktrees** — one ticket ID, many services, one screen
+- **Task phases** — feature/release/hotfix support with tree grouping when `git_flow` has release/hotfix branch types
+- **Promote to release** — press `Q` on a feature task to create a release task with per-service versions
 - **Service auto-discovery** — scans `root_dir` for git repos on startup
 - **Bulk operations** — sync, push, stash across all services in a task
 - **Pre-flight validation** — blocks sync/close if any repo is dirty or in a broken state
@@ -44,6 +87,7 @@ A **task** groups multiple service worktrees under a single ticket ID.
 - **Forge integration** — `glab` (GitLab) and `gh` (GitHub) for MR/PR, pipeline status, and issues
 - **IDE workspaces** — auto-generated `.code-workspace` and `.sln` per task
 - **lazygit** — open lazygit in any service worktree with one key
+- **System status** — press `.` to see which external tools are connected and how forge/Git Flow are configured
 
 ---
 
@@ -112,14 +156,26 @@ In the Tasks panel:
 
 wtui creates worktrees, branches, and generates `PROJ-101.code-workspace` and `PROJ-101.sln`.
 
-### 4. Validate and close
+### 4. Promote to release (optional)
+
+If your config defines a `release` branch type:
+
+1. Finish feature work and close the feature task (`C`) to merge it into `develop`
+2. Select the feature task in the Tasks panel
+3. Press `Q`
+4. Enter a version for each service (e.g. `1.2.0`)
+5. Confirm
+
+wtui creates `PROJ-101-release` worktrees on `release/<version>` branches, ready for regression and release close.
+
+### 5. Validate and close
 
 When you are done:
 
-1. Press `V` to validate that all repos are clean
+1. Press `V` to validate task state
 2. Press `C` to open the close-task plan
 3. Review the plan and confirm
-4. wtui merges (or opens MR/PR), creates tags, pushes, and optionally triggers pipelines
+4. wtui merges (or opens MR/PR), creates tags when configured, pushes, and optionally triggers pipelines
 5. Press `P` later to scan and remove merged task directories
 
 ---
@@ -145,7 +201,95 @@ base_branch: develop
 editor: code
 ```
 
-### Full config with all blocks
+### `git-flow` preset
+
+Classic git-flow defaults: feature branches from `develop`, release/hotfix support, and direct local merges on close.
+
+```yaml
+root_dir: ~/dev
+tasks_root: ~/dev/.tasks
+editor: code
+
+git_flow:
+  preset: git-flow
+```
+
+### `github-flow` preset
+
+Single long-lived branch (`main`) with review-request close strategy by default.
+
+```yaml
+root_dir: ~/dev
+tasks_root: ~/dev/.tasks
+editor: code
+
+git_flow:
+  preset: github-flow
+```
+
+### `gitlab-flow` preset
+
+Similar to GitHub flow for branch model, with MR-driven close behavior by default.
+
+```yaml
+root_dir: ~/dev
+tasks_root: ~/dev/.tasks
+editor: code
+
+git_flow:
+  preset: gitlab-flow
+```
+
+### `custom` preset
+
+Define branch types and close behavior explicitly per branch type.
+
+```yaml
+root_dir: ~/dev
+tasks_root: ~/dev/.tasks
+editor: code
+
+git_flow:
+  preset: custom
+  production_branch: master
+  integration_branch: develop
+  default_branch_type: feature
+
+  branch_types:
+    feature:
+      prefixes: ["feature/"]
+      base_branch: develop
+      merge_targets: [develop]
+      review_targets: [develop]
+      close_strategy: direct_merge
+      merge_strategy: merge_commit
+      requires_clean: true
+      tag_on_close: false
+
+    release:
+      prefixes: ["release/"]
+      base_branch: develop
+      merge_targets: [master, develop]
+      review_targets: [master, develop]
+      close_strategy: direct_merge
+      merge_strategy: merge_commit
+      requires_clean: true
+      tag_on_close: true
+      tag_source: master
+
+    hotfix:
+      prefixes: ["hotfix/"]
+      base_branch: master
+      merge_targets: [master, develop]
+      review_targets: [master, develop]
+      close_strategy: direct_merge
+      merge_strategy: merge_commit
+      requires_clean: true
+      tag_on_close: true
+      tag_source: master
+```
+
+### Full config with all optional blocks
 
 ```yaml
 # Core
@@ -285,6 +429,20 @@ With `github-flow` or `gitlab-flow`, wtui skips local merges and creates MR/PRs 
 - Delete source branch after merge
 - Trigger pipeline on close
 
+**Task phases:**
+
+When `git_flow.branch_types` contains `release` or `hotfix`, the Tasks panel renders a tree:
+
+```
+▼ PROJ-101
+  ├─ feature/PROJ-101
+  └─ release/1.2.0
+```
+
+- Feature tasks are created with `i`
+- Release tasks are created with `Q` on a feature task
+- Hotfix support is gated by the `hotfix` branch type
+
 **Hotfix behavior:**
 
 Hotfix branches start from `production_branch`. On close they merge into production, then into integration (or an active release branch if one exists).
@@ -319,41 +477,69 @@ gh auth login
 - List issues
 - Trigger pipeline during close flow (if `trigger_pipeline_on_close: true`)
 
+Press `.` in wtui to see whether `glab`, `gh`, and `lazygit` were detected.
+
 ---
+
+## Development / Contributing
+
+Common local commands:
+
+```bash
+make build
+make test
+make lint
+make test-integration
+go test ./...
+```
+
+Notes:
+
+- `make test` runs `go test ./...`.
+- `make lint` runs `go vet ./...`.
+- Integration tests use build tag `integration` (`go test -tags integration ./...`).
 
 ## TUI Key Bindings
 
-### Tasks panel
+> Footer shows common keys for current panel. Press `?` for full help overlay.
 
-| Key | Action |
-|---|---|
-| `i` | Init a new task |
-| `d` | Remove a task |
-| `S` | Sync all services in the task |
-| `C` | Close task (plan + execute automation) |
-| `V` | Validate task |
-| `T` | Browse tags for the selected task |
-| `P` | Prune — scan and remove merged tasks |
-| `O` | Open VS Code workspace for the task |
-| `R` | Open Rider with the task's `.sln` |
-| `r` | Refresh repos / tasks |
-| `?` | Help overlay |
-
-### Services panel
-
-| Key | Action |
-|---|---|
-| `a` | Add a service to the current task |
-| `d` | Remove a service from the task |
-| `s` | Sync the selected service |
-| `p` | Pipeline status (via forge) |
-| `v` | Validate current task |
-| `m` | Open forge actions menu |
-| `g` | Open lazygit for the selected service |
-| `Ctrl+s` | Stash changes |
-| `Ctrl+u` | Unstash changes |
-
-> When `lazygit` is installed, `g` replaces `p`, `s`, `Ctrl+s`, and `Ctrl+u` in the services panel.
+| Context | Key | Action | Notes |
+|---|---|---|---|
+| Tasks | `Enter` | Open selected task in Services panel | |
+| Tasks | `i` | Init new task | |
+| Tasks | `c` | Clone selected task | |
+| Tasks | `d` | Remove selected task | |
+| Tasks | `S` | Open sync strategy selection | sync all services in task |
+| Tasks | `C` | Close task (plan + execute automation) | |
+| Tasks | `P` | Prune merged tasks | scan + remove flow |
+| Tasks | `V` | Validate task | |
+| Tasks | `T` | Browse tags for selected task | |
+| Tasks | `Q` | Promote feature task to release | requires `release` branch type |
+| Tasks | `O` | Open `<task>.code-workspace` in VS Code | |
+| Tasks | `R` | Open `<task>.sln` in Rider | |
+| Tasks | `,` | Show effective config | |
+| Tasks | `;` | Run shell command in selected task directory | |
+| Tasks | `/` | Filter tasks | |
+| Tasks | `r` | Refresh repos/tasks | |
+| Tasks | `L` | Toggle log overlay | global |
+| Tasks | `Tab` / `1` / `2` / `0` | Focus panels | Tab = next; 1/2/0 = tasks/services/output |
+| Tasks | `?` | Help overlay | global |
+| Tasks | `.` | System status (tools / forge / git flow) | global |
+| Tasks | `q` / `Ctrl+c` | Quit | global |
+| Services | `a` | Add service to current task | |
+| Services | `d` | Remove service from task | |
+| Services | `m` | Open forge actions menu | |
+| Services | `p` | Pipeline status | via forge |
+| Services | `v` | Validate current task | |
+| Services | `g` | Open lazygit for selected service | only when `lazygit` detected |
+| Services | `P` | Push selected service | only when `lazygit` **not** detected |
+| Services | `s` | Sync selected service | only when `lazygit` **not** detected |
+| Services | `Ctrl+s` | Stash changes | only when `lazygit` **not** detected |
+| Services | `Ctrl+u` | Unstash changes | only when `lazygit` **not** detected |
+| Services | `Esc` | Back to tasks | |
+| Output | `j/k` | Scroll up/down | |
+| Output | `g/G` | Jump top/bottom | |
+| Output | `Esc` | Back to tasks | |
 
 ---
 
@@ -375,15 +561,52 @@ Working on ticket `PAY-442` that touches `gateway`, `billing`, and `ledger`:
    - Press `V` (or `v` from Services panel)
    - Fix any dirty state or conflicts before closing
 
-4. **Close task**
+4. **Close feature task**
    - Press `C`
-   - Review the generated close plan (merge targets, tag, forge actions)
-   - Confirm execution
-   - wtui performs merges (or creates MR/PR), tags, pushes, and optionally triggers pipelines
+   - Review the generated close plan
+   - Confirm execution to merge `feature/PAY-442` into `develop`
 
-5. **Clean up**
-   - Press `P` to scan for merged tasks
-   - Select merged tasks and confirm removal
+5. **Promote to release** (when configured)
+   - Select `PAY-442` in Tasks panel
+   - Press `Q`
+   - Enter version (e.g. `1.2.0`)
+   - wtui creates `PAY-442-release` worktrees on `release/1.2.0`
+
+6. **Close release task**
+   - Select `PAY-442-release`
+   - Press `C`
+   - Confirm to merge `release/1.2.0` into `master` and `develop`, create tag, push
+
+7. **Clean up**
+    - Press `P` to scan for merged tasks
+    - Select merged tasks and confirm removal
+
+---
+
+## FAQ
+
+### How do I merge a feature branch into `develop`?
+
+Close feature task with `C` in Tasks panel. Close flow prepares and executes plan that merges feature branches according to configured close strategy (for `git-flow`, this is direct merge into `develop` by default).
+
+### Does Close task work for release branches?
+
+Yes. With a `release` branch type configured, close flow merges release branches into production (`master` by default) and integration (`develop` by default), then creates/pushes a release tag when the branch rule has `tag_on_close: true`.
+
+### When should I promote a feature to a release?
+
+After feature task is merged into integration branch (`develop` in git-flow). Then select root feature task and press `Q` to create matching release task/worktrees.
+
+### Why is promote to release disabled?
+
+Promotion (`Q`) is available only when:
+
+- `git_flow.branch_types.release` exists, and
+- selected task is root feature task (not already release/hotfix child phase).
+
+### What does validation block?
+
+Validation can block task operations when repos are in unsafe states according to `validation` config. By default this includes dirty working tree, detached HEAD, and interrupted git operations (merge/rebase/cherry-pick). Untracked files do not block unless `validation.block_untracked: true` is set.
 
 ---
 
@@ -424,6 +647,11 @@ gh auth login
 
 - The proposed tag already exists locally
 - Check your tag format and existing semver history
+
+### Release promote is disabled
+
+- `Q` only appears when the selected task is a root feature task and `git_flow.branch_types.release` exists
+- Check your config and press `.` to verify the detected Git Flow preset
 
 ---
 

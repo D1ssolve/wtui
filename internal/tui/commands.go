@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -12,6 +13,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/logutil"
 	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tui/panels"
 )
 
 type TasksLoadedMsg struct{ Tasks []domain.Task }
@@ -372,6 +374,50 @@ func listTagsCmd(mgr task.Manager, taskID string) tea.Cmd {
 		tags, err := mgr.ListTags(ctx, taskID)
 		return TagListMsg{TaskID: taskID, Tags: tags, Err: err}
 	}
+}
+
+func loadPromoteVersionsCmd(mgr task.Manager, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
+		defer cancel()
+
+		services, err := mgr.ListServices(ctx, taskID)
+		if err != nil {
+			return CommandDoneMsg{Err: err, Op: "Load promote versions for task " + taskID}
+		}
+
+		versions := make(map[string]string, len(services))
+		for _, svc := range services {
+			name := strings.TrimSpace(svc.Name)
+			if name == "" {
+				continue
+			}
+			versions[name] = "0.1.0"
+		}
+
+		return panels.PromoteVersionsLoadedMsg{TaskID: taskID, Versions: versions}
+	}
+}
+
+func promoteToReleaseCmd(mgr task.Manager, taskID string, versions map[string]string) tea.Cmd {
+	statusCh := make(chan string, 32)
+	params := task.PromoteToReleaseParams{
+		TaskID:   taskID,
+		Versions: versions,
+		StatusCh: statusCh,
+	}
+
+	return tea.Batch(
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 10*time.Minute)
+			defer cancel()
+
+			promotedTask, err := mgr.PromoteToRelease(ctx, params)
+			close(statusCh)
+			return PromoteToReleaseDoneMsg{Task: promotedTask, Err: err}
+		},
+		readNextLine(statusCh),
+	)
 }
 
 type forgePipelineStatusParams struct {

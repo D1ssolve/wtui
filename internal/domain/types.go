@@ -7,6 +7,15 @@ type Task struct {
 	Dir      string
 	Services []Service
 	Stale    bool
+
+	// ParentID is empty for root tasks and references root task ID for phase children.
+	ParentID string
+	// Phase is task lifecycle phase: "feature", "release", "hotfix", or empty when unknown/mixed.
+	Phase string
+	// Version is semantic version for phase-versioned tasks; empty when not phase-versioned.
+	Version string
+	// IsGroup indicates at least one loaded task references this task as parent.
+	IsGroup bool
 }
 
 type Service struct {

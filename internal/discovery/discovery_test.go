@@ -112,6 +112,9 @@ func (m *mockGitClient) CreateTag(_ context.Context, _, _, _, _ string) error {
 func (m *mockGitClient) PushTag(_ context.Context, _, _ string) error {
 	panic("mockGitClient.PushTag called unexpectedly")
 }
+func (m *mockGitClient) DeleteTag(_ context.Context, _, _ string) error {
+	panic("mockGitClient.DeleteTag called unexpectedly")
+}
 func (m *mockGitClient) ListTags(_ context.Context, _ string) ([]domain.TagInfo, error) {
 	panic("mockGitClient.ListTags called unexpectedly")
 }
@@ -129,6 +132,12 @@ func (m *mockGitClient) PushBranch(_ context.Context, _ string, _ chan<- string)
 }
 func (m *mockGitClient) DeleteRemoteBranch(_ context.Context, _, _ string) error {
 	panic("mockGitClient.DeleteRemoteBranch called unexpectedly")
+}
+func (m *mockGitClient) CreateBranchFromBranch(_ context.Context, _, _, _ string) error {
+	return nil
+}
+func (m *mockGitClient) PushBranchExplicit(_ context.Context, _, _ string) error {
+	return nil
 }
 func (m *mockGitClient) TagExists(_ context.Context, _, _ string) (bool, error) {
 	panic("mockGitClient.TagExists called unexpectedly")

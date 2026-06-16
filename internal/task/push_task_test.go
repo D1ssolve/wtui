@@ -5,7 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/D1ssolve/wtui/internal/config"
+	"github.com/D1ssolve/wtui/internal/discovery"
+	"github.com/D1ssolve/wtui/internal/gitflow"
+	"github.com/D1ssolve/wtui/internal/sln"
+	"github.com/D1ssolve/wtui/internal/validation"
 )
 
 func TestPushTask_NoServices(t *testing.T) {
@@ -232,4 +239,72 @@ func TestPushTask_ReportsProgress(t *testing.T) {
 			t.Errorf("line %d = %q, want %q", i, lines[i], want)
 		}
 	}
+}
+
+func TestPushTask_ProtectedBranch_RefusesPush(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-PUSH-PROTECTED")
+	worktreePath := filepath.Join(taskDir, "svc-a")
+
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-a", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == worktreePath {
+				return fakeCommonDir, nil
+			}
+			return "", errors.New("not a git worktree")
+		},
+		getWorktreeBranchFn: func(path string) (string, error) {
+			if path != worktreePath {
+				t.Fatalf("GetWorktreeBranch path = %q, want %q", path, worktreePath)
+			}
+			return "develop", nil
+		},
+	}
+
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code"}
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
+	logger := newTestLogger()
+	disc := discovery.New(cfg, gitMock, logger)
+	slnMgr := sln.NewManager(&mockDotnetClient{}, logger)
+	validator := validation.NewTaskValidator(gitMock)
+	flow := &gitflow.ResolvedGitFlow{ProductionBranch: "main", IntegrationBranch: "develop"}
+	mgr := New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
+
+	lineCh := make(chan string, 8)
+	err := mgr.PushTask(context.Background(), "IN-PUSH-PROTECTED", lineCh)
+	if err == nil {
+		t.Fatal("PushTask error = nil, want protected-branch error")
+	}
+
+	if got := err.Error(); !strings.Contains(got, "refusing to push protected branch develop") {
+		t.Fatalf("PushTask error = %q, want protected-branch error", got)
+	}
+
+	gitMock.mu.Lock()
+	pushCalls := append([]string(nil), gitMock.pushCalls...)
+	gitMock.mu.Unlock()
+
+	if len(pushCalls) != 0 {
+		t.Fatalf("expected no Push calls, got %d", len(pushCalls))
+	}
+
+	var lines []string
+	for line := range lineCh {
+		lines = append(lines, line)
+	}
+
+	assertContainsLine(t, lines, "[svc-a] pushing...")
+	assertContainsLine(t, lines, "[svc-a] push error: refusing to push protected branch develop")
 }

@@ -23,6 +23,7 @@ type KeyMap struct {
 	TagBrowser     key.Binding
 	ForgeMenu      key.Binding
 	PipelineStatus key.Binding
+	Promote        key.Binding
 	ServiceValidate key.Binding
 }
 
@@ -91,6 +92,10 @@ func DefaultKeyMap() KeyMap {
 		PipelineStatus: key.NewBinding(
 			key.WithKeys("p"),
 			key.WithHelp("p", "pipeline status"),
+		),
+		Promote: key.NewBinding(
+			key.WithKeys("Q"),
+			key.WithHelp("Q", "promote to release"),
 		),
 		ServiceValidate: key.NewBinding(
 			key.WithKeys("v"),

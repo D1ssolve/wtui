@@ -205,6 +205,10 @@ func (m *cmdManager) ForgeListIssues(_ context.Context, _, _ string, params forg
 	return m.forgeIssuesResult, m.forgeErr
 }
 
+func (m *cmdManager) PromoteToRelease(_ context.Context, _ task.PromoteToReleaseParams) (domain.Task, error) {
+	return domain.Task{}, nil
+}
+
 func TestCmdManager_ImplementsTaskManager(t *testing.T) {
 	var _ task.Manager = (*cmdManager)(nil)
 }

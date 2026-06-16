@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -281,6 +282,13 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				}
 				step(svc.Name+":merge:"+target, StepStatusOK, "merged into "+target)
 
+				ensureErr := m.ensurePushBranchAllowed(ctx, svc.WorktreePath)
+				if ensureErr != nil {
+					step(svc.Name+":push:"+target, StepStatusFailed, ensureErr.Error())
+					svcFailed = true
+					break
+				}
+
 				pushErr := m.pushBranch(ctx, svc.WorktreePath)
 				if pushErr != nil {
 					step(svc.Name+":push:"+target, StepStatusFailed, pushErr.Error())
@@ -294,6 +302,11 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				if restoreErr := m.git.Checkout(ctx, svc.WorktreePath, originalBranch); restoreErr != nil {
 					step(svc.Name+":restore-branch", StepStatusFailed, restoreErr.Error())
 					svcFailed = true
+					if !continueOnError {
+						return result, errors.New("close task failed")
+					}
+					anyFailed = true
+					continue
 				} else {
 					step(svc.Name+":restore-branch", StepStatusOK, "restored "+originalBranch)
 				}
@@ -353,6 +366,7 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 		}
 
 		if svcPlan.TagPlan != nil {
+			tagCreated := false
 			version, tagName, tagErr := m.proposeTag(ctx, params.TaskID, svc, gitflow.BranchTypeRule{TagSource: svcPlan.TagPlan.SourceRef}, svcPlan.SourceBranch, params.TagVersion)
 			if tagErr != nil {
 				step(svc.Name+":tag", StepStatusFailed, tagErr.Error())
@@ -380,12 +394,24 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 					}
 					continue
 				}
+				tagCreated = true
 				result.TagCreated = tagName
 				step(svc.Name+":tag", StepStatusOK, fmt.Sprintf("created %s (%s)", tagName, version))
 			}
 
 			if svcPlan.TagPlan.Push {
 				if pushTagErr := m.git.PushTag(ctx, svc.WorktreePath, tagName); pushTagErr != nil {
+					if tagCreated {
+						if deleteTagErr := m.git.DeleteTag(ctx, svc.RepoPath, tagName); deleteTagErr != nil {
+							if m.logger != nil {
+								m.logger.WarnContext(ctx, "failed to delete local tag after push failure",
+									slog.String("service", svc.Name),
+									slog.String("tag", tagName),
+									slog.String("repo_path", svc.RepoPath),
+									slog.String("error", deleteTagErr.Error()))
+							}
+						}
+					}
 					step(svc.Name+":push-tag", StepStatusFailed, pushTagErr.Error())
 					if !continueOnError {
 						return result, pushTagErr
@@ -479,21 +505,6 @@ func (m *manager) proposeTag(ctx context.Context, taskID string, svc domain.Serv
 		return "", "", fmt.Errorf("empty tag name for task %s", taskID)
 	}
 	return version, tagName, nil
-}
-
-func extractVersionFromBranch(branch string) string {
-	parts := strings.Split(branch, "/")
-	if len(parts) < 2 {
-		return ""
-	}
-	candidate := strings.TrimSpace(parts[len(parts)-1])
-	if candidate == "" {
-		return ""
-	}
-	if _, err := semver.NewVersion(candidate); err == nil {
-		return normalizeVersion(candidate)
-	}
-	return ""
 }
 
 func normalizeVersion(version string) string {

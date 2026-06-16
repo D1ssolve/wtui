@@ -23,10 +23,12 @@ type FeatureFlags struct {
 }
 
 type Dependencies struct {
-	Manager      task.Manager
-	Features     FeatureFlags
-	ForgeClients map[forge.ForgeProvider]forge.ForgeClient
-	ResolvedFlow *gitflow.ResolvedGitFlow
+	Manager       task.Manager
+	Features      FeatureFlags
+	ForgeClients  map[forge.ForgeProvider]forge.ForgeClient
+	ResolvedFlow  *gitflow.ResolvedGitFlow
+	GlabAvailable bool
+	GhAvailable   bool
 }
 
 type lookPathFunc func(string) (string, error)
@@ -51,6 +53,8 @@ func BuildDependencies(cfg *config.Config, logger *slog.Logger) Dependencies {
 		Features:     features,
 		ForgeClients: forgeClients,
 		ResolvedFlow: resolvedFlow,
+		GlabAvailable: glabAvailable,
+		GhAvailable:   ghAvailable,
 	}
 }
 

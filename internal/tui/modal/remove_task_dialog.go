@@ -12,6 +12,7 @@ type RemoveTaskDialog struct {
 	taskID        string
 	serviceCount  int
 	dirtyServices []string
+	forceConfirm  bool
 }
 
 func NewRemoveTaskDialog(taskID string, serviceCount int, dirtyServices []string) *RemoveTaskDialog {
@@ -34,6 +35,23 @@ func (d *RemoveTaskDialog) UpdateInfo(serviceCount int, dirtyServices []string) 
 func (d *RemoveTaskDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if d.forceConfirm {
+			switch msg.String() {
+			case "y":
+				taskID := d.taskID
+				d.forceConfirm = false
+				return d, func() tea.Msg {
+					return SubmitRemoveTaskMsg{TaskID: taskID, Force: true, DeleteBranches: false}
+				}
+			case "n", "esc":
+				d.forceConfirm = false
+				return d, nil
+			default:
+				d.forceConfirm = false
+				return d, nil
+			}
+		}
+
 		switch msg.String() {
 		case "y":
 			taskID := d.taskID
@@ -42,10 +60,8 @@ func (d *RemoveTaskDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 			}
 
 		case "f":
-			taskID := d.taskID
-			return d, func() tea.Msg {
-				return SubmitRemoveTaskMsg{TaskID: taskID, Force: true, DeleteBranches: false}
-			}
+			d.forceConfirm = true
+			return d, nil
 
 		case "b":
 			taskID := d.taskID
@@ -68,6 +84,19 @@ func (d *RemoveTaskDialog) View() string {
 	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 
 	var sb strings.Builder
+
+	if d.forceConfirm {
+		sb.WriteString(warnStyle.Bold(true).Render("⚠ WARNING: Force remove confirmation"))
+		sb.WriteString("\n")
+		sb.WriteString(warnStyle.Render("Force remove will permanently delete uncommitted changes."))
+		sb.WriteString("\n\n")
+		sb.WriteString(warnStyle.Render("[y] Confirm force remove"))
+		sb.WriteString("\n")
+		sb.WriteString(dimStyle.Render("[n/Esc] Cancel"))
+		sb.WriteString("\n")
+		sb.WriteString(dimStyle.Render("Any other key cancels"))
+		return sb.String()
+	}
 
 	sb.WriteString(titleStyle.Render(fmt.Sprintf("Remove task %q?", d.taskID)))
 	sb.WriteString("\n")

@@ -14,6 +14,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
@@ -117,6 +118,10 @@ func (m *mockManager) ForgePipelineStatus(_ context.Context, _, _ string, _ stri
 
 func (m *mockManager) ForgeListIssues(_ context.Context, _, _ string, _ forge.ListIssuesParams) ([]forge.IssueInfo, error) {
 	return nil, nil
+}
+
+func (m *mockManager) PromoteToRelease(_ context.Context, _ task.PromoteToReleaseParams) (domain.Task, error) {
+	return domain.Task{}, nil
 }
 
 func newTestConfig() *config.Config {
@@ -363,6 +368,28 @@ func TestUpdate_HelpKey_OpensHelpModal(t *testing.T) {
 	}
 	if _, ok := m.modal.(*modal.HelpOverlay); !ok {
 		t.Errorf("expected *modal.HelpOverlay, got %T", m.modal)
+	}
+}
+
+func TestUpdate_HelpKey_AfterResize_AllowsScrollToBottom(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 80, 10)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	m = updated.(Model)
+	if m.modal == nil {
+		t.Fatal("'?' must open a modal")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = updated.(Model)
+
+	view := stripANSIForModel(m.modal.View())
+	if !strings.Contains(view, "[Esc] or [?] to close") {
+		t.Fatalf("scrolled help view must show bottom close hint, got: %q", view)
+	}
+	if strings.Contains(view, "Keyboard Shortcuts") {
+		t.Fatalf("scrolled help view should not contain top title, got: %q", view)
 	}
 }
 
@@ -645,6 +672,72 @@ func TestUpdate_CommandDoneMsg_NoError_AppendsOperationDone(t *testing.T) {
 	view := m.outputPanel.View()
 	if !strings.Contains(view, "Push task IN-1 done.") {
 		t.Errorf("output panel should contain contextual done message after successful CommandDoneMsg, got %q", view)
+	}
+}
+
+func TestUpdate_QKeyOnFeatureRootWithReleaseFlow_OpensPromoteDialog(t *testing.T) {
+	mgr := &mockManager{
+		listServicesResult: []domain.Service{{Name: "api"}},
+	}
+	flow := &gitflow.ResolvedGitFlow{
+		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
+			gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}, BaseBranch: "develop"},
+		},
+	}
+	m := newTestModelWithOptions(t, mgr, Options{ResolvedFlow: flow})
+	m = sendWindowSize(m, 120, 40)
+	m.tasksPanel.SetTasks([]domain.Task{{
+		ID:       "ZA-553",
+		Phase:    "feature",
+		ParentID: "",
+		Services: []domain.Service{{Name: "api"}},
+	}})
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Q")})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("Q must emit open promote dialog command")
+	}
+
+	openMsg := cmd()
+	openPromoteMsg, ok := openMsg.(panels.OpenPromoteDialogMsg)
+	if !ok {
+		t.Fatalf("expected OpenPromoteDialogMsg, got %T", openMsg)
+	}
+	if openPromoteMsg.TaskID != "ZA-553" {
+		t.Fatalf("open promote taskID = %q, want ZA-553", openPromoteMsg.TaskID)
+	}
+
+	updated, cmd = m.Update(openPromoteMsg)
+	m = updated.(Model)
+	if _, ok := m.modal.(*modal.PromoteToReleaseDialog); !ok {
+		t.Fatalf("expected PromoteToReleaseDialog, got %T", m.modal)
+	}
+	if cmd == nil {
+		t.Fatal("open promote dialog should trigger versions load cmd")
+	}
+
+	loadedMsg := cmd()
+	loaded, ok := loadedMsg.(panels.PromoteVersionsLoadedMsg)
+	if !ok {
+		t.Fatalf("expected PromoteVersionsLoadedMsg, got %T", loadedMsg)
+	}
+	if loaded.TaskID != "ZA-553" {
+		t.Fatalf("loaded versions taskID = %q, want ZA-553", loaded.TaskID)
+	}
+	if got := loaded.Versions["api"]; got != "0.1.0" {
+		t.Fatalf("loaded default version = %q, want 0.1.0", got)
+	}
+
+	updated, _ = m.Update(loaded)
+	m = updated.(Model)
+	promoteDialog, ok := m.modal.(*modal.PromoteToReleaseDialog)
+	if !ok {
+		t.Fatalf("expected PromoteToReleaseDialog after versions loaded, got %T", m.modal)
+	}
+	if !strings.Contains(promoteDialog.View(), "0.1.0") {
+		t.Fatalf("promote dialog should render loaded default version, got %q", promoteDialog.View())
 	}
 }
 
@@ -1165,11 +1258,16 @@ func TestUpdate_ValidationResultMsg_NonBlockingAppendsOutput(t *testing.T) {
 func TestUpdate_ClosePlanReadyMsg_OpensConfirmModal(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "IN-1", Phase: "feature"}})
 
 	updated, _ := m.Update(ClosePlanReadyMsg{Plan: task.ClosePlan{TaskID: "IN-1"}})
 	m = updated.(Model)
-	if _, ok := m.modal.(*modal.CloseTaskConfirmModal); !ok {
+	closeModal, ok := m.modal.(*modal.CloseTaskConfirmModal)
+	if !ok {
 		t.Fatalf("expected CloseTaskConfirmModal, got %T", m.modal)
+	}
+	if got := closeModal.Title(); got != "Close Feature Task: IN-1" {
+		t.Fatalf("confirm title = %q", got)
 	}
 }
 
@@ -1177,11 +1275,20 @@ func TestUpdate_CloseTaskFinishedMsg_OpensSummaryAndReloads(t *testing.T) {
 	mgr := &mockManager{listTasksResult: []domain.Task{{ID: "IN-1"}}}
 	m := newTestModel(t, mgr)
 	m = sendWindowSize(m, 120, 40)
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "IN-1", Phase: "hotfix", Version: "1.2.1"}})
+	m.pendingCloseTask = &domain.Task{ID: "IN-1", Phase: "hotfix", Version: "1.2.1"}
 
 	updated, cmd := m.Update(CloseTaskFinishedMsg{Result: task.CloseTaskResult{TaskID: "IN-1", Success: true}})
 	m = updated.(Model)
-	if _, ok := m.modal.(*modal.CloseTaskSummaryModal); !ok {
+	closeModal, ok := m.modal.(*modal.CloseTaskSummaryModal)
+	if !ok {
 		t.Fatalf("expected CloseTaskSummaryModal, got %T", m.modal)
+	}
+	if got := closeModal.Title(); got != "Close Hotfix Task: IN-1 (v1.2.1)" {
+		t.Fatalf("summary title = %q", got)
+	}
+	if m.pendingCloseTask != nil {
+		t.Fatal("pendingCloseTask should be cleared after close finishes")
 	}
 	if cmd == nil {
 		t.Fatal("close finished should reload tasks/services")

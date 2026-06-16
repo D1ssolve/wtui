@@ -18,3 +18,8 @@ type ForgeListIssuesMsg struct {
 	TaskID      string
 	ServiceName string
 }
+
+type PromoteToReleaseMsg struct {
+	TaskID   string
+	Versions map[string]string
+}

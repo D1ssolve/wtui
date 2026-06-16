@@ -90,3 +90,10 @@ type ForgePipelineStatusMsg struct {
 	Branch      string
 	RepoPath    string
 }
+
+type OpenPromoteDialogMsg struct{ TaskID string }
+
+type PromoteVersionsLoadedMsg struct {
+	TaskID   string
+	Versions map[string]string // serviceName → proposed version
+}

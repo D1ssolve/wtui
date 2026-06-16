@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -32,6 +33,8 @@ type Model struct {
 	flow         *gitflow.ResolvedGitFlow
 
 	lazygitAvailable bool
+	glabAvailable    bool
+	ghAvailable      bool
 
 	focus         FocusPanel
 	previousFocus FocusPanel
@@ -67,10 +70,13 @@ type Model struct {
 
 	pendingAddParams *task.AddParams
 	pendingSyncTask  *modal.SubmitSyncStrategyMsg
+	pendingCloseTask *domain.Task
 }
 
 type Options struct {
 	LazygitAvailable bool
+	GlabAvailable    bool
+	GhAvailable      bool
 	ForgeClients     map[forge.ForgeProvider]forge.ForgeClient
 	ResolvedFlow     *gitflow.ResolvedGitFlow
 }
@@ -106,6 +112,8 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 		styles:           NewStyles(),
 		focus:            FocusTasks,
 		lazygitAvailable: opts.LazygitAvailable,
+		glabAvailable:    opts.GlabAvailable,
+		ghAvailable:      opts.GhAvailable,
 		spinner:          sp,
 		logPath:          logPath,
 		tasksPanel:       panels.NewTasksPanel(25, 10),
@@ -114,6 +122,7 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 	}
 
 	m.tasksPanel.SetFocused(true)
+	m.tasksPanel.SetFlow(opts.ResolvedFlow)
 	m.servicesPanel.SetLazygitAvailable(opts.LazygitAvailable)
 	m.servicesPanel.SetForgeClients(opts.ForgeClients, cfg.Forge)
 
@@ -255,6 +264,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keymap.Help):
 			m.modal = modal.NewHelpOverlayWithOptions(m.lazygitAvailable)
+			m.modal.SetTerminalSize(m.width, m.height)
+			return m, nil
+
+		case msg.String() == ".":
+			m.modal = m.newSystemInfoModal()
 			return m, nil
 
 		case key.Matches(msg, m.keymap.ToggleLogs):
@@ -350,7 +364,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = modal.NewConfigModal(m.cfg)
 		return m, nil
 
+	case panels.OpenPromoteDialogMsg:
+		selected := m.tasksPanel.SelectedTask()
+		if selected == nil || selected.ID != msg.TaskID {
+			m.outputPanel.AppendLine("Promote failed: selected task not found.")
+			return m, nil
+		}
+
+		baseBranch := ""
+		if m.flow != nil {
+			if rule, ok := m.flow.BranchTypes[gitflow.BranchTypeRelease]; ok {
+				baseBranch = rule.BaseBranch
+			}
+		}
+
+		m.modal = modal.NewPromoteToReleaseDialog(msg.TaskID, selected.Services, baseBranch, m.width, m.height)
+		return m, loadPromoteVersionsCmd(m.mgr, msg.TaskID)
+
+	case panels.PromoteVersionsLoadedMsg:
+		dialog, ok := m.modal.(*modal.PromoteToReleaseDialog)
+		if !ok {
+			return m, nil
+		}
+		dialog.SetProposedVersions(msg.Versions)
+		m.modal = dialog
+		return m, nil
+
 	case panels.PlanCloseTaskMsg:
+		if selected := m.tasksPanel.SelectedTask(); selected != nil && selected.ID == msg.TaskID {
+			taskCopy := *selected
+			m.pendingCloseTask = &taskCopy
+		} else {
+			m.pendingCloseTask = &domain.Task{ID: msg.TaskID}
+		}
 		m.opRunning = true
 		m.outputPanel.AppendLine("Planning close for task " + msg.TaskID + "...")
 		return m, tea.Batch(planCloseTaskCmd(m.mgr, msg.TaskID), m.spinner.Tick)
@@ -588,6 +634,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner.Tick,
 		)
 
+	case modal.PromoteToReleaseMsg:
+		m.modal = nil
+		m.opRunning = true
+		m.outputPanel.AppendLine("Promoting task " + msg.TaskID + " to release...")
+		return m, tea.Batch(promoteToReleaseCmd(m.mgr, msg.TaskID, msg.Versions), m.spinner.Tick)
+
 	case modal.SubmitPruneMsg:
 		m.modal = nil
 		if len(msg.SelectedTaskIDs) == 0 {
@@ -729,7 +781,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outputPanel.AppendLine("Plan close task failed: " + msg.Err.Error())
 			return m, nil
 		}
-		m.modal = modal.NewCloseTaskConfirmModal(msg.Plan, m.width, m.height)
+		closeTask := m.resolveCloseTask(msg.Plan.TaskID)
+		m.modal = modal.NewCloseTaskConfirmModal(closeTask, msg.Plan, m.width, m.height)
 		return m, nil
 
 	case CloseTaskFinishedMsg:
@@ -737,7 +790,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Close task failed: " + msg.Err.Error())
 		}
-		m.modal = modal.NewCloseTaskSummaryModal(msg.Result, m.width, m.height)
+		closeTask := m.resolveCloseTask(msg.Result.TaskID)
+		m.modal = modal.NewCloseTaskSummaryModal(closeTask, msg.Result, m.width, m.height)
+		m.pendingCloseTask = nil
 		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
 
 	case PrunePlanReadyMsg:
@@ -776,6 +831,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.outputPanel.AppendLine(fmt.Sprintf("Forge %s done for %s: %+v", msg.Op, msg.ServiceName, msg.Data))
 		return m, nil
+
+	case PromoteToReleaseDoneMsg:
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Promote to release failed: " + msg.Err.Error())
+			return m, nil
+		}
+		m.outputPanel.AppendLine("Promote to release done: " + msg.Task.ID)
+		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
 
 	case LazygitDoneMsg:
 		m.opRunning = false
@@ -958,6 +1022,38 @@ func (m Model) handleOpenLazygitServiceMsg(msg panels.OpenLazygitServiceMsg) (Mo
 	m.opRunning = true
 	m.outputPanel.AppendLine("Opening lazygit for service " + msg.ServiceName + " from " + msg.WorktreePath + "...")
 	return m, tea.Batch(lazygitServiceCmd(msg.TaskID, msg.ServiceName, msg.WorktreePath), m.spinner.Tick)
+}
+
+func (m Model) resolveCloseTask(taskID string) domain.Task {
+	if m.pendingCloseTask != nil && m.pendingCloseTask.ID == taskID {
+		return *m.pendingCloseTask
+	}
+	if selected := m.tasksPanel.SelectedTask(); selected != nil && selected.ID == taskID {
+		return *selected
+	}
+	return domain.Task{ID: taskID}
+}
+
+func (m Model) newSystemInfoModal() modal.Modal {
+	preset := ""
+	if m.cfg != nil && m.cfg.GitFlow != nil {
+		preset = m.cfg.GitFlow.Preset
+	}
+	gitlabHost := "gitlab.com"
+	githubHost := "github.com"
+	if m.cfg != nil && m.cfg.Forge != nil {
+		if strings.TrimSpace(m.cfg.Forge.GitLabHost) != "" {
+			gitlabHost = m.cfg.Forge.GitLabHost
+		}
+		if strings.TrimSpace(m.cfg.Forge.GitHubHost) != "" {
+			githubHost = m.cfg.Forge.GitHubHost
+		}
+	}
+	forgeProvider := "auto"
+	if m.cfg != nil && m.cfg.Forge != nil {
+		forgeProvider = m.cfg.Forge.DefaultProvider
+	}
+	return modal.NewSystemInfoModal(m.lazygitAvailable, m.glabAvailable, m.ghAvailable, forgeProvider, gitlabHost, githubHost, preset)
 }
 
 func isExecutableNotFoundErr(err error) bool {

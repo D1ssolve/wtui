@@ -41,3 +41,8 @@ type ForgeResultMsg struct {
 	Data        any
 	Err         error
 }
+
+type PromoteToReleaseDoneMsg struct {
+	Task domain.Task
+	Err  error
+}

@@ -7,22 +7,29 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/task"
 )
 
 var _ Modal = (*CloseTaskSummaryModal)(nil)
 
 type CloseTaskSummaryModal struct {
+	task           domain.Task
 	result         task.CloseTaskResult
 	terminalWidth  int
 	terminalHeight int
 }
 
-func NewCloseTaskSummaryModal(result task.CloseTaskResult, width, height int) *CloseTaskSummaryModal {
-	return &CloseTaskSummaryModal{result: result, terminalWidth: width, terminalHeight: height}
+func NewCloseTaskSummaryModal(taskInfo domain.Task, result task.CloseTaskResult, width, height int) *CloseTaskSummaryModal {
+	if strings.TrimSpace(taskInfo.ID) == "" {
+		taskInfo.ID = result.TaskID
+	}
+	return &CloseTaskSummaryModal{task: taskInfo, result: result, terminalWidth: width, terminalHeight: height}
 }
 
-func (m *CloseTaskSummaryModal) Title() string { return "Close Task Summary" }
+func (m *CloseTaskSummaryModal) Title() string {
+	return closeTaskModalTitle(m.task, m.result.TaskID)
+}
 
 func (m *CloseTaskSummaryModal) SetTerminalSize(width, height int) {
 	m.terminalWidth = width
@@ -50,7 +57,7 @@ func (m *CloseTaskSummaryModal) View() string {
 	warnStyle := lipgloss.NewStyle().Foreground(modalColorWarning)
 
 	var sb strings.Builder
-	sb.WriteString(titleStyle.Render("Close summary: " + m.result.TaskID))
+	sb.WriteString(titleStyle.Render(m.Title()))
 	sb.WriteString("\n\n")
 	sb.WriteString(dimStyle.Render("Step | Status | Message"))
 	sb.WriteString("\n")

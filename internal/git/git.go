@@ -32,6 +32,10 @@ type Client interface {
 
 	AddWorktreeWithTracking(ctx context.Context, repoPath, dest, localBranch, remoteBranch string) error
 
+	// CreateBranchFromBranch creates a new branch from an existing branch.
+	// Command: git -C <repoPath> branch <newBranch> <fromBranch>
+	CreateBranchFromBranch(ctx context.Context, repoPath, newBranch, fromBranch string) error
+
 	CommonDir(ctx context.Context, worktreePath string) (string, error)
 
 	GetWorktreeBranch(ctx context.Context, worktreePath string) (string, error)
@@ -64,11 +68,17 @@ type Client interface {
 
 	Push(ctx context.Context, worktreePath string, lineCh chan<- string) error
 
+	// PushBranchExplicit pushes a specific branch to origin with upstream tracking.
+	// Command: git -C <worktreePath> push -u origin <branch>
+	PushBranchExplicit(ctx context.Context, worktreePath, branch string) error
+
 	Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error
 
 	CreateTag(ctx context.Context, repoPath, tag, ref, message string) error
 
 	PushTag(ctx context.Context, worktreePath, tag string) error
+
+	DeleteTag(ctx context.Context, repoPath, tag string) error
 
 	ListTags(ctx context.Context, repoPath string) ([]domain.TagInfo, error)
 
@@ -195,6 +205,11 @@ func (c *CommandClient) AddWorktree(ctx context.Context, repoPath, dest, branch 
 func (c *CommandClient) AddWorktreeWithTracking(ctx context.Context, repoPath, dest, localBranch, remoteBranch string) error {
 	args := []string{"-C", repoPath, "worktree", "add", "-b", localBranch, dest, "origin/" + remoteBranch}
 	_, err := c.execGit(ctx, args...)
+	return err
+}
+
+func (c *CommandClient) CreateBranchFromBranch(ctx context.Context, repoPath, newBranch, fromBranch string) error {
+	_, err := c.execGit(ctx, "-C", repoPath, "branch", newBranch, fromBranch)
 	return err
 }
 
@@ -406,6 +421,11 @@ func (c *CommandClient) Push(ctx context.Context, worktreePath string, lineCh ch
 		}
 	}
 	return nil
+}
+
+func (c *CommandClient) PushBranchExplicit(ctx context.Context, worktreePath, branch string) error {
+	_, err := c.execGit(ctx, "-C", worktreePath, "push", "-u", "origin", branch)
+	return err
 }
 
 func (c *CommandClient) Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error {

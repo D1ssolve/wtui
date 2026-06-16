@@ -218,12 +218,20 @@ func TestRemoveDialog_Y_Submits(t *testing.T) {
 	}
 }
 
-func TestRemoveDialog_F_ForceRemoves(t *testing.T) {
+func TestRemoveDialog_FThenY_ForceRemoves(t *testing.T) {
 	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
 
 	_, cmd := d.Update(sendKey("f"))
+	if cmd != nil {
+		t.Fatal("f must not submit immediately")
+	}
+	if !d.forceConfirm {
+		t.Fatal("f should enter force confirmation mode")
+	}
+
+	_, cmd = d.Update(sendKey("y"))
 	if cmd == nil {
-		t.Fatal("f must return a cmd")
+		t.Fatal("y in force confirmation mode must submit")
 	}
 	msg := execCmd(cmd)
 	sub, ok := msg.(SubmitRemoveTaskMsg)
@@ -238,6 +246,46 @@ func TestRemoveDialog_F_ForceRemoves(t *testing.T) {
 	}
 	if sub.DeleteBranches {
 		t.Error("DeleteBranches should be false for f")
+	}
+}
+
+func TestRemoveDialog_FThenN_ReturnsToNormalView(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
+
+	_, cmd := d.Update(sendKey("f"))
+	if cmd != nil {
+		t.Fatal("f must not submit immediately")
+	}
+	if !d.forceConfirm {
+		t.Fatal("f should enter force confirmation mode")
+	}
+
+	_, cmd = d.Update(sendKey("n"))
+	if cmd != nil {
+		t.Fatal("n in force confirmation mode should cancel back to normal view")
+	}
+	if d.forceConfirm {
+		t.Fatal("n should exit force confirmation mode")
+	}
+}
+
+func TestRemoveDialog_FThenEsc_ReturnsToNormalView(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
+
+	_, cmd := d.Update(sendKey("f"))
+	if cmd != nil {
+		t.Fatal("f must not submit immediately")
+	}
+	if !d.forceConfirm {
+		t.Fatal("f should enter force confirmation mode")
+	}
+
+	_, cmd = d.Update(sendSpecialKey(tea.KeyEsc))
+	if cmd != nil {
+		t.Fatal("esc in force confirmation mode should cancel back to normal view")
+	}
+	if d.forceConfirm {
+		t.Fatal("esc should exit force confirmation mode")
 	}
 }
 
@@ -320,6 +368,7 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		"Remove service from task",
 		"Scroll up/down",
 		"Toggle this help",
+		"System status",
 		"Quit",
 	}
 	for _, want := range mustContain {
@@ -374,6 +423,64 @@ func TestHelpOverlay_QuestionMark_Closes(t *testing.T) {
 	msg := execCmd(cmd)
 	if _, ok := msg.(CloseModalMsg); !ok {
 		t.Fatalf("expected CloseModalMsg, got %T", msg)
+	}
+}
+
+func TestHelpOverlay_ScrollDownUp_AdjustsOffset(t *testing.T) {
+	h := NewHelpOverlayWithOptions(false)
+	h.SetTerminalSize(80, 10)
+
+	if h.scrollOffset != 0 {
+		t.Fatalf("initial scrollOffset = %d, want 0", h.scrollOffset)
+	}
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if h.scrollOffset != 1 {
+		t.Fatalf("after j scrollOffset = %d, want 1", h.scrollOffset)
+	}
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if h.scrollOffset != 0 {
+		t.Fatalf("after k scrollOffset = %d, want 0", h.scrollOffset)
+	}
+}
+
+func TestHelpOverlay_ScrollPgDownAndEnd_ClampToBottom(t *testing.T) {
+	h := NewHelpOverlayWithOptions(false)
+	h.SetTerminalSize(80, 10)
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if h.scrollOffset <= 0 {
+		t.Fatalf("after pgdown scrollOffset = %d, want > 0", h.scrollOffset)
+	}
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if h.scrollOffset != h.maxScrollOffset() {
+		t.Fatalf("after end scrollOffset = %d, want %d", h.scrollOffset, h.maxScrollOffset())
+	}
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if h.scrollOffset != h.maxScrollOffset() {
+		t.Fatalf("after pgdown at bottom scrollOffset = %d, want %d", h.scrollOffset, h.maxScrollOffset())
+	}
+}
+
+func TestHelpOverlay_View_RendersVisibleSliceAfterScroll(t *testing.T) {
+	h := NewHelpOverlayWithOptions(false)
+	h.SetTerminalSize(80, 10)
+
+	top := stripAnsi(h.View())
+	if !strings.Contains(top, "Keyboard Shortcuts") {
+		t.Fatalf("top view must contain title, got %q", top)
+	}
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	bottom := stripAnsi(h.View())
+	if !strings.Contains(bottom, "[Esc] or [?] to close") {
+		t.Fatalf("bottom view must contain close hint, got %q", bottom)
+	}
+	if strings.Contains(bottom, "Keyboard Shortcuts") {
+		t.Fatalf("bottom view should not contain top title slice, got %q", bottom)
 	}
 }
 
@@ -443,11 +550,9 @@ func TestInitDialogWithFlow_MultipleBranchTypes_ShowsSelectorAndOptions(t *testi
 		IntegrationBranch: "develop",
 		DefaultBranchType: gitflow.BranchTypeFeature,
 		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
-			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
-			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "master"},
-			gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}, BaseBranch: "develop"},
-			gitflow.BranchTypeBugfix:  {Prefixes: []string{"bugfix/"}, BaseBranch: "develop"},
-			gitflow.BranchTypeChore:   {Prefixes: []string{"chore/"}, BaseBranch: "develop"},
+		gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
+		gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "master"},
+		gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}, BaseBranch: "develop"},
 		},
 	}
 
@@ -460,8 +565,6 @@ func TestInitDialogWithFlow_MultipleBranchTypes_ShowsSelectorAndOptions(t *testi
 		gitflow.BranchTypeFeature,
 		gitflow.BranchTypeHotfix,
 		gitflow.BranchTypeRelease,
-		gitflow.BranchTypeBugfix,
-		gitflow.BranchTypeChore,
 	}
 	if len(d.branchTypeOptions) != len(want) {
 		t.Fatalf("expected %d branch type options, got %d", len(want), len(d.branchTypeOptions))

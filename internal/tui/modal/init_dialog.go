@@ -498,8 +498,6 @@ func orderedBranchTypes(flow *gitflow.ResolvedGitFlow) []gitflow.BranchType {
 		gitflow.BranchTypeFeature,
 		gitflow.BranchTypeHotfix,
 		gitflow.BranchTypeRelease,
-		gitflow.BranchTypeBugfix,
-		gitflow.BranchTypeChore,
 	}
 
 	seen := make(map[gitflow.BranchType]struct{}, len(flow.BranchTypes))

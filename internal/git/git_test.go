@@ -460,6 +460,151 @@ exit 0
 	}
 }
 
+func TestCommandClient_DeleteTagUsesDeleteFlag(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err := client.DeleteTag(t.Context(), "/repo", "v1.2.0"); err != nil {
+		t.Fatalf("DeleteTag returned error: %v", err)
+	}
+
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read args file: %v", err)
+	}
+	want := "-C /repo tag -d v1.2.0\n"
+	if string(args) != want {
+		t.Fatalf("git args = %q, want %q", string(args), want)
+	}
+}
+
+func TestCreateBranchFromBranch(t *testing.T) {
+	t.Run("uses expected argv", func(t *testing.T) {
+		binDir := t.TempDir()
+		argsFile := filepath.Join(t.TempDir(), "git-args")
+		fakeGit := filepath.Join(binDir, "git")
+		script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+		if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake git: %v", err)
+		}
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("GIT_ARGS_FILE", argsFile)
+
+		client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		if err := client.CreateBranchFromBranch(t.Context(), "/repo", "release/1.2.0", "feature/ABC-123"); err != nil {
+			t.Fatalf("CreateBranchFromBranch returned error: %v", err)
+		}
+
+		args, err := os.ReadFile(argsFile)
+		if err != nil {
+			t.Fatalf("read args file: %v", err)
+		}
+		want := "-C /repo branch release/1.2.0 feature/ABC-123\n"
+		if string(args) != want {
+			t.Fatalf("git args = %q, want %q", string(args), want)
+		}
+	})
+
+	t.Run("returns ExecError on git failure", func(t *testing.T) {
+		binDir := t.TempDir()
+		fakeGit := filepath.Join(binDir, "git")
+		script := `#!/bin/sh
+printf '%s' 'fatal: branch creation failed' >&2
+exit 128
+`
+		if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake git: %v", err)
+		}
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		err := client.CreateBranchFromBranch(t.Context(), "/repo", "release/1.2.0", "feature/ABC-123")
+		if err == nil {
+			t.Fatal("CreateBranchFromBranch error = nil, want error")
+		}
+
+		var execErr *ExecError
+		if !errors.As(err, &execErr) {
+			t.Fatalf("CreateBranchFromBranch error = %T, want *ExecError", err)
+		}
+		if execErr.ExitCode != 128 {
+			t.Fatalf("ExitCode = %d, want 128", execErr.ExitCode)
+		}
+	})
+}
+
+func TestPushBranchExplicit(t *testing.T) {
+	t.Run("uses expected argv", func(t *testing.T) {
+		binDir := t.TempDir()
+		argsFile := filepath.Join(t.TempDir(), "git-args")
+		fakeGit := filepath.Join(binDir, "git")
+		script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+		if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake git: %v", err)
+		}
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("GIT_ARGS_FILE", argsFile)
+
+		client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		if err := client.PushBranchExplicit(t.Context(), "/worktree", "release/1.2.0"); err != nil {
+			t.Fatalf("PushBranchExplicit returned error: %v", err)
+		}
+
+		args, err := os.ReadFile(argsFile)
+		if err != nil {
+			t.Fatalf("read args file: %v", err)
+		}
+		want := "-C /worktree push -u origin release/1.2.0\n"
+		if string(args) != want {
+			t.Fatalf("git args = %q, want %q", string(args), want)
+		}
+	})
+
+	t.Run("returns ExecError on git failure", func(t *testing.T) {
+		binDir := t.TempDir()
+		fakeGit := filepath.Join(binDir, "git")
+		script := `#!/bin/sh
+printf '%s' 'fatal: push failed' >&2
+exit 1
+`
+		if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake git: %v", err)
+		}
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		err := client.PushBranchExplicit(t.Context(), "/worktree", "release/1.2.0")
+		if err == nil {
+			t.Fatal("PushBranchExplicit error = nil, want error")
+		}
+
+		var execErr *ExecError
+		if !errors.As(err, &execErr) {
+			t.Fatalf("PushBranchExplicit error = %T, want *ExecError", err)
+		}
+		if execErr.ExitCode != 1 {
+			t.Fatalf("ExitCode = %d, want 1", execErr.ExitCode)
+		}
+	})
+}
+
 func TestCommandClient_ListTagsSortedBySemver(t *testing.T) {
 	binDir := t.TempDir()
 	fakeGit := filepath.Join(binDir, "git")

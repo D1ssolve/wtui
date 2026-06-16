@@ -62,6 +62,7 @@ func (m *mockValidationGitClient) CreateTag(context.Context, string, string, str
 	return nil
 }
 func (m *mockValidationGitClient) PushTag(context.Context, string, string) error        { return nil }
+func (m *mockValidationGitClient) DeleteTag(context.Context, string, string) error      { return nil }
 func (m *mockValidationGitClient) ListTags(context.Context, string) ([]domain.TagInfo, error) {
 	return nil, nil
 }
@@ -70,6 +71,12 @@ func (m *mockValidationGitClient) LatestSemverTag(context.Context, string, strin
 	return "", nil
 }
 func (m *mockValidationGitClient) DeleteBranch(context.Context, string, string) error { return nil }
+func (m *mockValidationGitClient) CreateBranchFromBranch(context.Context, string, string, string) error {
+	return nil
+}
+func (m *mockValidationGitClient) PushBranchExplicit(context.Context, string, string) error {
+	return nil
+}
 
 func TestTaskValidator_ValidateTask_AllClean(t *testing.T) {
 	validator := NewTaskValidator(&mockValidationGitClient{

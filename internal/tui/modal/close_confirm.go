@@ -8,42 +8,65 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/task"
 )
 
 var _ Modal = (*CloseTaskConfirmModal)(nil)
 
 type CloseTaskConfirmModal struct {
+	task           domain.Task
 	plan           task.ClosePlan
 	tagInput       textinput.Model
 	hasTagInput    bool
+	hasTagColumn   bool
+	hasPipelineCol bool
+	hasForgeColumn bool
 	terminalWidth  int
 	terminalHeight int
 }
 
-func NewCloseTaskConfirmModal(plan task.ClosePlan, width, height int) *CloseTaskConfirmModal {
+func NewCloseTaskConfirmModal(taskInfo domain.Task, plan task.ClosePlan, width, height int) *CloseTaskConfirmModal {
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.Placeholder = "tag version"
 	ti.Width = 20
 
 	hasTag := false
+	hasPipeline := false
+	hasForge := false
 	defaultVersion := ""
 	for _, svc := range plan.Services {
 		if svc.TagPlan != nil {
 			hasTag = true
 			defaultVersion = svc.TagPlan.Version
-			break
+		}
+		if svc.PipelinePlan != nil {
+			hasPipeline = true
+		}
+		if svc.ForgePlan != nil {
+			hasForge = true
 		}
 	}
 	if defaultVersion != "" {
 		ti.SetValue(defaultVersion)
 	}
 
+	if strings.TrimSpace(taskInfo.ID) == "" {
+		taskInfo.ID = plan.TaskID
+	}
+	if strings.TrimSpace(taskInfo.Phase) == "" {
+		taskInfo.Phase = string(plan.BranchType)
+	}
+
 	m := &CloseTaskConfirmModal{
+		task:           taskInfo,
 		plan:           plan,
 		tagInput:       ti,
 		hasTagInput:    hasTag,
+		hasTagColumn:   hasTag,
+		hasPipelineCol: hasPipeline,
+		hasForgeColumn: hasForge,
 		terminalWidth:  width,
 		terminalHeight: height,
 	}
@@ -53,7 +76,9 @@ func NewCloseTaskConfirmModal(plan task.ClosePlan, width, height int) *CloseTask
 	return m
 }
 
-func (m *CloseTaskConfirmModal) Title() string { return "Close Task Confirmation" }
+func (m *CloseTaskConfirmModal) Title() string {
+	return closeTaskModalTitle(m.task, m.plan.TaskID)
+}
 
 func (m *CloseTaskConfirmModal) SetTerminalSize(width, height int) {
 	m.terminalWidth = width
@@ -92,30 +117,59 @@ func (m *CloseTaskConfirmModal) View() string {
 	warnStyle := lipgloss.NewStyle().Foreground(modalColorWarning)
 
 	var sb strings.Builder
-	sb.WriteString(titleStyle.Render("Close task " + m.plan.TaskID))
+	sb.WriteString(titleStyle.Render(m.Title()))
 	sb.WriteString("\n\n")
 	sb.WriteString(normalStyle.Render("Branch type: " + string(m.plan.BranchType)))
 	sb.WriteString("\n")
 
+	headers := []string{"Service", "Source Branch", "Targets", "Close Strategy"}
+	if m.hasTagColumn {
+		headers = append(headers, "Tag")
+	}
+	if m.hasPipelineCol {
+		headers = append(headers, "Pipeline")
+	}
+	if m.hasForgeColumn {
+		headers = append(headers, "Forge/MR")
+	}
+	sb.WriteString(dimStyle.Render(strings.Join(headers, " | ")))
+	sb.WriteString("\n")
+	sb.WriteString(dimStyle.Render(strings.Repeat("─", 64)))
+	sb.WriteString("\n")
+
 	for _, svc := range m.plan.Services {
-		sb.WriteString(normalStyle.Bold(true).Render("- " + svc.ServiceName))
-		sb.WriteString("\n")
-		sb.WriteString(dimStyle.Render(fmt.Sprintf("  source→targets: %s → %s", svc.SourceBranch, strings.Join(svc.TargetBranches, ", "))))
-		sb.WriteString("\n")
-		sb.WriteString(dimStyle.Render(fmt.Sprintf("  close strategy: %s", svc.CloseStrategy)))
-		sb.WriteString("\n")
-		if svc.TagPlan != nil {
-			sb.WriteString(dimStyle.Render(fmt.Sprintf("  tag proposal: %s (%s)", svc.TagPlan.TagName, svc.TagPlan.Version)))
-			sb.WriteString("\n")
+		cols := []string{
+			svc.ServiceName,
+			svc.SourceBranch,
+			strings.Join(svc.TargetBranches, ", "),
+			string(svc.CloseStrategy),
 		}
-		if svc.ForgePlan != nil {
-			sb.WriteString(dimStyle.Render(fmt.Sprintf("  forge action: create review request to %s", svc.ForgePlan.TargetBranch)))
-			sb.WriteString("\n")
+		if m.hasTagColumn {
+			tagValue := "-"
+			if svc.TagPlan != nil {
+				tagValue = svc.TagPlan.TagName
+				if strings.TrimSpace(svc.TagPlan.Version) != "" {
+					tagValue = fmt.Sprintf("%s (%s)", svc.TagPlan.TagName, svc.TagPlan.Version)
+				}
+			}
+			cols = append(cols, tagValue)
 		}
-		if svc.PipelinePlan != nil {
-			sb.WriteString(dimStyle.Render(fmt.Sprintf("  pipeline trigger: %s", svc.PipelinePlan.Branch)))
-			sb.WriteString("\n")
+		if m.hasPipelineCol {
+			pipelineValue := "-"
+			if svc.PipelinePlan != nil {
+				pipelineValue = svc.PipelinePlan.Branch
+			}
+			cols = append(cols, pipelineValue)
 		}
+		if m.hasForgeColumn {
+			forgeValue := "-"
+			if svc.ForgePlan != nil {
+				forgeValue = svc.ForgePlan.TargetBranch
+			}
+			cols = append(cols, forgeValue)
+		}
+		sb.WriteString(normalStyle.Render(strings.Join(cols, " | ")))
+		sb.WriteString("\n")
 	}
 
 	if len(m.plan.Warnings) > 0 {

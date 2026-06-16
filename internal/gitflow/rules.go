@@ -6,8 +6,6 @@ const (
 	BranchTypeFeature BranchType = "feature"
 	BranchTypeHotfix  BranchType = "hotfix"
 	BranchTypeRelease BranchType = "release"
-	BranchTypeBugfix  BranchType = "bugfix"
-	BranchTypeChore   BranchType = "chore"
 	BranchTypeUnknown BranchType = "unknown"
 )
 

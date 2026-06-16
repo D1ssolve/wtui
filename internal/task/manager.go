@@ -55,6 +55,12 @@ type AddParams struct {
 	BranchSuffixes map[string]string
 }
 
+type PromoteToReleaseParams struct {
+	TaskID   string
+	Versions map[string]string
+	StatusCh chan<- string
+}
+
 type Manager interface {
 	Init(ctx context.Context, params InitParams) error
 
@@ -85,6 +91,8 @@ type Manager interface {
 	PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, error)
 
 	CloseTask(ctx context.Context, params CloseTaskParams) (CloseTaskResult, error)
+
+	PromoteToRelease(ctx context.Context, params PromoteToReleaseParams) (domain.Task, error)
 
 	ScanPrunableTasks(ctx context.Context) ([]domain.PruneCandidate, error)
 

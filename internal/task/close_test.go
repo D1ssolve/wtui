@@ -229,6 +229,193 @@ func TestCloseTask_DryRun_NoGitMutations(t *testing.T) {
 	}
 }
 
+func TestCloseTask_RestoreBranchFailure_ReturnsErrorWhenContinueOnErrorDisabled(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "IN-CLOSE-RESTORE-FAIL"
+	svcPath := filepath.Join(tasksRoot, taskID, "svc-a")
+	if err := osMkdirAll(svcPath); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-a", ".git")
+	if err := osMkdirAll(fakeCommonDir); err != nil {
+		t.Fatal(err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn:      func(path string) (string, error) { return fakeCommonDir, nil },
+		listWorktreesRes: []git.WorktreeEntry{{Path: svcPath, Branch: "refs/heads/feature/IN-CLOSE-RESTORE-FAIL"}},
+		repoStatusFn:     func(path string) (git.RawStatus, error) { return git.RawStatus{Branch: "feature/IN-CLOSE-RESTORE-FAIL"}, nil },
+		isAncestorFn:     func(repoPath, ancestor, descendant string) (bool, error) { return true, nil },
+		worktreeBranchResult: "feature/IN-CLOSE-RESTORE-FAIL",
+		checkoutFn: func(worktreePath, branch string) error {
+			if branch == "feature/IN-CLOSE-RESTORE-FAIL" {
+				return errors.New("restore failed")
+			}
+			return nil
+		},
+	}
+
+	cfg := newCloseTestConfig(rootDir, tasksRoot)
+	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
+
+	res, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
+	if err == nil {
+		t.Fatal("CloseTask error = nil, want non-nil")
+	}
+	if err.Error() != "close task failed" {
+		t.Fatalf("CloseTask error = %q, want %q", err.Error(), "close task failed")
+	}
+
+	foundRestoreFailed := false
+	for _, st := range res.Steps {
+		if st.Name == "svc-a:restore-branch" && st.Status == StepStatusFailed {
+			foundRestoreFailed = true
+			break
+		}
+	}
+	if !foundRestoreFailed {
+		t.Fatalf("steps %+v do not contain failed restore step", res.Steps)
+	}
+}
+
+func TestCloseTask_RestoreBranchFailure_ContinueOnErrorMarksResultFailed(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "IN-CLOSE-RESTORE-CONTINUE"
+	svcAPath := filepath.Join(tasksRoot, taskID, "svc-a")
+	svcBPath := filepath.Join(tasksRoot, taskID, "svc-b")
+	if err := osMkdirAll(svcAPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := osMkdirAll(svcBPath); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeCommonDirA := filepath.Join(rootDir, "repos", "svc-a", ".git")
+	fakeCommonDirB := filepath.Join(rootDir, "repos", "svc-b", ".git")
+	if err := osMkdirAll(fakeCommonDirA); err != nil {
+		t.Fatal(err)
+	}
+	if err := osMkdirAll(fakeCommonDirB); err != nil {
+		t.Fatal(err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			switch path {
+			case svcAPath:
+				return fakeCommonDirA, nil
+			case svcBPath:
+				return fakeCommonDirB, nil
+			default:
+				return "", errors.New("not a worktree")
+			}
+		},
+		listWorktreesRes: []git.WorktreeEntry{
+			{Path: svcAPath, Branch: "refs/heads/feature/IN-CLOSE-RESTORE-CONTINUE"},
+			{Path: svcBPath, Branch: "refs/heads/feature/IN-CLOSE-RESTORE-CONTINUE"},
+		},
+		repoStatusFn: func(path string) (git.RawStatus, error) {
+			return git.RawStatus{Branch: "feature/IN-CLOSE-RESTORE-CONTINUE"}, nil
+		},
+		isAncestorFn: func(repoPath, ancestor, descendant string) (bool, error) { return true, nil },
+		getWorktreeBranchFn: func(path string) (string, error) {
+			if path == svcAPath {
+				return "feature/IN-CLOSE-RESTORE-CONTINUE", nil
+			}
+			if path == svcBPath {
+				return "feature/IN-CLOSE-RESTORE-CONTINUE", nil
+			}
+			return "", nil
+		},
+		checkoutFn: func(worktreePath, branch string) error {
+			if worktreePath == svcAPath && branch == "feature/IN-CLOSE-RESTORE-CONTINUE" {
+				return errors.New("restore failed")
+			}
+			return nil
+		},
+	}
+
+	cfg := newCloseTestConfig(rootDir, tasksRoot)
+	cfg.Close.ContinueOnError = true
+	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
+
+	res, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
+	if err != nil {
+		t.Fatalf("CloseTask error: %v", err)
+	}
+	if res.Success {
+		t.Fatal("result.Success = true, want false")
+	}
+
+	foundSvcBFetch := false
+	for _, st := range res.Steps {
+		if st.Name == "svc-b:fetch" && st.Status == StepStatusOK {
+			foundSvcBFetch = true
+			break
+		}
+	}
+	if !foundSvcBFetch {
+		t.Fatalf("steps %+v do not show continuation to svc-b", res.Steps)
+	}
+}
+
+func TestCloseTask_PushTagFailure_DeletesLocalTag(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "IN-CLOSE-PUSH-TAG-FAIL"
+	svcPath := filepath.Join(tasksRoot, taskID, "svc-a")
+	if err := osMkdirAll(svcPath); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-a", ".git")
+	if err := osMkdirAll(fakeCommonDir); err != nil {
+		t.Fatal(err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn:      func(path string) (string, error) { return fakeCommonDir, nil },
+		listWorktreesRes: []git.WorktreeEntry{{Path: svcPath, Branch: "refs/heads/release/1.2.0"}},
+		repoStatusFn:     func(path string) (git.RawStatus, error) { return git.RawStatus{Branch: "release/1.2.0"}, nil },
+		isAncestorFn:     func(repoPath, ancestor, descendant string) (bool, error) { return true, nil },
+		worktreeBranchResult: "release/1.2.0",
+		pushTagErr:       errors.New("push tag failed"),
+	}
+
+	cfg := newCloseTestConfig(rootDir, tasksRoot)
+	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
+
+	_, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
+	if err == nil {
+		t.Fatal("CloseTask error = nil, want non-nil")
+	}
+	if err.Error() != "push tag failed" {
+		t.Fatalf("CloseTask error = %q, want %q", err.Error(), "push tag failed")
+	}
+
+	gitMock.mu.Lock()
+	createTagCalls := gitMock.createTagCalls
+	pushTagCalls := gitMock.pushTagCalls
+	deleteTagCalls := gitMock.deleteTagCalls
+	gitMock.mu.Unlock()
+
+	if createTagCalls != 1 {
+		t.Fatalf("CreateTag calls = %d, want 1", createTagCalls)
+	}
+	if pushTagCalls != 1 {
+		t.Fatalf("PushTag calls = %d, want 1", pushTagCalls)
+	}
+	if deleteTagCalls != 1 {
+		t.Fatalf("DeleteTag calls = %d, want 1", deleteTagCalls)
+	}
+}
+
 func TestCloseTask_DeleteSourceBranchAfterMerge_DeletesBranch(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")

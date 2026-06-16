@@ -427,7 +427,7 @@ func TestServicesPanel_View_CleanService_ShowsCheckIcon(t *testing.T) {
 	}
 }
 
-func TestServicesPanel_View_GitFlowFeatureBadgeVisible(t *testing.T) {
+func TestServicesPanel_View_NoPresetBadge(t *testing.T) {
 	p := NewServicesPanel(100, 20)
 	p.SetGitFlow(testResolvedFlow(), "git-flow", true)
 	p.SetServices("IN-001", []domain.Service{{
@@ -438,15 +438,15 @@ func TestServicesPanel_View_GitFlowFeatureBadgeVisible(t *testing.T) {
 	}})
 
 	view := stripAnsi(p.View())
-	if !strings.Contains(view, "[git-flow]") {
-		t.Fatalf("expected git-flow preset badge, got: %q", view)
+	if strings.Contains(view, "[git-flow]") {
+		t.Fatalf("unexpected git-flow preset badge, got: %q", view)
 	}
-	if !strings.Contains(view, "[feature]") {
-		t.Fatalf("expected feature branch type badge, got: %q", view)
+	if strings.Contains(view, "[feature]") {
+		t.Fatalf("unexpected feature branch type badge, got: %q", view)
 	}
 }
 
-func TestServicesPanel_View_GitFlowHotfixBadgeVisible(t *testing.T) {
+func TestServicesPanel_View_NoHotfixBadge(t *testing.T) {
 	p := NewServicesPanel(100, 20)
 	p.SetGitFlow(testResolvedFlow(), "git-flow", true)
 	p.SetServices("IN-001", []domain.Service{{
@@ -457,12 +457,12 @@ func TestServicesPanel_View_GitFlowHotfixBadgeVisible(t *testing.T) {
 	}})
 
 	view := stripAnsi(p.View())
-	if !strings.Contains(view, "[hotfix]") {
-		t.Fatalf("expected hotfix branch type badge, got: %q", view)
+	if strings.Contains(view, "[hotfix]") {
+		t.Fatalf("unexpected hotfix branch type badge, got: %q", view)
 	}
 }
 
-func TestServicesPanel_View_ForgeIndicatorVisibleWhenProviderAvailable(t *testing.T) {
+func TestServicesPanel_View_NoForgeIndicator(t *testing.T) {
 	p := NewServicesPanel(100, 20)
 	p.SetForgeClients(
 		map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitLab: nil},
@@ -477,8 +477,8 @@ func TestServicesPanel_View_ForgeIndicatorVisibleWhenProviderAvailable(t *testin
 	}})
 
 	view := stripAnsi(p.View())
-	if !strings.Contains(view, "[forge]") {
-		t.Fatalf("expected forge indicator, got: %q", view)
+	if strings.Contains(view, "[forge]") {
+		t.Fatalf("unexpected forge indicator, got: %q", view)
 	}
 }
 

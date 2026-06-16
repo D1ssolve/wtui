@@ -128,6 +128,10 @@ func (m *closeTaskE2EManager) ForgeListIssues(_ context.Context, _, _ string, _ 
 	return nil, nil
 }
 
+func (m *closeTaskE2EManager) PromoteToRelease(_ context.Context, _ task.PromoteToReleaseParams) (domain.Task, error) {
+	return domain.Task{}, nil
+}
+
 func TestE2E_CloseTask_DirtyTask_ShowsValidationModalAndDoesNotExecuteClose(t *testing.T) {
 	mgr := &closeTaskE2EManager{
 		tasks: []domain.Task{{ID: "IN-200", Dir: "/tmp/.tasks/IN-200"}},

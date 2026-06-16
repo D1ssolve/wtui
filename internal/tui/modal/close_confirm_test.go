@@ -6,12 +6,13 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/task"
 )
 
 func TestCloseTaskConfirmModal_ImplementsModal(t *testing.T) {
-	var _ Modal = NewCloseTaskConfirmModal(task.ClosePlan{}, 80, 24)
+	var _ Modal = NewCloseTaskConfirmModal(domain.Task{}, task.ClosePlan{}, 80, 24)
 }
 
 func TestCloseTaskConfirmModal_ViewShowsPlanDetails(t *testing.T) {
@@ -30,17 +31,13 @@ func TestCloseTaskConfirmModal_ViewShowsPlanDetails(t *testing.T) {
 		}},
 	}
 
-	m := NewCloseTaskConfirmModal(plan, 120, 40)
+	m := NewCloseTaskConfirmModal(domain.Task{ID: "IN-777", Phase: "feature"}, plan, 120, 40)
 	view := stripAnsi(m.View())
 	for _, want := range []string{
-		"Close task IN-777",
+		"Close Feature Task: IN-777",
 		"Branch type: feature",
-		"api",
-		"feature/IN-777 → develop, main",
-		"close strategy: direct_merge",
-		"tag proposal: v1.2.3 (1.2.3)",
-		"forge action: create review request to develop",
-		"pipeline trigger: main",
+		"Service | Source Branch | Targets | Close Strategy | Tag | Pipeline | Forge/MR",
+		"api | feature/IN-777 | develop, main | direct_merge | v1.2.3 (1.2.3) | main | develop",
 		"Warnings:",
 		"warn-1",
 		"Tag version:",
@@ -52,7 +49,7 @@ func TestCloseTaskConfirmModal_ViewShowsPlanDetails(t *testing.T) {
 }
 
 func TestCloseTaskConfirmModal_EnterSubmitsTaskIDAndTagVersion(t *testing.T) {
-	m := NewCloseTaskConfirmModal(task.ClosePlan{
+	m := NewCloseTaskConfirmModal(domain.Task{}, task.ClosePlan{
 		TaskID: "IN-778",
 		Services: []task.ServiceClosePlan{{
 			ServiceName: "api",
@@ -81,12 +78,56 @@ func TestCloseTaskConfirmModal_EnterSubmitsTaskIDAndTagVersion(t *testing.T) {
 }
 
 func TestCloseTaskConfirmModal_EscCloses(t *testing.T) {
-	m := NewCloseTaskConfirmModal(task.ClosePlan{TaskID: "IN-779"}, 80, 24)
+	m := NewCloseTaskConfirmModal(domain.Task{}, task.ClosePlan{TaskID: "IN-779"}, 80, 24)
 	_, cmd := m.Update(sendSpecialKey(tea.KeyEsc))
 	if cmd == nil {
 		t.Fatal("esc must return close cmd")
 	}
 	if _, ok := execCmd(cmd).(CloseModalMsg); !ok {
 		t.Fatalf("expected CloseModalMsg, got %T", execCmd(cmd))
+	}
+}
+
+func TestCloseTaskConfirmModal_DynamicColumnsHideOptionalWhenNoPlans(t *testing.T) {
+	m := NewCloseTaskConfirmModal(domain.Task{ID: "IN-780"}, task.ClosePlan{
+		TaskID: "IN-780",
+		Services: []task.ServiceClosePlan{{
+			ServiceName:    "api",
+			SourceBranch:   "feature/IN-780",
+			TargetBranches: []string{"develop"},
+			CloseStrategy:  gitflow.CloseStrategyDirectMerge,
+		}},
+	}, 100, 40)
+
+	view := stripAnsi(m.View())
+	if !strings.Contains(view, "Service | Source Branch | Targets | Close Strategy") {
+		t.Fatalf("expected base columns, got: %s", view)
+	}
+	for _, unexpected := range []string{" | Tag", " | Pipeline", " | Forge/MR"} {
+		if strings.Contains(view, unexpected) {
+			t.Fatalf("unexpected optional column %q in view: %s", unexpected, view)
+		}
+	}
+}
+
+func TestCloseTaskConfirmModal_TitleByPhaseAndVersion(t *testing.T) {
+	tests := []struct {
+		name string
+		task domain.Task
+		want string
+	}{
+		{name: "feature", task: domain.Task{ID: "ZA-553", Phase: "feature"}, want: "Close Feature Task: ZA-553"},
+		{name: "release", task: domain.Task{ID: "ZA-553-release", Phase: "release", Version: "1.2.0"}, want: "Close Release Task: ZA-553-release (v1.2.0)"},
+		{name: "hotfix", task: domain.Task{ID: "ZA-553-hotfix", Phase: "hotfix", Version: "1.2.1"}, want: "Close Hotfix Task: ZA-553-hotfix (v1.2.1)"},
+		{name: "unknown", task: domain.Task{ID: "ZA-553"}, want: "Close Task: ZA-553"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewCloseTaskConfirmModal(tc.task, task.ClosePlan{TaskID: tc.task.ID}, 80, 24)
+			if got := m.Title(); got != tc.want {
+				t.Fatalf("Title() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

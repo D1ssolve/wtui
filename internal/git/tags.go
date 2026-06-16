@@ -28,6 +28,14 @@ func (c *CommandClient) PushTag(ctx context.Context, worktreePath, tag string) e
 	return err
 }
 
+func (c *CommandClient) DeleteTag(ctx context.Context, repoPath, tag string) error {
+	_, err := c.execGit(ctx, "-C", repoPath, "tag", "-d", tag)
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
 func (c *CommandClient) ListTags(ctx context.Context, repoPath string) ([]domain.TagInfo, error) {
 	tags, err := c.listTags(ctx, repoPath)
 	if err != nil {

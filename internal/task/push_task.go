@@ -38,6 +38,16 @@ func (m *manager) PushTask(ctx context.Context, taskID string, lineCh chan<- str
 				mu.Unlock()
 				return
 			}
+			if err := m.ensurePushBranchAllowed(ctx, svc.WorktreePath); err != nil {
+				sendLine(ctx, lineCh, fmt.Sprintf("[%s] push error: %v", svc.Name, err))
+
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
 			if err := m.git.Push(ctx, svc.WorktreePath, lineCh); err != nil {
 				sendLine(ctx, lineCh, fmt.Sprintf("[%s] push error: %v", svc.Name, err))
 

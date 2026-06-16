@@ -41,6 +41,51 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 		tasks = append(tasks, task)
 	}
 
+	allTaskIDs := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		allTaskIDs[task.ID] = struct{}{}
+	}
+
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i := range tasks {
+		i := i
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			services, listErr := m.ListServices(ctx, tasks[i].ID)
+			if listErr != nil {
+				m.logger.DebugContext(ctx, "list: could not load services for phase detection",
+					slog.String("task_id", tasks[i].ID),
+					slog.String("error", listErr.Error()),
+				)
+				return
+			}
+
+			phase, version := detectTaskPhase(services, m.flow)
+			tasks[i].Phase = phase
+			tasks[i].Version = version
+		})
+	}
+	wg.Wait()
+
+	for i := range tasks {
+		tasks[i].ParentID = detectTaskRelationship(tasks[i].ID, allTaskIDs, m.cfg.TasksRoot, m.flow)
+	}
+
+	hasChildren := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		if task.ParentID == "" {
+			continue
+		}
+		hasChildren[task.ParentID] = struct{}{}
+	}
+
+	for i := range tasks {
+		_, tasks[i].IsGroup = hasChildren[tasks[i].ID]
+	}
+
 	sort.Slice(tasks, func(i, j int) bool {
 		return tasks[i].ID < tasks[j].ID
 	})

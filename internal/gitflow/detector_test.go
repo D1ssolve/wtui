@@ -42,7 +42,7 @@ func TestDetectBranchType_LongestPrefixWins(t *testing.T) {
 		CloseStrategy: CloseStrategyDirectMerge,
 		MergeStrategy: MergeStrategyMerge,
 	}
-	flow.BranchTypes[BranchTypeBugfix] = BranchTypeRule{
+	flow.BranchTypes[BranchTypeHotfix] = BranchTypeRule{
 		Prefixes:      []string{"feat/"},
 		BaseBranch:    "develop",
 		MergeTargets:  []string{"develop"},
@@ -68,7 +68,7 @@ func TestDetectBranchType_AmbiguousSameLengthReturnsUnknown(t *testing.T) {
 			CloseStrategy: CloseStrategyDirectMerge,
 			MergeStrategy: MergeStrategyMerge,
 		},
-		BranchTypeBugfix: {
+		BranchTypeHotfix: {
 			Prefixes:      []string{"work/"},
 			BaseBranch:    "develop",
 			MergeTargets:  []string{"develop"},
@@ -87,11 +87,11 @@ func TestDetectBranchType_NoMatchFallsBackDefault(t *testing.T) {
 	t.Parallel()
 
 	flow := mustGitFlow(t)
-	flow.DefaultBranchType = BranchTypeBugfix
+	flow.DefaultBranchType = BranchTypeHotfix
 
 	got := DetectBranchType("ABC-123", flow)
-	if got != BranchTypeBugfix {
-		t.Fatalf("DetectBranchType() = %q, want %q", got, BranchTypeBugfix)
+	if got != BranchTypeHotfix {
+		t.Fatalf("DetectBranchType() = %q, want %q", got, BranchTypeHotfix)
 	}
 }
 

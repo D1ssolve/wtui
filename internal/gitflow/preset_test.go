@@ -70,6 +70,26 @@ func TestEffectiveConfig_GitLabFlowPresetDefaults(t *testing.T) {
 	}
 }
 
+func TestDefaultPresets_NoBugfixOrChore(t *testing.T) {
+	t.Parallel()
+
+	gitFlowPreset := defaultGitFlowPreset()
+	if _, exists := gitFlowPreset.BranchTypes["bugfix"]; exists {
+		t.Fatalf("defaultGitFlowPreset contains unexpected branch type bugfix")
+	}
+	if _, exists := gitFlowPreset.BranchTypes["chore"]; exists {
+		t.Fatalf("defaultGitFlowPreset contains unexpected branch type chore")
+	}
+
+	gitHubFlowPreset := defaultGitHubFlowPreset()
+	if _, exists := gitHubFlowPreset.BranchTypes["bugfix"]; exists {
+		t.Fatalf("defaultGitHubFlowPreset contains unexpected branch type bugfix")
+	}
+	if _, exists := gitHubFlowPreset.BranchTypes["chore"]; exists {
+		t.Fatalf("defaultGitHubFlowPreset contains unexpected branch type chore")
+	}
+}
+
 func TestEffectiveConfig_CustomPresetValid(t *testing.T) {
 	t.Parallel()
 
@@ -77,10 +97,10 @@ func TestEffectiveConfig_CustomPresetValid(t *testing.T) {
 		Preset:            "custom",
 		ProductionBranch:  "prod",
 		IntegrationBranch: "int",
-		DefaultBranchType: "bugfix",
+		DefaultBranchType: "hotfix",
 		BranchTypes: map[string]config.BranchTypeRule{
-			"bugfix": {
-				Prefixes:      []string{"bugfix/"},
+			"hotfix": {
+				Prefixes:      []string{"hotfix/"},
 				BaseBranch:    "int",
 				MergeTargets:  []string{"int"},
 				CloseStrategy: "direct_merge",
@@ -95,8 +115,8 @@ func TestEffectiveConfig_CustomPresetValid(t *testing.T) {
 	if flow.ProductionBranch != "prod" || flow.IntegrationBranch != "int" {
 		t.Fatalf("flow branches = %q/%q, want prod/int", flow.ProductionBranch, flow.IntegrationBranch)
 	}
-	if flow.DefaultBranchType != BranchTypeBugfix {
-		t.Fatalf("DefaultBranchType = %q, want %q", flow.DefaultBranchType, BranchTypeBugfix)
+	if flow.DefaultBranchType != BranchTypeHotfix {
+		t.Fatalf("DefaultBranchType = %q, want %q", flow.DefaultBranchType, BranchTypeHotfix)
 	}
 }
 
