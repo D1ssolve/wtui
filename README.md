@@ -41,7 +41,7 @@ A **task** groups multiple service worktrees under a single ticket ID. Releases 
 │ [1] Tasks               │ │ [2] Services — PAY-442       │ │ [3] Releases (optional)      │
 │                         │ │                              │ │                              │
 │ ▼ PAY-442               │ │ ✓ gateway                    │ │ rel-1.2.0-20260610  released │
-│   └─ feature/PAY-442    │ │   branch: feature/PAY-442    │ │ rel-1.2.1-20260616  failed   │
+│   ├─ feature/PAY-442    │ │   branch: feature/PAY-442    │ │ rel-1.2.1-20260616  failed   │
 │ PAY-443                 │ │ ✓ billing                    │ │                              │
 │                         │ │ ✓ ledger                     │ │                              │
 └─────────────────────────┘ └──────────────────────────────┘ └──────────────────────────────┘
@@ -80,7 +80,7 @@ Dependency rules (high-level):
 - **Task phases** — feature/release/hotfix support with tree grouping when `git_flow` has release/hotfix branch types
 - **Releases panel workflow** — press `3` to focus Releases, `N` to prepare a release, and `f` to finish a `prepared` release after regression testing
 - **Service auto-discovery** — scans `root_dir` for git repos on startup
-- **Bulk operations** — sync, push, stash across all services in a task
+- **Bulk operations** — sync and push across all services in a task; stash is per-service (`Ctrl+s`/`Ctrl+u` in Services panel)
 - **Pre-flight validation** — blocks sync/close if any repo is dirty or in a broken state
 - **Configurable Git Flow** — presets for `git-flow`, `github-flow`, `gitlab-flow`, or fully custom rules
 - **Task Close Automation** — plan, merge (or open MR/PR), tag, push, and optionally trigger pipelines in one action
@@ -90,7 +90,7 @@ Dependency rules (high-level):
 - **Forge integration** — `glab` (GitLab) and `gh` (GitHub) for MR/PR, pipeline status, and issues
 - **IDE workspaces** — auto-generated `.code-workspace` and `.sln` per task
 - **lazygit** — open lazygit in any service worktree with one key
-- **System status** — press `.` to see which external tools are connected and how forge/Git Flow are configured
+- **System status** — press `.` to see detected external tools, forge provider/hosts, and the Git Flow preset name
 
 ---
 
@@ -169,6 +169,8 @@ In the Tasks panel:
 
 wtui creates task directory like `/Users/you/dev/.tasks/PROJ-101`, creates service worktrees, checks out branches, and generates `PROJ-101.code-workspace` + `PROJ-101.sln`.
 
+If a selected service already has a remote branch named `feature/PROJ-101` (or another matching name), wtui shows a remote-branch conflict dialog. You can reuse the remote branch or create a new local branch with a suffix.
+
 ### 4. Create release (optional)
 
 1. Finish feature work and close feature tasks (`C`) so they are ready for release
@@ -196,18 +198,17 @@ When you are done with normal task flow:
 
 Config lookup order (first match wins):
 
-1. `--config /path/to/config.yaml`
-2. `$XDG_CONFIG_HOME/wtui/config.yaml`
-3. `~/.config/wtui/config.yaml`
-4. `config.yaml` next to the `wtui` binary
+1. `$XDG_CONFIG_HOME/wtui/config.yaml`
+2. `~/.config/wtui/config.yaml`
+3. `config.yaml` next to the `wtui` binary
 
 Log file: `$XDG_STATE_HOME/wtui/wtui.log`
 
 A minimal config is enough for most cases:
 
 ```yaml
-root_dir: ~/dev
-tasks_root: ~/dev/.tasks
+root_dir: /Users/you/dev
+tasks_root: /Users/you/dev/.tasks
 branch_prefix: feature/
 base_branch: develop
 editor: code
@@ -225,8 +226,8 @@ Optional settings and presets are below.
 Classic git-flow defaults: feature branches from `develop`, release/hotfix support, and direct local merges on close.
 
 ```yaml
-root_dir: ~/dev
-tasks_root: ~/dev/.tasks
+root_dir: /Users/you/dev
+tasks_root: /Users/you/dev/.tasks
 editor: code
 
 git_flow:
@@ -238,8 +239,8 @@ git_flow:
 Single long-lived branch (`main`) with review-request close strategy by default.
 
 ```yaml
-root_dir: ~/dev
-tasks_root: ~/dev/.tasks
+root_dir: /Users/you/dev
+tasks_root: /Users/you/dev/.tasks
 editor: code
 
 git_flow:
@@ -251,8 +252,8 @@ git_flow:
 Similar to GitHub flow for branch model, with MR-driven close behavior by default.
 
 ```yaml
-root_dir: ~/dev
-tasks_root: ~/dev/.tasks
+root_dir: /Users/you/dev
+tasks_root: /Users/you/dev/.tasks
 editor: code
 
 git_flow:
@@ -264,8 +265,8 @@ git_flow:
 Define branch types and close behavior explicitly per branch type.
 
 ```yaml
-root_dir: ~/dev
-tasks_root: ~/dev/.tasks
+root_dir: /Users/you/dev
+tasks_root: /Users/you/dev/.tasks
 editor: code
 
 git_flow:
@@ -326,6 +327,8 @@ The integration branch and release branch prefix are taken from the resolved `gi
 | `allow_task_reuse` | `bool` | `false` | Allow task to participate in more than one active release. |
 | `require_clean_before_merge` | `bool` | `true` | Require clean source worktrees before release merge. |
 
+`{{.Timestamp}}` renders as `YYYYMMDDTHHMMSS` in UTC (for example `20260610T120000`). Use `{{.Date}}` for `YYYYMMDD` if you want a date-only release ID.
+
 Example:
 
 ```yaml
@@ -347,8 +350,8 @@ release:
 
 ```yaml
 # Core
-root_dir: ~/dev
-tasks_root: ~/dev/.tasks
+root_dir: /Users/you/dev
+tasks_root: /Users/you/dev/.tasks
 branch_prefix: feature/
 base_branch: develop
 editor: code
@@ -377,7 +380,7 @@ git_flow:
       merge_targets: [develop]
       review_targets: [develop]
       close_strategy: direct_merge   # direct_merge | review_request | none
-      merge_strategy: merge_commit   # merge_commit | squash | rebase | ff_only
+      merge_strategy: merge_commit   # currently only merge_commit is applied
       requires_clean: true
       tag_on_close: false
       delete_source_branch_after_merge: false
@@ -409,7 +412,7 @@ git_flow:
 
 # Release workflow (optional)
 release:
-  root_dir: ~/.tasks/.releases
+  root_dir: /Users/you/dev/.tasks/.releases
   id_format: rel-{{.Version}}-{{.Timestamp}}
   push_integration: true
   push_release_branches: true
@@ -522,14 +525,16 @@ worktree:
 
 Keys live under `git_flow.branch_types.<type>`.
 
+All fields with `—` in the Default column are required for a `custom` preset. `merge_targets` is required when `close_strategy` is `direct_merge`; `review_targets` is required when `close_strategy` is `review_request`; `tag_source` is required when `tag_on_close` is `true`.
+
 | YAML key/path | Type | Default / effective | Env override | Behavior | Bounds / normalization |
 |---|---|---|---|---|---|
 | `prefixes` | `[]string` | — | — | Prefixes that identify this branch type. | Longest matching prefix wins during detection. |
-| `base_branch` | `string` | — | — | Branch the worktree is created from. | Empty means no explicit base. |
+| `base_branch` | `string` | — | — | Required. Branch the worktree is created from. | Empty is not allowed. |
 | `merge_targets` | `[]string` | — | — | Branches to merge into during close. | Executed in order. |
 | `review_targets` | `[]string` | — | — | Branches to open review requests against. | Used when `close_strategy` is `review_request`. |
 | `close_strategy` | `string` | — | — | How close is executed. | Values: `direct_merge`, `review_request`, `none`. |
-| `merge_strategy` | `string` | — | — | Git merge style for `direct_merge`. | Values: `merge_commit`, `squash`, `rebase`, `ff_only`. |
+| `merge_strategy` | `string` | — | — | Git merge style for `direct_merge`. Required. Currently only `merge_commit` is applied; `squash`, `rebase`, and `ff_only` are parsed but ignored. | Values: `merge_commit`, `squash`, `rebase`, `ff_only`. |
 | `requires_clean` | `bool` | `false` | — | Require a clean worktree before close. | Plain bool: omitted → `false`. |
 | `tag_on_close` | `bool` | `false` | — | Create a version tag when this branch type closes. | Plain bool: omitted → `false`. |
 | `tag_source` | `string` | — | — | Branch checked out to create the tag. | Required when `tag_on_close` is `true`. |
@@ -546,9 +551,11 @@ Keys live under `git_flow.branch_types.<type>`.
 
 ### tag
 
+Note: `tag.enabled`, `tag.version_scheme`, `tag.parser`, `tag.strict`, `tag.bump`, `tag.source`, `tag.shared_version`, and `tag.create_after_all_targets` are parsed but currently not wired to behavior. Only `tag.format`, `tag.annotated`, `tag.message_template`, and `tag.push` affect tag creation.
+
 | YAML key/path | Type | Default / effective | Env override | Behavior | Bounds / normalization |
 |---|---|---|---|---|---|
-| `tag.enabled` | `bool` | `true` when block absent; `false` when block present but omitted | — | Master switch for tag creation. | Plain bool: omitted → `false`. |
+| `tag.enabled` | `bool` | `true` when block absent; `false` when block present but omitted | — | Parsed but currently ignored. Tags are created when the branch rule has `tag_on_close: true`. | Plain bool: omitted → `false`. |
 | `tag.format` | `string` | `v{{.Version}}` | — | Template for the tag name. | Empty → `v{{.Version}}`. |
 | `tag.version_scheme` | `string` | `semver` | — | Versioning scheme for proposals. | Empty → `semver`. |
 | `tag.parser` | `string` | `masterminds-semver` | — | Parser used to interpret existing tags. | Empty → `masterminds-semver`. |
@@ -556,7 +563,7 @@ Keys live under `git_flow.branch_types.<type>`.
 | `tag.bump` | `string` | `manual` | — | Default bump strategy for version proposals. | Empty → `manual`. |
 | `tag.annotated` | `bool` | `true` when block absent; `false` when block present but omitted | — | Create annotated tags instead of lightweight. | Plain bool: omitted → `false`. |
 | `tag.message_template` | `string` | `Release {{.Tag}} for {{.TaskID}}` | — | Annotated tag message template. | Empty → `Release {{.Tag}} for {{.TaskID}}`. |
-| `tag.source` | `string` | `production_branch` | — | Branch or context used as tag source. | Empty → `production_branch`. |
+| `tag.source` | `string` | `production_branch` | — | Parsed but currently ignored. Close uses `branch_type.<type>.tag_source` instead. | Empty → `production_branch`. |
 | `tag.push` | `bool` | `true` when block absent; `false` when block present but omitted | — | Push tags to the remote. | Plain bool: omitted → `false`; also feeds `release.push_tags` fallback. |
 | `tag.shared_version` | `bool` | `false` | — | Use one version across all services in a release. | Plain bool: omitted → `false`. |
 | `tag.create_after_all_targets` | `bool` | `true` when block absent; `false` when block present but omitted | — | Defer tag creation until all merge targets complete. | Plain bool: omitted → `false`. |
@@ -579,6 +586,8 @@ All `release` booleans are `*bool`. Omitting a field falls back to the documente
 
 ### validation
 
+Note: `validation.require_upstream_for_sync` and `validation.command_timeout` are parsed but currently not wired to behavior. Git commands use a fixed 30s timeout regardless of this setting.
+
 | YAML key/path | Type | Default / effective | Env override | Behavior | Bounds / normalization |
 |---|---|---|---|---|---|
 | `validation.block_untracked` | `bool` | `false` when block present; absent block also yields `false` | — | Block operations when untracked files exist. | Plain bool: omitted → `false`. |
@@ -590,6 +599,8 @@ All `release` booleans are `*bool`. Omitting a field falls back to the documente
 
 ### close
 
+Note: `close.require_confirmation`, `close.push_targets_after_direct_merge`, and `close.show_plan_before_execute` are parsed but currently not wired to behavior. The close confirmation dialog is always shown and target branches are always pushed after a direct merge.
+
 | YAML key/path | Type | Default / effective | Env override | Behavior | Bounds / normalization |
 |---|---|---|---|---|---|
 | `close.require_confirmation` | `bool` | `true` when block absent; `false` when block present but omitted | — | Show confirmation dialog before executing close plan. | Plain bool: omitted → `false`. |
@@ -599,6 +610,8 @@ All `release` booleans are `*bool`. Omitting a field falls back to the documente
 | `close.show_plan_before_execute` | `bool` | `true` when block absent; `false` when block present but omitted | — | Display close plan and require explicit confirm. | Plain bool: omitted → `false`. |
 
 ### prune
+
+Note: only `prune.concurrency` is currently wired to behavior. `prune.fetch`, `prune.dry_run_default`, `prune.require_confirmation`, `prune.allow_dirty`, `prune.allow_unpushed`, `prune.remove_empty_task_dir`, and `prune.run_git_worktree_prune` are parsed but ignored.
 
 | YAML key/path | Type | Default / effective | Env override | Behavior | Bounds / normalization |
 |---|---|---|---|---|---|
@@ -648,7 +661,7 @@ With `github-flow` or `gitlab-flow`, wtui skips local merges and creates MR/PRs 
 - Base branch (`base_branch`)
 - Merge targets and review targets
 - Close strategy: `direct_merge`, `review_request`, `none`
-- Merge strategy: `merge_commit`, `squash`, `rebase`, `ff_only`
+- Merge strategy: `merge_commit` (currently applied), `squash`/`rebase`/`ff_only` are parsed but ignored
 - Tag on close + tag source branch
 - Delete source branch after merge
 - Trigger pipeline on close
@@ -660,7 +673,7 @@ When `git_flow.branch_types` contains `release` or `hotfix`, the Tasks panel ren
 ```
 ▼ PROJ-101
   ├─ feature/PROJ-101
-  └─ release/1.2.0
+  ├─ release/1.2.0
 ```
 
 - Feature tasks are created with `i`
@@ -736,7 +749,7 @@ Notes:
 
 | Context | Key | Action | Notes |
 |---|---|---|---|
-| Global | `Tab` | Focus next panel | cycle: Tasks → Services → Output → Releases |
+| Global | `Tab` | Focus next panel | cycle: Tasks → Services → Releases → Output |
 | Global | `1` / `2` / `0` / `3` | Focus Tasks / Services / Output / Releases | Output is key `0` |
 | Tasks | `Enter` | Open selected task in Services panel | |
 | Tasks | `i` | Init new task | |
@@ -750,9 +763,13 @@ Notes:
 | Tasks | `O` | Open `<task>.code-workspace` in VS Code | |
 | Tasks | `R` | Open `<task>.sln` in Rider | |
 | Tasks | `,` | Show effective config | |
-| Tasks | `;` | Run shell command in selected task directory | |
 | Tasks | `/` | Filter tasks | |
 | Tasks | `r` | Refresh repos/tasks | |
+| Tasks | `f` | Start filtering tasks | same as `/` |
+| Tasks | `g` | Jump to first task | |
+| Tasks | `G` | Jump to last task | |
+| Tasks | `h` | Page up | |
+| Tasks | `l` | Page down | |
 | Services | `a` | Add service to current task | |
 | Services | `d` | Remove service from task | regenerates `<task>.sln` + `<task>.code-workspace` |
 | Services | `m` | Open forge actions menu | |
@@ -773,7 +790,7 @@ Notes:
 | Releases | `r` | Refresh releases | |
 | Global | `L` | Toggle log overlay | |
 | Global | `?` | Help overlay | |
-| Global | `.` | System status (tools / forge / git flow) | |
+| Global | `.` | System status (tools / forge / git flow preset) | |
 | Global | `q` / `Ctrl+c` | Quit | |
 
 ---
@@ -906,11 +923,7 @@ Validation can block task/release operations when repos are unsafe per `validati
 ### Config not found
 
 - Check search order above
-- Run with explicit path:
-
-```bash
-wtui --config /full/path/to/config.yaml
-```
+- Place `config.yaml` in one of the supported locations above
 
 ### Forge auth errors
 
