@@ -1,3 +1,4 @@
+// Package task orchestrates task lifecycle and release workflows.
 package task
 
 import (
@@ -5,11 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/git"
+	"github.com/D1ssolve/wtui/internal/gitflow"
+	"github.com/D1ssolve/wtui/internal/validation"
 )
 
 type Resolver interface {
@@ -28,6 +33,7 @@ type SlnGenerator interface {
 type InitParams struct {
 	TaskID       string
 	Services     []string
+	BranchType   string
 	BranchPrefix string
 	BaseBranch   string
 
@@ -39,8 +45,9 @@ type InitParams struct {
 }
 
 type AddParams struct {
-	TaskID   string
-	Services []string
+	TaskID     string
+	Services   []string
+	BranchType string
 
 	StatusCh chan<- string
 
@@ -49,10 +56,29 @@ type AddParams struct {
 	BranchSuffixes map[string]string
 }
 
-type Manager interface {
-	Init(ctx context.Context, params InitParams) error
+type CreateReleaseParams struct {
+	TaskIDs          []string
+	ServiceVersions  map[string]string
+	SharedVersion    string
+	StartImmediately bool
+	StatusCh         chan<- string
+}
 
-	Add(ctx context.Context, params AddParams) error
+// FinishReleaseParams carries Stage-2 (tag + push tag) inputs for FinishRelease.
+type FinishReleaseParams struct {
+	// ReleaseID is the prepared release to finish. Required.
+	ReleaseID string
+
+	// StatusCh, when non-nil, receives human-readable progress lines streamed
+	// from the finish pipeline (mirrors CreateReleaseParams.StatusCh). The
+	// channel is never closed by the manager; the caller owns it.
+	StatusCh chan<- string
+}
+
+type Manager interface {
+	Init(ctx context.Context, params InitParams) (PartialFailureResult, error)
+
+	Add(ctx context.Context, params AddParams) (PartialFailureResult, error)
 
 	List(ctx context.Context) ([]domain.Task, error)
 
@@ -73,14 +99,58 @@ type Manager interface {
 	StashService(ctx context.Context, taskID, serviceName string, pop bool, includeUntracked bool) error
 
 	RemoveService(ctx context.Context, taskID string, serviceName string, removeBranch bool) error
+
+	ValidateTask(ctx context.Context, taskID string) (domain.TaskValidation, error)
+
+	PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, error)
+
+	CloseTask(ctx context.Context, params CloseTaskParams) (CloseTaskResult, error)
+
+	ListReleases(ctx context.Context) ([]domain.Release, error)
+
+	GetRelease(ctx context.Context, releaseID string) (domain.Release, error)
+
+	CreateRelease(ctx context.Context, params CreateReleaseParams) (domain.Release, error)
+
+	FinishRelease(ctx context.Context, params FinishReleaseParams) (domain.Release, error)
+
+	// IsProtectedBranch reports whether branch is protected under the resolved
+	// git-flow policy. A branch is protected if it exactly equals the resolved
+	// production branch, integration branch, or top-level base_branch, OR if it
+	// shares a prefix with a release/hotfix branch type as resolved by gitflow.
+	// Pure in-memory computation; performs no git I/O.
+	IsProtectedBranch(ctx context.Context, branch string) bool
+
+	// BuildReleasePreview computes display-only release execute facts from the
+	// configured git-flow policy and release settings.
+	BuildReleasePreview(ctx context.Context, versions map[string]string) (ReleasePreview, error)
+
+	RetryRelease(ctx context.Context, releaseID string) (domain.Release, error)
+
+	RejectRelease(ctx context.Context, releaseID string) (domain.Release, error)
+
+	RemoveRelease(ctx context.Context, releaseID string) error
+
+	ScanPrunableTasks(ctx context.Context) ([]domain.PruneCandidate, error)
+
+	ListTags(ctx context.Context, taskID string) ([]domain.TagInfo, error)
+
+	ForgeCreateMR(ctx context.Context, taskID, serviceName string, params forge.CreateMRParams) (forge.MRInfo, error)
+
+	ForgePipelineStatus(ctx context.Context, taskID, serviceName string, branch string) ([]forge.PipelineStatus, error)
+
+	ForgeListIssues(ctx context.Context, taskID, serviceName string, params forge.ListIssuesParams) ([]forge.IssueInfo, error)
 }
 
 type manager struct {
-	cfg        *config.Config
-	git        git.Client
-	discoverer Resolver
-	slnMgr     SlnGenerator
-	logger     *slog.Logger
+	cfg          *config.Config
+	git          git.Client
+	discoverer   Resolver
+	slnMgr       SlnGenerator
+	validator    *validation.TaskValidator
+	flow         *gitflow.ResolvedGitFlow
+	forgeClients map[forge.ForgeProvider]forge.ForgeClient
+	logger       *slog.Logger
 }
 
 func New(
@@ -88,14 +158,20 @@ func New(
 	gitClient git.Client,
 	disc Resolver,
 	slnMgr SlnGenerator,
+	validator *validation.TaskValidator,
+	flow *gitflow.ResolvedGitFlow,
+	forgeClients map[forge.ForgeProvider]forge.ForgeClient,
 	logger *slog.Logger,
 ) Manager {
 	return &manager{
-		cfg:        cfg,
-		git:        gitClient,
-		discoverer: disc,
-		slnMgr:     slnMgr,
-		logger:     logger,
+		cfg:          cfg,
+		git:          gitClient,
+		discoverer:   disc,
+		slnMgr:       slnMgr,
+		validator:    validator,
+		flow:         flow,
+		forgeClients: forgeClients,
+		logger:       logger,
 	}
 }
 
@@ -111,6 +187,14 @@ func (m *manager) Repos(ctx context.Context, refresh bool) ([]domain.Repo, error
 
 func (m *manager) taskDir(taskID string) string {
 	return filepath.Join(m.cfg.TasksRoot, taskID)
+}
+
+func (m *manager) concurrency() int {
+	if m == nil || m.cfg == nil || m.cfg.Concurrency <= 0 {
+		return 4
+	}
+
+	return m.cfg.Concurrency
 }
 
 func validateTaskID(taskID string) error {
@@ -133,4 +217,52 @@ func validateTaskID(taskID string) error {
 	}
 
 	return nil
+}
+
+func (m *manager) ListTags(ctx context.Context, taskID string) ([]domain.TagInfo, error) {
+	services, err := m.ListServices(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]domain.TagInfo)
+	for _, svc := range services {
+		tags, listErr := m.git.ListTags(ctx, svc.RepoPath)
+		if listErr != nil {
+			return nil, fmt.Errorf("list tags for service %s: %w", svc.Name, listErr)
+		}
+
+		for _, tag := range tags {
+			if _, ok := seen[tag.Name]; !ok {
+				seen[tag.Name] = tag
+			}
+		}
+	}
+
+	aggregated := make([]domain.TagInfo, 0, len(seen))
+	for _, tag := range seen {
+		aggregated = append(aggregated, tag)
+	}
+
+	slices.SortStableFunc(aggregated, func(a, b domain.TagInfo) int {
+		switch {
+		case a.IsSemver && b.IsSemver:
+			return b.Version.Compare(a.Version)
+		case a.IsSemver:
+			return -1
+		case b.IsSemver:
+			return 1
+		default:
+			return strings.Compare(a.Name, b.Name)
+		}
+	})
+
+	return aggregated, nil
+}
+
+func (m *manager) BuildReleasePreview(ctx context.Context, versions map[string]string) (ReleasePreview, error) {
+	if m.cfg == nil {
+		return ReleasePreview{}, fmt.Errorf("release preview: config is nil")
+	}
+	return BuildReleasePreview(*m.cfg, versions)
 }

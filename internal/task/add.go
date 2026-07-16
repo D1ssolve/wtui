@@ -2,41 +2,49 @@ package task
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
+	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
-func (m *manager) Add(ctx context.Context, params AddParams) error {
+func (m *manager) Add(ctx context.Context, params AddParams) (PartialFailureResult, error) {
 	if err := validateTaskID(params.TaskID); err != nil {
-		return err
+		return PartialFailureResult{}, err
 	}
 
 	taskDir := m.taskDir(params.TaskID)
 
 	if _, err := os.Stat(taskDir); os.IsNotExist(err) {
-		return fmt.Errorf("%w: %s", ErrTaskNotFound, params.TaskID)
+		return PartialFailureResult{}, fmt.Errorf("%w: %s", ErrTaskNotFound, params.TaskID)
 	} else if err != nil {
-		return fmt.Errorf("add: stat task directory %s: %w", taskDir, err)
+		return PartialFailureResult{}, fmt.Errorf("add: stat task directory %s: %w", taskDir, err)
 	}
 
-	branchName := m.resolveBranchName("", params.TaskID)
+	branchType, rule := m.resolveInitRule(params.BranchType)
+	branchPrefix := ""
+	if len(rule.Prefixes) > 0 {
+		branchPrefix = strings.TrimSpace(rule.Prefixes[0])
+	}
+	branchName := m.resolveBranchName(branchPrefix, params.TaskID)
 
-	added, worktreeErrs := m.addWorktreesForServices(
-		ctx, params.TaskID, params.Services, taskDir, branchName, "",
+	baseBranch := strings.TrimSpace(rule.BaseBranch)
+	if branchType == gitflow.BranchTypeHotfix && m.flow != nil && strings.TrimSpace(m.flow.ProductionBranch) != "" {
+		baseBranch = strings.TrimSpace(m.flow.ProductionBranch)
+	}
+
+	results := m.addWorktreesForServices(
+		ctx, params.TaskID, params.Services, taskDir, branchName, baseBranch,
 		params.RemoteBranchStrategies, params.BranchSuffixes, params.StatusCh,
 	)
-	if err := unresolvedRemoteBranchConflict(worktreeErrs); err != nil {
-		return fmt.Errorf("add: remote branch conflicts for task %s: %w", params.TaskID, err)
-	}
+	summary := summarizeServiceResults(params.TaskID, "add", params.Services, results)
 
-	if len(params.Services) > 0 && added == 0 {
-		return fmt.Errorf("add: no worktrees added for task %s: %w",
-			params.TaskID, errors.Join(worktreeErrs...))
+	if len(params.Services) > 0 && len(summary.succeededServices) == 0 {
+		return PartialFailureResult{}, fmt.Errorf("add: no worktrees added for task %s: %w",
+			params.TaskID, summary.JoinedError())
 	}
 
 	if err := generateWorkspaceFile(params.TaskID, taskDir); err != nil {
@@ -52,24 +60,26 @@ func (m *manager) Add(ctx context.Context, params AddParams) error {
 		)
 	}
 
-	return nil
+	if summary.HasPartialFailure() {
+		return summary.PartialResult(), &ErrPartialFailure{Result: summary.PartialResult()}
+	}
+
+	return PartialFailureResult{}, nil
 }
 
 func buildServicesFromSubdirs(taskDir string) []domain.Service {
-	entries, err := os.ReadDir(taskDir)
+	discovered, err := discoverServicesFromTaskDir(taskDir)
 	if err != nil {
 		return nil
 	}
 
-	var services []domain.Service
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+	services := make([]domain.Service, 0, len(discovered))
+	for _, svc := range discovered {
 		services = append(services, domain.Service{
-			Name:         entry.Name(),
-			WorktreePath: filepath.Join(taskDir, entry.Name()),
+			Name:         svc.Name,
+			WorktreePath: svc.RepoPath,
 		})
 	}
+
 	return services
 }

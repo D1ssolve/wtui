@@ -57,6 +57,10 @@ func (m *mockGitClient) RevListCount(_ context.Context, _, _, _ string) (int, er
 	panic("mockGitClient.RevListCount called unexpectedly")
 }
 
+func (m *mockGitClient) ResolveRef(_ context.Context, _, _ string) (string, error) {
+	panic("mockGitClient.ResolveRef called unexpectedly")
+}
+
 func (m *mockGitClient) RevListAheadBehind(_ context.Context, _, _ string) (int, int, error) {
 	panic("mockGitClient.RevListAheadBehind called unexpectedly")
 }
@@ -71,6 +75,10 @@ func (m *mockGitClient) Rebase(_ context.Context, _, _ string) error {
 
 func (m *mockGitClient) Merge(_ context.Context, _, _ string) error {
 	panic("mockGitClient.Merge called unexpectedly")
+}
+
+func (m *mockGitClient) MergeAbort(_ context.Context, _ string) error {
+	panic("mockGitClient.MergeAbort called unexpectedly")
 }
 
 func (m *mockGitClient) Push(_ context.Context, _ string, _ chan<- string) error {
@@ -95,6 +103,58 @@ func (m *mockGitClient) RemoteBranchExists(_ context.Context, _, _ string) (bool
 
 func (m *mockGitClient) AddWorktreeWithTracking(_ context.Context, _, _, _, _ string) error {
 	panic("mockGitClient.AddWorktreeWithTracking called unexpectedly")
+}
+
+func (m *mockGitClient) RepoStatus(_ context.Context, _ string) (git.RawStatus, error) {
+	panic("mockGitClient.RepoStatus called unexpectedly")
+}
+func (m *mockGitClient) ListLocalFiles(_ context.Context, _ string) ([]string, error) {
+	panic("mockGitClient.ListLocalFiles called unexpectedly")
+}
+func (m *mockGitClient) OperationState(_ context.Context, _ string) ([]domain.RepoState, error) {
+	panic("mockGitClient.OperationState called unexpectedly")
+}
+func (m *mockGitClient) IsAncestor(_ context.Context, _, _, _ string) (bool, error) {
+	panic("mockGitClient.IsAncestor called unexpectedly")
+}
+func (m *mockGitClient) CreateTag(_ context.Context, _, _, _, _ string) error {
+	panic("mockGitClient.CreateTag called unexpectedly")
+}
+func (m *mockGitClient) PushTag(_ context.Context, _, _ string) error {
+	panic("mockGitClient.PushTag called unexpectedly")
+}
+func (m *mockGitClient) DeleteTag(_ context.Context, _, _ string) error {
+	panic("mockGitClient.DeleteTag called unexpectedly")
+}
+func (m *mockGitClient) ListTags(_ context.Context, _ string) ([]domain.TagInfo, error) {
+	panic("mockGitClient.ListTags called unexpectedly")
+}
+func (m *mockGitClient) LatestSemverTag(_ context.Context, _, _ string) (string, error) {
+	panic("mockGitClient.LatestSemverTag called unexpectedly")
+}
+func (m *mockGitClient) ListBranches(_ context.Context, _ string, _ string) ([]string, error) {
+	panic("mockGitClient.ListBranches called unexpectedly")
+}
+func (m *mockGitClient) RemoteURL(_ context.Context, _, _ string) (string, error) {
+	panic("mockGitClient.RemoteURL called unexpectedly")
+}
+func (m *mockGitClient) Checkout(_ context.Context, _, _ string) error {
+	panic("mockGitClient.Checkout called unexpectedly")
+}
+func (m *mockGitClient) PushBranch(_ context.Context, _ string, _ chan<- string) error {
+	panic("mockGitClient.PushBranch called unexpectedly")
+}
+func (m *mockGitClient) DeleteRemoteBranch(_ context.Context, _, _ string) error {
+	panic("mockGitClient.DeleteRemoteBranch called unexpectedly")
+}
+func (m *mockGitClient) CreateBranchFromBranch(_ context.Context, _, _, _ string) error {
+	return nil
+}
+func (m *mockGitClient) PushBranchExplicit(_ context.Context, _, _ string) error {
+	return nil
+}
+func (m *mockGitClient) TagExists(_ context.Context, _, _ string) (bool, error) {
+	panic("mockGitClient.TagExists called unexpectedly")
 }
 
 var _ git.Client = (*mockGitClient)(nil)

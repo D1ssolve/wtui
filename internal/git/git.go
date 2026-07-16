@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 const subprocessTimeout = 30 * time.Second
@@ -22,6 +24,10 @@ type Client interface {
 
 	BranchExists(ctx context.Context, repoPath, branch string) (bool, error)
 
+	// ListBranches lists local branches under repoPath matching the git glob pattern.
+	// Returns short names (no refs/heads/ prefix). Empty pattern omits --list and returns all local branches.
+	ListBranches(ctx context.Context, repoPath string, pattern string) ([]string, error)
+
 	RemoteBranchExists(ctx context.Context, repoPath, branch string) (bool, error)
 
 	ListWorktrees(ctx context.Context, repoPath string) ([]WorktreeEntry, error)
@@ -29,6 +35,10 @@ type Client interface {
 	AddWorktree(ctx context.Context, repoPath, dest, branch string, newBranch bool, base string) error
 
 	AddWorktreeWithTracking(ctx context.Context, repoPath, dest, localBranch, remoteBranch string) error
+
+	// CreateBranchFromBranch creates a new branch from an existing branch.
+	// Command: git -C <repoPath> branch <newBranch> <fromBranch>
+	CreateBranchFromBranch(ctx context.Context, repoPath, newBranch, fromBranch string) error
 
 	CommonDir(ctx context.Context, worktreePath string) (string, error)
 
@@ -38,21 +48,52 @@ type Client interface {
 
 	IsDirty(ctx context.Context, worktreePath string) (bool, error)
 
+	RepoStatus(ctx context.Context, worktreePath string) (RawStatus, error)
+	ListLocalFiles(ctx context.Context, repoPath string) ([]string, error)
+
+	OperationState(ctx context.Context, worktreePath string) ([]domain.RepoState, error)
+
+	IsAncestor(ctx context.Context, repoPath, ancestor, descendant string) (bool, error)
+
 	Version(ctx context.Context) (major, minor int, err error)
 
 	RevListCount(ctx context.Context, worktreePath, tip, base string) (int, error)
+
+	ResolveRef(ctx context.Context, repoPath, ref string) (string, error)
 
 	RevListAheadBehind(ctx context.Context, worktreePath, originBranch string) (ahead, behind int, err error)
 
 	Fetch(ctx context.Context, worktreePath string) error
 
+	RemoteURL(ctx context.Context, worktreePath, remote string) (string, error)
+
+	Checkout(ctx context.Context, worktreePath, branch string) error
+
 	Merge(ctx context.Context, worktreePath, branch string) error
+
+	MergeAbort(ctx context.Context, worktreePath string) error
 
 	Rebase(ctx context.Context, worktreePath, upstream string) error
 
 	Push(ctx context.Context, worktreePath string, lineCh chan<- string) error
 
-Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error
+	// PushBranchExplicit pushes a specific branch to origin with upstream tracking.
+	// Command: git -C <worktreePath> push -u origin <branch>
+	PushBranchExplicit(ctx context.Context, worktreePath, branch string) error
+
+	Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error
+
+	CreateTag(ctx context.Context, repoPath, tag, ref, message string) error
+
+	PushTag(ctx context.Context, worktreePath, tag string) error
+
+	DeleteTag(ctx context.Context, repoPath, tag string) error
+
+	ListTags(ctx context.Context, repoPath string) ([]domain.TagInfo, error)
+
+	TagExists(ctx context.Context, repoPath, tag string) (bool, error)
+
+	LatestSemverTag(ctx context.Context, repoPath, branch string) (string, error)
 
 	DeleteBranch(ctx context.Context, repoPath, branch string) error
 }
@@ -135,6 +176,31 @@ func (c *CommandClient) BranchExists(ctx context.Context, repoPath, branch strin
 	return false, err
 }
 
+func (c *CommandClient) ListBranches(ctx context.Context, repoPath, pattern string) ([]string, error) {
+	args := []string{"-C", repoPath, "branch", "--format=%(refname:short)"}
+	if pattern != "" {
+		args = append(args, "--list", pattern)
+	}
+	out, err := c.execGit(ctx, args...)
+	if err != nil {
+		if pattern == "" {
+			return nil, fmt.Errorf("git branch --format=%%(refname:short): %w", err)
+		}
+		return nil, fmt.Errorf("git branch --list %q: %w", pattern, err)
+	}
+
+	lines := strings.Split(out, "\n")
+	branches := make([]string, 0, len(lines))
+	for _, line := range lines {
+		branch := strings.TrimSpace(line)
+		if branch == "" {
+			continue
+		}
+		branches = append(branches, branch)
+	}
+	return branches, nil
+}
+
 func (c *CommandClient) RemoteBranchExists(ctx context.Context, repoPath, branch string) (bool, error) {
 	_, err := c.execGit(ctx, "-C", repoPath, "ls-remote", "--exit-code", "--heads", "origin", branch)
 	if err == nil {
@@ -173,6 +239,11 @@ func (c *CommandClient) AddWorktree(ctx context.Context, repoPath, dest, branch 
 func (c *CommandClient) AddWorktreeWithTracking(ctx context.Context, repoPath, dest, localBranch, remoteBranch string) error {
 	args := []string{"-C", repoPath, "worktree", "add", "-b", localBranch, dest, "origin/" + remoteBranch}
 	_, err := c.execGit(ctx, args...)
+	return err
+}
+
+func (c *CommandClient) CreateBranchFromBranch(ctx context.Context, repoPath, newBranch, fromBranch string) error {
+	_, err := c.execGit(ctx, "-C", repoPath, "branch", newBranch, fromBranch)
 	return err
 }
 
@@ -261,14 +332,35 @@ func (c *CommandClient) RevListCount(ctx context.Context, worktreePath, tip, bas
 	return n, nil
 }
 
+func (c *CommandClient) ResolveRef(ctx context.Context, repoPath, ref string) (string, error) {
+	out, err := c.execGit(ctx, "-C", repoPath, "rev-parse", ref)
+	if err != nil {
+		return "", err
+	}
+
+	sha := strings.TrimSpace(out)
+	if sha == "" {
+		return "", fmt.Errorf("resolve ref %s: empty output", ref)
+	}
+
+	return sha, nil
+}
+
 func (c *CommandClient) RevListAheadBehind(ctx context.Context, worktreePath, originBranch string) (ahead, behind int, err error) {
 	out, runErr := c.execGit(ctx, "-C", worktreePath, "rev-list", "--count", "--left-right",
 		"HEAD..."+originBranch)
 	if runErr != nil {
 		var execErr *ExecError
 		if isExecError(runErr, &execErr) {
-
-			return 0, 0, nil
+			if execErr.ExitCode == 128 {
+				stderrLower := strings.ToLower(execErr.Stderr)
+				if strings.Contains(stderrLower, "no upstream") ||
+					strings.Contains(stderrLower, "unknown revision") ||
+					strings.Contains(stderrLower, "does not exist") ||
+					strings.Contains(stderrLower, "bad revision") {
+					return 0, 0, nil
+				}
+			}
 		}
 		return 0, 0, fmt.Errorf("rev-list ahead/behind %s: %w", originBranch, runErr)
 	}
@@ -293,8 +385,29 @@ func (c *CommandClient) Fetch(ctx context.Context, worktreePath string) error {
 	return err
 }
 
+func (c *CommandClient) RemoteURL(ctx context.Context, worktreePath, remote string) (string, error) {
+	if strings.TrimSpace(remote) == "" {
+		remote = "origin"
+	}
+	out, err := c.execGit(ctx, "-C", worktreePath, "remote", "get-url", remote)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (c *CommandClient) Checkout(ctx context.Context, worktreePath, branch string) error {
+	_, err := c.execGit(ctx, "-C", worktreePath, "checkout", branch)
+	return err
+}
+
 func (c *CommandClient) Merge(ctx context.Context, worktreePath, branch string) error {
 	_, err := c.execGit(ctx, "-C", worktreePath, "merge", branch)
+	return err
+}
+
+func (c *CommandClient) MergeAbort(ctx context.Context, worktreePath string) error {
+	_, err := c.execGit(ctx, "-C", worktreePath, "merge", "--abort")
 	return err
 }
 
@@ -368,6 +481,11 @@ func (c *CommandClient) Push(ctx context.Context, worktreePath string, lineCh ch
 		}
 	}
 	return nil
+}
+
+func (c *CommandClient) PushBranchExplicit(ctx context.Context, worktreePath, branch string) error {
+	_, err := c.execGit(ctx, "-C", worktreePath, "push", "-u", "origin", branch)
+	return err
 }
 
 func (c *CommandClient) Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error {

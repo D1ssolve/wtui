@@ -8,6 +8,7 @@ type KeyMap struct {
 	PanelTasks    key.Binding
 	PanelServices key.Binding
 	PanelOutput   key.Binding
+	PanelReleases key.Binding
 
 	Quit      key.Binding
 	ForceQuit key.Binding
@@ -16,6 +17,15 @@ type KeyMap struct {
 	Escape    key.Binding
 
 	ToggleLogs key.Binding
+
+	CloseTask       key.Binding
+	PruneTask       key.Binding
+	ValidateTask    key.Binding
+	TagBrowser      key.Binding
+	ForgeMenu       key.Binding
+	PipelineStatus  key.Binding
+	NewRelease      key.Binding
+	ServiceValidate key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -35,6 +45,10 @@ func DefaultKeyMap() KeyMap {
 		PanelOutput: key.NewBinding(
 			key.WithKeys("0"),
 			key.WithHelp("0", "focus output"),
+		),
+		PanelReleases: key.NewBinding(
+			key.WithKeys("3"),
+			key.WithHelp("3", "focus releases"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("q"),
@@ -59,6 +73,38 @@ func DefaultKeyMap() KeyMap {
 		ToggleLogs: key.NewBinding(
 			key.WithKeys("L"),
 			key.WithHelp("L", "logs"),
+		),
+		CloseTask: key.NewBinding(
+			key.WithKeys("C"),
+			key.WithHelp("C", "close task"),
+		),
+		PruneTask: key.NewBinding(
+			key.WithKeys("P"),
+			key.WithHelp("P", "prune tasks"),
+		),
+		ValidateTask: key.NewBinding(
+			key.WithKeys("V"),
+			key.WithHelp("V", "validate task"),
+		),
+		TagBrowser: key.NewBinding(
+			key.WithKeys("T"),
+			key.WithHelp("T", "browse tags"),
+		),
+		ForgeMenu: key.NewBinding(
+			key.WithKeys("m"),
+			key.WithHelp("m", "forge menu"),
+		),
+		PipelineStatus: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "pipeline status"),
+		),
+		NewRelease: key.NewBinding(
+			key.WithKeys("N"),
+			key.WithHelp("N", "new release"),
+		),
+		ServiceValidate: key.NewBinding(
+			key.WithKeys("v"),
+			key.WithHelp("v", "validate task"),
 		),
 	}
 }

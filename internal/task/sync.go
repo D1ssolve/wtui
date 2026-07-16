@@ -3,7 +3,10 @@ package task
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
+
+	"golang.org/x/sync/semaphore"
 )
 
 type SyncStrategy int
@@ -41,6 +44,25 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 		return nil
 	}
 
+	validationResult, err := m.ValidateTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+
+	m.logger.InfoContext(ctx, "sync task validation finished",
+		slog.String("task_id", taskID),
+		slog.Bool("blocking", validationResult.Blocking),
+		slog.Bool("all_clean", validationResult.AllClean),
+		slog.Int("services", len(validationResult.Services)),
+	)
+
+	if validationResult.Blocking {
+		m.logger.WarnContext(ctx, "sync task blocked by validation",
+			slog.String("task_id", taskID),
+		)
+		return fmt.Errorf("sync task %s: %w", taskID, ErrValidationFailed)
+	}
+
 	services, err := m.ListServices(ctx, taskID)
 	if err != nil {
 		return err
@@ -61,9 +83,26 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 		mu       sync.Mutex
 		firstErr error
 	)
+	setFirstErr := func(err error) {
+		if err == nil {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	sem := semaphore.NewWeighted(int64(m.concurrency()))
 
 	for _, svc := range services {
+		if err := sem.Acquire(ctx, 1); err != nil {
+			setFirstErr(err)
+			break
+		}
+
 		wg.Go(func() {
+			defer sem.Release(1)
 			// Skip stale services (worktree path missing)
 			if svc.Stale {
 				sendLine(ctx, lineCh, fmt.Sprintf("[%s] worktree missing, skipping.", svc.Name))
@@ -77,21 +116,12 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 			}
 
 			if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] fetching...", svc.Name)) {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = ctx.Err()
-				}
-				mu.Unlock()
+				setFirstErr(ctx.Err())
 				return
 			}
 			if err := m.git.Fetch(ctx, svc.WorktreePath); err != nil {
 				sendLine(ctx, lineCh, fmt.Sprintf("[%s] fetch error: %v", svc.Name, err))
-
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				mu.Unlock()
+				setFirstErr(err)
 				return
 			}
 
@@ -108,40 +138,22 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 			switch strategy {
 			case SyncStrategyMerge:
 				if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] merging %s...", svc.Name, upstream)) {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = ctx.Err()
-					}
-					mu.Unlock()
+					setFirstErr(ctx.Err())
 					return
 				}
 				if err := m.git.Merge(ctx, svc.WorktreePath, upstream); err != nil {
 					sendLine(ctx, lineCh, fmt.Sprintf("[%s] merge error: %v", svc.Name, err))
-
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-					}
-					mu.Unlock()
+					setFirstErr(err)
 					return
 				}
 			case SyncStrategyRebase:
 				if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] rebasing onto %s...", svc.Name, upstream)) {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = ctx.Err()
-					}
-					mu.Unlock()
+					setFirstErr(ctx.Err())
 					return
 				}
 				if err := m.git.Rebase(ctx, svc.WorktreePath, upstream); err != nil {
 					sendLine(ctx, lineCh, fmt.Sprintf("[%s] rebase error: %v", svc.Name, err))
-
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-					}
-					mu.Unlock()
+					setFirstErr(err)
 					return
 				}
 			}

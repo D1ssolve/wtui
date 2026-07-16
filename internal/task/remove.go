@@ -28,6 +28,7 @@ func (m *manager) Remove(ctx context.Context, taskID string, force, deleteBranch
 	}
 
 	var removeErrors []error
+	var removedServiceDirs []string
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -63,6 +64,8 @@ func (m *manager) Remove(ctx context.Context, taskID string, force, deleteBranch
 
 		m.logger.InfoContext(ctx, "removed worktree", slog.String("service", entry.Name()))
 
+		serviceRemoved := true
+
 		if deleteBranches && branchName != "" {
 			if delErr := m.git.DeleteBranch(ctx, commonDir, branchName); delErr != nil {
 				m.logger.WarnContext(ctx, "failed to delete branch",
@@ -71,6 +74,7 @@ func (m *manager) Remove(ctx context.Context, taskID string, force, deleteBranch
 					slog.String("error", delErr.Error()),
 				)
 				removeErrors = append(removeErrors, fmt.Errorf("delete branch %s: %w", branchName, delErr))
+				serviceRemoved = false
 			} else {
 				m.logger.InfoContext(ctx, "deleted branch",
 					slog.String("service", entry.Name()),
@@ -78,13 +82,51 @@ func (m *manager) Remove(ctx context.Context, taskID string, force, deleteBranch
 				)
 			}
 		}
+
+		if serviceRemoved {
+			removedServiceDirs = append(removedServiceDirs, entry.Name())
+		}
 	}
 
 	if len(removeErrors) > 0 && !force {
+		for _, serviceName := range removedServiceDirs {
+			subdirPath := filepath.Join(taskDir, serviceName)
+			if err := os.Remove(subdirPath); err != nil && !os.IsNotExist(err) {
+				removeErrors = append(removeErrors, fmt.Errorf("remove: delete service directory %s: %w", subdirPath, err))
+			}
+		}
+
+		if err := os.Remove(taskDir); err != nil {
+			removeErrors = append(removeErrors, fmt.Errorf("remove: delete task directory %s: %w", taskDir, err))
+		}
+
 		return errors.Join(removeErrors...)
 	}
 
-	if err := os.RemoveAll(taskDir); err != nil {
+	for _, serviceName := range removedServiceDirs {
+		subdirPath := filepath.Join(taskDir, serviceName)
+		if err := os.Remove(subdirPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove: delete service directory %s: %w", subdirPath, err)
+		}
+	}
+
+	if err := os.Remove(taskDir); err != nil {
+		remainingEntries, readErr := os.ReadDir(taskDir)
+		if readErr != nil {
+			return fmt.Errorf("remove: delete task directory %s: %w", taskDir, err)
+		}
+
+		remainingServices := make([]string, 0, len(remainingEntries))
+		for _, entry := range remainingEntries {
+			if entry.IsDir() {
+				remainingServices = append(remainingServices, entry.Name())
+			}
+		}
+
+		if len(remainingServices) > 0 {
+			return fmt.Errorf("remove: task %s still has remaining services: %v", taskID, remainingServices)
+		}
+
 		return fmt.Errorf("remove: delete task directory %s: %w", taskDir, err)
 	}
 

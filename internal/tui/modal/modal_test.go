@@ -11,6 +11,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 func makeTestRepos(names ...string) []domain.Repo {
@@ -217,12 +218,20 @@ func TestRemoveDialog_Y_Submits(t *testing.T) {
 	}
 }
 
-func TestRemoveDialog_F_ForceRemoves(t *testing.T) {
+func TestRemoveDialog_FThenY_ForceRemoves(t *testing.T) {
 	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
 
 	_, cmd := d.Update(sendKey("f"))
+	if cmd != nil {
+		t.Fatal("f must not submit immediately")
+	}
+	if !d.forceConfirm {
+		t.Fatal("f should enter force confirmation mode")
+	}
+
+	_, cmd = d.Update(sendKey("y"))
 	if cmd == nil {
-		t.Fatal("f must return a cmd")
+		t.Fatal("y in force confirmation mode must submit")
 	}
 	msg := execCmd(cmd)
 	sub, ok := msg.(SubmitRemoveTaskMsg)
@@ -237,6 +246,46 @@ func TestRemoveDialog_F_ForceRemoves(t *testing.T) {
 	}
 	if sub.DeleteBranches {
 		t.Error("DeleteBranches should be false for f")
+	}
+}
+
+func TestRemoveDialog_FThenN_ReturnsToNormalView(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
+
+	_, cmd := d.Update(sendKey("f"))
+	if cmd != nil {
+		t.Fatal("f must not submit immediately")
+	}
+	if !d.forceConfirm {
+		t.Fatal("f should enter force confirmation mode")
+	}
+
+	_, cmd = d.Update(sendKey("n"))
+	if cmd != nil {
+		t.Fatal("n in force confirmation mode should cancel back to normal view")
+	}
+	if d.forceConfirm {
+		t.Fatal("n should exit force confirmation mode")
+	}
+}
+
+func TestRemoveDialog_FThenEsc_ReturnsToNormalView(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
+
+	_, cmd := d.Update(sendKey("f"))
+	if cmd != nil {
+		t.Fatal("f must not submit immediately")
+	}
+	if !d.forceConfirm {
+		t.Fatal("f should enter force confirmation mode")
+	}
+
+	_, cmd = d.Update(sendSpecialKey(tea.KeyEsc))
+	if cmd != nil {
+		t.Fatal("esc in force confirmation mode should cancel back to normal view")
+	}
+	if d.forceConfirm {
+		t.Fatal("esc should exit force confirmation mode")
 	}
 }
 
@@ -300,17 +349,26 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		"Init new task group",
 		"Clone selected task group",
 		"Remove task group",
+		"Plan close selected task",
+		"Scan prunable tasks",
+		"Validate selected task",
+		"Browse task tags",
 		"Add service to task",
 		"Open <taskID>.sln in Rider",
+		"Open <taskID>.code-workspace in VS Code",
 		"Run shell command in selected task directory",
 		"Open sync strategy selection",
 		"Refresh tasks and repository cache",
+		"Open forge action menu",
+		"Show pipeline status",
+		"Validate current task",
 		"Push service",
 		"Stash service changes",
 		"Unstash service changes",
 		"Remove service from task",
 		"Scroll up/down",
 		"Toggle this help",
+		"System status",
 		"Quit",
 	}
 	for _, want := range mustContain {
@@ -365,6 +423,64 @@ func TestHelpOverlay_QuestionMark_Closes(t *testing.T) {
 	msg := execCmd(cmd)
 	if _, ok := msg.(CloseModalMsg); !ok {
 		t.Fatalf("expected CloseModalMsg, got %T", msg)
+	}
+}
+
+func TestHelpOverlay_ScrollDownUp_AdjustsOffset(t *testing.T) {
+	h := NewHelpOverlayWithOptions(false)
+	h.SetTerminalSize(80, 10)
+
+	if h.scrollOffset != 0 {
+		t.Fatalf("initial scrollOffset = %d, want 0", h.scrollOffset)
+	}
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if h.scrollOffset != 1 {
+		t.Fatalf("after j scrollOffset = %d, want 1", h.scrollOffset)
+	}
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if h.scrollOffset != 0 {
+		t.Fatalf("after k scrollOffset = %d, want 0", h.scrollOffset)
+	}
+}
+
+func TestHelpOverlay_ScrollPgDownAndEnd_ClampToBottom(t *testing.T) {
+	h := NewHelpOverlayWithOptions(false)
+	h.SetTerminalSize(80, 10)
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if h.scrollOffset <= 0 {
+		t.Fatalf("after pgdown scrollOffset = %d, want > 0", h.scrollOffset)
+	}
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if h.scrollOffset != h.maxScrollOffset() {
+		t.Fatalf("after end scrollOffset = %d, want %d", h.scrollOffset, h.maxScrollOffset())
+	}
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if h.scrollOffset != h.maxScrollOffset() {
+		t.Fatalf("after pgdown at bottom scrollOffset = %d, want %d", h.scrollOffset, h.maxScrollOffset())
+	}
+}
+
+func TestHelpOverlay_View_RendersVisibleSliceAfterScroll(t *testing.T) {
+	h := NewHelpOverlayWithOptions(false)
+	h.SetTerminalSize(80, 10)
+
+	top := stripAnsi(h.View())
+	if !strings.Contains(top, "Keyboard Shortcuts") {
+		t.Fatalf("top view must contain title, got %q", top)
+	}
+
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	bottom := stripAnsi(h.View())
+	if !strings.Contains(bottom, "[Esc] or [?] to close") {
+		t.Fatalf("bottom view must contain close hint, got %q", bottom)
+	}
+	if strings.Contains(bottom, "Keyboard Shortcuts") {
+		t.Fatalf("bottom view should not contain top title slice, got %q", bottom)
 	}
 }
 
@@ -425,6 +541,98 @@ func TestInitDialog_BranchPrefixPreFilled(t *testing.T) {
 	d := NewInitDialog("hotfix/", nil, 80, 24)
 	if got := d.fields[2].Value(); got != "hotfix/" {
 		t.Errorf("Branch Prefix field should be pre-filled with 'hotfix/', got %q", got)
+	}
+}
+
+func TestInitDialogWithFlow_MultipleBranchTypes_ShowsSelectorAndOptions(t *testing.T) {
+	flow := &gitflow.ResolvedGitFlow{
+		ProductionBranch:  "master",
+		IntegrationBranch: "develop",
+		DefaultBranchType: gitflow.BranchTypeFeature,
+		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+		gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
+		gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "master"},
+		gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}, BaseBranch: "develop"},
+		},
+	}
+
+	d := NewInitDialogWithFlow("feature/", flow, nil, 80, 24)
+
+	if !d.showBranchTypeSelector {
+		t.Fatal("expected branch type selector visible for multiple branch types")
+	}
+	want := []gitflow.BranchType{
+		gitflow.BranchTypeFeature,
+		gitflow.BranchTypeHotfix,
+		gitflow.BranchTypeRelease,
+	}
+	if len(d.branchTypeOptions) != len(want) {
+		t.Fatalf("expected %d branch type options, got %d", len(want), len(d.branchTypeOptions))
+	}
+	for i := range want {
+		if d.branchTypeOptions[i] != want[i] {
+			t.Fatalf("option[%d]: expected %q, got %q", i, want[i], d.branchTypeOptions[i])
+		}
+	}
+}
+
+func TestInitDialogWithFlow_SelectHotfix_UpdatesPrefixAndBaseAndSubmitBranchType(t *testing.T) {
+	flow := &gitflow.ResolvedGitFlow{
+		ProductionBranch:  "master",
+		IntegrationBranch: "develop",
+		DefaultBranchType: gitflow.BranchTypeFeature,
+		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "develop"},
+		},
+	}
+
+	d := NewInitDialogWithFlow("feature/", flow, nil, 80, 24)
+	d.fields[0].SetValue("IN-4242")
+	d.fields[1].SetValue("svc1")
+	d.focusField(2)
+
+	modal, _ := d.Update(sendKey("l"))
+	d = modal.(*InitDialog)
+
+	if got := d.fields[2].Value(); got != "hotfix/" {
+		t.Fatalf("prefix should update from selected hotfix rule, got %q", got)
+	}
+	if got := d.fields[3].Value(); got != "master" {
+		t.Fatalf("base branch should use production branch for hotfix, got %q", got)
+	}
+
+	d.focusField(d.lastFieldIndex())
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("enter on last field should submit")
+	}
+	msg := execCmd(cmd)
+	sub, ok := msg.(SubmitInitMsg)
+	if !ok {
+		t.Fatalf("expected SubmitInitMsg, got %T", msg)
+	}
+	if sub.BranchType != "hotfix" {
+		t.Fatalf("expected BranchType hotfix, got %q", sub.BranchType)
+	}
+}
+
+func TestInitDialogWithFlow_SingleBranchType_HidesSelector(t *testing.T) {
+	flow := &gitflow.ResolvedGitFlow{
+		ProductionBranch:  "master",
+		IntegrationBranch: "develop",
+		DefaultBranchType: gitflow.BranchTypeFeature,
+		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
+		},
+	}
+
+	d := NewInitDialogWithFlow("", flow, nil, 80, 24)
+	if d.showBranchTypeSelector {
+		t.Fatal("selector must be hidden for single branch type")
+	}
+	if got := d.selectedBranchType(); got != "feature" {
+		t.Fatalf("expected default selected feature branch type, got %q", got)
 	}
 }
 
@@ -549,6 +757,56 @@ func TestConfigModal_ViewContainsConfigValues(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("ConfigModal.View() missing %q", want)
 		}
+	}
+}
+
+func TestConfigModal_ScrollDown_IncreasesOffset(t *testing.T) {
+	d := NewConfigModal(&config.Config{RootDir: "/tmp/root", TasksRoot: "/tmp/root/.tasks"})
+	d.SetTerminalSize(80, 5)
+
+	_, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if d.scrollOffset != 1 {
+		t.Errorf("scrollOffset = %d, want 1", d.scrollOffset)
+	}
+}
+
+func TestConfigModal_ScrollUp_DecreasesOffset(t *testing.T) {
+	d := NewConfigModal(&config.Config{RootDir: "/tmp/root", TasksRoot: "/tmp/root/.tasks"})
+	d.SetTerminalSize(80, 5)
+	d.scrollOffset = 2
+
+	_, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if d.scrollOffset != 1 {
+		t.Errorf("scrollOffset = %d, want 1", d.scrollOffset)
+	}
+}
+
+func TestConfigModal_ScrollUp_StopsAtZero(t *testing.T) {
+	d := NewConfigModal(&config.Config{RootDir: "/tmp/root"})
+	_, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if d.scrollOffset != 0 {
+		t.Errorf("scrollOffset = %d, want 0", d.scrollOffset)
+	}
+}
+
+func TestConfigModal_Home_GoesToTop(t *testing.T) {
+	d := NewConfigModal(&config.Config{RootDir: "/tmp/root", TasksRoot: "/tmp/root/.tasks"})
+	d.SetTerminalSize(80, 5)
+	d.scrollOffset = 5
+
+	_, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if d.scrollOffset != 0 {
+		t.Errorf("scrollOffset = %d, want 0", d.scrollOffset)
+	}
+}
+
+func TestConfigModal_End_GoesToBottom(t *testing.T) {
+	d := NewConfigModal(&config.Config{RootDir: "/tmp/root", TasksRoot: "/tmp/root/.tasks"})
+	d.SetTerminalSize(80, 5)
+
+	_, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if d.scrollOffset != d.maxScrollOffset() {
+		t.Errorf("scrollOffset = %d, want %d", d.scrollOffset, d.maxScrollOffset())
 	}
 }
 

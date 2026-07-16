@@ -22,6 +22,9 @@ func (m *manager) PushService(ctx context.Context, taskID, serviceName string, l
 	if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] pushing...", serviceName)) {
 		return ctx.Err()
 	}
+	if err := m.ensurePushBranchAllowed(ctx, worktreePath); err != nil {
+		return fmt.Errorf("push %s/%s: %w", taskID, serviceName, err)
+	}
 	if err := m.git.Push(ctx, worktreePath, lineCh); err != nil {
 		return fmt.Errorf("push %s/%s: %w", taskID, serviceName, err)
 	}

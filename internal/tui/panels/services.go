@@ -3,12 +3,17 @@ package panels
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
+	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 const (
@@ -18,14 +23,19 @@ const (
 )
 
 type serviceItem struct {
-	service domain.Service
+	service           domain.Service
+	preset            string
+	showGitFlowBadges bool
+	resolvedFlow      *gitflow.ResolvedGitFlow
+	forgeAvailable    bool
+	forgeProvider     forge.ForgeProvider
 }
 
 func (s serviceItem) FilterValue() string { return s.service.Name }
 
 type serviceDelegate struct{}
 
-func (d serviceDelegate) Height() int { return 3 }
+func (d serviceDelegate) Height() int { return 2 }
 
 func (d serviceDelegate) Spacing() int { return 1 }
 
@@ -37,18 +47,16 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		return
 	}
 	svc := si.service
+	width := max(0, m.Width())
+	dimStyle := lipgloss.NewStyle().Foreground(svcColorDim)
 
 	if svc.Stale {
 		staleStyle := lipgloss.NewStyle().Bold(true).Foreground(svcColorDirty)
-		dimStyle := lipgloss.NewStyle().Foreground(svcColorDim)
 		nameStyle := lipgloss.NewStyle().Foreground(svcColorDim)
 		line1 := fmt.Sprintf("  ✗ %s %s", nameStyle.Render(svc.Name), staleStyle.Render("[STALE]"))
-		line2 := fmt.Sprintf("    %s", dimStyle.Render("worktree path no longer exists"))
-		shortPath := truncatePath(svc.WorktreePath)
-		line3 := fmt.Sprintf("    %s", dimStyle.Render("path:   "+shortPath))
-		fmt.Fprintln(w, line1)
-		fmt.Fprintln(w, line2)
-		fmt.Fprint(w, line3)
+		line2 := fmt.Sprintf("    %s", dimStyle.Render("worktree missing"))
+		fmt.Fprintln(w, ansi.Truncate(line1, width, "…"))
+		fmt.Fprint(w, ansi.Truncate(line2, width, "…"))
 		return
 	}
 
@@ -64,13 +72,10 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		nameStyle = nameStyle.Foreground(panelColorPrimary)
 	}
 	line1 := fmt.Sprintf("  %s %s", icon, nameStyle.Render(svc.Name))
-
-	branchInfo := svc.Branch
-	if svc.BaseBranch != "" {
-		branchInfo = fmt.Sprintf("%s ← %s", svc.Branch, svc.BaseBranch)
+	state := "clean"
+	if svc.IsDirty {
+		state = "modified"
 	}
-
-	dimStyle := lipgloss.NewStyle().Foreground(svcColorDim)
 	aheadBehindSuffix := ""
 	if svc.Ahead > 0 || svc.Behind > 0 {
 		aheadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399"))
@@ -80,15 +85,10 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 			behindStyle.Render(fmt.Sprintf("↓%d", svc.Behind)),
 		)
 	}
+	line2 := fmt.Sprintf("    %s%s", dimStyle.Render(state), aheadBehindSuffix)
 
-	line2 := fmt.Sprintf("    %s%s", dimStyle.Render("branch: "+branchInfo), aheadBehindSuffix)
-
-	shortPath := truncatePath(svc.WorktreePath)
-	line3 := fmt.Sprintf("    %s", dimStyle.Render("path:   "+shortPath))
-
-	fmt.Fprintln(w, line1)
-	fmt.Fprintln(w, line2)
-	fmt.Fprint(w, line3)
+	fmt.Fprintln(w, ansi.Truncate(line1, width, "…"))
+	fmt.Fprint(w, ansi.Truncate(line2, width, "…"))
 }
 
 type ServicesPanel struct {
@@ -99,6 +99,12 @@ type ServicesPanel struct {
 	height  int
 
 	lazygitAvailable bool
+
+	resolvedFlow      *gitflow.ResolvedGitFlow
+	gitFlowPreset     string
+	showGitFlowBadges bool
+	forgeClients      map[forge.ForgeProvider]forge.ForgeClient
+	forgeCfg          *config.ForgeConfig
 
 	services []domain.Service
 }
@@ -124,13 +130,61 @@ func NewServicesPanel(width, height int) ServicesPanel {
 func (p *ServicesPanel) SetServices(taskID string, services []domain.Service) {
 	p.taskID = taskID
 	p.services = services
+	p.refreshItems()
+}
 
-	items := make([]list.Item, len(services))
-	for i, s := range services {
-		items[i] = serviceItem{service: s}
+func (p *ServicesPanel) SetGitFlow(flow *gitflow.ResolvedGitFlow, preset string, showBadges bool) {
+	p.resolvedFlow = flow
+	p.gitFlowPreset = strings.TrimSpace(preset)
+	p.showGitFlowBadges = showBadges
+	p.refreshItems()
+}
+
+func (p *ServicesPanel) SetForgeClients(clients map[forge.ForgeProvider]forge.ForgeClient, cfg *config.ForgeConfig) {
+	p.forgeClients = clients
+	p.forgeCfg = cfg
+	p.refreshItems()
+}
+
+func (p *ServicesPanel) refreshItems() {
+	items := make([]list.Item, len(p.services))
+	for i, s := range p.services {
+		provider := detectServiceProvider(s, p.forgeCfg)
+		_, forgeAvailable := p.forgeClients[provider]
+		items[i] = serviceItem{
+			service:           s,
+			preset:            p.gitFlowPreset,
+			showGitFlowBadges: p.showGitFlowBadges,
+			resolvedFlow:      p.resolvedFlow,
+			forgeAvailable:    forgeAvailable,
+			forgeProvider:     provider,
+		}
 	}
 	p.list.SetItems(items)
 	p.list.Select(0)
+}
+
+func detectServiceProvider(service domain.Service, cfg *config.ForgeConfig) forge.ForgeProvider {
+	provider := forge.DetectProvider(service.RemoteURL, cfg)
+	if provider != forge.ForgeProviderUnknown {
+		return provider
+	}
+
+	return forge.ForgeProviderUnknown
+}
+
+func renderBranchTypeBadge(branchType gitflow.BranchType) string {
+	text := "[" + string(branchType) + "]"
+	switch branchType {
+	case gitflow.BranchTypeFeature:
+		return branchTypeFeatureStyle.Render(text)
+	case gitflow.BranchTypeHotfix:
+		return branchTypeHotfixStyle.Render(text)
+	case gitflow.BranchTypeRelease:
+		return branchTypeReleaseStyle.Render(text)
+	default:
+		return badgeStyle.Render(text)
+	}
 }
 
 func (p *ServicesPanel) SetSize(width, height int) {
@@ -146,6 +200,14 @@ func (p *ServicesPanel) SetFocused(focused bool) {
 
 func (p *ServicesPanel) SetLazygitAvailable(available bool) {
 	p.lazygitAvailable = available
+}
+
+func (p ServicesPanel) TaskID() string {
+	return p.taskID
+}
+
+func (p ServicesPanel) Services() []domain.Service {
+	return append([]domain.Service(nil), p.services...)
 }
 
 func (p *ServicesPanel) SelectedService() *domain.Service {
@@ -211,6 +273,20 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			return p, func() tea.Msg { return OpenAddServiceMsg{TaskID: tid, ExistingServices: existing} }
 
 		case "p":
+			svc := p.SelectedService()
+			if svc == nil {
+				return p, nil
+			}
+			return p, func() tea.Msg {
+				return ForgePipelineStatusMsg{
+					TaskID:      p.taskID,
+					ServiceName: svc.Name,
+					Branch:      svc.Branch,
+					RepoPath:    svc.RepoPath,
+				}
+			}
+
+		case "P":
 			if p.lazygitAvailable {
 				return p, nil
 			}
@@ -253,6 +329,23 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			name := svc.Name
 			return p, func() tea.Msg {
 				return OpenSyncServiceStrategyDialogMsg{TaskID: tid, ServiceName: name}
+			}
+
+		case "v":
+			if p.taskID == "" {
+				return p, nil
+			}
+			tid := p.taskID
+			return p, func() tea.Msg { return ValidateTaskMsg{TaskID: tid} }
+
+		case "m":
+			svc := p.SelectedService()
+			if svc == nil {
+				return p, nil
+			}
+			item, _ := p.list.SelectedItem().(serviceItem)
+			return p, func() tea.Msg {
+				return OpenForgeMenuMsg{TaskID: p.taskID, ServiceName: svc.Name, Provider: item.forgeProvider}
 			}
 
 		case "ctrl+s":
@@ -309,21 +402,11 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			}
 
 		case "h":
-
-			if p.list.Paginator.Page > 0 {
-				p.list.Paginator.PrevPage()
-
-				p.list.Select(p.list.Paginator.Page * p.list.Paginator.PerPage)
-			}
+			listMovePage(&p.list, -1)
 			return p, nil
 
 		case "l":
-
-			if p.list.Paginator.Page < p.list.Paginator.TotalPages-1 {
-				p.list.Paginator.NextPage()
-
-				p.list.Select(p.list.Paginator.Page * p.list.Paginator.PerPage)
-			}
+			listMovePage(&p.list, 1)
 			return p, nil
 
 		case "f":
@@ -358,20 +441,20 @@ func (p ServicesPanel) View() string {
 		titleText = fmt.Sprintf("[2] Services — %s  [%d/%d]", p.taskID, current, total)
 	}
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary)
-
 	inner := innerDimensions(p.width, p.height)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary).MaxWidth(inner.w)
+	titleText = ansi.Truncate(titleText, max(0, inner.w), "…")
 
 	var body string
 
 	switch {
 	case p.taskID == "":
-		body = lipgloss.NewStyle().
+		body = lipgloss.NewStyle().MaxWidth(inner.w).
 			Foreground(svcColorDim).
 			Render("Select a task to view services.")
 
 	case len(p.list.Items()) == 0:
-		body = lipgloss.NewStyle().
+		body = lipgloss.NewStyle().MaxWidth(inner.w).
 			Foreground(svcColorDim).
 			Render("No services in this task. Press [a] to add.")
 

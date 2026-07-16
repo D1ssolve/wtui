@@ -5,21 +5,16 @@ import (
 	"testing"
 )
 
-func TestRenderFooter_FocusTasks_IncludesConfigHint(t *testing.T) {
+func TestRenderFooter_FocusTasks_IncludesCoreHints(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m.focus = FocusTasks
 
 	footer := renderFooter(m)
 	for _, want := range []string{
+		"[Enter] services",
 		"[i] init",
-		"[d] remove",
-		"[S] sync",
-		"[P] push",
-		"[R] Rider",
-		"[C] VS Code",
-		"[,] config",
-		"[/] filter",
-		"[Tab] services",
+		"[C] close",
+		"[.] status",
 		"[?] help",
 		"[q] quit",
 	} {
@@ -29,29 +24,48 @@ func TestRenderFooter_FocusTasks_IncludesConfigHint(t *testing.T) {
 	}
 }
 
-func TestRenderFooter_FocusTasks_IncludesRefreshHint(t *testing.T) {
+func TestRenderFooter_FocusTasks_DoesNotShowLegacyQHint(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m.focus = FocusTasks
 
 	footer := renderFooter(m)
-	if !strings.Contains(footer, "[/] filter") {
-		t.Errorf("tasks footer should include filter hint, got %q", footer)
+	if strings.Contains(footer, "[Q] promote") {
+		t.Errorf("tasks footer should not show legacy Q hint, got %q", footer)
 	}
 }
 
-func TestRenderFooter_FocusServices_IncludesServiceActionHints(t *testing.T) {
+func TestRenderFooter_FocusTasks_DoesNotIncludeVerboseHints(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.focus = FocusTasks
+
+	footer := renderFooter(m)
+	for _, forbidden := range []string{
+		"[R] Rider",
+		"[O] VS Code",
+		"[,] config",
+		"[/] filter",
+		"[Tab] services",
+		"[V] validate",
+		"[T] tags",
+	} {
+		if strings.Contains(footer, forbidden) {
+			t.Errorf("tasks footer should not include verbose hint %q, got %q", forbidden, footer)
+		}
+	}
+}
+
+func TestRenderFooter_FocusServices_IncludesCoreHints(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m.focus = FocusServices
 
 	footer := renderFooter(m)
 	for _, want := range []string{
-		"[a] add service",
-		"[s] sync service",
-		"[p] push service",
-		"[d] remove service",
-		"[ctrl+s] stash",
-		"[ctrl+u] unstash",
+		"[a] add",
+		"[m] forge",
+		"[p] pipeline",
+		"[v] validate",
 		"[Esc] back",
+		"[.] status",
 		"[?] help",
 	} {
 		if !strings.Contains(footer, want) {
@@ -60,25 +74,17 @@ func TestRenderFooter_FocusServices_IncludesServiceActionHints(t *testing.T) {
 	}
 }
 
-func TestRenderFooter_FocusServices_LazygitAvailableIncludesHint(t *testing.T) {
+func TestRenderFooter_FocusServices_DoesNotIncludeVerboseHints(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m.focus = FocusServices
-	m.lazygitAvailable = true
 
 	footer := renderFooter(m)
-	if !strings.Contains(footer, "[g] lazygit") {
-		t.Fatalf("services footer should include lazygit hint when available, got %q", footer)
-	}
-}
-
-func TestRenderFooter_FocusServices_LazygitUnavailableExcludesHint(t *testing.T) {
-	m := newTestModel(t, &mockManager{})
-	m.focus = FocusServices
-	m.lazygitAvailable = false
-
-	footer := renderFooter(m)
-	if strings.Contains(footer, "lazygit") {
-		t.Fatalf("services footer should not include lazygit hint when unavailable, got %q", footer)
+	for _, forbidden := range []string{
+		"[/] filter",
+	} {
+		if strings.Contains(footer, forbidden) {
+			t.Errorf("services footer should not include verbose hint %q, got %q", forbidden, footer)
+		}
 	}
 }
 
@@ -94,6 +100,23 @@ func TestRenderFooter_FocusOutput_IncludesOutputNavigationHints(t *testing.T) {
 	} {
 		if !strings.Contains(footer, want) {
 			t.Errorf("output footer should include %q, got %q", want, footer)
+		}
+	}
+}
+
+func TestRenderFooter_FocusReleases_IncludesReleaseHints(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.focus = FocusReleases
+
+	footer := renderFooter(m)
+	for _, want := range []string{
+		"[N] prepare release",
+		"[r] refresh",
+		"[?] help",
+		"[q] quit",
+	} {
+		if !strings.Contains(footer, want) {
+			t.Errorf("releases footer should include %q, got %q", want, footer)
 		}
 	}
 }

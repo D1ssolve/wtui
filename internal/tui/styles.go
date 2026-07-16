@@ -22,6 +22,8 @@ func NewStyles() Styles {
 			PaddingRight(1),
 
 		Footer: lipgloss.NewStyle().
-			Foreground(colorDimText),
+			Foreground(colorDimText).
+			PaddingLeft(1).
+			PaddingRight(1),
 	}
 }

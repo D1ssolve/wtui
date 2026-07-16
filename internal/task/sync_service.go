@@ -3,8 +3,12 @@ package task
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/D1ssolve/wtui/internal/config"
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 func (m *manager) SyncService(ctx context.Context, taskID, serviceName string, strategy SyncStrategy, lineCh chan<- string) error {
@@ -14,16 +18,39 @@ func (m *manager) SyncService(ctx context.Context, taskID, serviceName string, s
 		return err
 	}
 
-	if strategy == SyncStrategyNoop {
-		sendLine(ctx, lineCh, "sync skipped.")
-		return nil
-	}
-
 	worktreePath := filepath.Join(m.taskDir(taskID), serviceName)
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 		return fmt.Errorf("%w: service %s not in task %s", ErrServiceNotFound, serviceName, taskID)
 	} else if err != nil {
 		return fmt.Errorf("sync service: stat worktree %s: %w", worktreePath, err)
+	}
+
+	if strategy == SyncStrategyNoop {
+		sendLine(ctx, lineCh, "sync skipped.")
+		return nil
+	}
+
+	validationResult, err := m.ValidateTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+
+	serviceValidation, found := findServiceValidation(validationResult, serviceName)
+	serviceBlocking := found && isServiceValidationBlocking(serviceValidation, m.cfg.Validation)
+	m.logger.InfoContext(ctx, "sync service validation finished",
+		slog.String("task_id", taskID),
+		slog.String("service", serviceName),
+		slog.Bool("service_found", found),
+		slog.Bool("service_blocking", serviceBlocking),
+		slog.Bool("task_blocking", validationResult.Blocking),
+	)
+
+	if serviceBlocking {
+		m.logger.WarnContext(ctx, "sync service blocked by validation",
+			slog.String("task_id", taskID),
+			slog.String("service", serviceName),
+		)
+		return fmt.Errorf("sync %s/%s: %w", taskID, serviceName, ErrValidationFailed)
 	}
 
 	// Check dirty state before syncing
@@ -79,4 +106,59 @@ func (m *manager) SyncService(ctx context.Context, taskID, serviceName string, s
 
 	sendLine(ctx, lineCh, fmt.Sprintf("[%s] done.", serviceName))
 	return nil
+}
+
+func findServiceValidation(taskValidation domain.TaskValidation, serviceName string) (domain.ServiceValidation, bool) {
+	for _, serviceValidation := range taskValidation.Services {
+		if serviceValidation.ServiceName == serviceName {
+			return serviceValidation, true
+		}
+	}
+
+	return domain.ServiceValidation{}, false
+}
+
+func isServiceValidationBlocking(serviceValidation domain.ServiceValidation, cfg *config.ValidationConfig) bool {
+	blockUntracked := false
+	blockDetachedHead := true
+	blockInterruptedOperations := true
+
+	if cfg != nil {
+		blockUntracked = cfg.BlockUntracked
+		blockDetachedHead = cfg.BlockDetachedHead
+		blockInterruptedOperations = cfg.BlockInterruptedOperations
+	}
+
+	hasState := func(target domain.RepoState) bool {
+		for _, state := range serviceValidation.States {
+			if state == target {
+				return true
+			}
+		}
+		return false
+	}
+
+	if hasState(domain.RepoStateUnreachable) || hasState(domain.RepoStateDirty) || hasState(domain.RepoStateConflicted) {
+		return true
+	}
+
+	if blockDetachedHead && hasState(domain.RepoStateDetached) {
+		return true
+	}
+
+	if blockUntracked && hasState(domain.RepoStateUntracked) {
+		return true
+	}
+
+	if blockInterruptedOperations {
+		if hasState(domain.RepoStateMerging) ||
+			hasState(domain.RepoStateRebasing) ||
+			hasState(domain.RepoStateCherryPick) ||
+			hasState(domain.RepoStateReverting) ||
+			hasState(domain.RepoStateBisect) {
+			return true
+		}
+	}
+
+	return false
 }
