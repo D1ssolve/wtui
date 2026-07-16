@@ -203,9 +203,7 @@ Config lookup order (first match wins):
 
 Log file: `$XDG_STATE_HOME/wtui/wtui.log`
 
-### Quick-start examples
-
-#### Minimal config
+A minimal config is enough for most cases:
 
 ```yaml
 root_dir: ~/dev
@@ -214,6 +212,13 @@ branch_prefix: feature/
 base_branch: develop
 editor: code
 ```
+
+Optional settings and presets are below.
+
+<details>
+<summary>Full configuration reference</summary>
+
+### Quick-start examples
 
 #### `git-flow` preset
 
@@ -615,9 +620,14 @@ All `release` booleans are `*bool`. Omitting a field falls back to the documente
 | `EDITOR` | `editor` |
 | `WTUI_BASE_BRANCH` | `base_branch` |
 
+</details>
+
 ---
 
 ## Git Flow Setup
+
+<details>
+<summary>Git Flow preset details</summary>
 
 Choose a preset or define your own rules.
 
@@ -661,9 +671,14 @@ When `git_flow.branch_types` contains `release` or `hotfix`, the Tasks panel ren
 
 Hotfix branches start from `production_branch`. On close they merge into production, then into integration (or an active release branch if one exists).
 
+</details>
+
 ---
 
 ## Forge CLI Setup
+
+<details>
+<summary>Forge CLI setup details</summary>
 
 wtui auto-detects `glab` / `gh` on `PATH` and chooses the provider from the service remote URL.
 
@@ -692,6 +707,8 @@ gh auth login
 - Trigger pipeline during close flow (if `trigger_pipeline_on_close: true`)
 
 Press `.` in wtui to see whether `glab`, `gh`, and `lazygit` were detected.
+
+</details>
 
 ---
 
@@ -929,10 +946,6 @@ gh auth login
 - Ensure selected tasks are root feature tasks and not already blocked by active release policy
 - Check Output panel for exact stage failure (`validating`, `merging`, `branching`, `pushing`, `tag`, `push_tag`)
 - Use `.` to verify detected Git Flow + tool availability
-
-### Legacy `keep_promote_key` in config
-
-`release.keep_promote_key` no longer used. Safe to remove from config.
 
 ---
 
