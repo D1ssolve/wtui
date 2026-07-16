@@ -18,26 +18,39 @@ type mockValidationGitClient struct {
 	operationStateFn func(ctx context.Context, worktreePath string) ([]domain.RepoState, error)
 }
 
-func (m *mockValidationGitClient) IsValidRepo(context.Context, string) error                            { return nil }
-func (m *mockValidationGitClient) BaseBranch(context.Context, string) (string, error)                   { return "", nil }
-func (m *mockValidationGitClient) BranchExists(context.Context, string, string) (bool, error)           { return false, nil }
-func (m *mockValidationGitClient) RemoteBranchExists(context.Context, string, string) (bool, error)     { return false, nil }
-func (m *mockValidationGitClient) ListWorktrees(context.Context, string) ([]git.WorktreeEntry, error)   { return nil, nil }
+func (m *mockValidationGitClient) IsValidRepo(context.Context, string) error          { return nil }
+func (m *mockValidationGitClient) BaseBranch(context.Context, string) (string, error) { return "", nil }
+func (m *mockValidationGitClient) BranchExists(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (m *mockValidationGitClient) RemoteBranchExists(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (m *mockValidationGitClient) ListWorktrees(context.Context, string) ([]git.WorktreeEntry, error) {
+	return nil, nil
+}
 func (m *mockValidationGitClient) AddWorktree(context.Context, string, string, string, bool, string) error {
 	return nil
 }
 func (m *mockValidationGitClient) AddWorktreeWithTracking(context.Context, string, string, string, string) error {
 	return nil
 }
-func (m *mockValidationGitClient) CommonDir(context.Context, string) (string, error)                    { return "", nil }
-func (m *mockValidationGitClient) GetWorktreeBranch(context.Context, string) (string, error)            { return "", nil }
-func (m *mockValidationGitClient) RemoveWorktree(context.Context, string, string, bool) error           { return nil }
-func (m *mockValidationGitClient) IsDirty(context.Context, string) (bool, error)                         { return false, nil }
+func (m *mockValidationGitClient) CommonDir(context.Context, string) (string, error) { return "", nil }
+func (m *mockValidationGitClient) GetWorktreeBranch(context.Context, string) (string, error) {
+	return "", nil
+}
+func (m *mockValidationGitClient) RemoveWorktree(context.Context, string, string, bool) error {
+	return nil
+}
+func (m *mockValidationGitClient) IsDirty(context.Context, string) (bool, error) { return false, nil }
 func (m *mockValidationGitClient) RepoStatus(ctx context.Context, worktreePath string) (git.RawStatus, error) {
 	if m.repoStatusFn != nil {
 		return m.repoStatusFn(ctx, worktreePath)
 	}
 	return git.RawStatus{}, nil
+}
+func (m *mockValidationGitClient) ListLocalFiles(context.Context, string) ([]string, error) {
+	return nil, nil
 }
 func (m *mockValidationGitClient) OperationState(ctx context.Context, worktreePath string) ([]domain.RepoState, error) {
 	if m.operationStateFn != nil {
@@ -45,31 +58,45 @@ func (m *mockValidationGitClient) OperationState(ctx context.Context, worktreePa
 	}
 	return nil, nil
 }
-func (m *mockValidationGitClient) IsAncestor(context.Context, string, string, string) (bool, error) { return false, nil }
-func (m *mockValidationGitClient) Version(context.Context) (int, int, error)                         { return 0, 0, nil }
-func (m *mockValidationGitClient) RevListCount(context.Context, string, string, string) (int, error) { return 0, nil }
+func (m *mockValidationGitClient) IsAncestor(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+func (m *mockValidationGitClient) Version(context.Context) (int, int, error) { return 0, 0, nil }
+func (m *mockValidationGitClient) RevListCount(context.Context, string, string, string) (int, error) {
+	return 0, nil
+}
+func (m *mockValidationGitClient) ResolveRef(context.Context, string, string) (string, error) {
+	return "", nil
+}
 func (m *mockValidationGitClient) RevListAheadBehind(context.Context, string, string) (int, int, error) {
 	return 0, 0, nil
 }
-func (m *mockValidationGitClient) Fetch(context.Context, string) error                       { return nil }
-func (m *mockValidationGitClient) RemoteURL(context.Context, string, string) (string, error) { return "", nil }
-func (m *mockValidationGitClient) Checkout(context.Context, string, string) error            { return nil }
-func (m *mockValidationGitClient) Merge(context.Context, string, string) error               { return nil }
-func (m *mockValidationGitClient) MergeAbort(context.Context, string) error                   { return nil }
-func (m *mockValidationGitClient) Rebase(context.Context, string, string) error              { return nil }
-func (m *mockValidationGitClient) Push(context.Context, string, chan<- string) error         { return nil }
-func (m *mockValidationGitClient) Stash(context.Context, string, bool, bool) error           { return nil }
+func (m *mockValidationGitClient) Fetch(context.Context, string) error { return nil }
+func (m *mockValidationGitClient) RemoteURL(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (m *mockValidationGitClient) Checkout(context.Context, string, string) error    { return nil }
+func (m *mockValidationGitClient) Merge(context.Context, string, string) error       { return nil }
+func (m *mockValidationGitClient) MergeAbort(context.Context, string) error          { return nil }
+func (m *mockValidationGitClient) Rebase(context.Context, string, string) error      { return nil }
+func (m *mockValidationGitClient) Push(context.Context, string, chan<- string) error { return nil }
+func (m *mockValidationGitClient) Stash(context.Context, string, bool, bool) error   { return nil }
 func (m *mockValidationGitClient) CreateTag(context.Context, string, string, string, string) error {
 	return nil
 }
-func (m *mockValidationGitClient) PushTag(context.Context, string, string) error        { return nil }
-func (m *mockValidationGitClient) DeleteTag(context.Context, string, string) error      { return nil }
+func (m *mockValidationGitClient) PushTag(context.Context, string, string) error   { return nil }
+func (m *mockValidationGitClient) DeleteTag(context.Context, string, string) error { return nil }
 func (m *mockValidationGitClient) ListTags(context.Context, string) ([]domain.TagInfo, error) {
 	return nil, nil
 }
-func (m *mockValidationGitClient) TagExists(context.Context, string, string) (bool, error) { return false, nil }
+func (m *mockValidationGitClient) TagExists(context.Context, string, string) (bool, error) {
+	return false, nil
+}
 func (m *mockValidationGitClient) LatestSemverTag(context.Context, string, string) (string, error) {
 	return "", nil
+}
+func (m *mockValidationGitClient) ListBranches(context.Context, string, string) ([]string, error) {
+	return nil, nil
 }
 func (m *mockValidationGitClient) DeleteBranch(context.Context, string, string) error { return nil }
 func (m *mockValidationGitClient) CreateBranchFromBranch(context.Context, string, string, string) error {

@@ -51,3 +51,8 @@ type CreateReleaseDoneMsg struct {
 	Release domain.Release
 	Err     error
 }
+
+type FinishReleaseDoneMsg struct {
+	Release domain.Release
+	Err     error
+}

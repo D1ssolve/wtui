@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 func renderFooter(m Model) string {
@@ -31,12 +33,15 @@ func renderFooter(m Model) string {
 	case FocusOutput:
 		hints = "[j/k] scroll  [g/G] top/bottom  [Esc] back"
 	case FocusReleases:
-		hints = joinFooterHints([]string{
-			"[N] new release",
+		parts := []string{
+			"[N] prepare release",
 			"[r] refresh",
-			"[?] help",
-			"[q] quit",
-		})
+		}
+		if rel := m.releasesPanel.SelectedRelease(); rel != nil && rel.Status == domain.ReleaseStatusPrepared {
+			parts = append(parts, "[f] finish release")
+		}
+		parts = append(parts, "[?] help", "[q] quit")
+		hints = joinFooterHints(parts)
 	default:
 		hints = "[q] quit  [?] help"
 	}

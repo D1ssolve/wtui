@@ -39,9 +39,13 @@ type closeTaskE2EManager struct {
 
 var _ task.Manager = (*closeTaskE2EManager)(nil)
 
-func (m *closeTaskE2EManager) Init(_ context.Context, _ task.InitParams) error { return nil }
+func (m *closeTaskE2EManager) Init(_ context.Context, _ task.InitParams) (task.PartialFailureResult, error) {
+	return task.PartialFailureResult{}, nil
+}
 
-func (m *closeTaskE2EManager) Add(_ context.Context, _ task.AddParams) error { return nil }
+func (m *closeTaskE2EManager) Add(_ context.Context, _ task.AddParams) (task.PartialFailureResult, error) {
+	return task.PartialFailureResult{}, nil
+}
 
 func (m *closeTaskE2EManager) List(_ context.Context) ([]domain.Task, error) { return m.tasks, nil }
 
@@ -142,6 +146,16 @@ func (m *closeTaskE2EManager) GetRelease(_ context.Context, _ string) (domain.Re
 
 func (m *closeTaskE2EManager) CreateRelease(_ context.Context, _ task.CreateReleaseParams) (domain.Release, error) {
 	return domain.Release{}, nil
+}
+
+func (m *closeTaskE2EManager) FinishRelease(_ context.Context, _ task.FinishReleaseParams) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *closeTaskE2EManager) IsProtectedBranch(_ context.Context, _ string) bool { return false }
+
+func (m *closeTaskE2EManager) BuildReleasePreview(_ context.Context, _ map[string]string) (task.ReleasePreview, error) {
+	return task.ReleasePreview{}, nil
 }
 
 func (m *closeTaskE2EManager) RetryRelease(_ context.Context, _ string) (domain.Release, error) {

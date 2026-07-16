@@ -13,6 +13,10 @@ var retryCheckpoints = map[string]struct{}{
 	"failed":               {},
 	"fetch":                {},
 	"integration_worktree": {},
+	"service_prepared":     {},
+	"prepared":             {},
+	"cleanup_prepare":      {},
+	"finish_fetch":         {},
 	"merge":                {},
 	"push_integration":     {},
 	"branch":               {},
@@ -41,6 +45,13 @@ func (m *manager) RetryRelease(ctx context.Context, releaseID string) (domain.Re
 		return domain.Release{}, err
 	}
 
+	if release.PreparedAt != nil {
+		return m.retryFinishRelease(ctx, release)
+	}
+	return m.retryPrepareRelease(ctx, release)
+}
+
+func (m *manager) retryPrepareRelease(ctx context.Context, release domain.Release) (domain.Release, error) {
 	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusValidating, "validating", nil); err != nil {
 		return domain.Release{}, err
 	}
@@ -49,7 +60,7 @@ func (m *manager) RetryRelease(ctx context.Context, releaseID string) (domain.Re
 		release.StartedAt = &startedAt
 	}
 	release.CompletedAt = nil
-	release, err = m.writeReleaseManifest(release)
+	release, err := m.writeReleaseManifest(release)
 	if err != nil {
 		return domain.Release{}, err
 	}
@@ -64,7 +75,64 @@ func (m *manager) RetryRelease(ctx context.Context, releaseID string) (domain.Re
 
 	for i := range release.Services {
 		svc := &release.Services[i]
-		if serviceRetryCompleted(*svc) {
+		if servicePrepareRetryCompleted(*svc) {
+			svc.Status = domain.ReleaseStatusPrepared
+			if err := m.persistCheckpoint(&release, "service_prepared", nil); err != nil {
+				return domain.Release{}, err
+			}
+			continue
+		}
+
+		if execErr := m.retryPrepareService(ctx, &release, svc); execErr != nil {
+			releaseErr := classifyReleaseError(execErr, svc)
+			_ = m.failRelease(&release, releaseErr)
+			return release, execErr
+		}
+	}
+
+	if err := m.ensureReleaseReadyForPrepared(&release); err != nil {
+		return release, err
+	}
+	preparedAt := defaultReleaseNow().UTC()
+	release.PreparedAt = &preparedAt
+	release.Error = nil
+
+	release, err = m.writeReleaseManifest(release)
+	if err != nil {
+		return domain.Release{}, err
+	}
+
+	return release, nil
+}
+
+func (m *manager) retryFinishRelease(ctx context.Context, release domain.Release) (domain.Release, error) {
+	for _, svc := range release.Services {
+		if safetyErr := m.validateFinishSafety(ctx, svc); safetyErr != nil {
+			_ = m.failRelease(&release, safetyErr)
+			return release, fmt.Errorf("%w: %s", ErrReleaseRetryUnsafe, safetyErr.Message)
+		}
+	}
+
+	release.CompletedAt = nil
+	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusPrepared, "prepared", nil); err != nil {
+		return domain.Release{}, err
+	}
+	release, err := m.writeReleaseManifest(release)
+	if err != nil {
+		return domain.Release{}, err
+	}
+
+	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusTagging, "tag", nil); err != nil {
+		return release, err
+	}
+	release, err = m.writeReleaseManifest(release)
+	if err != nil {
+		return domain.Release{}, err
+	}
+
+	for i := range release.Services {
+		svc := &release.Services[i]
+		if serviceFinishRetryCompleted(*svc) {
 			svc.Status = domain.ReleaseStatusReleased
 			if err := m.persistCheckpoint(&release, "service_done", nil); err != nil {
 				return domain.Release{}, err
@@ -72,18 +140,14 @@ func (m *manager) RetryRelease(ctx context.Context, releaseID string) (domain.Re
 			continue
 		}
 
-		if execErr := m.retryReleaseService(ctx, &release, svc); execErr != nil {
+		if execErr := m.runFinishService(ctx, &release, svc, nil); execErr != nil {
 			releaseErr := classifyReleaseError(execErr, svc)
 			_ = m.failRelease(&release, releaseErr)
 			return release, execErr
 		}
 	}
 
-	if err := m.ensureRetryFinalizeStatus(&release); err != nil {
-		return release, err
-	}
-
-	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusReleased, "final", nil); err != nil {
+	if err := m.ensureReleaseReadyForReleased(&release); err != nil {
 		return release, err
 	}
 	completedAt := defaultReleaseNow().UTC()
@@ -96,6 +160,14 @@ func (m *manager) RetryRelease(ctx context.Context, releaseID string) (domain.Re
 	}
 
 	return release, nil
+}
+
+func servicePrepareRetryCompleted(svc domain.ReleaseService) bool {
+	return svc.Status == domain.ReleaseStatusPrepared || svc.PushedReleaseBranch
+}
+
+func serviceFinishRetryCompleted(svc domain.ReleaseService) bool {
+	return svc.Status == domain.ReleaseStatusReleased || svc.PushedTag
 }
 
 func (m *manager) validateRetrySafety(ctx context.Context, release domain.Release) error {
@@ -122,7 +194,7 @@ func (m *manager) validateRetryServiceRefs(ctx context.Context, svc domain.Relea
 			return fmt.Errorf("%w: service=%s missing integration branch %s", ErrReleaseRetryUnsafe, svc.Name, svc.IntegrationBranch)
 		}
 		if svc.PostIntegrationSHA != "" {
-			currentSHA, resolveErr := resolveReleaseRefSHA(ctx, svc.RepoPath, svc.IntegrationBranch)
+			currentSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, svc.IntegrationBranch)
 			if resolveErr != nil {
 				return fmt.Errorf("%w: service=%s integration sha resolve: %v", ErrReleaseRetryUnsafe, svc.Name, resolveErr)
 			}
@@ -141,7 +213,7 @@ func (m *manager) validateRetryServiceRefs(ctx context.Context, svc domain.Relea
 			return fmt.Errorf("%w: service=%s missing release branch %s", ErrReleaseRetryUnsafe, svc.Name, svc.ReleaseBranch)
 		}
 		if svc.ReleaseSHA != "" {
-			currentSHA, resolveErr := resolveReleaseRefSHA(ctx, svc.RepoPath, svc.ReleaseBranch)
+			currentSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, svc.ReleaseBranch)
 			if resolveErr != nil {
 				return fmt.Errorf("%w: service=%s release sha resolve: %v", ErrReleaseRetryUnsafe, svc.Name, resolveErr)
 			}
@@ -160,7 +232,7 @@ func (m *manager) validateRetryServiceRefs(ctx context.Context, svc domain.Relea
 			return fmt.Errorf("%w: service=%s missing tag %s", ErrReleaseRetryUnsafe, svc.Name, svc.Tag)
 		}
 		if svc.TagSHA != "" {
-			currentSHA, resolveErr := resolveReleaseRefSHA(ctx, svc.RepoPath, svc.Tag+"^{}")
+			currentSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, svc.Tag+"^{}")
 			if resolveErr != nil {
 				return fmt.Errorf("%w: service=%s tag sha resolve: %v", ErrReleaseRetryUnsafe, svc.Name, resolveErr)
 			}
@@ -197,7 +269,7 @@ func (m *manager) validateRetryServiceRefs(ctx context.Context, svc domain.Relea
 	return nil
 }
 
-func (m *manager) retryReleaseService(ctx context.Context, release *domain.Release, svc *domain.ReleaseService) error {
+func (m *manager) retryPrepareService(ctx context.Context, release *domain.Release, svc *domain.ReleaseService) error {
 	svc.Status = domain.ReleaseStatusMerging
 	if err := m.persistCheckpoint(release, "fetch", nil); err != nil {
 		return err
@@ -254,11 +326,14 @@ func (m *manager) retryReleaseService(ctx context.Context, release *domain.Relea
 		}
 	}
 
+	if svc.PreIntegrationRef == "" {
+		svc.PreIntegrationRef = svc.IntegrationBranch
+	}
 	if svc.PostIntegrationRef == "" {
 		svc.PostIntegrationRef = svc.IntegrationBranch
 	}
 	if svc.PostIntegrationSHA == "" {
-		postIntegrationSHA, resolveErr := resolveReleaseRefSHA(ctx, integrationPath, "HEAD")
+		postIntegrationSHA, resolveErr := m.resolveReleaseRefSHA(ctx, integrationPath, "HEAD")
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -295,7 +370,7 @@ func (m *manager) retryReleaseService(ctx context.Context, release *domain.Relea
 		svc.ReleaseRef = svc.ReleaseBranch
 	}
 	if svc.ReleaseSHA == "" {
-		releaseSHA, resolveErr := resolveReleaseRefSHA(ctx, svc.RepoPath, svc.ReleaseBranch)
+		releaseSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, svc.ReleaseBranch)
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -317,39 +392,10 @@ func (m *manager) retryReleaseService(ctx context.Context, release *domain.Relea
 		pushPath = svc.ReleaseWorktreePath
 	}
 
-	if err := m.moveReleaseStatus(release, domain.ReleaseStatusTagging, "tag", nil); err != nil {
+	if err := m.moveReleaseStatus(release, domain.ReleaseStatusPushing, "push_branch", nil); err != nil {
 		return err
 	}
-	tagExists, err := m.git.TagExists(ctx, svc.RepoPath, svc.Tag)
-	if err != nil {
-		return err
-	}
-	if !tagExists {
-		if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.ReleaseBranch, "wtui release "+release.ID); err != nil {
-			return err
-		}
-		svc.TagRef = svc.Tag
-		if err := m.persistCheckpoint(release, "tag", nil); err != nil {
-			return err
-		}
-	}
-	if svc.TagRef == "" {
-		svc.TagRef = svc.Tag
-	}
-	if svc.TagSHA == "" {
-		tagSHA, resolveErr := resolveReleaseRefSHA(ctx, svc.RepoPath, svc.Tag+"^{}")
-		if resolveErr != nil {
-			return resolveErr
-		}
-		svc.TagSHA = tagSHA
-	}
-
 	if m.cfg.Release != nil && m.cfg.Release.PushReleaseBranches != nil && *m.cfg.Release.PushReleaseBranches && !svc.PushedReleaseBranch {
-		if release.Status != domain.ReleaseStatusPushing {
-			if err := m.moveReleaseStatus(release, domain.ReleaseStatusPushing, "push_branch", nil); err != nil {
-				return err
-			}
-		}
 		if err := m.git.PushBranchExplicit(ctx, pushPath, svc.ReleaseBranch); err != nil {
 			return fmt.Errorf("%w: service=%s branch=%s: %v", ErrReleaseOperationInProgress, svc.Name, svc.ReleaseBranch, err)
 		}
@@ -359,53 +405,14 @@ func (m *manager) retryReleaseService(ctx context.Context, release *domain.Relea
 		}
 	}
 
-	if m.cfg.Release != nil && m.cfg.Release.PushTags != nil && *m.cfg.Release.PushTags && !svc.PushedTag {
-		if err := m.git.PushTag(ctx, pushPath, svc.Tag); err != nil {
-			return fmt.Errorf("%w: service=%s tag=%s: %v", ErrReleaseOperationInProgress, svc.Name, svc.Tag, err)
-		}
-		svc.PushedTag = true
-		if err := m.persistCheckpoint(release, "push_tag", nil); err != nil {
-			return err
-		}
-	}
-
-	svc.Status = domain.ReleaseStatusReleased
-	if err := m.persistCheckpoint(release, "service_done", nil); err != nil {
-		return err
-	}
-
 	if !keepIntegration {
 		cleanupIntegration()
-		_ = m.persistCheckpoint(release, "cleanup", nil)
+		_ = m.persistCheckpoint(release, "cleanup_prepare", nil)
 	}
 
-	return nil
-}
-
-func serviceRetryCompleted(svc domain.ReleaseService) bool {
-	return svc.Status == domain.ReleaseStatusReleased || svc.PushedTag
-}
-
-func (m *manager) ensureRetryFinalizeStatus(release *domain.Release) error {
-	switch release.Status {
-	case domain.ReleaseStatusMerging:
-		if err := m.moveReleaseStatus(release, domain.ReleaseStatusBranching, "branch", nil); err != nil {
-			return err
-		}
-		fallthrough
-	case domain.ReleaseStatusBranching:
-		if err := m.moveReleaseStatus(release, domain.ReleaseStatusTagging, "tag", nil); err != nil {
-			return err
-		}
-		fallthrough
-	case domain.ReleaseStatusTagging:
-		if err := m.moveReleaseStatus(release, domain.ReleaseStatusPushing, "push_tag", nil); err != nil {
-			return err
-		}
-	case domain.ReleaseStatusPushing:
-		return nil
-	default:
-		return fmt.Errorf("%w: %s -> released", ErrReleaseInvalidStatusTransition, release.Status)
+	svc.Status = domain.ReleaseStatusPrepared
+	if err := m.persistCheckpoint(release, "service_prepared", nil); err != nil {
+		return err
 	}
 
 	return nil

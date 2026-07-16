@@ -66,3 +66,8 @@ type SubmitStashMsg struct {
 	Pop              bool
 	IncludeUntracked bool
 }
+
+type SubmitPushMsg struct {
+	TaskID      string
+	ServiceName string // empty = task-wide
+}

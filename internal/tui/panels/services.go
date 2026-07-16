@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -34,7 +35,7 @@ func (s serviceItem) FilterValue() string { return s.service.Name }
 
 type serviceDelegate struct{}
 
-func (d serviceDelegate) Height() int { return 3 }
+func (d serviceDelegate) Height() int { return 2 }
 
 func (d serviceDelegate) Spacing() int { return 1 }
 
@@ -46,18 +47,16 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		return
 	}
 	svc := si.service
+	width := max(0, m.Width())
+	dimStyle := lipgloss.NewStyle().Foreground(svcColorDim)
 
 	if svc.Stale {
 		staleStyle := lipgloss.NewStyle().Bold(true).Foreground(svcColorDirty)
-		dimStyle := lipgloss.NewStyle().Foreground(svcColorDim)
 		nameStyle := lipgloss.NewStyle().Foreground(svcColorDim)
 		line1 := fmt.Sprintf("  ✗ %s %s", nameStyle.Render(svc.Name), staleStyle.Render("[STALE]"))
-		line2 := fmt.Sprintf("    %s", dimStyle.Render("worktree path no longer exists"))
-		shortPath := truncatePath(svc.WorktreePath)
-		line3 := fmt.Sprintf("    %s", dimStyle.Render("path:   "+shortPath))
-		fmt.Fprintln(w, line1)
-		fmt.Fprintln(w, line2)
-		fmt.Fprint(w, line3)
+		line2 := fmt.Sprintf("    %s", dimStyle.Render("worktree missing"))
+		fmt.Fprintln(w, ansi.Truncate(line1, width, "…"))
+		fmt.Fprint(w, ansi.Truncate(line2, width, "…"))
 		return
 	}
 
@@ -73,15 +72,10 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		nameStyle = nameStyle.Foreground(panelColorPrimary)
 	}
 	line1 := fmt.Sprintf("  %s %s", icon, nameStyle.Render(svc.Name))
-
-
-
-	branchInfo := svc.Branch
-	if svc.BaseBranch != "" {
-		branchInfo = fmt.Sprintf("%s ← %s", svc.Branch, svc.BaseBranch)
+	state := "clean"
+	if svc.IsDirty {
+		state = "modified"
 	}
-
-	dimStyle := lipgloss.NewStyle().Foreground(svcColorDim)
 	aheadBehindSuffix := ""
 	if svc.Ahead > 0 || svc.Behind > 0 {
 		aheadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399"))
@@ -91,15 +85,10 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 			behindStyle.Render(fmt.Sprintf("↓%d", svc.Behind)),
 		)
 	}
+	line2 := fmt.Sprintf("    %s%s", dimStyle.Render(state), aheadBehindSuffix)
 
-	line2 := fmt.Sprintf("    %s%s", dimStyle.Render("branch: "+branchInfo), aheadBehindSuffix)
-
-	shortPath := truncatePath(svc.WorktreePath)
-	line3 := fmt.Sprintf("    %s", dimStyle.Render("path:   "+shortPath))
-
-	fmt.Fprintln(w, line1)
-	fmt.Fprintln(w, line2)
-	fmt.Fprint(w, line3)
+	fmt.Fprintln(w, ansi.Truncate(line1, width, "…"))
+	fmt.Fprint(w, ansi.Truncate(line2, width, "…"))
 }
 
 type ServicesPanel struct {
@@ -211,6 +200,14 @@ func (p *ServicesPanel) SetFocused(focused bool) {
 
 func (p *ServicesPanel) SetLazygitAvailable(available bool) {
 	p.lazygitAvailable = available
+}
+
+func (p ServicesPanel) TaskID() string {
+	return p.taskID
+}
+
+func (p ServicesPanel) Services() []domain.Service {
+	return append([]domain.Service(nil), p.services...)
 }
 
 func (p *ServicesPanel) SelectedService() *domain.Service {
@@ -444,20 +441,20 @@ func (p ServicesPanel) View() string {
 		titleText = fmt.Sprintf("[2] Services — %s  [%d/%d]", p.taskID, current, total)
 	}
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary)
-
 	inner := innerDimensions(p.width, p.height)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary).MaxWidth(inner.w)
+	titleText = ansi.Truncate(titleText, max(0, inner.w), "…")
 
 	var body string
 
 	switch {
 	case p.taskID == "":
-		body = lipgloss.NewStyle().
+		body = lipgloss.NewStyle().MaxWidth(inner.w).
 			Foreground(svcColorDim).
 			Render("Select a task to view services.")
 
 	case len(p.list.Items()) == 0:
-		body = lipgloss.NewStyle().
+		body = lipgloss.NewStyle().MaxWidth(inner.w).
 			Foreground(svcColorDim).
 			Render("No services in this task. Press [a] to add.")
 

@@ -228,6 +228,31 @@ exit 2
 	}
 }
 
+func TestCommandClient_ListLocalFilesCombinesUntrackedAndIgnored(t *testing.T) {
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+case "$*" in
+  *"--ignored"*) printf '.claude/settings.json\0shared file.txt\0' ;;
+  *) printf 'src/appsettings.Development.json\0shared file.txt\0' ;;
+esac
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	got, err := client.ListLocalFiles(t.Context(), "/repo")
+	if err != nil {
+		t.Fatalf("ListLocalFiles() error: %v", err)
+	}
+	want := []string{".claude/settings.json", "shared file.txt", "src/appsettings.Development.json"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ListLocalFiles() = %q, want %q", got, want)
+	}
+}
+
 type wrappedErr struct{ inner error }
 
 func (w *wrappedErr) Error() string { return w.inner.Error() }
@@ -711,4 +736,247 @@ func TestCommandClient_LatestSemverTag(t *testing.T) {
 			t.Fatalf("LatestSemverTag = %q, want empty string", tag)
 		}
 	})
+}
+
+func TestCommandClient_ResolveRef(t *testing.T) {
+	t.Run("uses rev-parse and trims sha", func(t *testing.T) {
+		binDir := t.TempDir()
+		argsFile := filepath.Join(t.TempDir(), "git-args")
+		fakeGit := filepath.Join(binDir, "git")
+		script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+printf 'abc123\n'
+exit 0
+`
+		if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake git: %v", err)
+		}
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("GIT_ARGS_FILE", argsFile)
+
+		client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		sha, err := client.ResolveRef(t.Context(), "/repo", "HEAD")
+		if err != nil {
+			t.Fatalf("ResolveRef returned error: %v", err)
+		}
+		if sha != "abc123" {
+			t.Fatalf("ResolveRef sha = %q, want %q", sha, "abc123")
+		}
+
+		args, err := os.ReadFile(argsFile)
+		if err != nil {
+			t.Fatalf("read args file: %v", err)
+		}
+		want := "-C /repo rev-parse HEAD\n"
+		if string(args) != want {
+			t.Fatalf("git args = %q, want %q", string(args), want)
+		}
+	})
+
+	t.Run("returns error on empty output", func(t *testing.T) {
+		binDir := t.TempDir()
+		fakeGit := filepath.Join(binDir, "git")
+		script := `#!/bin/sh
+exit 0
+`
+		if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake git: %v", err)
+		}
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		_, err := client.ResolveRef(t.Context(), "/repo", "HEAD")
+		if err == nil {
+			t.Fatal("ResolveRef error = nil, want error")
+		}
+		if got := err.Error(); !strings.Contains(got, "empty output") {
+			t.Fatalf("ResolveRef error = %q, want contains %q", got, "empty output")
+		}
+	})
+}
+
+func TestCommandClient_RevListAheadBehind_NoUpstreamPatterns(t *testing.T) {
+	tests := []string{
+		"fatal: no upstream configured",
+		"fatal: ambiguous argument 'origin/missing': unknown revision or path not in the working tree.",
+		"fatal: origin/missing does not exist",
+		"fatal: bad revision 'HEAD...origin/missing'",
+	}
+
+	for _, stderr := range tests {
+		stderr := stderr
+		t.Run(stderr, func(t *testing.T) {
+			binDir := t.TempDir()
+			fakeGit := filepath.Join(binDir, "git")
+			script := `#!/bin/sh
+printf '%s' "$GIT_STDERR" >&2
+exit 128
+`
+			if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+				t.Fatalf("write fake git: %v", err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("GIT_STDERR", stderr)
+
+			client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+			ahead, behind, err := client.RevListAheadBehind(t.Context(), "/repo", "origin/main")
+			if err != nil {
+				t.Fatalf("RevListAheadBehind returned error: %v", err)
+			}
+			if ahead != 0 || behind != 0 {
+				t.Fatalf("ahead/behind = %d/%d, want 0/0", ahead, behind)
+			}
+		})
+	}
+}
+
+func TestCommandClient_RevListAheadBehind_UnexpectedErrorsReturnWrappedError(t *testing.T) {
+	t.Run("exit 128 unknown stderr", func(t *testing.T) {
+		binDir := t.TempDir()
+		fakeGit := filepath.Join(binDir, "git")
+		script := `#!/bin/sh
+printf '%s' 'fatal: some other git failure' >&2
+exit 128
+`
+		if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake git: %v", err)
+		}
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		_, _, err := client.RevListAheadBehind(t.Context(), "/repo", "origin/main")
+		if err == nil {
+			t.Fatal("RevListAheadBehind error = nil, want error")
+		}
+		if got := err.Error(); !strings.Contains(got, "rev-list ahead/behind origin/main") {
+			t.Fatalf("error = %q, want wrapped message", got)
+		}
+	})
+
+	t.Run("non-128 code with no-upstream-like stderr", func(t *testing.T) {
+		binDir := t.TempDir()
+		fakeGit := filepath.Join(binDir, "git")
+		script := `#!/bin/sh
+printf '%s' 'fatal: no upstream configured' >&2
+exit 1
+`
+		if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake git: %v", err)
+		}
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		_, _, err := client.RevListAheadBehind(t.Context(), "/repo", "origin/main")
+		if err == nil {
+			t.Fatal("RevListAheadBehind error = nil, want error")
+		}
+	})
+}
+
+func TestCommandClient_ListBranches_PatternMatch_ReturnsShortNames(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+pat=$6
+for b in release/1.0 release/1.1 main; do
+  case $b in
+    $pat) printf '%s\n' "$b" ;;
+  esac
+done
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	branches, err := client.ListBranches(t.Context(), "/repo", "release/*")
+	if err != nil {
+		t.Fatalf("ListBranches returned error: %v", err)
+	}
+
+	want := []string{"release/1.0", "release/1.1"}
+	if !slices.Equal(branches, want) {
+		t.Fatalf("ListBranches = %v, want %v", branches, want)
+	}
+
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read args file: %v", err)
+	}
+	wantArgs := "-C /repo branch --format=%(refname:short) --list release/*\n"
+	if string(args) != wantArgs {
+		t.Fatalf("git args = %q, want %q", string(args), wantArgs)
+	}
+}
+
+func TestCommandClient_ListBranches_EmptyPattern_ReturnsAllLocalBranches(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf 'main\ndevelop\nfeature/ABC-123\n'
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	branches, err := client.ListBranches(t.Context(), "/repo", "")
+	if err != nil {
+		t.Fatalf("ListBranches returned error: %v", err)
+	}
+
+	want := []string{"main", "develop", "feature/ABC-123"}
+	if !slices.Equal(branches, want) {
+		t.Fatalf("ListBranches = %v, want %v", branches, want)
+	}
+
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read args file: %v", err)
+	}
+	wantArgs := "-C /repo branch --format=%(refname:short)\n"
+	if string(args) != wantArgs {
+		t.Fatalf("git args = %q, want %q", string(args), wantArgs)
+	}
+}
+
+func TestCommandClient_ListBranches_GitError_WrappedWithPattern(t *testing.T) {
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf '%s' 'fatal: not a git repository' >&2
+exit 128
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	_, err := client.ListBranches(t.Context(), "/repo", "release/*")
+	if err == nil {
+		t.Fatal("ListBranches error = nil, want error")
+	}
+
+	if got := err.Error(); !strings.Contains(got, `git branch --list "release/*"`) {
+		t.Fatalf("error = %q, want contains %q", got, `git branch --list "release/*"`)
+	}
+
+	var execErr *ExecError
+	if !errors.As(err, &execErr) {
+		t.Fatalf("error = %T, want wrapped *ExecError", err)
+	}
+	if execErr.ExitCode != 128 {
+		t.Fatalf("ExitCode = %d, want 128", execErr.ExitCode)
+	}
 }

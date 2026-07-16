@@ -9,6 +9,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/Masterminds/semver/v3"
 )
 
@@ -132,10 +133,12 @@ func formatReleaseTag(cfg *config.Config, version string) string {
 	return tag
 }
 
-func releaseBranchName(cfg *config.Config, version string) string {
+func releaseBranchName(flow *gitflow.ResolvedGitFlow, version string) string {
 	prefix := defaultReleaseBranchPref
-	if cfg != nil && cfg.Release != nil && cfg.Release.ReleaseBranchPrefix != "" {
-		prefix = cfg.Release.ReleaseBranchPrefix
+	if flow != nil {
+		if releaseRule, ok := flow.BranchTypes[gitflow.BranchTypeRelease]; ok && len(releaseRule.Prefixes) > 0 && releaseRule.Prefixes[0] != "" {
+			prefix = releaseRule.Prefixes[0]
+		}
 	}
 
 	return prefix + version
@@ -156,6 +159,7 @@ func isReleaseActiveStatus(status domain.ReleaseStatus) bool {
 		domain.ReleaseStatusValidating,
 		domain.ReleaseStatusMerging,
 		domain.ReleaseStatusBranching,
+		domain.ReleaseStatusPrepared,
 		domain.ReleaseStatusTagging,
 		domain.ReleaseStatusPushing:
 		return true
@@ -177,13 +181,15 @@ func canTransitionReleaseStatus(from, to domain.ReleaseStatus) bool {
 	case domain.ReleaseStatusMerging:
 		return to == domain.ReleaseStatusBranching || to == domain.ReleaseStatusFailed
 	case domain.ReleaseStatusBranching:
-		return to == domain.ReleaseStatusTagging || to == domain.ReleaseStatusFailed
+		return to == domain.ReleaseStatusPushing || to == domain.ReleaseStatusFailed
 	case domain.ReleaseStatusTagging:
 		return to == domain.ReleaseStatusPushing || to == domain.ReleaseStatusFailed
 	case domain.ReleaseStatusPushing:
-		return to == domain.ReleaseStatusReleased || to == domain.ReleaseStatusFailed
+		return to == domain.ReleaseStatusPrepared || to == domain.ReleaseStatusReleased || to == domain.ReleaseStatusFailed
+	case domain.ReleaseStatusPrepared:
+		return to == domain.ReleaseStatusTagging || to == domain.ReleaseStatusRejected || to == domain.ReleaseStatusFailed
 	case domain.ReleaseStatusFailed:
-		return to == domain.ReleaseStatusValidating || to == domain.ReleaseStatusRejected
+		return to == domain.ReleaseStatusValidating || to == domain.ReleaseStatusPrepared || to == domain.ReleaseStatusRejected
 	default:
 		return false
 	}

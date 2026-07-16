@@ -157,6 +157,7 @@ func TestRejectRelease_AllowedTransitionsPersistRejected(t *testing.T) {
 		status domain.ReleaseStatus
 	}{
 		{name: "draft to rejected", status: domain.ReleaseStatusDraft},
+		{name: "prepared to rejected", status: domain.ReleaseStatusPrepared},
 		{name: "failed to rejected", status: domain.ReleaseStatusFailed},
 	}
 
@@ -248,6 +249,12 @@ func TestRemoveRelease_NeverRemovesActiveAndRemovesDraftAndTerminal(t *testing.T
 		{
 			name:           "active validating not removed",
 			status:         domain.ReleaseStatusValidating,
+			wantErr:        ErrReleaseInvalidStatusTransition,
+			wantDirPresent: true,
+		},
+		{
+			name:           "active prepared not removed",
+			status:         domain.ReleaseStatusPrepared,
 			wantErr:        ErrReleaseInvalidStatusTransition,
 			wantDirPresent: true,
 		},

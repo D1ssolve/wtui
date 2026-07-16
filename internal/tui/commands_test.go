@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
@@ -122,6 +123,12 @@ func TestLazygitDoneMessagePreservesMetadataAndError(t *testing.T) {
 type cmdManager struct {
 	mockManager
 
+	initPartial task.PartialFailureResult
+	initErr     error
+
+	addPartial task.PartialFailureResult
+	addErr     error
+
 	validateTaskID string
 	validateResult domain.TaskValidation
 	validateErr    error
@@ -156,6 +163,11 @@ type cmdManager struct {
 	createReleaseResult domain.Release
 	createReleaseErr    error
 
+	finishReleaseCtx    context.Context
+	finishReleaseParams task.FinishReleaseParams
+	finishReleaseResult domain.Release
+	finishReleaseErr    error
+
 	forgeCreateMRArgs      forge.CreateMRParams
 	forgePipelineStatusArg forgePipelineStatusParams
 	forgeListIssuesArgs    forge.ListIssuesParams
@@ -168,6 +180,14 @@ type cmdManager struct {
 func (m *cmdManager) ValidateTask(_ context.Context, taskID string) (domain.TaskValidation, error) {
 	m.validateTaskID = taskID
 	return m.validateResult, m.validateErr
+}
+
+func (m *cmdManager) Init(_ context.Context, _ task.InitParams) (task.PartialFailureResult, error) {
+	return m.initPartial, m.initErr
+}
+
+func (m *cmdManager) Add(_ context.Context, _ task.AddParams) (task.PartialFailureResult, error) {
+	return m.addPartial, m.addErr
 }
 
 func (m *cmdManager) PlanCloseTask(_ context.Context, taskID string) (task.ClosePlan, error) {
@@ -238,6 +258,12 @@ func (m *cmdManager) CreateRelease(ctx context.Context, params task.CreateReleas
 		params.StatusCh <- "create release: tagging"
 	}
 	return m.createReleaseResult, m.createReleaseErr
+}
+
+func (m *cmdManager) FinishRelease(ctx context.Context, params task.FinishReleaseParams) (domain.Release, error) {
+	m.finishReleaseCtx = ctx
+	m.finishReleaseParams = params
+	return m.finishReleaseResult, m.finishReleaseErr
 }
 
 func (m *cmdManager) RetryRelease(_ context.Context, _ string) (domain.Release, error) {
@@ -557,6 +583,51 @@ func TestCreateReleaseCmdReturnsErrorInMessage(t *testing.T) {
 	}
 }
 
+func TestFinishReleaseCmdStreamsStatusAndReturnsDoneMsg(t *testing.T) {
+	expected := domain.Release{ID: "rel-1", Status: domain.ReleaseStatusPrepared}
+	mgr := &cmdManager{finishReleaseResult: expected}
+
+	cmd := finishReleaseCmd(mgr, "rel-1")
+
+	msg1 := cmd()
+	line1, ok := msg1.(OutputLineMsg)
+	if !ok {
+		t.Fatalf("msg1 = %T, want OutputLineMsg", msg1)
+	}
+	if line1.Line != "Finishing release rel-1" {
+		t.Fatalf("line1 = %q, want Finishing release rel-1", line1.Line)
+	}
+
+	msg2 := line1.Next()
+	done, ok := msg2.(FinishReleaseDoneMsg)
+	if !ok {
+		t.Fatalf("msg2 = %T, want FinishReleaseDoneMsg", msg2)
+	}
+	if done.Release.ID != "rel-1" {
+		t.Fatalf("done.Release.ID = %q, want rel-1", done.Release.ID)
+	}
+	if done.Err != nil {
+		t.Fatalf("done.Err = %v, want nil", done.Err)
+	}
+	if mgr.finishReleaseCtx == nil {
+		t.Fatal("FinishRelease ctx = nil, want non-nil")
+	}
+	if mgr.finishReleaseParams.ReleaseID != "rel-1" {
+		t.Fatalf("FinishRelease params.ReleaseID = %q, want rel-1", mgr.finishReleaseParams.ReleaseID)
+	}
+	if mgr.finishReleaseParams.StatusCh == nil {
+		t.Fatal("FinishRelease params.StatusCh = nil, want non-nil")
+	}
+	deadline, ok := mgr.finishReleaseCtx.Deadline()
+	if !ok {
+		t.Fatal("FinishRelease ctx has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining > 10*time.Minute || remaining < 9*time.Minute+59*time.Second {
+		t.Fatalf("FinishRelease timeout ~10m, got remaining=%s", remaining)
+	}
+}
+
 func TestLoadReleaseVersionsCmdBuildsVersionMapWithSemverBumpAndFallback(t *testing.T) {
 	mgr := &cmdManager{}
 	mgr.listServicesResult = []domain.Service{{Name: "api"}, {Name: "worker"}}
@@ -626,6 +697,92 @@ func TestLoadReleaseVersionsCmdReturnsCommandDoneOnManagerError(t *testing.T) {
 	}
 	if done.Op != "Load release versions for task T-1" {
 		t.Fatalf("Op = %q, want task-specific op", done.Op)
+	}
+}
+
+func TestInitTaskCmd_PartialFailureEmitsPartialInitDoneMsg(t *testing.T) {
+	mgr := &cmdManager{
+		initPartial: task.PartialFailureResult{
+			TaskID:            "T-1",
+			Operation:         "init",
+			RequestedCount:    2,
+			SucceededServices: []string{"svc-a"},
+			FailedServices: []task.FailedService{{
+				Name:  "svc-b",
+				Cause: errors.New("boom"),
+			}},
+			Retryable: true,
+		},
+		initErr: errors.New("partial failure"),
+	}
+
+	msg := initTaskCmd(mgr, task.InitParams{TaskID: "T-1"})()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want tea.BatchMsg", msg)
+	}
+
+	var partial PartialInitDoneMsg
+	var found bool
+	for _, cmd := range batch {
+		if cmd == nil {
+			continue
+		}
+		if m, ok := cmd().(PartialInitDoneMsg); ok {
+			partial = m
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Fatal("PartialInitDoneMsg not found")
+	}
+	if partial.Result.TaskID != "T-1" || partial.Op != "Init task T-1" {
+		t.Fatalf("partial msg = %+v, want task/op set", partial)
+	}
+}
+
+func TestAddServiceCmd_PartialFailureEmitsPartialAddDoneMsg(t *testing.T) {
+	mgr := &cmdManager{
+		addPartial: task.PartialFailureResult{
+			TaskID:            "T-2",
+			Operation:         "add",
+			RequestedCount:    2,
+			SucceededServices: []string{"svc-a"},
+			FailedServices: []task.FailedService{{
+				Name:  "svc-b",
+				Cause: errors.New("boom"),
+			}},
+			Retryable: true,
+		},
+		addErr: errors.New("partial failure"),
+	}
+
+	msg := addServiceCmd(mgr, task.AddParams{TaskID: "T-2"})()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want tea.BatchMsg", msg)
+	}
+
+	var partial PartialAddDoneMsg
+	var found bool
+	for _, cmd := range batch {
+		if cmd == nil {
+			continue
+		}
+		if m, ok := cmd().(PartialAddDoneMsg); ok {
+			partial = m
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Fatal("PartialAddDoneMsg not found")
+	}
+	if partial.Result.TaskID != "T-2" || partial.Op != "Add services to T-2" {
+		t.Fatalf("partial msg = %+v, want task/op set", partial)
 	}
 }
 

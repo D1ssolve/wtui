@@ -1,3 +1,4 @@
+// Package task orchestrates task lifecycle and release workflows.
 package task
 
 import (
@@ -63,10 +64,21 @@ type CreateReleaseParams struct {
 	StatusCh         chan<- string
 }
 
-type Manager interface {
-	Init(ctx context.Context, params InitParams) error
+// FinishReleaseParams carries Stage-2 (tag + push tag) inputs for FinishRelease.
+type FinishReleaseParams struct {
+	// ReleaseID is the prepared release to finish. Required.
+	ReleaseID string
 
-	Add(ctx context.Context, params AddParams) error
+	// StatusCh, when non-nil, receives human-readable progress lines streamed
+	// from the finish pipeline (mirrors CreateReleaseParams.StatusCh). The
+	// channel is never closed by the manager; the caller owns it.
+	StatusCh chan<- string
+}
+
+type Manager interface {
+	Init(ctx context.Context, params InitParams) (PartialFailureResult, error)
+
+	Add(ctx context.Context, params AddParams) (PartialFailureResult, error)
 
 	List(ctx context.Context) ([]domain.Task, error)
 
@@ -99,6 +111,19 @@ type Manager interface {
 	GetRelease(ctx context.Context, releaseID string) (domain.Release, error)
 
 	CreateRelease(ctx context.Context, params CreateReleaseParams) (domain.Release, error)
+
+	FinishRelease(ctx context.Context, params FinishReleaseParams) (domain.Release, error)
+
+	// IsProtectedBranch reports whether branch is protected under the resolved
+	// git-flow policy. A branch is protected if it exactly equals the resolved
+	// production branch, integration branch, or top-level base_branch, OR if it
+	// shares a prefix with a release/hotfix branch type as resolved by gitflow.
+	// Pure in-memory computation; performs no git I/O.
+	IsProtectedBranch(ctx context.Context, branch string) bool
+
+	// BuildReleasePreview computes display-only release execute facts from the
+	// configured git-flow policy and release settings.
+	BuildReleasePreview(ctx context.Context, versions map[string]string) (ReleasePreview, error)
 
 	RetryRelease(ctx context.Context, releaseID string) (domain.Release, error)
 
@@ -164,6 +189,14 @@ func (m *manager) taskDir(taskID string) string {
 	return filepath.Join(m.cfg.TasksRoot, taskID)
 }
 
+func (m *manager) concurrency() int {
+	if m == nil || m.cfg == nil || m.cfg.Concurrency <= 0 {
+		return 4
+	}
+
+	return m.cfg.Concurrency
+}
+
 func validateTaskID(taskID string) error {
 	if taskID == "" {
 		return fmt.Errorf("%w: task ID must not be empty", ErrTaskNotFound)
@@ -225,4 +258,11 @@ func (m *manager) ListTags(ctx context.Context, taskID string) ([]domain.TagInfo
 	})
 
 	return aggregated, nil
+}
+
+func (m *manager) BuildReleasePreview(ctx context.Context, versions map[string]string) (ReleasePreview, error) {
+	if m.cfg == nil {
+		return ReleasePreview{}, fmt.Errorf("release preview: config is nil")
+	}
+	return BuildReleasePreview(*m.cfg, versions)
 }

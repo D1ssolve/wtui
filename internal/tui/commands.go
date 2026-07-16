@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Masterminds/semver/v3"
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
@@ -43,6 +43,18 @@ type OutputLineMsg struct {
 type CommandDoneMsg struct {
 	Err error
 	Op  string
+}
+
+type PartialInitDoneMsg struct {
+	Result task.PartialFailureResult
+	Err    error
+	Op     string
+}
+
+type PartialAddDoneMsg struct {
+	Result task.PartialFailureResult
+	Err    error
+	Op     string
 }
 
 type LazygitDoneMsg struct {
@@ -136,8 +148,11 @@ func initTaskCmd(mgr task.Manager, params task.InitParams) tea.Cmd {
 		func() tea.Msg {
 			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), params.TaskID), 5*time.Minute)
 			defer cancel()
-			err := mgr.Init(ctx, params)
+			partial, err := mgr.Init(ctx, params)
 			close(statusCh)
+			if err != nil && len(partial.SucceededServices) > 0 && len(partial.FailedServices) > 0 {
+				return PartialInitDoneMsg{Result: partial, Err: err, Op: "Init task " + params.TaskID}
+			}
 			return CommandDoneMsg{Err: err, Op: "Init task " + params.TaskID}
 		},
 		readNextLine(statusCh),
@@ -151,8 +166,11 @@ func addServiceCmd(mgr task.Manager, params task.AddParams) tea.Cmd {
 		func() tea.Msg {
 			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), params.TaskID), 5*time.Minute)
 			defer cancel()
-			err := mgr.Add(ctx, params)
+			partial, err := mgr.Add(ctx, params)
 			close(statusCh)
+			if err != nil && len(partial.SucceededServices) > 0 && len(partial.FailedServices) > 0 {
+				return PartialAddDoneMsg{Result: partial, Err: err, Op: "Add services to " + params.TaskID}
+			}
 			return CommandDoneMsg{Err: err, Op: "Add services to " + params.TaskID}
 		},
 		readNextLine(statusCh),
@@ -399,6 +417,24 @@ func createReleaseCmd(mgr task.Manager, params task.CreateReleaseParams) tea.Cmd
 		release, err := mgr.CreateRelease(ctx, params)
 		close(statusCh)
 		doneCh <- CreateReleaseDoneMsg{Release: release, Err: err}
+		close(doneCh)
+	}()
+
+	return readStatusOrDone(statusCh, doneCh)
+}
+
+func finishReleaseCmd(mgr task.Manager, releaseID string) tea.Cmd {
+	statusCh := make(chan string, 32)
+	doneCh := make(chan FinishReleaseDoneMsg, 1)
+	statusCh <- "Finishing release " + releaseID
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		release, err := mgr.FinishRelease(ctx, task.FinishReleaseParams{ReleaseID: releaseID, StatusCh: statusCh})
+		close(statusCh)
+		doneCh <- FinishReleaseDoneMsg{Release: release, Err: err}
 		close(doneCh)
 	}()
 

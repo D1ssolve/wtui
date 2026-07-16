@@ -7,10 +7,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -21,6 +23,8 @@ import (
 )
 
 type mockManager struct {
+	mu sync.Mutex
+
 	listTasksResult    []domain.Task
 	listTasksErr       error
 	listTasksCalls     int
@@ -48,12 +52,30 @@ type mockManager struct {
 	createReleaseResult domain.Release
 	createReleaseErr    error
 	createReleaseCalls  int
+	createReleaseDone   chan struct{}
+	finishReleaseResult domain.Release
+	finishReleaseErr    error
+	finishReleaseID     string
+	finishReleaseCalls  int
+	finishReleaseDone   chan struct{}
+
+	pushTaskCalls    int
+	pushTaskID       string
+	pushServiceCalls int
+	pushServiceTask  string
+	pushServiceName  string
+
+	isProtectedBranchResult map[string]bool
 }
 
 var _ task.Manager = (*mockManager)(nil)
 
-func (m *mockManager) Init(_ context.Context, _ task.InitParams) error     { return nil }
-func (m *mockManager) Add(_ context.Context, _ task.AddParams) error       { return nil }
+func (m *mockManager) Init(_ context.Context, _ task.InitParams) (task.PartialFailureResult, error) {
+	return task.PartialFailureResult{}, nil
+}
+func (m *mockManager) Add(_ context.Context, _ task.AddParams) (task.PartialFailureResult, error) {
+	return task.PartialFailureResult{}, nil
+}
 func (m *mockManager) Remove(_ context.Context, _ string, _, _ bool) error { return nil }
 
 func (m *mockManager) List(_ context.Context) ([]domain.Task, error) {
@@ -85,12 +107,19 @@ func (m *mockManager) SyncService(_ context.Context, _, _ string, _ task.SyncStr
 	return nil
 }
 
-func (m *mockManager) PushTask(_ context.Context, _ string, lineCh chan<- string) error {
+func (m *mockManager) PushTask(_ context.Context, taskID string, lineCh chan<- string) error {
+	m.pushTaskCalls++
+	m.pushTaskID = taskID
 	close(lineCh)
 	return nil
 }
 
-func (m *mockManager) PushService(_ context.Context, _, _ string, _ chan<- string) error { return nil }
+func (m *mockManager) PushService(_ context.Context, taskID, serviceName string, _ chan<- string) error {
+	m.pushServiceCalls++
+	m.pushServiceTask = taskID
+	m.pushServiceName = serviceName
+	return nil
+}
 
 func (m *mockManager) StashService(_ context.Context, _, _ string, _, _ bool) error { return nil }
 
@@ -139,9 +168,36 @@ func (m *mockManager) GetRelease(_ context.Context, _ string) (domain.Release, e
 }
 
 func (m *mockManager) CreateRelease(_ context.Context, params task.CreateReleaseParams) (domain.Release, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.createReleaseCalls++
 	m.createReleaseParams = params
+	if m.createReleaseDone != nil {
+		close(m.createReleaseDone)
+	}
 	return m.createReleaseResult, m.createReleaseErr
+}
+
+func (m *mockManager) FinishRelease(_ context.Context, params task.FinishReleaseParams) (domain.Release, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.finishReleaseCalls++
+	m.finishReleaseID = params.ReleaseID
+	if m.finishReleaseDone != nil {
+		close(m.finishReleaseDone)
+	}
+	return m.finishReleaseResult, m.finishReleaseErr
+}
+
+func (m *mockManager) IsProtectedBranch(_ context.Context, branch string) bool {
+	if m.isProtectedBranchResult != nil {
+		return m.isProtectedBranchResult[branch]
+	}
+	return false
+}
+
+func (m *mockManager) BuildReleasePreview(_ context.Context, _ map[string]string) (task.ReleasePreview, error) {
+	return task.ReleasePreview{}, nil
 }
 
 func (m *mockManager) RetryRelease(_ context.Context, _ string) (domain.Release, error) {
@@ -303,6 +359,11 @@ func TestUpdate_WindowSizeMsg_SetsReady(t *testing.T) {
 	if m.height != 40 {
 		t.Errorf("height: expected 40, got %d", m.height)
 	}
+
+	tasksWidth, _, releasesWidth := threePanelWidths(m.width)
+	if tasksWidth != releasesWidth {
+		t.Fatalf("tasks and releases width should match, got tasks=%d releases=%d", tasksWidth, releasesWidth)
+	}
 }
 
 func TestView_AfterWindowSize_NotLoading(t *testing.T) {
@@ -322,6 +383,46 @@ func TestView_AfterWindowSize_IncludesReleasesPanel(t *testing.T) {
 	view := stripANSIForModel(m.View())
 	if !strings.Contains(view, "[3] Releases") {
 		t.Fatalf("view should include releases panel title, got %q", view)
+	}
+}
+
+func TestThreePanelWidths_DistributesTasksAndReleasesEqually(t *testing.T) {
+	cases := []struct {
+		total           int
+		wantTasks       int
+		wantServices    int
+		wantReleases    int
+	}{
+		{120, 44, 32, 44},
+		{80, 29, 22, 29},
+		{60, 25, 10, 25},
+	}
+
+	for _, tc := range cases {
+		tasks, services, releases := threePanelWidths(tc.total)
+		if tasks != tc.wantTasks || services != tc.wantServices || releases != tc.wantReleases {
+			t.Errorf("threePanelWidths(%d) = tasks=%d services=%d releases=%d, want tasks=%d services=%d releases=%d",
+				tc.total, tasks, services, releases, tc.wantTasks, tc.wantServices, tc.wantReleases)
+		}
+		if tasks+services+releases != tc.total {
+			t.Errorf("threePanelWidths(%d) sums to %d, want %d", tc.total, tasks+services+releases, tc.total)
+		}
+		if tasks != releases {
+			t.Errorf("threePanelWidths(%d): tasks (%d) != releases (%d)", tc.total, tasks, releases)
+		}
+	}
+}
+
+func TestRecalculateDimensions_UsesFullTerminalHeight(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+
+	for _, height := range []int{24, 40, 60} {
+		m = sendWindowSize(m, 120, height)
+		view := m.View()
+		got := lipgloss.Height(view)
+		if got != height {
+			t.Errorf("View() height for terminal %d = %d, want %d", height, got, height)
+		}
 	}
 }
 
@@ -398,14 +499,14 @@ func TestUpdate_Tab_CyclesFocusForward(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
-	if m.focus != FocusOutput {
-		t.Errorf("after Tab×2: expected FocusOutput, got %v", m.focus)
+	if m.focus != FocusReleases {
+		t.Errorf("after Tab×2: expected FocusReleases, got %v", m.focus)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
-	if m.focus != FocusReleases {
-		t.Errorf("after Tab×3: expected FocusReleases, got %v", m.focus)
+	if m.focus != FocusOutput {
+		t.Errorf("after Tab×3: expected FocusOutput, got %v", m.focus)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
@@ -823,7 +924,7 @@ func TestUpdate_FocusReleasesAndNewRelease_OpensCreateReleaseDialog(t *testing.T
 	}
 }
 
-func TestUpdate_SubmitCreateRelease_StartsOperation(t *testing.T) {
+func TestUpdate_SubmitCreateRelease_OpensExecuteConfirmModal(t *testing.T) {
 	mgr := &mockManager{createReleaseResult: domain.Release{ID: "rel-1", CreatedAt: time.Now().UTC()}}
 	m := newTestModel(t, mgr)
 	m = sendWindowSize(m, 120, 40)
@@ -834,14 +935,144 @@ func TestUpdate_SubmitCreateRelease_StartsOperation(t *testing.T) {
 	})
 	m = updated.(Model)
 
+	if m.opRunning {
+		t.Fatal("submit create release should not start operation before confirm")
+	}
+	if cmd != nil {
+		t.Fatal("submit create release should not return command before confirm")
+	}
+	if _, ok := m.modal.(*modal.ReleaseExecuteConfirmDialog); !ok {
+		t.Fatalf("expected ReleaseExecuteConfirmDialog, got %T", m.modal)
+	}
+	if m.pendingReleaseSubmit == nil {
+		t.Fatal("pending release submit should be stored")
+	}
+}
+func TestUpdate_ConfirmReleaseExecute_StartsOperation(t *testing.T) {
+	mgr := &mockManager{
+		createReleaseResult: domain.Release{ID: "rel-1", CreatedAt: time.Now().UTC()},
+		createReleaseDone:   make(chan struct{}),
+	}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.pendingReleaseSubmit = &modal.SubmitCreateReleaseMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}}
+	m.modal = modal.NewReleaseExecuteConfirmDialog([]string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
+
+	updated, cmd := m.Update(modal.ConfirmReleaseExecuteMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}})
+	m = updated.(Model)
+
 	if !m.opRunning {
-		t.Fatal("submit create release should set opRunning=true")
+		t.Fatal("confirm release execute should set opRunning=true")
 	}
 	if cmd == nil {
-		t.Fatal("submit create release should return command")
+		t.Fatal("confirm release execute should return command")
 	}
 	if !strings.Contains(m.outputPanel.View(), "Creating release from selected tasks") {
 		t.Fatalf("output should include create release start line, got %q", m.outputPanel.View())
+	}
+	if m.pendingReleaseSubmit != nil {
+		t.Fatal("pending release submit should be cleared after confirm")
+	}
+
+	select {
+	case <-mgr.createReleaseDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("CreateRelease was not called")
+	}
+
+	mgr.mu.Lock()
+	calls := mgr.createReleaseCalls
+	params := mgr.createReleaseParams
+	mgr.mu.Unlock()
+
+	if calls != 1 {
+		t.Fatalf("CreateRelease calls = %d, want 1", calls)
+	}
+	if !params.StartImmediately {
+		t.Fatal("CreateRelease StartImmediately should be true after confirm")
+	}
+}
+
+func TestUpdate_ConfirmReleaseExecute_WithoutPendingSubmit_DoesNotExecute(t *testing.T) {
+	mgr := &mockManager{createReleaseResult: domain.Release{ID: "rel-1", CreatedAt: time.Now().UTC()}}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.modal = modal.NewReleaseExecuteConfirmDialog([]string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
+
+	updated, cmd := m.Update(modal.ConfirmReleaseExecuteMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("confirm release execute without pending submit must not return command")
+	}
+	if m.opRunning {
+		t.Fatal("confirm release execute without pending submit must not set opRunning")
+	}
+	if mgr.createReleaseCalls != 0 {
+		t.Fatalf("create release should not execute, got calls=%d", mgr.createReleaseCalls)
+	}
+}
+
+func TestUpdate_ConfirmReleaseExecute_WithWrongActiveModal_DoesNotExecute(t *testing.T) {
+	mgr := &mockManager{createReleaseResult: domain.Release{ID: "rel-1", CreatedAt: time.Now().UTC()}}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.pendingReleaseSubmit = &modal.SubmitCreateReleaseMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}}
+	m.modal = nil
+
+	updated, cmd := m.Update(modal.ConfirmReleaseExecuteMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("confirm release execute with wrong active modal must not return command")
+	}
+	if m.opRunning {
+		t.Fatal("confirm release execute with wrong active modal must not set opRunning")
+	}
+	if mgr.createReleaseCalls != 0 {
+		t.Fatalf("create release should not execute, got calls=%d", mgr.createReleaseCalls)
+	}
+}
+
+func TestUpdate_ConfirmReleaseExecute_WithMismatchedTaskIDs_DoesNotExecute(t *testing.T) {
+	mgr := &mockManager{createReleaseResult: domain.Release{ID: "rel-1", CreatedAt: time.Now().UTC()}}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.pendingReleaseSubmit = &modal.SubmitCreateReleaseMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}}
+	m.modal = modal.NewReleaseExecuteConfirmDialog([]string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
+
+	updated, cmd := m.Update(modal.ConfirmReleaseExecuteMsg{TaskIDs: []string{"ZA-2"}, Versions: map[string]string{"api": "1.2.3"}})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("confirm release execute with mismatched task IDs must not return command")
+	}
+	if m.opRunning {
+		t.Fatal("confirm release execute with mismatched task IDs must not set opRunning")
+	}
+	if mgr.createReleaseCalls != 0 {
+		t.Fatalf("create release should not execute, got calls=%d", mgr.createReleaseCalls)
+	}
+}
+
+func TestUpdate_ConfirmReleaseExecute_WithMismatchedVersions_DoesNotExecute(t *testing.T) {
+	mgr := &mockManager{createReleaseResult: domain.Release{ID: "rel-1", CreatedAt: time.Now().UTC()}}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.pendingReleaseSubmit = &modal.SubmitCreateReleaseMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}}
+	m.modal = modal.NewReleaseExecuteConfirmDialog([]string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
+
+	updated, cmd := m.Update(modal.ConfirmReleaseExecuteMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.4"}})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("confirm release execute with mismatched versions must not return command")
+	}
+	if m.opRunning {
+		t.Fatal("confirm release execute with mismatched versions must not set opRunning")
+	}
+	if mgr.createReleaseCalls != 0 {
+		t.Fatalf("create release should not execute, got calls=%d", mgr.createReleaseCalls)
 	}
 }
 
@@ -856,7 +1087,7 @@ func TestUpdate_CreateReleaseDone_AppendsOutputAndRefreshesReleases(t *testing.T
 	if m.opRunning {
 		t.Fatal("create release done should clear opRunning")
 	}
-	if !strings.Contains(m.outputPanel.View(), "Create release done: rel-2") {
+	if !strings.Contains(m.outputPanel.View(), "Release prepared: rel-2 — run Finish Release after regression testing.") {
 		t.Fatalf("output should include create release done line, got %q", m.outputPanel.View())
 	}
 	if cmd == nil {
@@ -865,6 +1096,210 @@ func TestUpdate_CreateReleaseDone_AppendsOutputAndRefreshesReleases(t *testing.T
 	_ = cmd()
 	if mgr.listReleasesCalls != 1 {
 		t.Fatalf("create completion should refresh releases once, got %d", mgr.listReleasesCalls)
+	}
+}
+
+func TestUpdate_FinishReleaseMsg_OpensFinishConfirmDialog(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	rel := domain.Release{
+		ID:     "rel-1",
+		Status: domain.ReleaseStatusPrepared,
+		Services: []domain.ReleaseService{
+			{Name: "api", Version: "1.2.3", Tag: "v1.2.3"},
+		},
+	}
+	m.releasesPanel.SetReleases([]domain.Release{rel})
+
+	updated, _ := m.Update(panels.FinishReleaseMsg{ReleaseID: "rel-1"})
+	m = updated.(Model)
+
+	if m.pendingFinishReleaseID == nil || *m.pendingFinishReleaseID != "rel-1" {
+		t.Fatal("pendingFinishReleaseID should be set to release ID")
+	}
+	if _, ok := m.modal.(*modal.ReleaseFinishConfirmDialog); !ok {
+		t.Fatalf("expected ReleaseFinishConfirmDialog, got %T", m.modal)
+	}
+}
+
+func TestUpdate_ConfirmFinishReleaseMsg_StartsOperation(t *testing.T) {
+	mgr := &mockManager{
+		finishReleaseResult: domain.Release{ID: "rel-1"},
+		finishReleaseDone:   make(chan struct{}),
+	}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	pending := "rel-1"
+	m.pendingFinishReleaseID = &pending
+	m.modal = modal.NewReleaseFinishConfirmDialog("rel-1", domain.Release{ID: "rel-1"}, m.cfg)
+
+	updated, cmd := m.Update(modal.ConfirmFinishReleaseMsg{ReleaseID: "rel-1"})
+	m = updated.(Model)
+
+	if !m.opRunning {
+		t.Fatal("confirm finish release should set opRunning=true")
+	}
+	if cmd == nil {
+		t.Fatal("confirm finish release should return command")
+	}
+	if m.modal != nil {
+		t.Fatal("modal should be cleared after confirm")
+	}
+	if m.pendingFinishReleaseID != nil {
+		t.Fatal("pending finish release ID should be cleared after confirm")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Finishing release rel-1...") {
+		t.Fatalf("output should include finish start line, got %q", m.outputPanel.View())
+	}
+
+	select {
+	case <-mgr.finishReleaseDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("FinishRelease was not called")
+	}
+
+	mgr.mu.Lock()
+	calls := mgr.finishReleaseCalls
+	id := mgr.finishReleaseID
+	mgr.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("FinishRelease calls = %d, want 1", calls)
+	}
+	if id != "rel-1" {
+		t.Fatalf("FinishRelease releaseID = %q, want rel-1", id)
+	}
+}
+
+func TestUpdate_ConfirmFinishReleaseMsg_NoPending_DoesNotExecute(t *testing.T) {
+	mgr := &mockManager{finishReleaseResult: domain.Release{ID: "rel-1"}}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.modal = modal.NewReleaseFinishConfirmDialog("rel-1", domain.Release{ID: "rel-1"}, m.cfg)
+
+	updated, cmd := m.Update(modal.ConfirmFinishReleaseMsg{ReleaseID: "rel-1"})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("confirm finish release without pending ID must not return command")
+	}
+	if m.opRunning {
+		t.Fatal("confirm finish release without pending ID must not set opRunning")
+	}
+	if mgr.finishReleaseCalls != 0 {
+		t.Fatalf("finish release should not execute, got calls=%d", mgr.finishReleaseCalls)
+	}
+}
+
+func TestUpdate_ConfirmFinishReleaseMsg_WrongModal_DoesNotExecute(t *testing.T) {
+	mgr := &mockManager{finishReleaseResult: domain.Release{ID: "rel-1"}}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	pending := "rel-1"
+	m.pendingFinishReleaseID = &pending
+	m.modal = modal.NewHelpOverlayWithOptions(false)
+
+	updated, cmd := m.Update(modal.ConfirmFinishReleaseMsg{ReleaseID: "rel-1"})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("confirm finish release with wrong active modal must not return command")
+	}
+	if m.opRunning {
+		t.Fatal("confirm finish release with wrong active modal must not set opRunning")
+	}
+	if mgr.finishReleaseCalls != 0 {
+		t.Fatalf("finish release should not execute, got calls=%d", mgr.finishReleaseCalls)
+	}
+}
+
+func TestUpdate_ConfirmFinishReleaseMsg_MismatchedID_DoesNotExecute(t *testing.T) {
+	mgr := &mockManager{finishReleaseResult: domain.Release{ID: "rel-1"}}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	pending := "rel-1"
+	m.pendingFinishReleaseID = &pending
+	m.modal = modal.NewReleaseFinishConfirmDialog("rel-1", domain.Release{ID: "rel-1"}, m.cfg)
+
+	updated, cmd := m.Update(modal.ConfirmFinishReleaseMsg{ReleaseID: "rel-2"})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("confirm finish release with mismatched ID must not return command")
+	}
+	if m.opRunning {
+		t.Fatal("confirm finish release with mismatched ID must not set opRunning")
+	}
+	if mgr.finishReleaseCalls != 0 {
+		t.Fatalf("finish release should not execute, got calls=%d", mgr.finishReleaseCalls)
+	}
+}
+
+func TestUpdate_FinishReleaseDoneMsg_Success_AppendsDoneAndReloads(t *testing.T) {
+	mgr := &mockManager{}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.opRunning = true
+
+	updated, cmd := m.Update(FinishReleaseDoneMsg{Release: domain.Release{ID: "rel-1"}})
+	m = updated.(Model)
+
+	if m.opRunning {
+		t.Fatal("FinishReleaseDoneMsg should clear opRunning")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Finish release done: rel-1") {
+		t.Fatalf("output should include finish done line, got %q", m.outputPanel.View())
+	}
+	if cmd == nil {
+		t.Fatal("FinishReleaseDoneMsg should trigger releases refresh command")
+	}
+	msg := cmd()
+	if _, ok := msg.(ReleasesLoadedMsg); !ok {
+		t.Fatalf("expected ReleasesLoadedMsg, got %T", msg)
+	}
+}
+
+func TestUpdate_FinishReleaseDoneMsg_Error_AppendsFailureAndReloads(t *testing.T) {
+	mgr := &mockManager{}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.opRunning = true
+
+	updated, cmd := m.Update(FinishReleaseDoneMsg{Release: domain.Release{ID: "rel-1"}, Err: &mockError{msg: "tag push failed"}})
+	m = updated.(Model)
+
+	if m.opRunning {
+		t.Fatal("FinishReleaseDoneMsg should clear opRunning")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Finish release failed: tag push failed") {
+		t.Fatalf("output should include finish failure line, got %q", m.outputPanel.View())
+	}
+	if cmd == nil {
+		t.Fatal("FinishReleaseDoneMsg should trigger releases refresh command")
+	}
+	msg := cmd()
+	if _, ok := msg.(ReleasesLoadedMsg); !ok {
+		t.Fatalf("expected ReleasesLoadedMsg, got %T", msg)
+	}
+}
+
+func TestUpdate_CloseModalMsg_FinishConfirm_ClearsPendingAndAppendsCancelled(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	pending := "rel-1"
+	m.pendingFinishReleaseID = &pending
+	m.modal = modal.NewReleaseFinishConfirmDialog("rel-1", domain.Release{ID: "rel-1"}, m.cfg)
+
+	updated, _ := m.Update(modal.CloseModalMsg{})
+	m = updated.(Model)
+
+	if m.pendingFinishReleaseID != nil {
+		t.Fatal("pending finish release ID should be cleared on cancel")
+	}
+	if m.modal != nil {
+		t.Fatal("modal should be cleared on cancel")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Finish release cancelled.") {
+		t.Fatalf("output should include finish cancellation, got %q", m.outputPanel.View())
 	}
 }
 
@@ -958,30 +1393,30 @@ func TestFocusPanel_NextPrev(t *testing.T) {
 	if got := FocusTasks.Next(); got != FocusServices {
 		t.Errorf("FocusTasks.Next(): expected FocusServices, got %v", got)
 	}
-	if got := FocusServices.Next(); got != FocusOutput {
-		t.Errorf("FocusServices.Next(): expected FocusOutput, got %v", got)
+	if got := FocusServices.Next(); got != FocusReleases {
+		t.Errorf("FocusServices.Next(): expected FocusReleases, got %v", got)
 	}
 
-	if got := FocusOutput.Next(); got != FocusReleases {
-		t.Errorf("FocusOutput.Next(): expected FocusReleases, got %v", got)
+	if got := FocusReleases.Next(); got != FocusOutput {
+		t.Errorf("FocusReleases.Next(): expected FocusOutput, got %v", got)
 	}
-	if got := FocusReleases.Next(); got != FocusTasks {
-		t.Errorf("FocusReleases.Next(): expected FocusTasks, got %v", got)
+	if got := FocusOutput.Next(); got != FocusTasks {
+		t.Errorf("FocusOutput.Next(): expected FocusTasks, got %v", got)
 	}
 
 	if got := FocusServices.Prev(); got != FocusTasks {
 		t.Errorf("FocusServices.Prev(): expected FocusTasks, got %v", got)
 	}
-	if got := FocusTasks.Prev(); got != FocusReleases {
-		t.Errorf("FocusTasks.Prev(): expected FocusReleases, got %v", got)
+	if got := FocusTasks.Prev(); got != FocusOutput {
+		t.Errorf("FocusTasks.Prev(): expected FocusOutput, got %v", got)
 	}
 
-	if got := FocusOutput.Prev(); got != FocusServices {
-		t.Errorf("FocusOutput.Prev(): expected FocusServices, got %v", got)
+	if got := FocusReleases.Prev(); got != FocusServices {
+		t.Errorf("FocusReleases.Prev(): expected FocusServices, got %v", got)
 	}
 
-	if got := FocusReleases.Prev(); got != FocusOutput {
-		t.Errorf("FocusReleases.Prev(): expected FocusOutput, got %v", got)
+	if got := FocusOutput.Prev(); got != FocusReleases {
+		t.Errorf("FocusOutput.Prev(): expected FocusReleases, got %v", got)
 	}
 }
 
@@ -989,41 +1424,215 @@ type mockError struct{ msg string }
 
 func (e *mockError) Error() string { return e.msg }
 
-func TestUpdate_PushServiceMsg_StartsOperation(t *testing.T) {
+func TestUpdate_PushServiceMsg_OpensConfirmModal(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
+	m.servicesPanel.SetServices("IN-001", []domain.Service{{Name: "svc-a", Branch: "feature/IN-001", RemoteURL: "git@host/repo.git"}})
 
 	updated, cmd := m.Update(panels.PushServiceMsg{TaskID: "IN-001", ServiceName: "svc-a"})
 	m = updated.(Model)
 
-	if !m.opRunning {
-		t.Error("opRunning must be true after PushServiceMsg")
+	if m.opRunning {
+		t.Error("opRunning must stay false before push confirm")
 	}
-	if cmd == nil {
-		t.Fatal("PushServiceMsg must return a non-nil cmd")
+	if cmd != nil {
+		t.Fatal("PushServiceMsg should not return command before confirm")
 	}
-
-	view := m.outputPanel.View()
-	if !strings.Contains(view, "Pushing service svc-a for task IN-001...") {
-		t.Errorf("output panel should contain push message, got:\n%s", view)
+	if _, ok := m.modal.(*modal.PushConfirmDialog); !ok {
+		t.Fatalf("expected PushConfirmDialog, got %T", m.modal)
 	}
 }
 
-func TestUpdate_PushTaskMsg_StartsOperationWithTaskID(t *testing.T) {
+func TestUpdate_PushTaskMsg_OpensConfirmModal(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
+	m.servicesPanel.SetServices("IN-777", []domain.Service{{Name: "svc-a", Branch: "feature/IN-777"}})
 
 	updated, cmd := m.Update(panels.PushTaskMsg{TaskID: "IN-777"})
 	m = updated.(Model)
 
+	if m.opRunning {
+		t.Error("opRunning must stay false before push confirm")
+	}
+	if cmd != nil {
+		t.Fatal("PushTaskMsg should not return command before confirm")
+	}
+	if _, ok := m.modal.(*modal.PushConfirmDialog); !ok {
+		t.Fatalf("expected PushConfirmDialog, got %T", m.modal)
+	}
+}
+
+func TestPushTargets_ProtectedBranch_SetsProtectedTrue(t *testing.T) {
+	mgr := &mockManager{isProtectedBranchResult: map[string]bool{"main": true}}
+	m := newTestModel(t, mgr)
+	m.servicesPanel.SetServices("IN-001", []domain.Service{{Name: "api", Branch: "main"}})
+
+	targets := m.pushTargets("IN-001", "")
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(targets))
+	}
+	if !targets[0].Protected {
+		t.Fatalf("expected Protected=true for main branch, got %v", targets[0].Protected)
+	}
+}
+
+func TestPushTargets_FeatureBranch_SetsProtectedFalse(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.servicesPanel.SetServices("IN-002", []domain.Service{{Name: "api", Branch: "feature/IN-002"}})
+
+	targets := m.pushTargets("IN-002", "")
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(targets))
+	}
+	if targets[0].Protected {
+		t.Fatalf("expected Protected=false for feature branch, got %v", targets[0].Protected)
+	}
+}
+
+func TestUpdate_SubmitPushMsg_StartsPushOperation(t *testing.T) {
+	mgr := &mockManager{}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.modal = modal.NewPushConfirmDialog("IN-001", "svc-a", nil)
+	m.pendingPushSubmit = &modal.SubmitPushMsg{TaskID: "IN-001", ServiceName: "svc-a"}
+
+	updated, cmd := m.Update(modal.SubmitPushMsg{TaskID: "IN-001", ServiceName: "svc-a"})
+	m = updated.(Model)
+
 	if !m.opRunning {
-		t.Error("opRunning must be true after PushTaskMsg")
+		t.Fatal("submit push should set opRunning")
 	}
 	if cmd == nil {
-		t.Fatal("PushTaskMsg must return a non-nil cmd")
+		t.Fatal("submit push should return command")
 	}
-	if !strings.Contains(m.outputPanel.View(), "Pushing task IN-777...") {
-		t.Errorf("output panel should contain task push message, got:\n%s", m.outputPanel.View())
+	runBatchCommands(cmd())
+	if mgr.pushServiceCalls != 1 || mgr.pushServiceTask != "IN-001" || mgr.pushServiceName != "svc-a" {
+		t.Fatalf("push service call mismatch: calls=%d task=%q service=%q", mgr.pushServiceCalls, mgr.pushServiceTask, mgr.pushServiceName)
+	}
+	if !strings.Contains(m.outputPanel.View(), "Pushing service svc-a for task IN-001...") {
+		t.Fatalf("output should include push start, got %q", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_SubmitPushMsg_WithoutActivePushModal_DoesNotExecute(t *testing.T) {
+	mgr := &mockManager{}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.modal = modal.NewHelpOverlayWithOptions(false)
+	m.pendingPushSubmit = &modal.SubmitPushMsg{TaskID: "IN-001", ServiceName: "svc-a"}
+
+	updated, cmd := m.Update(modal.SubmitPushMsg{TaskID: "IN-001", ServiceName: "svc-a"})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("submit push without push modal must not return command")
+	}
+	if m.opRunning {
+		t.Fatal("submit push without push modal must not set opRunning")
+	}
+	if mgr.pushTaskCalls != 0 || mgr.pushServiceCalls != 0 {
+		t.Fatalf("push should not execute, got pushTask=%d pushService=%d", mgr.pushTaskCalls, mgr.pushServiceCalls)
+	}
+}
+
+func TestUpdate_SubmitPushMsg_WithMismatchedPending_DoesNotExecute(t *testing.T) {
+	mgr := &mockManager{}
+	m := newTestModel(t, mgr)
+	m = sendWindowSize(m, 120, 40)
+	m.modal = modal.NewPushConfirmDialog("IN-001", "svc-a", nil)
+	m.pendingPushSubmit = &modal.SubmitPushMsg{TaskID: "IN-001", ServiceName: "svc-b"}
+
+	updated, cmd := m.Update(modal.SubmitPushMsg{TaskID: "IN-001", ServiceName: "svc-a"})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("submit push with mismatched pending must not return command")
+	}
+	if m.opRunning {
+		t.Fatal("submit push with mismatched pending must not set opRunning")
+	}
+	if mgr.pushTaskCalls != 0 || mgr.pushServiceCalls != 0 {
+		t.Fatalf("push should not execute, got pushTask=%d pushService=%d", mgr.pushTaskCalls, mgr.pushServiceCalls)
+	}
+}
+
+func TestUpdate_CloseModalMsg_PushConfirm_AppendsCancelledMessage(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	m.modal = modal.NewPushConfirmDialog("IN-001", "", nil)
+	m.pendingPushSubmit = &modal.SubmitPushMsg{TaskID: "IN-001"}
+
+	updated, _ := m.Update(modal.CloseModalMsg{})
+	m = updated.(Model)
+
+	if m.pendingPushSubmit != nil {
+		t.Fatal("pending push submit should be cleared on cancel")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Push cancelled.") {
+		t.Fatalf("output should include push cancelled, got %q", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_CloseModalMsg_ReleaseExecuteConfirm_ClearsPendingAndAppendsCancelled(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	m.pendingReleaseSubmit = &modal.SubmitCreateReleaseMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}}
+	m.modal = modal.NewReleaseExecuteConfirmDialog([]string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
+
+	updated, _ := m.Update(modal.CloseModalMsg{})
+	m = updated.(Model)
+
+	if m.pendingReleaseSubmit != nil {
+		t.Fatal("pending release submit should be cleared on cancel")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Release execution cancelled.") {
+		t.Fatalf("output should include release cancellation, got %q", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_PartialInitDoneMsg_AppendsWarningSummary(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	m.opRunning = true
+
+	updated, _ := m.Update(PartialInitDoneMsg{
+		Op: "Init task IN-1",
+		Result: task.PartialFailureResult{
+			SucceededServices: []string{"svc-a"},
+			FailedServices:    []task.FailedService{{Name: "svc-b", Cause: &mockError{msg: "clone failed"}}},
+		},
+	})
+	m = updated.(Model)
+
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "Init task IN-1 partially done.") {
+		t.Fatalf("output should include partial init warning, got %q", view)
+	}
+	if !strings.Contains(view, "Succeeded: svc-a") || !strings.Contains(view, "Failed: svc-b (clone failed)") {
+		t.Fatalf("output should include succeeded/failed services, got %q", view)
+	}
+}
+
+func TestUpdate_PartialAddDoneMsg_AppendsWarningSummary(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+	m.opRunning = true
+
+	updated, _ := m.Update(PartialAddDoneMsg{
+		Op: "Add services to IN-1",
+		Result: task.PartialFailureResult{
+			SucceededServices: []string{"svc-a"},
+			FailedServices:    []task.FailedService{{Name: "svc-c", Cause: &mockError{msg: "branch exists"}}},
+		},
+	})
+	m = updated.(Model)
+
+	view := m.outputPanel.View()
+	if !strings.Contains(view, "Add services to IN-1 partially done.") {
+		t.Fatalf("output should include partial add warning, got %q", view)
+	}
+	if !strings.Contains(view, "Succeeded: svc-a") || !strings.Contains(view, "Failed: svc-c (branch exists)") {
+		t.Fatalf("output should include succeeded/failed services, got %q", view)
 	}
 }
 

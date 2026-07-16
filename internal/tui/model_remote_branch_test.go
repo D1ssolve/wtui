@@ -312,6 +312,120 @@ func TestUpdate_CommandDoneMsg_Success_ClearsPendingParams(t *testing.T) {
 	}
 }
 
+func TestUpdate_PartialInitDoneMsg_RemoteBranchConflict_KeepsPendingAndOpensDialog(t *testing.T) {
+	mgr := &mockManager{}
+	m := newTestModel(t, mgr)
+	m.ready = true
+	m.width = 80
+	m.height = 24
+	m.opRunning = true
+
+	m.pendingInitParams = &task.InitParams{
+		TaskID:       "TASK-123",
+		Services:     []string{"service-a"},
+		BranchPrefix: "feature/",
+		BaseBranch:   "main",
+	}
+
+	conflictErr := &task.ErrRemoteBranchConflict{
+		TaskID:      "TASK-123",
+		ServiceName: "service-a",
+		BranchName:  "feature/TASK-123",
+		RepoPath:    "/path/to/repo",
+	}
+	msg := PartialInitDoneMsg{
+		Op:  "Init task TASK-123",
+		Err: conflictErr,
+		Result: task.PartialFailureResult{
+			SucceededServices: []string{"service-b"},
+			FailedServices:    []task.FailedService{{Name: "service-a", Cause: conflictErr}},
+		},
+	}
+
+	newModel, cmd := m.Update(msg)
+	m = newModel.(Model)
+
+	if m.pendingInitParams == nil {
+		t.Fatal("pendingInitParams should be preserved for retry")
+	}
+	if m.pendingAddParams != nil {
+		t.Fatal("pendingAddParams should remain nil")
+	}
+	if cmd == nil {
+		t.Fatal("expected command producing remote conflict modal message")
+	}
+	result := cmd()
+	conflictMsg, ok := result.(modal.RemoteBranchConflictMsg)
+	if !ok {
+		t.Fatalf("expected RemoteBranchConflictMsg, got %T", result)
+	}
+	if conflictMsg.ServiceName != "service-a" {
+		t.Fatalf("conflict service = %q, want service-a", conflictMsg.ServiceName)
+	}
+
+	newModel, _ = m.Update(conflictMsg)
+	m = newModel.(Model)
+	if _, ok := m.modal.(*modal.RemoteBranchConflictDialog); !ok {
+		t.Fatalf("expected remote branch conflict dialog, got %T", m.modal)
+	}
+}
+
+func TestUpdate_PartialAddDoneMsg_RemoteBranchConflict_KeepsPendingAndOpensDialog(t *testing.T) {
+	mgr := &mockManager{}
+	m := newTestModel(t, mgr)
+	m.ready = true
+	m.width = 80
+	m.height = 24
+	m.opRunning = true
+
+	m.pendingAddParams = &task.AddParams{
+		TaskID:   "TASK-123",
+		Services: []string{"service-a"},
+	}
+
+	conflictErr := &task.ErrRemoteBranchConflict{
+		TaskID:      "TASK-123",
+		ServiceName: "service-a",
+		BranchName:  "feature/TASK-123",
+		RepoPath:    "/path/to/repo",
+	}
+	msg := PartialAddDoneMsg{
+		Op:  "Add services to TASK-123",
+		Err: conflictErr,
+		Result: task.PartialFailureResult{
+			SucceededServices: []string{"service-b"},
+			FailedServices:    []task.FailedService{{Name: "service-a", Cause: conflictErr}},
+		},
+	}
+
+	newModel, cmd := m.Update(msg)
+	m = newModel.(Model)
+
+	if m.pendingAddParams == nil {
+		t.Fatal("pendingAddParams should be preserved for retry")
+	}
+	if m.pendingInitParams != nil {
+		t.Fatal("pendingInitParams should remain nil")
+	}
+	if cmd == nil {
+		t.Fatal("expected command producing remote conflict modal message")
+	}
+	result := cmd()
+	conflictMsg, ok := result.(modal.RemoteBranchConflictMsg)
+	if !ok {
+		t.Fatalf("expected RemoteBranchConflictMsg, got %T", result)
+	}
+	if conflictMsg.ServiceName != "service-a" {
+		t.Fatalf("conflict service = %q, want service-a", conflictMsg.ServiceName)
+	}
+
+	newModel, _ = m.Update(conflictMsg)
+	m = newModel.(Model)
+	if _, ok := m.modal.(*modal.RemoteBranchConflictDialog); !ok {
+		t.Fatalf("expected remote branch conflict dialog, got %T", m.modal)
+	}
+}
+
 func TestUpdate_CloseModalMsg_ClearsPendingParams(t *testing.T) {
 	mgr := &mockManager{}
 	m := newTestModel(t, mgr)

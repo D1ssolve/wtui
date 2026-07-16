@@ -1,6 +1,8 @@
 package panels
 
-import "github.com/D1ssolve/wtui/internal/forge"
+import (
+	"github.com/D1ssolve/wtui/internal/forge"
+)
 
 type FocusServicesMsg struct{ TaskID string }
 
@@ -95,4 +97,8 @@ type OpenCreateReleaseDialogMsg struct{}
 
 type ReleaseVersionsLoadedMsg struct {
 	Versions map[string]string // serviceName → proposed version
+}
+
+type FinishReleaseMsg struct {
+	ReleaseID string
 }

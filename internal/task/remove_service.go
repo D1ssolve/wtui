@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -45,9 +46,10 @@ func (m *manager) RemoveService(
 		return fmt.Errorf("remove service: failed delete worktree %s: %w", worktreePath, err)
 	}
 
+	var branchDeleteErr error
 	if removeBranch {
 		if err = m.git.DeleteBranch(ctx, commonDir, branchName); err != nil {
-			return fmt.Errorf("remove service: failed delete branch %s: %w", branchName, err)
+			branchDeleteErr = fmt.Errorf("remove service: failed delete branch %s: %w", branchName, err)
 		}
 	}
 
@@ -68,7 +70,7 @@ func (m *manager) RemoveService(
 				slog.String("error", err.Error()),
 			)
 		}
-		return nil
+		return branchDeleteErr
 	}
 
 	if err := generateWorkspaceFile(taskID, taskDir); err != nil {
@@ -91,6 +93,10 @@ func (m *manager) RemoveService(
 			slog.String("task_id", taskID),
 			slog.String("error", err.Error()),
 		)
+	}
+
+	if branchDeleteErr != nil {
+		return errors.Join(branchDeleteErr)
 	}
 
 	return nil

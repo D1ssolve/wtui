@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -27,10 +29,10 @@ import (
 )
 
 type Model struct {
-	cfg          *config.Config
-	logger       *slog.Logger
-	mgr          task.Manager
-	flow         *gitflow.ResolvedGitFlow
+	cfg    *config.Config
+	logger *slog.Logger
+	mgr    task.Manager
+	flow   *gitflow.ResolvedGitFlow
 
 	lazygitAvailable bool
 	glabAvailable    bool
@@ -70,9 +72,12 @@ type Model struct {
 
 	pendingInitParams *task.InitParams
 
-	pendingAddParams *task.AddParams
-	pendingSyncTask  *modal.SubmitSyncStrategyMsg
-	pendingCloseTask *domain.Task
+	pendingAddParams     *task.AddParams
+	pendingPushSubmit    *modal.SubmitPushMsg
+	pendingReleaseSubmit   *modal.SubmitCreateReleaseMsg
+	pendingFinishReleaseID *string
+	pendingSyncTask        *modal.SubmitSyncStrategyMsg
+	pendingCloseTask       *domain.Task
 }
 
 type Options struct {
@@ -417,14 +422,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case panels.PushTaskMsg:
-		m.opRunning = true
-		m.outputPanel.AppendLine("Pushing task " + msg.TaskID + "...")
-		return m, tea.Batch(pushTaskCmd(m.mgr, msg.TaskID), m.spinner.Tick)
+		pendingPush := modal.SubmitPushMsg{TaskID: msg.TaskID, ServiceName: ""}
+		m.pendingPushSubmit = &pendingPush
+		m.modal = modal.NewPushConfirmDialog(msg.TaskID, "", m.pushTargets(msg.TaskID, ""))
+		m.modal.SetTerminalSize(m.width, m.height)
+		return m, nil
 
 	case panels.PushServiceMsg:
-		m.opRunning = true
-		m.outputPanel.AppendLine("Pushing service " + msg.ServiceName + " for task " + msg.TaskID + "...")
-		return m, tea.Batch(pushServiceCmd(m.mgr, msg.TaskID, msg.ServiceName), m.spinner.Tick)
+		pendingPush := modal.SubmitPushMsg{TaskID: msg.TaskID, ServiceName: msg.ServiceName}
+		m.pendingPushSubmit = &pendingPush
+		m.modal = modal.NewPushConfirmDialog(msg.TaskID, msg.ServiceName, m.pushTargets(msg.TaskID, msg.ServiceName))
+		m.modal.SetTerminalSize(m.width, m.height)
+		return m, nil
 
 	case panels.StashServiceMsg:
 		op := "Stashing"
@@ -452,6 +461,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = true
 		m.outputPanel.AppendLine(op + " service " + msg.ServiceName + " for task " + msg.TaskID + untracked + "...")
 		return m, tea.Batch(stashServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Pop, msg.IncludeUntracked), m.spinner.Tick)
+
+	case modal.SubmitPushMsg:
+		if _, ok := m.modal.(*modal.PushConfirmDialog); !ok {
+			m.logger.Warn("SubmitPushMsg ignored: active modal is not push confirm",
+				slog.String("task_id", msg.TaskID),
+				slog.String("service", msg.ServiceName),
+			)
+			return m, nil
+		}
+
+		pending := m.pendingPushSubmit
+		if pending == nil || strings.TrimSpace(pending.TaskID) != strings.TrimSpace(msg.TaskID) || strings.TrimSpace(pending.ServiceName) != strings.TrimSpace(msg.ServiceName) {
+			m.logger.Warn("SubmitPushMsg ignored: no matching pending push",
+				slog.String("task_id", msg.TaskID),
+				slog.String("service", msg.ServiceName),
+			)
+			return m, nil
+		}
+
+		m.pendingPushSubmit = nil
+		m.modal = nil
+		m.opRunning = true
+		if strings.TrimSpace(msg.ServiceName) == "" {
+			m.outputPanel.AppendLine("Pushing task " + msg.TaskID + "...")
+			return m, tea.Batch(pushTaskCmd(m.mgr, msg.TaskID), m.spinner.Tick)
+		}
+		m.outputPanel.AppendLine("Pushing service " + msg.ServiceName + " for task " + msg.TaskID + "...")
+		return m, tea.Batch(pushServiceCmd(m.mgr, msg.TaskID, msg.ServiceName), m.spinner.Tick)
 
 	case panels.OpenRemoveServiceDialogMsg:
 		m.modal = modal.NewRemoveServiceDialog(msg.TaskID, msg.ServiceName, msg.BranchName)
@@ -500,6 +537,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(codeWorkspaceTaskCmd(m.cfg.Editor, msg.TaskID, msg.TaskDir), m.spinner.Tick)
 
 	case modal.CloseModalMsg:
+		if _, ok := m.modal.(*modal.PushConfirmDialog); ok {
+			m.outputPanel.AppendLine("Push cancelled.")
+			m.pendingPushSubmit = nil
+		}
+		if _, ok := m.modal.(*modal.ReleaseExecuteConfirmDialog); ok {
+			m.pendingReleaseSubmit = nil
+			m.outputPanel.AppendLine("Release execution cancelled.")
+		}
+		if _, ok := m.modal.(*modal.ReleaseFinishConfirmDialog); ok {
+			m.pendingFinishReleaseID = nil
+			m.outputPanel.AppendLine("Finish release cancelled.")
+		}
 		m.modal = nil
 
 		m.pendingInitParams = nil
@@ -620,14 +669,88 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case modal.SubmitCreateReleaseMsg:
+		pending := modal.SubmitCreateReleaseMsg{
+			TaskIDs:  append([]string(nil), msg.TaskIDs...),
+			Versions: copyVersionMap(msg.Versions),
+		}
+		m.pendingReleaseSubmit = &pending
+		preview, err := m.mgr.BuildReleasePreview(context.Background(), pending.Versions)
+		if err != nil {
+			preview.Err = err
+		}
+		m.modal = modal.NewReleaseExecuteConfirmDialog(pending.TaskIDs, pending.Versions, preview)
+		m.modal.SetTerminalSize(m.width, m.height)
+		return m, nil
+
+	case modal.ConfirmReleaseExecuteMsg:
+		submit := m.pendingReleaseSubmit
+		if submit == nil {
+			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: pending release submit is nil")
+			return m, nil
+		}
+		if _, ok := m.modal.(*modal.ReleaseExecuteConfirmDialog); !ok {
+			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: active modal is not release execute confirm")
+			return m, nil
+		}
+		if !slices.Equal(msg.TaskIDs, submit.TaskIDs) {
+			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: task IDs do not match pending submit")
+			return m, nil
+		}
+		if !maps.Equal(msg.Versions, submit.Versions) {
+			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: versions do not match pending submit")
+			return m, nil
+		}
+
 		m.modal = nil
+		m.pendingReleaseSubmit = nil
 		m.opRunning = true
 		m.outputPanel.AppendLine("Creating release from selected tasks...")
 		return m, tea.Batch(createReleaseCmd(m.mgr, task.CreateReleaseParams{
-			TaskIDs:         append([]string(nil), msg.TaskIDs...),
-			ServiceVersions: msg.Versions,
+			TaskIDs:          append([]string(nil), submit.TaskIDs...),
+			ServiceVersions:  copyVersionMap(submit.Versions),
 			StartImmediately: true,
 		}), m.spinner.Tick)
+
+	case panels.FinishReleaseMsg:
+		selected := m.releasesPanel.SelectedRelease()
+		if selected == nil || selected.ID != msg.ReleaseID || selected.Status != domain.ReleaseStatusPrepared {
+			m.logger.Warn("FinishReleaseMsg ignored: selected release is not prepared or ID mismatch")
+			return m, nil
+		}
+		pendingID := msg.ReleaseID
+		m.pendingFinishReleaseID = &pendingID
+		m.modal = modal.NewReleaseFinishConfirmDialog(msg.ReleaseID, *selected, m.cfg)
+		m.modal.SetTerminalSize(m.width, m.height)
+		return m, nil
+
+	case modal.ConfirmFinishReleaseMsg:
+		if m.pendingFinishReleaseID == nil || *m.pendingFinishReleaseID != msg.ReleaseID {
+			m.logger.Warn("ConfirmFinishReleaseMsg ignored: pending ID mismatch",
+				slog.String("release_id", msg.ReleaseID),
+			)
+			return m, nil
+		}
+		if _, ok := m.modal.(*modal.ReleaseFinishConfirmDialog); !ok {
+			m.logger.Warn("ConfirmFinishReleaseMsg ignored: active modal is not finish confirm",
+				slog.String("release_id", msg.ReleaseID),
+			)
+			return m, nil
+		}
+
+		m.modal = nil
+		m.pendingFinishReleaseID = nil
+		m.opRunning = true
+		m.outputPanel.AppendLine("Finishing release " + msg.ReleaseID + "...")
+		return m, tea.Batch(finishReleaseCmd(m.mgr, msg.ReleaseID), m.spinner.Tick)
+
+	case FinishReleaseDoneMsg:
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Finish release failed: " + msg.Err.Error())
+		} else {
+			m.outputPanel.AppendLine("Finish release done: " + msg.Release.ID)
+		}
+		return m, loadReleasesCmd(m.mgr)
 
 	case modal.RequestReleaseVersionsMsg:
 		if len(msg.TaskIDs) == 0 {
@@ -848,7 +971,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if releaseID == "" {
 				releaseID = "(unknown)"
 			}
-			m.outputPanel.AppendLine("Create release done: " + releaseID)
+			m.outputPanel.AppendLine("Release prepared: " + releaseID + " — run Finish Release after regression testing.")
 		}
 		return m, loadReleasesCmd(m.mgr)
 
@@ -895,6 +1018,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingAddParams = nil
 		}
 
+		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
+
+	case PartialInitDoneMsg:
+		m.opRunning = false
+		m.outputPanel.AppendLine(msg.Op + " partially done.")
+		for _, line := range partialFailureLines(msg.Result) {
+			m.outputPanel.AppendLine(line)
+		}
+		var conflictErr *task.ErrRemoteBranchConflict
+		if errors.As(msg.Err, &conflictErr) {
+			m.outputPanel.AppendLine(msg.Op + ": remote branch conflict for " + conflictErr.ServiceName)
+			return m, func() tea.Msg {
+				return modal.RemoteBranchConflictMsg{
+					TaskID:      conflictErr.TaskID,
+					ServiceName: conflictErr.ServiceName,
+					BranchName:  conflictErr.BranchName,
+					RepoPath:    conflictErr.RepoPath,
+				}
+			}
+		}
+		m.pendingInitParams = nil
+		m.pendingAddParams = nil
+		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
+
+	case PartialAddDoneMsg:
+		m.opRunning = false
+		m.outputPanel.AppendLine(msg.Op + " partially done.")
+		for _, line := range partialFailureLines(msg.Result) {
+			m.outputPanel.AppendLine(line)
+		}
+		var conflictErr *task.ErrRemoteBranchConflict
+		if errors.As(msg.Err, &conflictErr) {
+			m.outputPanel.AppendLine(msg.Op + ": remote branch conflict for " + conflictErr.ServiceName)
+			return m, func() tea.Msg {
+				return modal.RemoteBranchConflictMsg{
+					TaskID:      conflictErr.TaskID,
+					ServiceName: conflictErr.ServiceName,
+					BranchName:  conflictErr.BranchName,
+					RepoPath:    conflictErr.RepoPath,
+				}
+			}
+		}
+		m.pendingInitParams = nil
+		m.pendingAddParams = nil
 		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
 
 	case channelDrainedMsg:
@@ -982,15 +1149,23 @@ func (m *Model) recalculateDimensions() {
 	const headerHeight = 1
 	const footerHeight = 1
 
-	outputPanelHeight := m.cfg.OutputPanelLines + 2
-	mainPanelHeight := max(m.height-headerHeight-footerHeight-outputPanelHeight, 3)
+	avail := m.height - headerHeight - footerHeight
+	minMainHeight := 3
+	outputPanelHeight := max(m.cfg.OutputPanelLines+1, avail*35/100)
+	if outputPanelHeight > avail-minMainHeight {
+		outputPanelHeight = avail - minMainHeight
+	}
+	if outputPanelHeight < 3 {
+		outputPanelHeight = min(avail, 3)
+	}
+	mainPanelHeight := avail - outputPanelHeight
 
 	tasksWidth, servicesWidth, releasesWidth := threePanelWidths(m.width)
 
 	m.tasksPanel.SetSize(tasksWidth, mainPanelHeight)
 	m.servicesPanel.SetSize(servicesWidth, mainPanelHeight)
 	m.releasesPanel.SetSize(releasesWidth, mainPanelHeight)
-	m.outputPanel.SetSize(m.width, m.cfg.OutputPanelLines)
+	m.outputPanel.SetSize(m.width, outputPanelHeight)
 }
 
 func (m Model) cycleFocusForward() Model {
@@ -1011,23 +1186,17 @@ func threePanelWidths(total int) (tasks, services, releases int) {
 		return 0, 0, 0
 	}
 
-	tasks = max(total*28/100, 25)
-	releases = max(total*28/100, 25)
+	tasks = max(total*37/100, 25)
+	releases = tasks
 	services = total - tasks - releases
 
 	if services < 1 {
-		deficit := 1 - services
-		reduce := min(deficit, max(releases-1, 0))
-		releases -= reduce
-		deficit -= reduce
-		if deficit > 0 {
-			reduce = min(deficit, max(tasks-1, 0))
-			tasks -= reduce
-			deficit -= reduce
-		}
-		services = 1
-		if deficit > 0 {
-			services = max(0, services-deficit)
+		maxSide := max((total-1)/2, 0)
+		tasks = min(tasks, maxSide)
+		releases = tasks
+		services = total - tasks - releases
+		if services < 1 {
+			services = 1
 		}
 	}
 
@@ -1110,6 +1279,65 @@ func (m Model) newSystemInfoModal() modal.Modal {
 		forgeProvider = m.cfg.Forge.DefaultProvider
 	}
 	return modal.NewSystemInfoModal(m.lazygitAvailable, m.glabAvailable, m.ghAvailable, forgeProvider, gitlabHost, githubHost, preset)
+}
+
+func (m Model) pushTargets(taskID, serviceName string) []modal.PushTargetInfo {
+	services := m.servicesPanel.Services()
+	if m.servicesPanel.TaskID() != taskID {
+		if strings.TrimSpace(serviceName) == "" {
+			return nil
+		}
+		return []modal.PushTargetInfo{{ServiceName: serviceName}}
+	}
+
+	ctx := context.Background()
+	targets := make([]modal.PushTargetInfo, 0, len(services))
+	for _, svc := range services {
+		if strings.TrimSpace(serviceName) != "" && svc.Name != serviceName {
+			continue
+		}
+		targets = append(targets, modal.PushTargetInfo{
+			ServiceName: svc.Name,
+			Branch:      svc.Branch,
+			RemoteURL:   svc.RemoteURL,
+			Protected:   m.mgr.IsProtectedBranch(ctx, svc.Branch),
+		})
+	}
+	if len(targets) == 0 && strings.TrimSpace(serviceName) != "" {
+		return []modal.PushTargetInfo{{ServiceName: serviceName}}
+	}
+	return targets
+}
+
+func copyVersionMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
+func partialFailureLines(result task.PartialFailureResult) []string {
+	lines := make([]string, 0, 2+len(result.FailedServices))
+	if len(result.SucceededServices) > 0 {
+		lines = append(lines, "Succeeded: "+strings.Join(result.SucceededServices, ", "))
+	}
+	if len(result.FailedServices) == 0 {
+		return lines
+	}
+	failed := make([]string, 0, len(result.FailedServices))
+	for _, service := range result.FailedServices {
+		if service.Cause == nil {
+			failed = append(failed, service.Name)
+			continue
+		}
+		failed = append(failed, fmt.Sprintf("%s (%s)", service.Name, service.Cause.Error()))
+	}
+	lines = append(lines, "Failed: "+strings.Join(failed, ", "))
+	return lines
 }
 
 func isExecutableNotFoundErr(err error) bool {

@@ -87,7 +87,7 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 					return releasePlan{}, fmt.Errorf("%w: service=%s repo_a=%s repo_b=%s", ErrReleaseServiceRepoConflict, svc.Name, plannedServices[idx].RepoPath, svc.RepoPath)
 				}
 			} else {
-				releaseBranch := releaseBranchName(m.cfg, version)
+				releaseBranch := releaseBranchName(m.flow, version)
 				tag := formatReleaseTag(m.cfg, version)
 				if strings.TrimSpace(tag) == "" {
 					return releasePlan{}, fmt.Errorf("%w: service=%s version=%q", ErrReleaseVersionInvalid, svc.Name, version)
@@ -123,7 +123,7 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 				plannedServices = append(plannedServices, domain.ReleaseService{
 					Name:              svc.Name,
 					RepoPath:          svc.RepoPath,
-					IntegrationBranch: m.cfg.Release.IntegrationBranch,
+					IntegrationBranch: m.flow.IntegrationBranch,
 					ReleaseBranch:     releaseBranch,
 					Version:           version,
 					Tag:               tag,

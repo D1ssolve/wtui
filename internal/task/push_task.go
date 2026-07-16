@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"golang.org/x/sync/semaphore"
 )
 
 func (m *manager) PushTask(ctx context.Context, taskID string, lineCh chan<- string) error {
@@ -27,35 +29,38 @@ func (m *manager) PushTask(ctx context.Context, taskID string, lineCh chan<- str
 		mu       sync.Mutex
 		firstErr error
 	)
+	setFirstErr := func(err error) {
+		if err == nil {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	sem := semaphore.NewWeighted(int64(m.concurrency()))
 
 	for _, svc := range services {
+		if err := sem.Acquire(ctx, 1); err != nil {
+			setFirstErr(err)
+			break
+		}
+
 		wg.Go(func() {
+			defer sem.Release(1)
 			if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] pushing...", svc.Name)) {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = ctx.Err()
-				}
-				mu.Unlock()
+				setFirstErr(ctx.Err())
 				return
 			}
 			if err := m.ensurePushBranchAllowed(ctx, svc.WorktreePath); err != nil {
 				sendLine(ctx, lineCh, fmt.Sprintf("[%s] push error: %v", svc.Name, err))
-
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				mu.Unlock()
+				setFirstErr(err)
 				return
 			}
 			if err := m.git.Push(ctx, svc.WorktreePath, lineCh); err != nil {
 				sendLine(ctx, lineCh, fmt.Sprintf("[%s] push error: %v", svc.Name, err))
-
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				mu.Unlock()
+				setFirstErr(err)
 				return
 			}
 

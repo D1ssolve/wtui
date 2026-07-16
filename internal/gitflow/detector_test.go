@@ -2,10 +2,13 @@ package gitflow
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/D1ssolve/wtui/internal/git"
@@ -157,5 +160,98 @@ func mustGit(t *testing.T, dir string, args ...string) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+}
+
+type listBranchesCall struct {
+	repoPath string
+	pattern  string
+}
+
+type fakeGitClient struct {
+	git.Client
+
+	calls    []listBranchesCall
+	branches []string
+	err      error
+}
+
+func (f *fakeGitClient) ListBranches(_ context.Context, repoPath, pattern string) ([]string, error) {
+	f.calls = append(f.calls, listBranchesCall{repoPath: repoPath, pattern: pattern})
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.branches, nil
+}
+
+func TestFindActiveReleaseBranch_EmptyPrefix_NoGitCall(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeGitClient{}
+	branch, err := FindActiveReleaseBranch(context.Background(), fake, "/repo", "")
+	if err != nil {
+		t.Fatalf("FindActiveReleaseBranch() error: %v", err)
+	}
+	if branch != "" {
+		t.Fatalf("FindActiveReleaseBranch() = %q, want empty", branch)
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("ListBranches called %d time(s), want 0", len(fake.calls))
+	}
+}
+
+func TestFindActiveReleaseBranch_NoMatch_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeGitClient{branches: []string{"feature/abc", "hotfix/1.2.1"}}
+	branch, err := FindActiveReleaseBranch(context.Background(), fake, "/repo", "release/")
+	if err != nil {
+		t.Fatalf("FindActiveReleaseBranch() error: %v", err)
+	}
+	if branch != "" {
+		t.Fatalf("FindActiveReleaseBranch() = %q, want empty", branch)
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("ListBranches called %d time(s), want 1", len(fake.calls))
+	}
+	if fake.calls[0].pattern != "release/*" {
+		t.Fatalf("ListBranches pattern = %q, want %q", fake.calls[0].pattern, "release/*")
+	}
+}
+
+func TestFindActiveReleaseBranch_Match_ReturnsFirstMatching(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeGitClient{branches: []string{"release/9.9", "release/1.0"}}
+	branch, err := FindActiveReleaseBranch(context.Background(), fake, "/repo", "release/")
+	if err != nil {
+		t.Fatalf("FindActiveReleaseBranch() error: %v", err)
+	}
+	if branch != "release/9.9" {
+		t.Fatalf("FindActiveReleaseBranch() = %q, want %q", branch, "release/9.9")
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("ListBranches called %d time(s), want 1", len(fake.calls))
+	}
+	if fake.calls[0].pattern != "release/*" {
+		t.Fatalf("ListBranches pattern = %q, want %q", fake.calls[0].pattern, "release/*")
+	}
+}
+
+func TestFindActiveReleaseBranch_GitError_PropagatedWrapped(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("git exploded")
+	fake := &fakeGitClient{err: fmt.Errorf("wrapped: %w", sentinel)}
+	_, err := FindActiveReleaseBranch(context.Background(), fake, "/repo", "release/")
+	if err == nil {
+		t.Fatal("FindActiveReleaseBranch() error = nil, want non-nil")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("error chain lost sentinel: %v", err)
+	}
+	wantSubstr := "git branch --list \"release/*\""
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Fatalf("error %q does not contain %q", err.Error(), wantSubstr)
 	}
 }

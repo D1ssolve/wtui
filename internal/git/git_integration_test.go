@@ -25,6 +25,33 @@ func realPath(t *testing.T, p string) string {
 	return resolved
 }
 
+func TestCommandClient_ListLocalFiles_Integration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not in PATH, skipping integration test")
+	}
+
+	repoDir := t.TempDir()
+	mustGit(t, repoDir, "init")
+	writeFile(t, filepath.Join(repoDir, ".gitignore"), ".claude/\n")
+	mustGit(t, repoDir, "add", ".gitignore")
+	mustGit(t, repoDir, "-c", "user.email=test@example.com", "-c", "user.name=Test User", "commit", "-m", "initial")
+	writeFile(t, filepath.Join(repoDir, "appsettings.Development.json"), "{}")
+	if err := os.MkdirAll(filepath.Join(repoDir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repoDir, ".claude", "settings.json"), "{}")
+
+	client := NewCommandClient(slog.Default())
+	got, err := client.ListLocalFiles(t.Context(), repoDir)
+	if err != nil {
+		t.Fatalf("ListLocalFiles() error: %v", err)
+	}
+	want := []string{".claude/settings.json", "appsettings.Development.json"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ListLocalFiles() = %q, want %q", got, want)
+	}
+}
+
 func TestCommandClient_Integration(t *testing.T) {
 
 	if _, err := exec.LookPath("git"); err != nil {

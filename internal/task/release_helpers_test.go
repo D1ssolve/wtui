@@ -8,6 +8,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 func TestValidateReleaseID(t *testing.T) {
@@ -134,17 +135,21 @@ func TestFormatReleaseTag(t *testing.T) {
 func TestReleaseBranchName(t *testing.T) {
 	tests := []struct {
 		name    string
-		cfg     *config.Config
+		flow    *gitflow.ResolvedGitFlow
 		version string
 		want    string
 	}{
-		{name: "default prefix", cfg: &config.Config{}, version: "1.2.3", want: "release/1.2.3"},
-		{name: "custom prefix", cfg: &config.Config{Release: &config.ReleaseConfig{ReleaseBranchPrefix: "rel/"}}, version: "2.0.0", want: "rel/2.0.0"},
+		{name: "default prefix", flow: &gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}},
+		}}, version: "1.2.3", want: "release/1.2.3"},
+		{name: "custom prefix", flow: &gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeRelease: {Prefixes: []string{"rel/"}},
+		}}, version: "2.0.0", want: "rel/2.0.0"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := releaseBranchName(tc.cfg, tc.version)
+			got := releaseBranchName(tc.flow, tc.version)
 			if got != tc.want {
 				t.Fatalf("releaseBranchName() = %q, want %q", got, tc.want)
 			}
@@ -162,6 +167,7 @@ func TestReleaseStatusHelpers(t *testing.T) {
 		{status: domain.ReleaseStatusValidating, wantActive: true, wantTerminal: false},
 		{status: domain.ReleaseStatusMerging, wantActive: true, wantTerminal: false},
 		{status: domain.ReleaseStatusBranching, wantActive: true, wantTerminal: false},
+		{status: domain.ReleaseStatusPrepared, wantActive: true, wantTerminal: false},
 		{status: domain.ReleaseStatusTagging, wantActive: true, wantTerminal: false},
 		{status: domain.ReleaseStatusPushing, wantActive: true, wantTerminal: false},
 		{status: domain.ReleaseStatusReleased, wantActive: false, wantTerminal: true},
@@ -194,11 +200,18 @@ func TestValidateReleaseStatusTransition(t *testing.T) {
 		{name: "validating to merging", from: domain.ReleaseStatusValidating, to: domain.ReleaseStatusMerging, wantErr: false},
 		{name: "validating to failed", from: domain.ReleaseStatusValidating, to: domain.ReleaseStatusFailed, wantErr: false},
 		{name: "merging to branching", from: domain.ReleaseStatusMerging, to: domain.ReleaseStatusBranching, wantErr: false},
-		{name: "branching to tagging", from: domain.ReleaseStatusBranching, to: domain.ReleaseStatusTagging, wantErr: false},
+		{name: "branching to tagging forbidden", from: domain.ReleaseStatusBranching, to: domain.ReleaseStatusTagging, wantErr: true},
 		{name: "tagging to pushing", from: domain.ReleaseStatusTagging, to: domain.ReleaseStatusPushing, wantErr: false},
 		{name: "pushing to released", from: domain.ReleaseStatusPushing, to: domain.ReleaseStatusReleased, wantErr: false},
+		{name: "pushing to prepared", from: domain.ReleaseStatusPushing, to: domain.ReleaseStatusPrepared, wantErr: false},
+		{name: "prepared to tagging", from: domain.ReleaseStatusPrepared, to: domain.ReleaseStatusTagging, wantErr: false},
+		{name: "prepared to rejected", from: domain.ReleaseStatusPrepared, to: domain.ReleaseStatusRejected, wantErr: false},
+		{name: "prepared to failed", from: domain.ReleaseStatusPrepared, to: domain.ReleaseStatusFailed, wantErr: false},
 		{name: "failed to validating", from: domain.ReleaseStatusFailed, to: domain.ReleaseStatusValidating, wantErr: false},
+		{name: "failed to prepared", from: domain.ReleaseStatusFailed, to: domain.ReleaseStatusPrepared, wantErr: false},
 		{name: "failed to rejected", from: domain.ReleaseStatusFailed, to: domain.ReleaseStatusRejected, wantErr: false},
+		{name: "prepared to released forbidden", from: domain.ReleaseStatusPrepared, to: domain.ReleaseStatusReleased, wantErr: true},
+		{name: "prepared to validating forbidden", from: domain.ReleaseStatusPrepared, to: domain.ReleaseStatusValidating, wantErr: true},
 
 		{name: "draft to released forbidden", from: domain.ReleaseStatusDraft, to: domain.ReleaseStatusReleased, wantErr: true},
 		{name: "released to failed forbidden", from: domain.ReleaseStatusReleased, to: domain.ReleaseStatusFailed, wantErr: true},
@@ -224,4 +237,74 @@ func TestValidateReleaseStatusTransition(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildReleasePreview(t *testing.T) {
+	cfg := config.Config{
+		Tag: &config.TagConfig{Format: "v{{.Version}}"},
+		Release: &config.ReleaseConfig{
+			PushIntegration:     testBoolPtr(true),
+			PushReleaseBranches: testBoolPtr(false),
+			PushTags:            testBoolPtr(true),
+		},
+	}
+
+	preview, err := BuildReleasePreview(cfg, map[string]string{
+		"svc-b": "1.2.4",
+		"svc-a": "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("BuildReleasePreview() error = %v", err)
+	}
+
+	if preview.IntegrationBranch != "develop" {
+		t.Fatalf("preview.IntegrationBranch = %q, want develop", preview.IntegrationBranch)
+	}
+	if !preview.PushIntegration || preview.PushReleaseBranches || !preview.PushTags {
+		t.Fatalf("preview push flags = %+v, want integration=true release=false tags=true", preview)
+	}
+
+	rows := preview.Rows
+	if len(rows) != 2 {
+		t.Fatalf("len(rows) = %d, want 2", len(rows))
+	}
+
+	if rows[0].ServiceName != "svc-a" || rows[1].ServiceName != "svc-b" {
+		t.Fatalf("rows order = [%s,%s], want [svc-a,svc-b]", rows[0].ServiceName, rows[1].ServiceName)
+	}
+
+	if rows[0].Version != "1.2.3" {
+		t.Fatalf("rows[0].Version = %q, want 1.2.3", rows[0].Version)
+	}
+	if rows[0].ReleaseBranch != "release/1.2.3" {
+		t.Fatalf("rows[0].ReleaseBranch = %q, want release/1.2.3", rows[0].ReleaseBranch)
+	}
+	if rows[0].Tag != "v1.2.3" {
+		t.Fatalf("rows[0].Tag = %q, want v1.2.3", rows[0].Tag)
+	}
+	if !rows[0].PushIntegration || rows[0].PushReleaseBranch || !rows[0].PushTag {
+		t.Fatalf("rows[0] push flags = %+v, want integration=true release=false tags=true", rows[0])
+	}
+}
+
+func TestBuildReleasePreview_InvalidInput(t *testing.T) {
+	_, err := BuildReleasePreview(config.Config{}, map[string]string{"": "1.2.3"})
+	if !errors.Is(err, ErrReleaseVersionInvalid) {
+		t.Fatalf("empty service error = %v, want ErrReleaseVersionInvalid", err)
+	}
+
+	_, err = BuildReleasePreview(config.Config{}, map[string]string{"svc": "not-semver"})
+	if !errors.Is(err, ErrReleaseVersionInvalid) {
+		t.Fatalf("invalid version error = %v, want ErrReleaseVersionInvalid", err)
+	}
+
+	badTagCfg := config.Config{Tag: &config.TagConfig{Format: "v{{.Version}}-{{.TaskID}}"}}
+	_, err = BuildReleasePreview(badTagCfg, map[string]string{"svc": "1.2.3"})
+	if !errors.Is(err, ErrReleaseVersionInvalid) {
+		t.Fatalf("invalid tag template error = %v, want ErrReleaseVersionInvalid", err)
+	}
+}
+
+func testBoolPtr(v bool) *bool {
+	return &v
 }

@@ -24,6 +24,10 @@ type Client interface {
 
 	BranchExists(ctx context.Context, repoPath, branch string) (bool, error)
 
+	// ListBranches lists local branches under repoPath matching the git glob pattern.
+	// Returns short names (no refs/heads/ prefix). Empty pattern omits --list and returns all local branches.
+	ListBranches(ctx context.Context, repoPath string, pattern string) ([]string, error)
+
 	RemoteBranchExists(ctx context.Context, repoPath, branch string) (bool, error)
 
 	ListWorktrees(ctx context.Context, repoPath string) ([]WorktreeEntry, error)
@@ -45,6 +49,7 @@ type Client interface {
 	IsDirty(ctx context.Context, worktreePath string) (bool, error)
 
 	RepoStatus(ctx context.Context, worktreePath string) (RawStatus, error)
+	ListLocalFiles(ctx context.Context, repoPath string) ([]string, error)
 
 	OperationState(ctx context.Context, worktreePath string) ([]domain.RepoState, error)
 
@@ -53,6 +58,8 @@ type Client interface {
 	Version(ctx context.Context) (major, minor int, err error)
 
 	RevListCount(ctx context.Context, worktreePath, tip, base string) (int, error)
+
+	ResolveRef(ctx context.Context, repoPath, ref string) (string, error)
 
 	RevListAheadBehind(ctx context.Context, worktreePath, originBranch string) (ahead, behind int, err error)
 
@@ -167,6 +174,31 @@ func (c *CommandClient) BranchExists(ctx context.Context, repoPath, branch strin
 		return false, nil
 	}
 	return false, err
+}
+
+func (c *CommandClient) ListBranches(ctx context.Context, repoPath, pattern string) ([]string, error) {
+	args := []string{"-C", repoPath, "branch", "--format=%(refname:short)"}
+	if pattern != "" {
+		args = append(args, "--list", pattern)
+	}
+	out, err := c.execGit(ctx, args...)
+	if err != nil {
+		if pattern == "" {
+			return nil, fmt.Errorf("git branch --format=%%(refname:short): %w", err)
+		}
+		return nil, fmt.Errorf("git branch --list %q: %w", pattern, err)
+	}
+
+	lines := strings.Split(out, "\n")
+	branches := make([]string, 0, len(lines))
+	for _, line := range lines {
+		branch := strings.TrimSpace(line)
+		if branch == "" {
+			continue
+		}
+		branches = append(branches, branch)
+	}
+	return branches, nil
 }
 
 func (c *CommandClient) RemoteBranchExists(ctx context.Context, repoPath, branch string) (bool, error) {
@@ -300,14 +332,35 @@ func (c *CommandClient) RevListCount(ctx context.Context, worktreePath, tip, bas
 	return n, nil
 }
 
+func (c *CommandClient) ResolveRef(ctx context.Context, repoPath, ref string) (string, error) {
+	out, err := c.execGit(ctx, "-C", repoPath, "rev-parse", ref)
+	if err != nil {
+		return "", err
+	}
+
+	sha := strings.TrimSpace(out)
+	if sha == "" {
+		return "", fmt.Errorf("resolve ref %s: empty output", ref)
+	}
+
+	return sha, nil
+}
+
 func (c *CommandClient) RevListAheadBehind(ctx context.Context, worktreePath, originBranch string) (ahead, behind int, err error) {
 	out, runErr := c.execGit(ctx, "-C", worktreePath, "rev-list", "--count", "--left-right",
 		"HEAD..."+originBranch)
 	if runErr != nil {
 		var execErr *ExecError
 		if isExecError(runErr, &execErr) {
-
-			return 0, 0, nil
+			if execErr.ExitCode == 128 {
+				stderrLower := strings.ToLower(execErr.Stderr)
+				if strings.Contains(stderrLower, "no upstream") ||
+					strings.Contains(stderrLower, "unknown revision") ||
+					strings.Contains(stderrLower, "does not exist") ||
+					strings.Contains(stderrLower, "bad revision") {
+					return 0, 0, nil
+				}
+			}
 		}
 		return 0, 0, fmt.Errorf("rev-list ahead/behind %s: %w", originBranch, runErr)
 	}

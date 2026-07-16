@@ -1,8 +1,10 @@
 package panels
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -103,6 +105,44 @@ func TestReleasesPanel_KeyN_Unfocused_Noop(t *testing.T) {
 	}
 }
 
+func TestReleasesPanel_KeyF_Prepared_EmitsFinishReleaseMsg(t *testing.T) {
+	p := NewReleasesPanel(60, 20)
+	release := domain.Release{
+		ID:     "rel-1",
+		Status: domain.ReleaseStatusPrepared,
+	}
+	p.SetReleases([]domain.Release{release})
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("f"))
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd for f key on prepared release")
+	}
+
+	msg := cmd()
+	relMsg, ok := msg.(FinishReleaseMsg)
+	if !ok {
+		t.Fatalf("expected FinishReleaseMsg, got %T", msg)
+	}
+	if relMsg.ReleaseID != release.ID {
+		t.Fatalf("expected ReleaseID=%q, got %q", release.ID, relMsg.ReleaseID)
+	}
+}
+
+func TestReleasesPanel_KeyF_NotPrepared_NoOp(t *testing.T) {
+	p := NewReleasesPanel(60, 20)
+	p.SetReleases([]domain.Release{{
+		ID:     "rel-2",
+		Status: domain.ReleaseStatusReleased,
+	}})
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("f"))
+	if cmd != nil {
+		t.Fatal("expected nil cmd for f key when release is not prepared")
+	}
+}
+
 func TestReleasesPanel_View_EmptyPlaceholder(t *testing.T) {
 	p := NewReleasesPanel(70, 12)
 	view := stripAnsi(p.View())
@@ -132,6 +172,37 @@ func TestReleasesPanel_View_RendersColumnsAndValues(t *testing.T) {
 	}
 }
 
+func TestReleasesPanel_View_NarrowWidth_DoesNotOverflow(t *testing.T) {
+	p := NewReleasesPanel(30, 12)
+	p.SetReleases([]domain.Release{
+		{
+			ID:        "rel-1.2.3-20260616T143000-long-overflow",
+			Status:    domain.ReleaseStatusReleased,
+			TaskIDs:   []string{"ZA-553", "ZA-554"},
+			Services:  []domain.ReleaseService{{Name: "svc-api"}},
+			CreatedAt: time.Date(2026, 6, 16, 14, 30, 0, 0, time.UTC),
+		},
+	})
+
+	view := stripAnsi(p.View())
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		if utf8.RuneCountInString(line) > 30 {
+			t.Fatalf("line %d wider than panel width 30: %q (runes=%d)", i, line, utf8.RuneCountInString(line))
+		}
+	}
+}
+
+func TestReleasesPanel_View_TinyWidth_ReturnsEmpty(t *testing.T) {
+	for _, w := range []int{0, 1, 2} {
+		p := NewReleasesPanel(w, 12)
+		p.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
+		if got := stripAnsi(p.View()); got != "" {
+			t.Fatalf("width=%d: expected empty view, got %q", w, got)
+		}
+	}
+}
+
 func TestReleaseStatusColor_Mapping(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -155,6 +226,14 @@ func TestReleaseStatusColor_Mapping(t *testing.T) {
 				t.Fatalf("releaseStatusColor(%q)=%q, want %q", tt.status, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestReleaseStatusColor_Prepared(t *testing.T) {
+	got := string(releaseStatusColor(domain.ReleaseStatusPrepared))
+	want := string(releasesColorPrepared)
+	if got != want {
+		t.Fatalf("releaseStatusColor(prepared) = %q, want %q", got, want)
 	}
 }
 

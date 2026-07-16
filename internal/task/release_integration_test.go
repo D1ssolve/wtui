@@ -5,6 +5,7 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -23,7 +24,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/validation"
 )
 
-func TestCreateRelease_Integration_HappyPath(t *testing.T) {
+func TestIntegration_TwoStageRelease_FullCycle(t *testing.T) {
 	env := newReleaseIntegrationEnv(t)
 
 	env.addFeatureTask(t, "APP-1", func(worktreePath string) {
@@ -46,8 +47,28 @@ func TestCreateRelease_Integration_HappyPath(t *testing.T) {
 		t.Fatalf("CreateRelease() error: %v", err)
 	}
 
-	if release.Status != "released" {
-		t.Fatalf("release status = %q, want released", release.Status)
+	if release.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("release status = %q, want %q", release.Status, domain.ReleaseStatusPrepared)
+	}
+	if release.PreparedAt == nil {
+		t.Fatalf("PreparedAt = nil, want non-nil")
+	}
+	if release.CompletedAt != nil {
+		t.Fatalf("CompletedAt = %v, want nil after prepare", release.CompletedAt)
+	}
+	if gitOutput(t, env.repoPath, "tag", "-l", "v1.2.3") != "" {
+		t.Fatalf("tag v1.2.3 already exists after prepare")
+	}
+
+	finished, err := env.manager.FinishRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err != nil {
+		t.Fatalf("FinishRelease() error: %v", err)
+	}
+	if finished.Status != domain.ReleaseStatusReleased {
+		t.Fatalf("release status = %q, want %q", finished.Status, domain.ReleaseStatusReleased)
+	}
+	if finished.CompletedAt == nil {
+		t.Fatalf("CompletedAt = nil, want non-nil after finish")
 	}
 
 	for _, branch := range []string{"feature/APP-1", "feature/APP-2"} {
@@ -150,7 +171,7 @@ func TestCreateRelease_Integration_ExistingBranchAndTag(t *testing.T) {
 		if !errors.Is(err, ErrReleaseBranchExists) {
 			t.Fatalf("CreateRelease() error = %v, want ErrReleaseBranchExists", err)
 		}
-})
+	})
 
 	t.Run("existing tag", func(t *testing.T) {
 		env := newReleaseIntegrationEnv(t)
@@ -174,12 +195,17 @@ func TestCreateRelease_Integration_ExistingBranchAndTag(t *testing.T) {
 }
 
 type releaseIntegrationEnv struct {
-	manager  *manager
-	repoPath string
+	manager   *manager
+	repoPath  string
 	tasksRoot string
 }
 
 func newReleaseIntegrationEnv(t *testing.T) releaseIntegrationEnv {
+	t.Helper()
+	return newReleaseIntegrationEnvWithGitClient(t, &integrationGitClient{Client: git.NewCommandClient(newIntegrationLogger())})
+}
+
+func newReleaseIntegrationEnvWithGitClient(t *testing.T, client git.Client) releaseIntegrationEnv {
 	t.Helper()
 
 	if _, err := exec.LookPath("git"); err != nil {
@@ -204,7 +230,6 @@ func newReleaseIntegrationEnv(t *testing.T) releaseIntegrationEnv {
 	mustGit(t, repoPath, "branch", "develop", "main")
 	mustGit(t, repoPath, "push", "-u", "origin", "develop")
 
-	gitClient := &integrationGitClient{Client: git.NewCommandClient(newIntegrationLogger())}
 	cfg := &config.Config{
 		TasksRoot:    tasksRoot,
 		RootDir:      rootDir,
@@ -217,9 +242,9 @@ func newReleaseIntegrationEnv(t *testing.T) releaseIntegrationEnv {
 	}
 
 	logger := newIntegrationLogger()
-	disc := discovery.New(cfg, gitClient, logger)
+	disc := discovery.New(cfg, client, logger)
 	slnMgr := sln.NewManager(dotnet.NewCommandClient(logger), logger)
-	validator := validation.NewTaskValidator(gitClient)
+	validator := validation.NewTaskValidator(client)
 	flow := &gitflow.ResolvedGitFlow{
 		DefaultBranchType: gitflow.BranchTypeFeature,
 		IntegrationBranch: "develop",
@@ -229,14 +254,14 @@ func newReleaseIntegrationEnv(t *testing.T) releaseIntegrationEnv {
 		},
 	}
 
-	mgr, ok := New(cfg, gitClient, disc, slnMgr, validator, flow, nil, logger).(*manager)
+	mgr, ok := New(cfg, client, disc, slnMgr, validator, flow, nil, logger).(*manager)
 	if !ok {
 		t.Fatal("manager type assertion failed")
 	}
 
 	return releaseIntegrationEnv{
-		manager:  mgr,
-		repoPath: repoPath,
+		manager:   mgr,
+		repoPath:  repoPath,
 		tasksRoot: tasksRoot,
 	}
 }
@@ -339,9 +364,406 @@ func containsRepoState(states []domain.RepoState, target domain.RepoState) bool 
 	return false
 }
 
+type failingPushTagClient struct {
+	git.Client
+	failCount int
+	onFail    func(worktreePath, tag string) error
+}
+
+func (c *failingPushTagClient) PushTag(ctx context.Context, worktreePath, tag string) error {
+	if c.failCount > 0 {
+		c.failCount--
+		if c.onFail != nil {
+			if err := c.onFail(worktreePath, tag); err != nil {
+				return err
+			}
+		}
+		return fmt.Errorf("%w: simulated tag push failure", ErrReleaseTagPushFailed)
+	}
+	return c.Client.PushTag(ctx, worktreePath, tag)
+}
+
+type failingCreateBranchClient struct {
+	git.Client
+	failCount int
+}
+
+func (c *failingCreateBranchClient) CreateBranchFromBranch(ctx context.Context, repoPath, newBranch, fromBranch string) error {
+	if c.failCount > 0 {
+		c.failCount--
+		return fmt.Errorf("simulated release branch create failure")
+	}
+	return c.Client.CreateBranchFromBranch(ctx, repoPath, newBranch, fromBranch)
+}
+
+type failingFetchClient struct {
+	git.Client
+	failCount int
+}
+
+func (c *failingFetchClient) Fetch(ctx context.Context, worktreePath string) error {
+	if c.failCount > 0 {
+		c.failCount--
+		return fmt.Errorf("simulated fetch failure")
+	}
+	return c.Client.Fetch(ctx, worktreePath)
+}
+
+type failingCreateTagClient struct {
+	git.Client
+	failCount int
+	onFail    func(repoPath, tag, target, message string) error
+}
+
+func (c *failingCreateTagClient) CreateTag(ctx context.Context, repoPath, tag, target, message string) error {
+	if c.failCount > 0 {
+		c.failCount--
+		if c.onFail != nil {
+			if err := c.onFail(repoPath, tag, target, message); err != nil {
+				return err
+			}
+		}
+		return fmt.Errorf("%w: simulated tag create failure", ErrReleaseTagCreateFailed)
+	}
+	return c.Client.CreateTag(ctx, repoPath, tag, target, message)
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("writeFile(%q): %v", path, err)
+	}
+}
+
+func TestIntegration_TwoStageRelease_FailAndRetryStage1(t *testing.T) {
+	env := newReleaseIntegrationEnvWithGitClient(t, &failingCreateBranchClient{
+		Client:    &integrationGitClient{Client: git.NewCommandClient(newIntegrationLogger())},
+		failCount: 1,
+	})
+
+	env.addFeatureTask(t, "APP-30", func(worktreePath string) {
+		writeFile(t, filepath.Join(worktreePath, "stage-one.txt"), "stage one retry case\n")
+		mustGit(t, worktreePath, "add", "stage-one.txt")
+		mustGit(t, worktreePath, "commit", "-m", "feat(APP-30): stage one retry case")
+	})
+
+	release, err := env.manager.CreateRelease(context.Background(), CreateReleaseParams{
+		TaskIDs:          []string{"APP-30"},
+		ServiceVersions:  map[string]string{"svc-api": "1.2.3"},
+		StartImmediately: true,
+	})
+	if err == nil {
+		t.Fatalf("CreateRelease() error=nil, want non-nil")
+	}
+	if release.Status != domain.ReleaseStatusFailed {
+		t.Fatalf("release status = %q, want %q", release.Status, domain.ReleaseStatusFailed)
+	}
+	if release.PreparedAt != nil {
+		t.Fatalf("PreparedAt = %v, want nil after stage-1 failure", release.PreparedAt)
+	}
+
+	retried, err := env.manager.RetryRelease(context.Background(), release.ID)
+	if err != nil {
+		t.Fatalf("RetryRelease() error: %v", err)
+	}
+	if retried.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("release status = %q, want %q", retried.Status, domain.ReleaseStatusPrepared)
+	}
+	if retried.PreparedAt == nil {
+		t.Fatalf("PreparedAt = nil, want non-nil after retry")
+	}
+
+	finished, err := env.manager.FinishRelease(context.Background(), FinishReleaseParams{ReleaseID: retried.ID})
+	if err != nil {
+		t.Fatalf("FinishRelease() error: %v", err)
+	}
+	if finished.Status != domain.ReleaseStatusReleased {
+		t.Fatalf("release status = %q, want %q", finished.Status, domain.ReleaseStatusReleased)
+	}
+
+	releaseTip := gitOutput(t, env.repoPath, "rev-parse", "release/1.2.3")
+	if typ := gitOutput(t, env.repoPath, "cat-file", "-t", "v1.2.3"); typ != "tag" {
+		t.Fatalf("tag object type = %q, want tag (annotated)", typ)
+	}
+	tagTarget := gitOutput(t, env.repoPath, "rev-parse", "v1.2.3^{}")
+	if tagTarget != releaseTip {
+		t.Fatalf("tag target = %s, release tip = %s, want equal", tagTarget, releaseTip)
+	}
+}
+
+func TestIntegration_TwoStageRelease_FailAndRetryStage2(t *testing.T) {
+	failingClient := &failingPushTagClient{
+		Client:    &integrationGitClient{Client: git.NewCommandClient(newIntegrationLogger())},
+		failCount: 1,
+	}
+	env := newReleaseIntegrationEnvWithGitClient(t, failingClient)
+
+	env.addFeatureTask(t, "APP-40", func(worktreePath string) {
+		writeFile(t, filepath.Join(worktreePath, "stage-two.txt"), "stage two retry case\n")
+		mustGit(t, worktreePath, "add", "stage-two.txt")
+		mustGit(t, worktreePath, "commit", "-m", "feat(APP-40): stage two retry case")
+	})
+
+	release, err := env.manager.CreateRelease(context.Background(), CreateReleaseParams{
+		TaskIDs:          []string{"APP-40"},
+		ServiceVersions:  map[string]string{"svc-api": "1.2.3"},
+		StartImmediately: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateRelease() error: %v", err)
+	}
+	if release.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("release status = %q, want %q", release.Status, domain.ReleaseStatusPrepared)
+	}
+
+	failingClient.onFail = func(worktreePath, tag string) error {
+		loaded, loadErr := env.manager.loadReleaseManifest(release.ID)
+		if loadErr != nil {
+			return fmt.Errorf("load manifest during PushTag: %w", loadErr)
+		}
+		if loaded.Status != domain.ReleaseStatusPushing {
+			return fmt.Errorf("manifest status during PushTag = %q, want %q", loaded.Status, domain.ReleaseStatusPushing)
+		}
+		if loaded.Checkpoint != "pushing" {
+			return fmt.Errorf("manifest checkpoint during PushTag = %q, want %q", loaded.Checkpoint, "pushing")
+		}
+		return nil
+	}
+
+	_, err = env.manager.FinishRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if !errors.Is(err, ErrReleaseTagPushFailed) {
+		t.Fatalf("FinishRelease() error = %v, want ErrReleaseTagPushFailed", err)
+	}
+
+	persisted, loadErr := env.manager.loadReleaseManifest(release.ID)
+	if loadErr != nil {
+		t.Fatalf("loadReleaseManifest(%q) error: %v", release.ID, loadErr)
+	}
+	if persisted.Status != domain.ReleaseStatusFailed {
+		t.Fatalf("persisted status = %q, want %q", persisted.Status, domain.ReleaseStatusFailed)
+	}
+	if persisted.PreparedAt == nil {
+		t.Fatalf("PreparedAt = nil, want non-nil after stage-2 failure")
+	}
+	if persisted.Error == nil || !persisted.Error.Recoverable {
+		t.Fatalf("persisted error = %#v, want recoverable", persisted.Error)
+	}
+
+	retried, err := env.manager.RetryRelease(context.Background(), release.ID)
+	if err != nil {
+		t.Fatalf("RetryRelease() error: %v", err)
+	}
+	if retried.Status != domain.ReleaseStatusReleased {
+		t.Fatalf("release status = %q, want %q", retried.Status, domain.ReleaseStatusReleased)
+	}
+
+	releaseTip := gitOutput(t, env.repoPath, "rev-parse", "release/1.2.3")
+	if typ := gitOutput(t, env.repoPath, "cat-file", "-t", "v1.2.3"); typ != "tag" {
+		t.Fatalf("tag object type = %q, want tag (annotated)", typ)
+	}
+	tagTarget := gitOutput(t, env.repoPath, "rev-parse", "v1.2.3^{}")
+	if tagTarget != releaseTip {
+		t.Fatalf("tag target = %s, release tip = %s, want equal", tagTarget, releaseTip)
+	}
+}
+
+func TestIntegration_FinishRelease_FetchFailure_PersistsFailedManifest(t *testing.T) {
+	env := newReleaseIntegrationEnv(t)
+
+	env.addFeatureTask(t, "APP-50", func(worktreePath string) {
+		writeFile(t, filepath.Join(worktreePath, "fetch-fail.txt"), "fetch failure case\n")
+		mustGit(t, worktreePath, "add", "fetch-fail.txt")
+		mustGit(t, worktreePath, "commit", "-m", "feat(APP-50): fetch failure case")
+	})
+
+	release, err := env.manager.CreateRelease(context.Background(), CreateReleaseParams{
+		TaskIDs:          []string{"APP-50"},
+		ServiceVersions:  map[string]string{"svc-api": "1.2.3"},
+		StartImmediately: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateRelease() error: %v", err)
+	}
+	if release.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("release status = %q, want %q", release.Status, domain.ReleaseStatusPrepared)
+	}
+
+	finishMgr := &manager{
+		cfg:          env.manager.cfg,
+		git:          &failingFetchClient{Client: env.manager.git, failCount: 1},
+		discoverer:   env.manager.discoverer,
+		slnMgr:       env.manager.slnMgr,
+		validator:    env.manager.validator,
+		flow:         env.manager.flow,
+		forgeClients: env.manager.forgeClients,
+		logger:       env.manager.logger,
+	}
+
+	result, err := finishMgr.FinishRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil {
+		t.Fatalf("FinishRelease() error=nil, want non-nil")
+	}
+	if !errors.Is(err, ErrReleaseOperationInProgress) {
+		t.Fatalf("FinishRelease() error = %v, want ErrReleaseOperationInProgress", err)
+	}
+	if result.ID != release.ID {
+		t.Fatalf("result.ID = %q, want %q", result.ID, release.ID)
+	}
+	if result.Status != domain.ReleaseStatusFailed {
+		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusFailed)
+	}
+	if result.Error == nil {
+		t.Fatalf("release error=nil, want non-nil")
+	}
+	if result.Error.Stage != "finish_fetch" {
+		t.Fatalf("release error stage = %q, want %q", result.Error.Stage, "finish_fetch")
+	}
+	if !result.Error.Recoverable {
+		t.Fatalf("release error Recoverable = %v, want true", result.Error.Recoverable)
+	}
+	if result.Error.Code != "ERR_RELEASE_FETCH" {
+		t.Fatalf("release error code = %q, want %q", result.Error.Code, "ERR_RELEASE_FETCH")
+	}
+
+	loaded, loadErr := finishMgr.loadReleaseManifest(release.ID)
+	if loadErr != nil {
+		t.Fatalf("loadReleaseManifest(%q) error: %v", release.ID, loadErr)
+	}
+	if loaded.Status != domain.ReleaseStatusFailed {
+		t.Fatalf("loaded release status = %q, want %q", loaded.Status, domain.ReleaseStatusFailed)
+	}
+	if loaded.Error == nil || loaded.Error.Stage != "finish_fetch" {
+		t.Fatalf("loaded release error stage = %q, want finish_fetch", loaded.Error.Stage)
+	}
+	if !loaded.Error.Recoverable {
+		t.Fatalf("loaded release error Recoverable = %v, want true", loaded.Error.Recoverable)
+	}
+}
+
+func TestIntegration_FinishRelease_TagCreateFailure_ReachedTaggingCheckpoint(t *testing.T) {
+	env := newReleaseIntegrationEnv(t)
+
+	env.addFeatureTask(t, "APP-51", func(worktreePath string) {
+		writeFile(t, filepath.Join(worktreePath, "tag-create-fail.txt"), "tag create failure case\n")
+		mustGit(t, worktreePath, "add", "tag-create-fail.txt")
+		mustGit(t, worktreePath, "commit", "-m", "feat(APP-51): tag create failure case")
+	})
+
+	release, err := env.manager.CreateRelease(context.Background(), CreateReleaseParams{
+		TaskIDs:          []string{"APP-51"},
+		ServiceVersions:  map[string]string{"svc-api": "1.2.3"},
+		StartImmediately: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateRelease() error: %v", err)
+	}
+	if release.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("release status = %q, want %q", release.Status, domain.ReleaseStatusPrepared)
+	}
+
+	failingGit := &failingCreateTagClient{
+		Client:    &integrationGitClient{Client: git.NewCommandClient(newIntegrationLogger())},
+		failCount: 1,
+	}
+	finishMgr := &manager{
+		cfg:          env.manager.cfg,
+		git:          failingGit,
+		discoverer:   env.manager.discoverer,
+		slnMgr:       env.manager.slnMgr,
+		validator:    env.manager.validator,
+		flow:         env.manager.flow,
+		forgeClients: env.manager.forgeClients,
+		logger:       env.manager.logger,
+	}
+	failingGit.onFail = func(repoPath, tag, target, message string) error {
+		loaded, loadErr := finishMgr.loadReleaseManifest(release.ID)
+		if loadErr != nil {
+			return fmt.Errorf("load manifest during CreateTag: %w", loadErr)
+		}
+		if loaded.Status != domain.ReleaseStatusTagging {
+			return fmt.Errorf("manifest status during CreateTag = %q, want %q", loaded.Status, domain.ReleaseStatusTagging)
+		}
+		if loaded.Checkpoint != "tagging" {
+			return fmt.Errorf("manifest checkpoint during CreateTag = %q, want %q", loaded.Checkpoint, "tagging")
+		}
+		return nil
+	}
+
+	result, err := finishMgr.FinishRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil {
+		t.Fatalf("FinishRelease() error=nil, want non-nil")
+	}
+	if !errors.Is(err, ErrReleaseTagCreateFailed) {
+		t.Fatalf("FinishRelease() error = %v, want ErrReleaseTagCreateFailed", err)
+	}
+	if result.Status != domain.ReleaseStatusFailed {
+		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusFailed)
+	}
+	if result.Error == nil || result.Error.Stage != "tag" {
+		t.Fatalf("release error stage = %q, want tag", result.Error.Stage)
+	}
+}
+
+func TestIntegration_FinishRelease_TagPushFailure_ReachedPushingCheckpoint(t *testing.T) {
+	env := newReleaseIntegrationEnv(t)
+
+	env.addFeatureTask(t, "APP-52", func(worktreePath string) {
+		writeFile(t, filepath.Join(worktreePath, "tag-push-fail.txt"), "tag push failure case\n")
+		mustGit(t, worktreePath, "add", "tag-push-fail.txt")
+		mustGit(t, worktreePath, "commit", "-m", "feat(APP-52): tag push failure case")
+	})
+
+	release, err := env.manager.CreateRelease(context.Background(), CreateReleaseParams{
+		TaskIDs:          []string{"APP-52"},
+		ServiceVersions:  map[string]string{"svc-api": "1.2.3"},
+		StartImmediately: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateRelease() error: %v", err)
+	}
+	if release.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("release status = %q, want %q", release.Status, domain.ReleaseStatusPrepared)
+	}
+
+	failingGit := &failingPushTagClient{
+		Client:    &integrationGitClient{Client: git.NewCommandClient(newIntegrationLogger())},
+		failCount: 1,
+	}
+	finishMgr := &manager{
+		cfg:          env.manager.cfg,
+		git:          failingGit,
+		discoverer:   env.manager.discoverer,
+		slnMgr:       env.manager.slnMgr,
+		validator:    env.manager.validator,
+		flow:         env.manager.flow,
+		forgeClients: env.manager.forgeClients,
+		logger:       env.manager.logger,
+	}
+	failingGit.onFail = func(worktreePath, tag string) error {
+		loaded, loadErr := finishMgr.loadReleaseManifest(release.ID)
+		if loadErr != nil {
+			return fmt.Errorf("load manifest during PushTag: %w", loadErr)
+		}
+		if loaded.Status != domain.ReleaseStatusPushing {
+			return fmt.Errorf("manifest status during PushTag = %q, want %q", loaded.Status, domain.ReleaseStatusPushing)
+		}
+		if loaded.Checkpoint != "pushing" {
+			return fmt.Errorf("manifest checkpoint during PushTag = %q, want %q", loaded.Checkpoint, "pushing")
+		}
+		return nil
+	}
+
+	result, err := finishMgr.FinishRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil {
+		t.Fatalf("FinishRelease() error=nil, want non-nil")
+	}
+	if !errors.Is(err, ErrReleaseTagPushFailed) {
+		t.Fatalf("FinishRelease() error = %v, want ErrReleaseTagPushFailed", err)
+	}
+	if result.Status != domain.ReleaseStatusFailed {
+		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusFailed)
+	}
+	if result.Error == nil || result.Error.Stage != "push_tag" {
+		t.Fatalf("release error stage = %q, want push_tag", result.Error.Stage)
 	}
 }

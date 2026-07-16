@@ -35,8 +35,8 @@ func (r *recordingSlnGenerator) Generate(_ context.Context, taskDir, taskID stri
 
 func newRemoveServiceManager(tasksRoot string, gitMock *mockGitClient, slnGen *recordingSlnGenerator) *manager {
 	return &manager{
-		cfg: &config.Config{TasksRoot: tasksRoot},
-		git: gitMock,
+		cfg:    &config.Config{TasksRoot: tasksRoot},
+		git:    gitMock,
 		slnMgr: slnGen,
 		logger: newTestLogger(),
 	}
@@ -235,7 +235,7 @@ func TestRemoveService_RemoveWorktreeFailure_DoesNotTouchGeneratedFiles(t *testi
 	}
 }
 
-func TestRemoveService_DeleteBranchFailure_DoesNotTouchGeneratedFiles(t *testing.T) {
+func TestRemoveService_DeleteBranchFailure_RegeneratesWorkspaceAndSlnAndReturnsError(t *testing.T) {
 	tasksRoot := t.TempDir()
 	taskID := "TASK-105"
 	taskDir := filepath.Join(tasksRoot, taskID)
@@ -277,8 +277,12 @@ func TestRemoveService_DeleteBranchFailure_DoesNotTouchGeneratedFiles(t *testing
 	if readErr != nil {
 		t.Fatalf("read workspace file: %v", readErr)
 	}
-	if string(workspaceData) != wantWorkspace {
-		t.Fatalf("workspace content changed = %q, want %q", string(workspaceData), wantWorkspace)
+	workspace := string(workspaceData)
+	if !strings.Contains(workspace, `"path": "worker"`) {
+		t.Fatalf("workspace missing remaining service: %s", workspace)
+	}
+	if strings.Contains(workspace, `"path": "api"`) {
+		t.Fatalf("workspace still contains removed service: %s", workspace)
 	}
 
 	slnData, readErr := os.ReadFile(slnPath)
@@ -286,10 +290,10 @@ func TestRemoveService_DeleteBranchFailure_DoesNotTouchGeneratedFiles(t *testing
 		t.Fatalf("read sln file: %v", readErr)
 	}
 	if string(slnData) != wantSln {
-		t.Fatalf("sln content changed = %q, want %q", string(slnData), wantSln)
+		t.Fatalf("sln file content changed unexpectedly = %q, want %q", string(slnData), wantSln)
 	}
 
-	if len(slnGen.calls) != 0 {
-		t.Fatalf("sln Generate call count = %d, want 0", len(slnGen.calls))
+	if len(slnGen.calls) != 1 {
+		t.Fatalf("sln Generate call count = %d, want 1", len(slnGen.calls))
 	}
 }

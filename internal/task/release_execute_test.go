@@ -10,11 +10,8 @@ import (
 	"github.com/D1ssolve/wtui/internal/domain"
 )
 
-func TestCreateRelease_HappyPath_PersistsReleasedManifest(t *testing.T) {
+func TestCreateRelease_StopsAtPrepared(t *testing.T) {
 	ctx := context.Background()
-	stubReleaseResolveRefSHA(t, func(_ context.Context, _ string, ref string) (string, error) {
-		return ref + "-sha", nil
-	})
 	gitMock := &mockGitClient{}
 	m, _ := newReleasePlanTestManager(t, gitMock)
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
@@ -36,22 +33,31 @@ func TestCreateRelease_HappyPath_PersistsReleasedManifest(t *testing.T) {
 		t.Fatalf("CreateRelease() error = %v", err)
 	}
 
-	if rel.Status != domain.ReleaseStatusReleased {
-		t.Fatalf("release status = %q, want %q", rel.Status, domain.ReleaseStatusReleased)
+	if rel.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("release status = %q, want %q", rel.Status, domain.ReleaseStatusPrepared)
 	}
-	if rel.CompletedAt == nil {
-		t.Fatalf("release CompletedAt=nil, want non-nil")
+	if rel.PreparedAt == nil {
+		t.Fatalf("release PreparedAt=nil, want non-nil")
+	}
+	if rel.CompletedAt != nil {
+		t.Fatalf("release CompletedAt=%v, want nil", rel.CompletedAt)
 	}
 	if len(rel.Services) != 1 {
 		t.Fatalf("len(services) = %d, want 1", len(rel.Services))
 	}
 
 	svc := rel.Services[0]
-	if svc.Status != domain.ReleaseStatusReleased {
-		t.Fatalf("service status = %q, want %q", svc.Status, domain.ReleaseStatusReleased)
+	if svc.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("service status = %q, want %q", svc.Status, domain.ReleaseStatusPrepared)
 	}
-	if !svc.PushedIntegration || !svc.PushedReleaseBranch || !svc.PushedTag {
-		t.Fatalf("pushed flags = (%v,%v,%v), want all true", svc.PushedIntegration, svc.PushedReleaseBranch, svc.PushedTag)
+	if !svc.PushedIntegration || !svc.PushedReleaseBranch {
+		t.Fatalf("pushed flags = (%v,%v,%v), want pushed integration and release branch true", svc.PushedIntegration, svc.PushedReleaseBranch, svc.PushedTag)
+	}
+	if svc.TagRef != "" {
+		t.Fatalf("service TagRef=%q, want empty", svc.TagRef)
+	}
+	if svc.PushedTag {
+		t.Fatalf("service PushedTag=%v, want false", svc.PushedTag)
 	}
 	if svc.IntegrationWorktreePath != "" {
 		t.Fatalf("integration worktree path = %q, want cleaned", svc.IntegrationWorktreePath)
@@ -78,27 +84,37 @@ func TestCreateRelease_HappyPath_PersistsReleasedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadReleaseManifest() error = %v", err)
 	}
-	if persisted.Status != domain.ReleaseStatusReleased {
-		t.Fatalf("persisted status = %q, want %q", persisted.Status, domain.ReleaseStatusReleased)
+	if persisted.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("persisted status = %q, want %q", persisted.Status, domain.ReleaseStatusPrepared)
 	}
-	if persisted.Services[0].ReleaseRef == "" || persisted.Services[0].TagRef == "" {
-		t.Fatalf("persisted refs empty")
+	if persisted.Services[0].ReleaseRef == "" {
+		t.Fatalf("persisted release ref empty")
+	}
+	if persisted.Services[0].TagRef != "" {
+		t.Fatalf("persisted TagRef=%q, want empty", persisted.Services[0].TagRef)
 	}
 
 	lines := drainStatusLines(statusCh)
 	assertStatusHasPrefix(t, lines, "[svc-api][fetch]")
 	assertStatusHasPrefix(t, lines, "[svc-api][merge]")
 	assertStatusHasPrefix(t, lines, "[svc-api][branch]")
-	assertStatusHasPrefix(t, lines, "[svc-api][tag]")
 	assertStatusHasPrefix(t, lines, "[svc-api][push]")
 	assertStatusHasPrefix(t, lines, "[svc-api][done]")
+
+	gitMock.mu.Lock()
+	createTagCalls := gitMock.createTagCalls
+	pushTagCalls := gitMock.pushTagCalls
+	gitMock.mu.Unlock()
+	if createTagCalls != 0 {
+		t.Fatalf("create tag calls = %d, want 0", createTagCalls)
+	}
+	if pushTagCalls != 0 {
+		t.Fatalf("push tag calls = %d, want 0", pushTagCalls)
+	}
 }
 
 func TestCreateRelease_MergeConflict_AbortAndFail(t *testing.T) {
 	ctx := context.Background()
-	stubReleaseResolveRefSHA(t, func(_ context.Context, _ string, ref string) (string, error) {
-		return ref + "-sha", nil
-	})
 	gitMock := &mockGitClient{}
 	m, _ := newReleasePlanTestManager(t, gitMock)
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
@@ -147,9 +163,6 @@ func TestCreateRelease_PrechecksBranchAndTagExists(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("branch exists", func(t *testing.T) {
-		stubReleaseResolveRefSHA(t, func(_ context.Context, _ string, ref string) (string, error) {
-			return ref + "-sha", nil
-		})
 		gitMock := &mockGitClient{branchExistsRes: true}
 		m, _ := newReleasePlanTestManager(t, gitMock)
 		seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
@@ -166,9 +179,6 @@ func TestCreateRelease_PrechecksBranchAndTagExists(t *testing.T) {
 	})
 
 	t.Run("tag exists", func(t *testing.T) {
-		stubReleaseResolveRefSHA(t, func(_ context.Context, _ string, ref string) (string, error) {
-			return ref + "-sha", nil
-		})
 		gitMock := &mockGitClient{tagExistsRes: true}
 		m, _ := newReleasePlanTestManager(t, gitMock)
 		seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
@@ -185,12 +195,14 @@ func TestCreateRelease_PrechecksBranchAndTagExists(t *testing.T) {
 	})
 }
 
-func TestCreateRelease_PushFailure_RecordsPartialPushedFlags(t *testing.T) {
+func TestCreateRelease_PushBranchFailure_RecordsPartialPushedFlags(t *testing.T) {
 	ctx := context.Background()
-	stubReleaseResolveRefSHA(t, func(_ context.Context, _ string, ref string) (string, error) {
-		return ref + "-sha", nil
-	})
-	gitMock := &mockGitClient{pushTagErr: errors.New("push tag failed")}
+	gitMock := &mockGitClient{pushBranchExplicitFn: func(_ string, branch string) error {
+		if branch == "release/1.2.3" {
+			return errors.New("push branch failed")
+		}
+		return nil
+	}}
 	m, _ := newReleasePlanTestManager(t, gitMock)
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "svc-api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
@@ -217,8 +229,11 @@ func TestCreateRelease_PushFailure_RecordsPartialPushedFlags(t *testing.T) {
 		t.Fatalf("status = %q, want %q", rel.Status, domain.ReleaseStatusFailed)
 	}
 	svc := rel.Services[0]
-	if !svc.PushedIntegration || !svc.PushedReleaseBranch {
-		t.Fatalf("expected pushed integration+release branch true")
+	if !svc.PushedIntegration {
+		t.Fatalf("expected pushed integration=true")
+	}
+	if svc.PushedReleaseBranch {
+		t.Fatalf("expected pushed release branch=false on push branch failure")
 	}
 	if svc.PushedTag {
 		t.Fatalf("expected pushed tag false")
@@ -228,11 +243,8 @@ func TestCreateRelease_PushFailure_RecordsPartialPushedFlags(t *testing.T) {
 	}
 }
 
-func TestCreateRelease_HappyPath_TwoServices_Succeeds(t *testing.T) {
+func TestCreateRelease_StopsAtPrepared_TwoServices(t *testing.T) {
 	ctx := context.Background()
-	stubReleaseResolveRefSHA(t, func(_ context.Context, _ string, ref string) (string, error) {
-		return ref + "-sha", nil
-	})
 	gitMock := &mockGitClient{}
 	m, _ := newReleasePlanTestManager(t, gitMock)
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
@@ -248,24 +260,47 @@ func TestCreateRelease_HappyPath_TwoServices_Succeeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRelease() error = %v", err)
 	}
-	if rel.Status != domain.ReleaseStatusReleased {
-		t.Fatalf("release status = %q, want %q", rel.Status, domain.ReleaseStatusReleased)
+	if rel.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("release status = %q, want %q", rel.Status, domain.ReleaseStatusPrepared)
+	}
+	if rel.PreparedAt == nil {
+		t.Fatalf("release PreparedAt=nil, want non-nil")
+	}
+	if rel.CompletedAt != nil {
+		t.Fatalf("release CompletedAt=%v, want nil", rel.CompletedAt)
 	}
 	if len(rel.Services) != 2 {
 		t.Fatalf("len(services) = %d, want 2", len(rel.Services))
 	}
 	for _, svc := range rel.Services {
-		if svc.Status != domain.ReleaseStatusReleased {
-			t.Fatalf("service %s status = %q, want %q", svc.Name, svc.Status, domain.ReleaseStatusReleased)
+		if svc.Status != domain.ReleaseStatusPrepared {
+			t.Fatalf("service %s status = %q, want %q", svc.Name, svc.Status, domain.ReleaseStatusPrepared)
 		}
+		if !svc.PushedReleaseBranch {
+			t.Fatalf("service %s pushed release branch = %v, want true", svc.Name, svc.PushedReleaseBranch)
+		}
+		if svc.TagRef != "" {
+			t.Fatalf("service %s TagRef=%q, want empty", svc.Name, svc.TagRef)
+		}
+		if svc.PushedTag {
+			t.Fatalf("service %s pushed tag = %v, want false", svc.Name, svc.PushedTag)
+		}
+	}
+
+	gitMock.mu.Lock()
+	createTagCalls := gitMock.createTagCalls
+	pushTagCalls := gitMock.pushTagCalls
+	gitMock.mu.Unlock()
+	if createTagCalls != 0 {
+		t.Fatalf("create tag calls = %d, want 0", createTagCalls)
+	}
+	if pushTagCalls != 0 {
+		t.Fatalf("push tag calls = %d, want 0", pushTagCalls)
 	}
 }
 
-func TestCreateRelease_NoPush_ReachesReleased(t *testing.T) {
+func TestCreateRelease_NoPush_ReachesPrepared(t *testing.T) {
 	ctx := context.Background()
-	stubReleaseResolveRefSHA(t, func(_ context.Context, _ string, ref string) (string, error) {
-		return ref + "-sha", nil
-	})
 	gitMock := &mockGitClient{}
 	m, _ := newReleasePlanTestManager(t, gitMock)
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
@@ -283,21 +318,35 @@ func TestCreateRelease_NoPush_ReachesReleased(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRelease() error = %v", err)
 	}
-	if rel.Status != domain.ReleaseStatusReleased {
-		t.Fatalf("release status = %q, want %q", rel.Status, domain.ReleaseStatusReleased)
+	if rel.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("release status = %q, want %q", rel.Status, domain.ReleaseStatusPrepared)
 	}
-	if len(rel.Services) != 1 || rel.Services[0].Status != domain.ReleaseStatusReleased {
-		t.Fatalf("service status = %#v, want released", rel.Services)
+	if rel.PreparedAt == nil {
+		t.Fatalf("release PreparedAt=nil, want non-nil")
 	}
-}
+	if rel.CompletedAt != nil {
+		t.Fatalf("release CompletedAt=%v, want nil", rel.CompletedAt)
+	}
+	if len(rel.Services) != 1 || rel.Services[0].Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("service status = %#v, want prepared", rel.Services)
+	}
+	if rel.Services[0].TagRef != "" {
+		t.Fatalf("service TagRef=%q, want empty", rel.Services[0].TagRef)
+	}
+	if rel.Services[0].PushedTag {
+		t.Fatalf("service PushedTag=%v, want false", rel.Services[0].PushedTag)
+	}
 
-func stubReleaseResolveRefSHA(t *testing.T, fn func(context.Context, string, string) (string, error)) {
-	t.Helper()
-	prev := releaseResolveRefSHA
-	releaseResolveRefSHA = fn
-	t.Cleanup(func() {
-		releaseResolveRefSHA = prev
-	})
+	gitMock.mu.Lock()
+	createTagCalls := gitMock.createTagCalls
+	pushTagCalls := gitMock.pushTagCalls
+	gitMock.mu.Unlock()
+	if createTagCalls != 0 {
+		t.Fatalf("create tag calls = %d, want 0", createTagCalls)
+	}
+	if pushTagCalls != 0 {
+		t.Fatalf("push tag calls = %d, want 0", pushTagCalls)
+	}
 }
 
 func drainStatusLines(ch chan string) []string {

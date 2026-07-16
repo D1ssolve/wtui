@@ -15,6 +15,7 @@ const (
 	releasesColorReleased   = lipgloss.Color("#22C55E")
 	releasesColorInProgress = lipgloss.Color("#F59E0B")
 	releasesColorFailed     = lipgloss.Color("#EF4444")
+	releasesColorPrepared   = lipgloss.Color("#3B82F6")
 	releasesColorDim        = colorDim
 )
 
@@ -99,6 +100,14 @@ func (p ReleasesPanel) Update(msg tea.Msg) (ReleasesPanel, tea.Cmd) {
 			return p, nil
 		case "N":
 			return p, func() tea.Msg { return OpenCreateReleaseDialogMsg{} }
+		case "f":
+			rel := p.SelectedRelease()
+			if rel != nil && rel.Status == domain.ReleaseStatusPrepared {
+				return p, func() tea.Msg {
+					return FinishReleaseMsg{ReleaseID: rel.ID}
+				}
+			}
+			return p, nil
 		}
 	}
 
@@ -107,6 +116,9 @@ func (p ReleasesPanel) Update(msg tea.Msg) (ReleasesPanel, tea.Cmd) {
 
 func (p ReleasesPanel) View() string {
 	inner := innerDimensions(p.width, p.height)
+	if inner.w <= 0 || inner.h <= 0 {
+		return ""
+	}
 
 	total := len(p.releases)
 	current := 0
@@ -114,7 +126,7 @@ func (p ReleasesPanel) View() string {
 		current = p.cursor + 1
 	}
 	title := fmt.Sprintf("[3] Releases  [%d/%d]", current, total)
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary).MaxWidth(inner.w)
 
 	body := p.renderBody(inner.w, max(0, inner.h-1))
 	content := lipgloss.JoinVertical(lipgloss.Left, titleStyle.Render(title), body)
@@ -127,13 +139,18 @@ func (p ReleasesPanel) View() string {
 }
 
 func (p ReleasesPanel) renderBody(width, height int) string {
+	if height <= 0 || width <= 0 {
+		return ""
+	}
+
 	if len(p.releases) == 0 {
 		placeholder := lipgloss.NewStyle().Foreground(releasesColorDim).Render("No releases yet. Press [N] to create release.")
-		return fitLines([]string{placeholder}, height)
+		return fitLines([]string{lipgloss.NewStyle().MaxWidth(width).Render(placeholder)}, height)
 	}
 
 	headStyle := lipgloss.NewStyle().Bold(true).Foreground(colorBold)
-	lines := []string{headStyle.Render(fmt.Sprintf("%-28s %-12s %5s %8s  %s", "ID", "Status", "Tasks", "Services", "Created"))}
+	header := headStyle.MaxWidth(width).Render(fmt.Sprintf("%-28s %-12s %5s %8s  %s", "ID", "Status", "Tasks", "Services", "Created"))
+	lines := []string{header}
 
 	for i, rel := range p.releases {
 		id := rel.ID
@@ -154,9 +171,9 @@ func (p ReleasesPanel) renderBody(width, height int) string {
 
 		line := fmt.Sprintf("%-28s %-12s %5d %8d  %s", id, statusStyled, len(rel.TaskIDs), len(rel.Services), created)
 		if i == p.cursor {
-			line = lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary).Render(line)
+			line = lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary).MaxWidth(width).Render(line)
 		} else {
-			line = lipgloss.NewStyle().Foreground(colorNormal).Render(line)
+			line = lipgloss.NewStyle().Foreground(colorNormal).MaxWidth(width).Render(line)
 		}
 		lines = append(lines, line)
 	}
@@ -187,6 +204,8 @@ func releaseStatusColor(status domain.ReleaseStatus) lipgloss.Color {
 		domain.ReleaseStatusTagging,
 		domain.ReleaseStatusPushing:
 		return releasesColorInProgress
+	case domain.ReleaseStatusPrepared:
+		return releasesColorPrepared
 	case domain.ReleaseStatusFailed:
 		return releasesColorFailed
 	case domain.ReleaseStatusDraft, domain.ReleaseStatusRejected:

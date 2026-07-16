@@ -10,6 +10,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/discovery"
+	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/git"
 	"github.com/D1ssolve/wtui/internal/gitflow"
@@ -246,8 +247,10 @@ func TestCloseTask_RestoreBranchFailure_ReturnsErrorWhenContinueOnErrorDisabled(
 	gitMock := &mockGitClient{
 		commonDirFn:      func(path string) (string, error) { return fakeCommonDir, nil },
 		listWorktreesRes: []git.WorktreeEntry{{Path: svcPath, Branch: "refs/heads/feature/IN-CLOSE-RESTORE-FAIL"}},
-		repoStatusFn:     func(path string) (git.RawStatus, error) { return git.RawStatus{Branch: "feature/IN-CLOSE-RESTORE-FAIL"}, nil },
-		isAncestorFn:     func(repoPath, ancestor, descendant string) (bool, error) { return true, nil },
+		repoStatusFn: func(path string) (git.RawStatus, error) {
+			return git.RawStatus{Branch: "feature/IN-CLOSE-RESTORE-FAIL"}, nil
+		},
+		isAncestorFn:         func(repoPath, ancestor, descendant string) (bool, error) { return true, nil },
 		worktreeBranchResult: "feature/IN-CLOSE-RESTORE-FAIL",
 		checkoutFn: func(worktreePath, branch string) error {
 			if branch == "feature/IN-CLOSE-RESTORE-FAIL" {
@@ -379,12 +382,12 @@ func TestCloseTask_PushTagFailure_DeletesLocalTag(t *testing.T) {
 	}
 
 	gitMock := &mockGitClient{
-		commonDirFn:      func(path string) (string, error) { return fakeCommonDir, nil },
-		listWorktreesRes: []git.WorktreeEntry{{Path: svcPath, Branch: "refs/heads/release/1.2.0"}},
-		repoStatusFn:     func(path string) (git.RawStatus, error) { return git.RawStatus{Branch: "release/1.2.0"}, nil },
-		isAncestorFn:     func(repoPath, ancestor, descendant string) (bool, error) { return true, nil },
+		commonDirFn:          func(path string) (string, error) { return fakeCommonDir, nil },
+		listWorktreesRes:     []git.WorktreeEntry{{Path: svcPath, Branch: "refs/heads/release/1.2.0"}},
+		repoStatusFn:         func(path string) (git.RawStatus, error) { return git.RawStatus{Branch: "release/1.2.0"}, nil },
+		isAncestorFn:         func(repoPath, ancestor, descendant string) (bool, error) { return true, nil },
 		worktreeBranchResult: "release/1.2.0",
-		pushTagErr:       errors.New("push tag failed"),
+		pushTagErr:           errors.New("push tag failed"),
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
@@ -431,10 +434,11 @@ func TestCloseTask_DeleteSourceBranchAfterMerge_DeletesBranch(t *testing.T) {
 	}
 
 	gitMock := &mockGitClient{
-		commonDirFn:      func(path string) (string, error) { return fakeCommonDir, nil },
-		listWorktreesRes: []git.WorktreeEntry{{Path: svcPath, Branch: "refs/heads/feature/IN-CLOSE-DEL"}},
-		repoStatusFn:     func(path string) (git.RawStatus, error) { return git.RawStatus{Branch: "feature/IN-CLOSE-DEL"}, nil },
-		isAncestorFn:     func(repoPath, ancestor, descendant string) (bool, error) { return false, nil },
+		commonDirFn:          func(path string) (string, error) { return fakeCommonDir, nil },
+		listWorktreesRes:     []git.WorktreeEntry{{Path: svcPath, Branch: "refs/heads/feature/IN-CLOSE-DEL"}},
+		repoStatusFn:         func(path string) (git.RawStatus, error) { return git.RawStatus{Branch: "feature/IN-CLOSE-DEL"}, nil },
+		isAncestorFn:         func(repoPath, ancestor, descendant string) (bool, error) { return false, nil },
+		worktreeBranchResult: "feature/IN-CLOSE-DEL",
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
@@ -461,6 +465,78 @@ func TestCloseTask_DeleteSourceBranchAfterMerge_DeletesBranch(t *testing.T) {
 	gitMock.mu.Unlock()
 	if deleteCalls == 0 {
 		t.Fatal("DeleteBranch call count = 0, want > 0")
+	}
+}
+
+func TestCloseTask_MergeError_AbortsMergeAndRestoresBranch(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "IN-CLOSE-MERGE-ABORT"
+	svcPath := filepath.Join(tasksRoot, taskID, "svc-a")
+	if err := osMkdirAll(svcPath); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-a", ".git")
+	if err := osMkdirAll(fakeCommonDir); err != nil {
+		t.Fatal(err)
+	}
+
+	mergeErr := errors.New("merge conflict")
+	operationStateCalls := 0
+	gitMock := &mockGitClient{
+		commonDirFn:      func(path string) (string, error) { return fakeCommonDir, nil },
+		listWorktreesRes: []git.WorktreeEntry{{Path: svcPath, Branch: "refs/heads/feature/IN-CLOSE-MERGE-ABORT"}},
+		repoStatusFn: func(path string) (git.RawStatus, error) {
+			return git.RawStatus{Branch: "feature/IN-CLOSE-MERGE-ABORT"}, nil
+		},
+		isAncestorFn:         func(repoPath, ancestor, descendant string) (bool, error) { return false, nil },
+		worktreeBranchResult: "feature/IN-CLOSE-MERGE-ABORT",
+		mergeFn: func(path, branch string) error {
+			if branch == "feature/IN-CLOSE-MERGE-ABORT" {
+				return mergeErr
+			}
+			return nil
+		},
+		operationStateFn: func(path string) ([]domain.RepoState, error) {
+			operationStateCalls++
+			if operationStateCalls == 1 {
+				return nil, nil
+			}
+			return []domain.RepoState{domain.RepoStateMerging, domain.RepoStateConflicted}, nil
+		},
+	}
+
+	cfg := newCloseTestConfig(rootDir, tasksRoot)
+	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
+
+	_, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
+	if err == nil {
+		t.Fatal("CloseTask error = nil, want merge error")
+	}
+	if !errors.Is(err, mergeErr) {
+		t.Fatalf("CloseTask error = %v, want merge error wrapped", err)
+	}
+
+	gitMock.mu.Lock()
+	abortCalls := append([]string(nil), gitMock.mergeAbortCalls...)
+	checkoutCalls := append([]checkoutCall(nil), gitMock.checkoutCalls...)
+	gitMock.mu.Unlock()
+
+	if len(abortCalls) != 1 || abortCalls[0] != svcPath {
+		t.Fatalf("MergeAbort calls = %+v, want one call for %s", abortCalls, svcPath)
+	}
+
+	foundRestore := false
+	for _, call := range checkoutCalls {
+		if call.WorktreePath == svcPath && call.Branch == "feature/IN-CLOSE-MERGE-ABORT" {
+			foundRestore = true
+			break
+		}
+	}
+	if !foundRestore {
+		t.Fatalf("checkout calls = %+v, want restore checkout", checkoutCalls)
 	}
 }
 

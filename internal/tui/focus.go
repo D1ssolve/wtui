@@ -6,8 +6,8 @@ const (
 	FocusTasks FocusPanel = iota
 
 	FocusServices
-	FocusOutput
 	FocusReleases
+	FocusOutput
 )
 
 func (f FocusPanel) Next() FocusPanel {
@@ -15,9 +15,9 @@ func (f FocusPanel) Next() FocusPanel {
 	case FocusTasks:
 		return FocusServices
 	case FocusServices:
-		return FocusOutput
-	case FocusOutput:
 		return FocusReleases
+	case FocusReleases:
+		return FocusOutput
 	default:
 		return FocusTasks
 	}
@@ -26,13 +26,13 @@ func (f FocusPanel) Next() FocusPanel {
 func (f FocusPanel) Prev() FocusPanel {
 	switch f {
 	case FocusTasks:
-		return FocusReleases
+		return FocusOutput
 	case FocusServices:
 		return FocusTasks
-	case FocusOutput:
+	case FocusReleases:
 		return FocusServices
 	default:
-		return FocusOutput
+		return FocusReleases
 	}
 }
 

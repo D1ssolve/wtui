@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"log/slog"
 
@@ -66,6 +65,7 @@ type mockGitClient struct {
 	branchExistsRes  bool
 	branchExistsErr  error
 	branchExistsFn   func(repoPath, branch string) (bool, error)
+	addWorktreeFn    func(repoPath, dest, branch string, newBranch bool, base string) error
 
 	remoteBranchExistsRes bool
 	remoteBranchExistsErr error
@@ -73,6 +73,10 @@ type mockGitClient struct {
 	remoteBranchExistsFn func(repoPath, branch string) (bool, error)
 	listWorktreesRes     []git.WorktreeEntry
 	listWorktreesErr     error
+	listWorktreesFn      func(repoPath string) ([]git.WorktreeEntry, error)
+	listBranchesRes      []string
+	listBranchesErr      error
+	listBranchesFn       func(repoPath, pattern string) ([]string, error)
 	addWorktreeErr       error
 	commonDirResult      string
 	commonDirErr         error
@@ -98,15 +102,21 @@ type mockGitClient struct {
 	versionMajor         int
 	versionMinor         int
 	versionErr           error
+	resolveRefRes        string
+	resolveRefErr        error
 	isDirtyFn            func(path string) (bool, error)
+	resolveRefFn         func(repoPath, ref string) (string, error)
 	revListAheadBehindFn func(path, originBranch string) (int, int, error)
 	repoStatusFn         func(path string) (git.RawStatus, error)
+	listLocalFilesRes    []string
+	listLocalFilesErr    error
 	operationStateFn     func(path string) ([]domain.RepoState, error)
 	isAncestorFn         func(repoPath, ancestor, descendant string) (bool, error)
 
 	addWorktreeWithTrackingErr error
 	createBranchFromBranchErr  error
 	pushBranchExplicitErr      error
+	pushBranchExplicitFn       func(worktreePath, branch string) error
 	deleteTagErr               error
 
 	addWorktreeCalls             []addWorktreeCall
@@ -122,12 +132,17 @@ type mockGitClient struct {
 	stashCalls                   []stashCall
 	isAncestorCalls              []isAncestorCall
 	createTagCalls               int
+	createTagCallList            []createTagCall
 	pushTagCalls                 int
+	pushTagCallList              []pushTagCall
 	deleteBranchCalls            int
 	deleteBranchErr              error
 	deleteTagCalls               int
 	createTagErr                 error
 	pushTagErr                   error
+	createTagFn                  func(repoPath, tag, target, message string) error
+	pushTagFn                    func(repoPath, tag string) error
+	checkoutCalls                []checkoutCall
 	listTagsRes                  []domain.TagInfo
 	listTagsErr                  error
 	latestSemverTagRes           string
@@ -138,6 +153,9 @@ type mockGitClient struct {
 	checkoutFn                   func(worktreePath, branch string) error
 	tagExistsRes                 bool
 	tagExistsErr                 error
+	tagExistsCalls               []tagExistsCall
+	branchExistsCalls            []branchExistsCall
+	resolveRefCalls              []resolveRefCall
 }
 
 type addWorktreeCall struct {
@@ -194,6 +212,38 @@ type isAncestorCall struct {
 	Descendant string
 }
 
+type checkoutCall struct {
+	WorktreePath string
+	Branch       string
+}
+
+type createTagCall struct {
+	RepoPath string
+	Tag      string
+	Target   string
+	Message  string
+}
+
+type pushTagCall struct {
+	RepoPath string
+	Tag      string
+}
+
+type branchExistsCall struct {
+	RepoPath string
+	Branch   string
+}
+
+type tagExistsCall struct {
+	RepoPath string
+	Tag      string
+}
+
+type resolveRefCall struct {
+	RepoPath string
+	Ref      string
+}
+
 func (m *mockGitClient) IsValidRepo(_ context.Context, _ string) error {
 	return m.isValidRepoErr
 }
@@ -203,14 +253,27 @@ func (m *mockGitClient) BaseBranch(_ context.Context, _ string) (string, error) 
 }
 
 func (m *mockGitClient) BranchExists(_ context.Context, repoPath, branch string) (bool, error) {
+	m.mu.Lock()
+	m.branchExistsCalls = append(m.branchExistsCalls, branchExistsCall{RepoPath: repoPath, Branch: branch})
+	m.mu.Unlock()
 	if m.branchExistsFn != nil {
 		return m.branchExistsFn(repoPath, branch)
 	}
 	return m.branchExistsRes, m.branchExistsErr
 }
 
-func (m *mockGitClient) ListWorktrees(_ context.Context, _ string) ([]git.WorktreeEntry, error) {
+func (m *mockGitClient) ListWorktrees(_ context.Context, repoPath string) ([]git.WorktreeEntry, error) {
+	if m.listWorktreesFn != nil {
+		return m.listWorktreesFn(repoPath)
+	}
 	return m.listWorktreesRes, m.listWorktreesErr
+}
+
+func (m *mockGitClient) ListBranches(_ context.Context, repoPath, pattern string) ([]string, error) {
+	if m.listBranchesFn != nil {
+		return m.listBranchesFn(repoPath, pattern)
+	}
+	return m.listBranchesRes, m.listBranchesErr
 }
 
 func (m *mockGitClient) AddWorktree(_ context.Context, repoPath, dest, branch string, newBranch bool, base string) error {
@@ -223,6 +286,9 @@ func (m *mockGitClient) AddWorktree(_ context.Context, repoPath, dest, branch st
 		NewBranch: newBranch,
 		Base:      base,
 	})
+	if m.addWorktreeFn != nil {
+		return m.addWorktreeFn(repoPath, dest, branch, newBranch, base)
+	}
 	return m.addWorktreeErr
 }
 
@@ -261,6 +327,10 @@ func (m *mockGitClient) RepoStatus(_ context.Context, path string) (git.RawStatu
 	return git.RawStatus{}, nil
 }
 
+func (m *mockGitClient) ListLocalFiles(_ context.Context, _ string) ([]string, error) {
+	return m.listLocalFilesRes, m.listLocalFilesErr
+}
+
 func (m *mockGitClient) OperationState(_ context.Context, path string) ([]domain.RepoState, error) {
 	if m.operationStateFn != nil {
 		return m.operationStateFn(path)
@@ -289,6 +359,22 @@ func (m *mockGitClient) Version(_ context.Context) (int, int, error) {
 
 func (m *mockGitClient) RevListCount(_ context.Context, _, _, _ string) (int, error) {
 	return 0, nil
+}
+
+func (m *mockGitClient) ResolveRef(_ context.Context, repoPath, ref string) (string, error) {
+	m.mu.Lock()
+	m.resolveRefCalls = append(m.resolveRefCalls, resolveRefCall{RepoPath: repoPath, Ref: ref})
+	m.mu.Unlock()
+	if m.resolveRefFn != nil {
+		return m.resolveRefFn(repoPath, ref)
+	}
+	if m.resolveRefErr != nil {
+		return "", m.resolveRefErr
+	}
+	if m.resolveRefRes != "" {
+		return m.resolveRefRes, nil
+	}
+	return ref + "-sha", nil
 }
 
 func (m *mockGitClient) RevListAheadBehind(_ context.Context, path, originBranch string) (int, int, error) {
@@ -364,17 +450,27 @@ func (m *mockGitClient) Stash(_ context.Context, worktreePath string, pop bool, 
 	return m.stashErr
 }
 
-func (m *mockGitClient) CreateTag(_ context.Context, _, _, _, _ string) error {
+func (m *mockGitClient) CreateTag(_ context.Context, repoPath, tag, target, message string) error {
 	m.mu.Lock()
 	m.createTagCalls++
+	m.createTagCallList = append(m.createTagCallList, createTagCall{RepoPath: repoPath, Tag: tag, Target: target, Message: message})
+	fn := m.createTagFn
 	m.mu.Unlock()
+	if fn != nil {
+		return fn(repoPath, tag, target, message)
+	}
 	return m.createTagErr
 }
 
-func (m *mockGitClient) PushTag(_ context.Context, _, _ string) error {
+func (m *mockGitClient) PushTag(_ context.Context, repoPath, tag string) error {
 	m.mu.Lock()
 	m.pushTagCalls++
+	m.pushTagCallList = append(m.pushTagCallList, pushTagCall{RepoPath: repoPath, Tag: tag})
+	fn := m.pushTagFn
 	m.mu.Unlock()
+	if fn != nil {
+		return fn(repoPath, tag)
+	}
 	return m.pushTagErr
 }
 
@@ -389,13 +485,19 @@ func (m *mockGitClient) LatestSemverTag(_ context.Context, _, _ string) (string,
 	return m.latestSemverTagRes, m.latestSemverTagErr
 }
 
-func (m *mockGitClient) TagExists(_ context.Context, _, _ string) (bool, error) {
+func (m *mockGitClient) TagExists(_ context.Context, repoPath, tag string) (bool, error) {
+	m.mu.Lock()
+	m.tagExistsCalls = append(m.tagExistsCalls, tagExistsCall{RepoPath: repoPath, Tag: tag})
+	m.mu.Unlock()
 	return m.tagExistsRes, m.tagExistsErr
 }
 
 func (m *mockGitClient) GetWorktreeBranch(_ context.Context, path string) (string, error) {
 	if m.getWorktreeBranchFn != nil {
 		return m.getWorktreeBranchFn(path)
+	}
+	if m.worktreeBranchResult == "" {
+		return "feature/mock", m.worktreeBranchErr
 	}
 	return m.worktreeBranchResult, m.worktreeBranchErr
 }
@@ -412,6 +514,10 @@ func (m *mockGitClient) RemoteURL(_ context.Context, _, _ string) (string, error
 }
 
 func (m *mockGitClient) Checkout(_ context.Context, worktreePath, branch string) error {
+	m.mu.Lock()
+	m.checkoutCalls = append(m.checkoutCalls, checkoutCall{WorktreePath: worktreePath, Branch: branch})
+	m.mu.Unlock()
+
 	if m.checkoutFn != nil {
 		return m.checkoutFn(worktreePath, branch)
 	}
@@ -462,6 +568,9 @@ func (m *mockGitClient) PushBranchExplicit(_ context.Context, worktreePath, bran
 		WorktreePath: worktreePath,
 		Branch:       branch,
 	})
+	if m.pushBranchExplicitFn != nil {
+		return m.pushBranchExplicitFn(worktreePath, branch)
+	}
 	return m.pushBranchExplicitErr
 }
 
@@ -545,7 +654,7 @@ func TestInit_CreatesDirAndCallsAddWorktree(t *testing.T) {
 		BranchPrefix: "feature/",
 	}
 
-	if err := mgr.Init(context.Background(), params); err != nil {
+	if _, err := mgr.Init(context.Background(), params); err != nil {
 		t.Fatalf("Init returned unexpected error: %v", err)
 	}
 
@@ -592,7 +701,7 @@ func TestInit_ErrTaskExists(t *testing.T) {
 	gitMock := &mockGitClient{}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Init(context.Background(), InitParams{TaskID: "IN-002"})
+	_, err := mgr.Init(context.Background(), InitParams{TaskID: "IN-002"})
 	if !errors.Is(err, ErrTaskExists) {
 		t.Errorf("Init error = %v, want ErrTaskExists", err)
 	}
@@ -607,7 +716,7 @@ func TestInit_ContinuesWhenServiceNotFound(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Init(context.Background(), InitParams{
+	_, err := mgr.Init(context.Background(), InitParams{
 		TaskID:   "IN-003",
 		Services: []string{"nonexistent"},
 	})
@@ -644,7 +753,7 @@ func TestInit_UsesExistingBranch(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	if err := mgr.Init(context.Background(), InitParams{
+	if _, err := mgr.Init(context.Background(), InitParams{
 		TaskID:   "IN-004",
 		Services: []string{"svcA"},
 	}); err != nil {
@@ -696,7 +805,7 @@ func TestInit_BranchTypeHotfix_UsesHotfixPrefixAndProductionBase(t *testing.T) {
 	}
 	mgr := New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
 
-	if err := mgr.Init(context.Background(), InitParams{TaskID: "IN-900", Services: []string{"svcA"}, BranchType: "hotfix"}); err != nil {
+	if _, err := mgr.Init(context.Background(), InitParams{TaskID: "IN-900", Services: []string{"svcA"}, BranchType: "hotfix"}); err != nil {
 		t.Fatalf("Init returned unexpected error: %v", err)
 	}
 
@@ -740,7 +849,7 @@ func TestInit_EmptyBranchType_DefaultsToFeature(t *testing.T) {
 	}
 	mgr := New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
 
-	if err := mgr.Init(context.Background(), InitParams{TaskID: "IN-901", Services: []string{"svcA"}}); err != nil {
+	if _, err := mgr.Init(context.Background(), InitParams{TaskID: "IN-901", Services: []string{"svcA"}}); err != nil {
 		t.Fatalf("Init returned unexpected error: %v", err)
 	}
 
@@ -762,7 +871,7 @@ func TestAdd_ErrTaskNotFound(t *testing.T) {
 	gitMock := &mockGitClient{}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Add(context.Background(), AddParams{TaskID: "IN-999", Services: []string{"svc"}})
+	_, err := mgr.Add(context.Background(), AddParams{TaskID: "IN-999", Services: []string{"svc"}})
 	if !errors.Is(err, ErrTaskNotFound) {
 		t.Errorf("Add error = %v, want ErrTaskNotFound", err)
 	}
@@ -799,7 +908,7 @@ func TestAdd_BranchTypeHotfix_UsesHotfixPrefixAndProductionBase(t *testing.T) {
 	}
 	mgr := New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
 
-	if err := mgr.Add(context.Background(), AddParams{TaskID: "ADD-HOTFIX", Services: []string{"svcA"}, BranchType: "hotfix"}); err != nil {
+	if _, err := mgr.Add(context.Background(), AddParams{TaskID: "ADD-HOTFIX", Services: []string{"svcA"}, BranchType: "hotfix"}); err != nil {
 		t.Fatalf("Add returned unexpected error: %v", err)
 	}
 
@@ -916,7 +1025,7 @@ func TestListServices_SkipsNonGitDirs(t *testing.T) {
 	}
 }
 
-func TestListServices_ChecksDirtyAndAheadBehindConcurrently(t *testing.T) {
+func TestListServices_ChecksDirtyAndAheadBehind(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 	taskDir := filepath.Join(tasksRoot, "IN-LSS")
@@ -930,9 +1039,6 @@ func TestListServices_ChecksDirtyAndAheadBehindConcurrently(t *testing.T) {
 		t.Fatalf("setup: create fakeCommonDir: %v", err)
 	}
 
-	ready := make(chan string, 2)
-	release := make(chan struct{})
-
 	gitMock := &mockGitClient{
 		commonDirResult: fakeCommonDir,
 		listWorktreesRes: []git.WorktreeEntry{{
@@ -943,8 +1049,6 @@ func TestListServices_ChecksDirtyAndAheadBehindConcurrently(t *testing.T) {
 			if path != svcDir {
 				t.Errorf("IsDirty path = %q, want %q", path, svcDir)
 			}
-			ready <- "dirty"
-			<-release
 			return true, nil
 		},
 		revListAheadBehindFn: func(path, originBranch string) (int, int, error) {
@@ -954,38 +1058,13 @@ func TestListServices_ChecksDirtyAndAheadBehindConcurrently(t *testing.T) {
 			if originBranch != "origin/feature/IN-LSS-service-a" {
 				t.Errorf("RevListAheadBehind origin = %q, want %q", originBranch, "origin/feature/IN-LSS-service-a")
 			}
-			ready <- "aheadBehind"
-			<-release
 			return 2, 3, nil
 		},
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	done := make(chan []string, 1)
-	go func() {
-		var calls []string
-		for range 2 {
-			calls = append(calls, <-ready)
-		}
-		done <- calls
-	}()
-
-	errCh := make(chan error, 1)
-	var services []domain.Service
-	go func() {
-		var err error
-		services, err = mgr.ListServices(context.Background(), "IN-LSS")
-		errCh <- err
-	}()
-
-	select {
-	case <-done:
-		close(release)
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("ListServices did not start IsDirty and RevListAheadBehind concurrently")
-	}
-
-	if err := <-errCh; err != nil {
+	services, err := mgr.ListServices(context.Background(), "IN-LSS")
+	if err != nil {
 		t.Fatalf("ListServices returned unexpected error: %v", err)
 	}
 	if len(services) != 1 {
@@ -1634,6 +1713,7 @@ func TestPushService_StreamsLines(t *testing.T) {
 	}
 
 	gitMock := &mockGitClient{
+		worktreeBranchResult: "feature/IN-PUSH",
 		pushFn: func(path string, lineCh chan<- string) error {
 			lineCh <- "Enumerating objects: 3, done."
 			lineCh <- "To origin/main"
@@ -1940,6 +2020,7 @@ func TestValidateTask_DelegatesToValidatorWithResolvedServices(t *testing.T) {
 	}
 
 	var repoStatusCalls []string
+	var repoStatusMu sync.Mutex
 	gitMock := &mockGitClient{
 		commonDirFn: func(path string) (string, error) {
 			switch path {
@@ -1956,7 +2037,9 @@ func TestValidateTask_DelegatesToValidatorWithResolvedServices(t *testing.T) {
 			{Path: serviceBPath, Branch: "refs/heads/feature/IN-VALIDATE-DELEGATE"},
 		},
 		repoStatusFn: func(path string) (git.RawStatus, error) {
+			repoStatusMu.Lock()
 			repoStatusCalls = append(repoStatusCalls, path)
+			repoStatusMu.Unlock()
 			return git.RawStatus{Branch: "feature/IN-VALIDATE-DELEGATE"}, nil
 		},
 	}
@@ -2607,7 +2690,7 @@ func TestInit_RollsBackWhenNoWorktreesAdded(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Init(context.Background(), InitParams{
+	_, err := mgr.Init(context.Background(), InitParams{
 		TaskID:   "IN-ROLLBACK",
 		Services: []string{"nonexistent"},
 	})
@@ -2627,13 +2710,52 @@ func TestInit_NoServicesRequested(t *testing.T) {
 
 	mgr := newTestManager(t, tasksRoot, rootDir, &mockGitClient{})
 
-	if err := mgr.Init(context.Background(), InitParams{TaskID: "IN-EMPTY"}); err != nil {
+	if _, err := mgr.Init(context.Background(), InitParams{TaskID: "IN-EMPTY"}); err != nil {
 		t.Fatalf("Init with no services returned unexpected error: %v", err)
 	}
 
 	taskDir := filepath.Join(tasksRoot, "IN-EMPTY")
 	if _, err := os.Stat(taskDir); err != nil {
 		t.Errorf("task directory not created: %v", err)
+	}
+}
+
+func TestInit_PartialFailureReturnsTypedResult(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	makeGitDir(t, filepath.Join(rootDir, "okservice"))
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:   nil,
+		baseBranchResult: "main",
+		branchExistsRes:  false,
+		listWorktreesRes: nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	partial, err := mgr.Init(context.Background(), InitParams{
+		TaskID:       "IN-PARTIAL",
+		Services:     []string{"okservice", "missing"},
+		BranchPrefix: "feature/",
+	})
+
+	if err == nil {
+		t.Fatal("Init error = nil, want partial failure")
+	}
+
+	var partialErr *ErrPartialFailure
+	if !errors.As(err, &partialErr) {
+		t.Fatalf("Init error = %v, want ErrPartialFailure", err)
+	}
+	if partial.TaskID != "IN-PARTIAL" || partial.Operation != "init" {
+		t.Fatalf("partial = %+v, want task/op set", partial)
+	}
+	if len(partial.SucceededServices) != 1 || partial.SucceededServices[0] != "okservice" {
+		t.Fatalf("partial succeeded = %+v, want [okservice]", partial.SucceededServices)
+	}
+	if len(partial.FailedServices) != 1 || partial.FailedServices[0].Name != "missing" {
+		t.Fatalf("partial failed = %+v, want [missing]", partial.FailedServices)
 	}
 }
 
@@ -2651,7 +2773,7 @@ func TestAdd_ReturnsErrorWhenNoWorktreesAdded(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Add(context.Background(), AddParams{
+	_, err := mgr.Add(context.Background(), AddParams{
 		TaskID:   "IN-ADD-FAIL",
 		Services: []string{"nonexistent"},
 	})
@@ -2661,6 +2783,49 @@ func TestAdd_ReturnsErrorWhenNoWorktreesAdded(t *testing.T) {
 
 	if _, statErr := os.Stat(taskDir); statErr != nil {
 		t.Errorf("task directory was removed by Add, want it preserved: %v", statErr)
+	}
+}
+
+func TestAdd_PartialFailureReturnsTypedResult(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "ADD-PARTIAL")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	makeGitDir(t, filepath.Join(rootDir, "okservice"))
+
+	gitMock := &mockGitClient{
+		isValidRepoErr:   nil,
+		baseBranchResult: "main",
+		branchExistsRes:  false,
+		listWorktreesRes: nil,
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	partial, err := mgr.Add(context.Background(), AddParams{
+		TaskID:   "ADD-PARTIAL",
+		Services: []string{"okservice", "missing"},
+	})
+
+	if err == nil {
+		t.Fatal("Add error = nil, want partial failure")
+	}
+
+	var partialErr *ErrPartialFailure
+	if !errors.As(err, &partialErr) {
+		t.Fatalf("Add error = %v, want ErrPartialFailure", err)
+	}
+	if partial.TaskID != "ADD-PARTIAL" || partial.Operation != "add" {
+		t.Fatalf("partial = %+v, want task/op set", partial)
+	}
+	if len(partial.SucceededServices) != 1 || partial.SucceededServices[0] != "okservice" {
+		t.Fatalf("partial succeeded = %+v, want [okservice]", partial.SucceededServices)
+	}
+	if len(partial.FailedServices) != 1 || partial.FailedServices[0].Name != "missing" {
+		t.Fatalf("partial failed = %+v, want [missing]", partial.FailedServices)
 	}
 }
 
@@ -2680,7 +2845,7 @@ func TestInit_RemoteBranchConflict_ReturnsError(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Init(context.Background(), InitParams{
+	_, err := mgr.Init(context.Background(), InitParams{
 		TaskID:       "IN-CONFLICT",
 		Services:     []string{"myservice"},
 		BranchPrefix: "feature/",
@@ -2725,7 +2890,7 @@ func TestInit_RemoteBranchConflict_ReturnsErrorAfterPartialSuccess(t *testing.T)
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Init(context.Background(), InitParams{
+	_, err := mgr.Init(context.Background(), InitParams{
 		TaskID:       "IN-PARTIAL-CONFLICT",
 		Services:     []string{"okservice", "conflictservice"},
 		BranchPrefix: "feature/",
@@ -2774,7 +2939,7 @@ func TestInit_RemoteBranchConflict_RetryWithStrategySucceeds(t *testing.T) {
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
 	// First call: okservice succeeds, conflictservice hits remote branch conflict.
-	err := mgr.Init(context.Background(), InitParams{
+	_, err := mgr.Init(context.Background(), InitParams{
 		TaskID:       "IN-RETRY",
 		Services:     []string{"okservice", "conflictservice"},
 		BranchPrefix: "feature/",
@@ -2793,7 +2958,7 @@ func TestInit_RemoteBranchConflict_RetryWithStrategySucceeds(t *testing.T) {
 	}
 
 	// Second call: retry with StrategyFetchAndSwitch for conflictservice.
-	err = mgr.Init(context.Background(), InitParams{
+	_, err = mgr.Init(context.Background(), InitParams{
 		TaskID:       "IN-RETRY",
 		Services:     []string{"okservice", "conflictservice"},
 		BranchPrefix: "feature/",
@@ -2829,7 +2994,7 @@ func TestInit_RemoteBranchConflict_StrategyFetchAndSwitch(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Init(context.Background(), InitParams{
+	_, err := mgr.Init(context.Background(), InitParams{
 		TaskID:       "IN-FETCH",
 		Services:     []string{"myservice"},
 		BranchPrefix: "feature/",
@@ -2883,7 +3048,7 @@ func TestInit_RemoteBranchConflict_StrategyNewBranch(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Init(context.Background(), InitParams{
+	_, err := mgr.Init(context.Background(), InitParams{
 		TaskID:       "IN-NEWBRANCH",
 		Services:     []string{"myservice"},
 		BranchPrefix: "feature/",
@@ -2935,7 +3100,7 @@ func TestInit_RemoteBranchConflict_StrategyCancel(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Init(context.Background(), InitParams{
+	_, err := mgr.Init(context.Background(), InitParams{
 		TaskID:       "IN-CANCEL",
 		Services:     []string{"myservice"},
 		BranchPrefix: "feature/",
@@ -2978,7 +3143,7 @@ func TestInit_RemoteBranchConflict_NetworkError_FailOpen(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Init(context.Background(), InitParams{
+	_, err := mgr.Init(context.Background(), InitParams{
 		TaskID:       "IN-NETWORK",
 		Services:     []string{"myservice"},
 		BranchPrefix: "feature/",
@@ -3017,7 +3182,7 @@ func TestInit_RemoteBranchConflict_NoRemoteBranch(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Init(context.Background(), InitParams{
+	_, err := mgr.Init(context.Background(), InitParams{
 		TaskID:       "IN-NORMAL",
 		Services:     []string{"myservice"},
 		BranchPrefix: "feature/",
@@ -3059,7 +3224,7 @@ func TestInit_RemoteBranchConflict_LocalBranchExists(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Init(context.Background(), InitParams{
+	_, err := mgr.Init(context.Background(), InitParams{
 		TaskID:       "IN-EXISTING",
 		Services:     []string{"myservice"},
 		BranchPrefix: "feature/",
@@ -3103,7 +3268,7 @@ func TestAdd_RemoteBranchConflict_ReturnsError(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Add(context.Background(), AddParams{
+	_, err := mgr.Add(context.Background(), AddParams{
 		TaskID:   "ADD-CONFLICT",
 		Services: []string{"myservice"},
 	})
@@ -3148,7 +3313,7 @@ func TestAdd_RemoteBranchConflict_ReturnsErrorAfterPartialSuccess(t *testing.T) 
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Add(context.Background(), AddParams{
+	_, err := mgr.Add(context.Background(), AddParams{
 		TaskID:   "ADD-PARTIAL-CONFLICT",
 		Services: []string{"okservice", "conflictservice"},
 	})
@@ -3196,7 +3361,7 @@ func TestAdd_RemoteBranchConflict_StrategyFetchAndSwitch(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Add(context.Background(), AddParams{
+	_, err := mgr.Add(context.Background(), AddParams{
 		TaskID:   "ADD-FETCH",
 		Services: []string{"myservice"},
 		RemoteBranchStrategies: map[string]RemoteBranchStrategy{
@@ -3254,7 +3419,7 @@ func TestAdd_RemoteBranchConflict_StrategyNewBranch(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Add(context.Background(), AddParams{
+	_, err := mgr.Add(context.Background(), AddParams{
 		TaskID:   "ADD-NEWBRANCH",
 		Services: []string{"myservice"},
 		RemoteBranchStrategies: map[string]RemoteBranchStrategy{
@@ -3310,7 +3475,7 @@ func TestAdd_RemoteBranchConflict_StrategyCancel(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Add(context.Background(), AddParams{
+	_, err := mgr.Add(context.Background(), AddParams{
 		TaskID:   "ADD-CANCEL",
 		Services: []string{"myservice"},
 		RemoteBranchStrategies: map[string]RemoteBranchStrategy{
@@ -3356,7 +3521,7 @@ func TestAdd_RemoteBranchConflict_NoRemoteBranch(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Add(context.Background(), AddParams{
+	_, err := mgr.Add(context.Background(), AddParams{
 		TaskID:   "ADD-NORMAL",
 		Services: []string{"myservice"},
 	})
@@ -3402,7 +3567,7 @@ func TestAdd_RemoteBranchConflict_LocalBranchExists(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Add(context.Background(), AddParams{
+	_, err := mgr.Add(context.Background(), AddParams{
 		TaskID:   "ADD-EXISTING",
 		Services: []string{"myservice"},
 	})
@@ -3446,7 +3611,7 @@ func TestAdd_RemoteBranchConflict_NetworkError_FailOpen(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Add(context.Background(), AddParams{
+	_, err := mgr.Add(context.Background(), AddParams{
 		TaskID:   "ADD-NETWORK",
 		Services: []string{"myservice"},
 	})

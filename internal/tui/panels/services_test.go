@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -424,6 +425,77 @@ func TestServicesPanel_View_CleanService_ShowsCheckIcon(t *testing.T) {
 	view := p.View()
 	if !strings.Contains(view, "✓") {
 		t.Errorf("clean service should show ✓ icon, got: %q", view)
+	}
+}
+
+func TestServiceDelegate_UsesTwoLines(t *testing.T) {
+	if got := (serviceDelegate{}).Height(); got != 2 {
+		t.Fatalf("Height() = %d, want 2", got)
+	}
+}
+
+func TestServicesPanel_View_ShowsCompactGitStateWithoutBranchOrPath(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	p.SetServices("IN-001", []domain.Service{{
+		Name:         "collection",
+		Branch:       "feature/IN-001",
+		BaseBranch:   "main",
+		WorktreePath: "/tmp/.tasks/IN-001/collection",
+		Ahead:        2,
+		Behind:       1,
+	}})
+
+	view := stripAnsi(p.View())
+	for _, want := range []string{"clean", "↑2", "↓1"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q: %q", want, view)
+		}
+	}
+	for _, unwanted := range []string{"branch:", "path:", "feature/IN-001"} {
+		if strings.Contains(view, unwanted) {
+			t.Errorf("view contains obsolete %q: %q", unwanted, view)
+		}
+	}
+}
+
+func TestServicesPanel_View_ShowsModifiedAndStaleStates(t *testing.T) {
+	tests := []struct {
+		name string
+		svc  domain.Service
+		want string
+	}{
+		{name: "modified", svc: domain.Service{Name: "api", IsDirty: true}, want: "modified"},
+		{name: "stale", svc: domain.Service{Name: "api", Stale: true}, want: "worktree missing"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewServicesPanel(60, 20)
+			p.SetServices("IN-001", []domain.Service{tc.svc})
+			view := stripAnsi(p.View())
+			if !strings.Contains(view, tc.want) {
+				t.Fatalf("view = %q, want state %q", view, tc.want)
+			}
+		})
+	}
+}
+
+func TestServicesPanel_View_LongContentDoesNotExceedPanelWidth(t *testing.T) {
+	const width = 30
+	p := NewServicesPanel(width, 12)
+	p.SetServices("IN-001-WITH-A-VERY-LONG-TASK-ID", []domain.Service{{
+		Name:         "очень-длинное-название-сервиса-которое-не-помещается",
+		Branch:       "feature/IN-001-WITH-A-VERY-LONG-TASK-ID",
+		WorktreePath: "/tmp/an/extremely/long/worktree/path/service",
+	}})
+
+	view := p.View()
+	for i, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > width {
+			t.Errorf("line %d width = %d, want <= %d: %q", i, got, width, stripAnsi(line))
+		}
+	}
+	if !strings.Contains(stripAnsi(view), "…") {
+		t.Fatalf("view = %q, want truncation ellipsis", stripAnsi(view))
 	}
 }
 

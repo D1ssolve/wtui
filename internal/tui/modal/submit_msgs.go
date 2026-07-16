@@ -27,3 +27,12 @@ type SubmitCreateReleaseMsg struct {
 type RequestReleaseVersionsMsg struct {
 	TaskIDs []string
 }
+
+type ConfirmReleaseExecuteMsg struct {
+	TaskIDs  []string
+	Versions map[string]string
+}
+
+type ConfirmFinishReleaseMsg struct {
+	ReleaseID string
+}

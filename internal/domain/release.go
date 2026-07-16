@@ -9,8 +9,9 @@ const (
 	ReleaseStatusValidating ReleaseStatus = "validating"
 	ReleaseStatusMerging    ReleaseStatus = "merging"
 	ReleaseStatusBranching  ReleaseStatus = "branching"
-	ReleaseStatusTagging    ReleaseStatus = "tagging"
 	ReleaseStatusPushing    ReleaseStatus = "pushing"
+	ReleaseStatusPrepared   ReleaseStatus = "prepared"
+	ReleaseStatusTagging    ReleaseStatus = "tagging"
 	ReleaseStatusReleased   ReleaseStatus = "released"
 	ReleaseStatusFailed     ReleaseStatus = "failed"
 	ReleaseStatusRejected   ReleaseStatus = "rejected"
@@ -30,6 +31,7 @@ type Release struct {
 	CreatedAt       time.Time        `json:"created_at"`
 	UpdatedAt       time.Time        `json:"updated_at"`
 	StartedAt       *time.Time       `json:"started_at,omitempty"`
+	PreparedAt      *time.Time       `json:"prepared_at,omitempty"`
 	CompletedAt     *time.Time       `json:"completed_at,omitempty"`
 	CreatedBy       string           `json:"created_by,omitempty"`
 	Error           *ReleaseError    `json:"error,omitempty"`

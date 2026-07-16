@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/D1ssolve/wtui/internal/config"
@@ -63,6 +64,7 @@ func TestPushTask_PushesAllServices(t *testing.T) {
 	}
 
 	gitMock := &mockGitClient{
+		worktreeBranchResult: "feature/IN-PUSH-ALL",
 		commonDirFn: func(path string) (string, error) {
 			commonDir, ok := fakeCommonDirs[path]
 			if !ok {
@@ -142,6 +144,7 @@ func TestPushTask_ContinuesOnError(t *testing.T) {
 
 	pushErr := errors.New("push rejected")
 	gitMock := &mockGitClient{
+		worktreeBranchResult: "feature/IN-PUSH-ERR",
 		commonDirFn: func(path string) (string, error) {
 			commonDir, ok := fakeCommonDirs[path]
 			if !ok {
@@ -200,6 +203,7 @@ func TestPushTask_ReportsProgress(t *testing.T) {
 	}
 
 	gitMock := &mockGitClient{
+		worktreeBranchResult: "feature/IN-PUSH-PROG",
 		commonDirFn: func(path string) (string, error) {
 			if filepath.Base(path) == "svc-a" {
 				return fakeCommonDir, nil
@@ -307,4 +311,299 @@ func TestPushTask_ProtectedBranch_RefusesPush(t *testing.T) {
 
 	assertContainsLine(t, lines, "[svc-a] pushing...")
 	assertContainsLine(t, lines, "[svc-a] push error: refusing to push protected branch develop")
+}
+
+func TestPushTask_BlankBranch_RefusesPush(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-PUSH-BLANK")
+	worktreePath := filepath.Join(taskDir, "svc-a")
+
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-a", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == worktreePath {
+				return fakeCommonDir, nil
+			}
+			return "", errors.New("not a git worktree")
+		},
+		getWorktreeBranchFn: func(path string) (string, error) {
+			if path != worktreePath {
+				t.Fatalf("GetWorktreeBranch path = %q, want %q", path, worktreePath)
+			}
+			return "   ", nil
+		},
+	}
+
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	lineCh := make(chan string, 8)
+	err := mgr.PushTask(context.Background(), "IN-PUSH-BLANK", lineCh)
+	if err == nil {
+		t.Fatal("PushTask error = nil, want blank-branch error")
+	}
+
+	if got := err.Error(); !strings.Contains(got, "refusing to push: current branch is blank") {
+		t.Fatalf("PushTask error = %q, want blank-branch error", got)
+	}
+
+	gitMock.mu.Lock()
+	pushCalls := append([]string(nil), gitMock.pushCalls...)
+	gitMock.mu.Unlock()
+
+	if len(pushCalls) != 0 {
+		t.Fatalf("expected no Push calls, got %d", len(pushCalls))
+	}
+}
+
+func TestPushTask_HEADBranch_RefusesPush(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-PUSH-HEAD")
+	worktreePath := filepath.Join(taskDir, "svc-a")
+
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-a", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == worktreePath {
+				return fakeCommonDir, nil
+			}
+			return "", errors.New("not a git worktree")
+		},
+		getWorktreeBranchFn: func(path string) (string, error) {
+			if path != worktreePath {
+				t.Fatalf("GetWorktreeBranch path = %q, want %q", path, worktreePath)
+			}
+			return "HEAD", nil
+		},
+	}
+
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	lineCh := make(chan string, 8)
+	err := mgr.PushTask(context.Background(), "IN-PUSH-HEAD", lineCh)
+	if err == nil {
+		t.Fatal("PushTask error = nil, want HEAD-branch error")
+	}
+
+	if got := err.Error(); !strings.Contains(got, `refusing to push detached branch marker "HEAD"`) {
+		t.Fatalf("PushTask error = %q, want HEAD-branch error", got)
+	}
+
+	gitMock.mu.Lock()
+	pushCalls := append([]string(nil), gitMock.pushCalls...)
+	gitMock.mu.Unlock()
+
+	if len(pushCalls) != 0 {
+		t.Fatalf("expected no Push calls, got %d", len(pushCalls))
+	}
+}
+
+func TestPushTask_DetachedBranchMarker_RefusesPush(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-PUSH-DETACHED")
+	worktreePath := filepath.Join(taskDir, "svc-a")
+
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-a", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == worktreePath {
+				return fakeCommonDir, nil
+			}
+			return "", errors.New("not a git worktree")
+		},
+		getWorktreeBranchFn: func(path string) (string, error) {
+			if path != worktreePath {
+				t.Fatalf("GetWorktreeBranch path = %q, want %q", path, worktreePath)
+			}
+			return "(detached)", nil
+		},
+	}
+
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	lineCh := make(chan string, 8)
+	err := mgr.PushTask(context.Background(), "IN-PUSH-DETACHED", lineCh)
+	if err == nil {
+		t.Fatal("PushTask error = nil, want detached-branch error")
+	}
+
+	if got := err.Error(); !strings.Contains(got, `refusing to push detached branch marker "(detached)"`) {
+		t.Fatalf("PushTask error = %q, want detached-branch error", got)
+	}
+
+	gitMock.mu.Lock()
+	pushCalls := append([]string(nil), gitMock.pushCalls...)
+	gitMock.mu.Unlock()
+
+	if len(pushCalls) != 0 {
+		t.Fatalf("expected no Push calls, got %d", len(pushCalls))
+	}
+}
+
+func TestPushTask_AllowedBranch_Pushes(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-PUSH-ALLOWED")
+	worktreePath := filepath.Join(taskDir, "svc-a")
+
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-a", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == worktreePath {
+				return fakeCommonDir, nil
+			}
+			return "", errors.New("not a git worktree")
+		},
+		getWorktreeBranchFn: func(path string) (string, error) {
+			if path != worktreePath {
+				t.Fatalf("GetWorktreeBranch path = %q, want %q", path, worktreePath)
+			}
+			return "feature/IN-PUSH-ALLOWED", nil
+		},
+	}
+
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	lineCh := make(chan string, 8)
+	err := mgr.PushTask(context.Background(), "IN-PUSH-ALLOWED", lineCh)
+	if err != nil {
+		t.Fatalf("PushTask returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	pushCalls := append([]string(nil), gitMock.pushCalls...)
+	gitMock.mu.Unlock()
+
+	if len(pushCalls) != 1 || pushCalls[0] != worktreePath {
+		t.Fatalf("push calls = %v, want [%s]", pushCalls, worktreePath)
+	}
+
+	var lines []string
+	for line := range lineCh {
+		lines = append(lines, line)
+	}
+
+	assertContainsLine(t, lines, "[svc-a] pushing...")
+	assertContainsLine(t, lines, "[svc-a] pushed.")
+}
+
+func TestPushTask_BoundedConcurrencyHonorsConfig(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "IN-PUSH-CONC")
+
+	servicePaths := map[string]string{
+		"svc-a": filepath.Join(taskDir, "svc-a"),
+		"svc-b": filepath.Join(taskDir, "svc-b"),
+		"svc-c": filepath.Join(taskDir, "svc-c"),
+	}
+	for _, path := range servicePaths {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("setup: create service dir %s: %v", path, err)
+		}
+	}
+
+	fakeCommonDirs := map[string]string{}
+	for name, path := range servicePaths {
+		common := filepath.Join(rootDir, "repos", name, ".git")
+		if err := os.MkdirAll(common, 0o755); err != nil {
+			t.Fatalf("setup: create common dir %s: %v", common, err)
+		}
+		fakeCommonDirs[path] = common
+	}
+
+	started := make(chan struct{}, len(servicePaths))
+	continuePush := make(chan struct{})
+	active := 0
+	maxActive := 0
+	var metricMu sync.Mutex
+
+	gitMock := &mockGitClient{
+		worktreeBranchResult: "feature/IN-PUSH-CONC",
+		commonDirFn: func(path string) (string, error) {
+			common, ok := fakeCommonDirs[path]
+			if !ok {
+				return "", errors.New("not a git worktree")
+			}
+			return common, nil
+		},
+		pushFn: func(path string, lineCh chan<- string) error {
+			metricMu.Lock()
+			active++
+			if active > maxActive {
+				maxActive = active
+			}
+			metricMu.Unlock()
+
+			started <- struct{}{}
+			<-continuePush
+
+			metricMu.Lock()
+			active--
+			metricMu.Unlock()
+			return nil
+		},
+	}
+
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code", Concurrency: 1}
+	if _, err := cfg.Effective(); err != nil {
+		t.Fatalf("cfg.Effective(): %v", err)
+	}
+	mgr := newTestManagerWithCfg(t, cfg, gitMock)
+
+	lineCh := make(chan string, 32)
+	done := make(chan error, 1)
+	go func() {
+		done <- mgr.PushTask(context.Background(), "IN-PUSH-CONC", lineCh)
+	}()
+
+	for range len(servicePaths) {
+		<-started
+		continuePush <- struct{}{}
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("PushTask returned error: %v", err)
+	}
+
+	metricMu.Lock()
+	observedMax := maxActive
+	metricMu.Unlock()
+	if observedMax > 1 {
+		t.Fatalf("max concurrent pushes = %d, want <=1", observedMax)
+	}
 }

@@ -34,8 +34,12 @@ var (
 	ErrReleaseTagExists               = errors.New("release: tag already exists")
 	ErrReleaseDirtyWorktree           = errors.New("release: dirty worktree")
 	ErrReleaseOperationInProgress     = errors.New("release: operation in progress")
+	ErrReleaseTagCreateFailed         = errors.New("release: tag create failed")
+	ErrReleaseTagPushFailed           = errors.New("release: tag push failed")
 	ErrReleaseRetryUnsafe             = errors.New("release: retry is unsafe")
 	ErrReleaseMergeConflict           = errors.New("release: merge conflict")
+
+	ErrPushProtectedBranch = errors.New("refusing to push protected branch")
 )
 
 type ErrRemoteBranchConflict struct {

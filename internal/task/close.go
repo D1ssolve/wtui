@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -255,6 +256,18 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				svcFailed = true
 				break
 			}
+			restoreBranch := func() error {
+				if originalBranch == "" {
+					return nil
+				}
+				if restoreErr := m.git.Checkout(ctx, svc.WorktreePath, originalBranch); restoreErr != nil {
+					step(svc.Name+":restore-branch", StepStatusFailed, restoreErr.Error())
+					return restoreErr
+				}
+				step(svc.Name+":restore-branch", StepStatusOK, "restored "+originalBranch)
+				return nil
+			}
+
 			for _, target := range svcPlan.TargetBranches {
 				merged, mergeErr := m.git.IsAncestor(ctx, svc.RepoPath, svcPlan.SourceBranch, target)
 				if mergeErr != nil {
@@ -277,7 +290,31 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				mergeRunErr := m.git.Merge(ctx, svc.WorktreePath, svcPlan.SourceBranch)
 				if mergeRunErr != nil {
 					step(svc.Name+":merge:"+target, StepStatusFailed, mergeRunErr.Error())
+
+					recoveryErrs := make([]error, 0, 2)
+					states, stateErr := m.git.OperationState(ctx, svc.WorktreePath)
+					if stateErr != nil {
+						recoveryErrs = append(recoveryErrs, fmt.Errorf("inspect operation state: %w", stateErr))
+					} else {
+						sort.Slice(states, func(i, j int) bool { return states[i] < states[j] })
+						if slices.Contains(states, domain.RepoStateMerging) || slices.Contains(states, domain.RepoStateConflicted) {
+							if abortErr := m.git.MergeAbort(ctx, svc.WorktreePath); abortErr != nil {
+								recoveryErrs = append(recoveryErrs, fmt.Errorf("abort merge: %w", abortErr))
+							}
+						}
+					}
+
+					if restoreErr := restoreBranch(); restoreErr != nil {
+						recoveryErrs = append(recoveryErrs, fmt.Errorf("restore branch: %w", restoreErr))
+					}
+
+					if len(recoveryErrs) > 0 {
+						mergeRunErr = fmt.Errorf("merge %s into %s failed: %w", svcPlan.SourceBranch, target, errors.Join(append([]error{mergeRunErr}, recoveryErrs...)...))
+					}
 					svcFailed = true
+					if !continueOnError {
+						return result, mergeRunErr
+					}
 					break
 				}
 				step(svc.Name+":merge:"+target, StepStatusOK, "merged into "+target)
@@ -298,18 +335,13 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				step(svc.Name+":push:"+target, StepStatusOK, "pushed "+target)
 			}
 
-			if originalBranch != "" {
-				if restoreErr := m.git.Checkout(ctx, svc.WorktreePath, originalBranch); restoreErr != nil {
-					step(svc.Name+":restore-branch", StepStatusFailed, restoreErr.Error())
-					svcFailed = true
-					if !continueOnError {
-						return result, errors.New("close task failed")
-					}
-					anyFailed = true
-					continue
-				} else {
-					step(svc.Name+":restore-branch", StepStatusOK, "restored "+originalBranch)
+			if restoreErr := restoreBranch(); restoreErr != nil {
+				svcFailed = true
+				if !continueOnError {
+					return result, errors.New("close task failed")
 				}
+				anyFailed = true
+				continue
 			}
 
 		case gitflow.CloseStrategyReviewRequest:
@@ -333,7 +365,7 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 			if svcPlan.ForgePlan != nil {
 				target = svcPlan.ForgePlan.TargetBranch
 			}
-				repo := forge.ExtractRepoPath(svc.RemoteURL)
+			repo := forge.ExtractRepoPath(svc.RemoteURL)
 			if repo == "" {
 				step(svc.Name+":review-request", StepStatusFailed, fmt.Sprintf("resolve repository path: remote URL %q is not parseable", svc.RemoteURL))
 				svcFailed = true

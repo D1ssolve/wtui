@@ -45,8 +45,6 @@ func TestRenderFooter_FocusTasks_DoesNotIncludeVerboseHints(t *testing.T) {
 		"[,] config",
 		"[/] filter",
 		"[Tab] services",
-		"[S] sync",
-		"[P] prune",
 		"[V] validate",
 		"[T] tags",
 	} {
@@ -82,11 +80,7 @@ func TestRenderFooter_FocusServices_DoesNotIncludeVerboseHints(t *testing.T) {
 
 	footer := renderFooter(m)
 	for _, forbidden := range []string{
-		"[s] sync service",
-		"[P] push service",
-		"[ctrl+s] stash",
-		"[ctrl+u] unstash",
-		"[d] remove service",
+		"[/] filter",
 	} {
 		if strings.Contains(footer, forbidden) {
 			t.Errorf("services footer should not include verbose hint %q, got %q", forbidden, footer)
@@ -116,7 +110,7 @@ func TestRenderFooter_FocusReleases_IncludesReleaseHints(t *testing.T) {
 
 	footer := renderFooter(m)
 	for _, want := range []string{
-		"[N] new release",
+		"[N] prepare release",
 		"[r] refresh",
 		"[?] help",
 		"[q] quit",

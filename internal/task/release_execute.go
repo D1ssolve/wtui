@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -76,22 +75,18 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 
 	for i := range release.Services {
 		svc := &release.Services[i]
-		if execErr := m.executeReleaseService(ctx, &release, svc, params.StatusCh); execErr != nil {
+		if execErr := m.executePrepareService(ctx, &release, svc, params.StatusCh); execErr != nil {
 			releaseErr := classifyReleaseError(execErr, svc)
 			_ = m.failRelease(&release, releaseErr)
 			return release, execErr
 		}
 	}
 
-	if err := m.ensureReleaseReadyForReleased(&release); err != nil {
+	if err := m.ensureReleaseReadyForPrepared(&release); err != nil {
 		return release, err
 	}
-
-	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusReleased, "final", nil); err != nil {
-		return release, err
-	}
-	completedAt := defaultReleaseNow().UTC()
-	release.CompletedAt = &completedAt
+	preparedAt := defaultReleaseNow().UTC()
+	release.PreparedAt = &preparedAt
 	release.Error = nil
 
 	release, err = m.writeReleaseManifest(release)
@@ -102,7 +97,7 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 	return release, nil
 }
 
-func (m *manager) executeReleaseService(ctx context.Context, release *domain.Release, svc *domain.ReleaseService, statusCh chan<- string) (err error) {
+func (m *manager) executePrepareService(ctx context.Context, release *domain.Release, svc *domain.ReleaseService, statusCh chan<- string) (err error) {
 	svc.Status = domain.ReleaseStatusMerging
 	if err := m.persistCheckpoint(release, "fetch", nil); err != nil {
 		return err
@@ -122,7 +117,7 @@ func (m *manager) executeReleaseService(ctx context.Context, release *domain.Rel
 	}
 	svc.IntegrationWorktreePath = integrationPath
 	svc.PreIntegrationRef = svc.IntegrationBranch
-	preIntegrationSHA, err := resolveReleaseRefSHA(ctx, svc.RepoPath, svc.IntegrationBranch)
+	preIntegrationSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, svc.IntegrationBranch)
 	if err != nil {
 		return err
 	}
@@ -145,18 +140,16 @@ func (m *manager) executeReleaseService(ctx context.Context, release *domain.Rel
 		if svc.IntegrationWorktreePath == "" {
 			return
 		}
-		if err == nil {
-			if !keepIntegration {
-				cleanupIntegration()
-				_ = m.persistCheckpoint(release, "cleanup", nil)
+		if err != nil {
+			if keepIntegration || mergeConflict {
+				return
 			}
+			cleanupIntegration()
 			return
 		}
-		if keepIntegration || mergeConflict {
-			return
+		if !keepIntegration {
+			cleanupIntegration()
 		}
-		cleanupIntegration()
-		_ = m.persistCheckpoint(release, "cleanup", nil)
 	}()
 
 	sendStatus(statusCh, fmt.Sprintf("[%s][merge] merging feature branches", svc.Name))
@@ -173,7 +166,7 @@ func (m *manager) executeReleaseService(ctx context.Context, release *domain.Rel
 			return err
 		}
 		fb.Merged = true
-		mergeSHA, resolveErr := resolveReleaseRefSHA(ctx, svc.RepoPath, fb.Branch)
+		mergeSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, fb.Branch)
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -184,7 +177,7 @@ func (m *manager) executeReleaseService(ctx context.Context, release *domain.Rel
 	}
 
 	svc.PostIntegrationRef = svc.IntegrationBranch
-	postIntegrationSHA, err := resolveReleaseRefSHA(ctx, integrationPath, "HEAD")
+	postIntegrationSHA, err := m.resolveReleaseRefSHA(ctx, integrationPath, "HEAD")
 	if err != nil {
 		return err
 	}
@@ -215,7 +208,7 @@ func (m *manager) executeReleaseService(ctx context.Context, release *domain.Rel
 		return err
 	}
 	svc.ReleaseRef = svc.ReleaseBranch
-	releaseSHA, err := resolveReleaseRefSHA(ctx, svc.RepoPath, svc.ReleaseBranch)
+	releaseSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, svc.ReleaseBranch)
 	if err != nil {
 		return err
 	}
@@ -238,29 +231,6 @@ func (m *manager) executeReleaseService(ctx context.Context, release *domain.Rel
 		pushPath = releaseWorktreePath
 	}
 
-	svc.Status = domain.ReleaseStatusTagging
-	tagExists, err := m.git.TagExists(ctx, svc.RepoPath, svc.Tag)
-	if err != nil {
-		return err
-	}
-	if tagExists {
-		return fmt.Errorf("%w: service=%s tag=%s", ErrReleaseTagExists, svc.Name, svc.Tag)
-	}
-
-	sendStatus(statusCh, fmt.Sprintf("[%s][tag] creating %s", svc.Name, svc.Tag))
-	if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.ReleaseBranch, "wtui release "+release.ID); err != nil {
-		return err
-	}
-	svc.TagRef = svc.Tag
-	tagSHA, err := resolveReleaseRefSHA(ctx, svc.RepoPath, svc.Tag+"^{}")
-	if err != nil {
-		return err
-	}
-	svc.TagSHA = tagSHA
-	if err := m.persistCheckpoint(release, "tag", nil); err != nil {
-		return err
-	}
-
 	svc.Status = domain.ReleaseStatusPushing
 	if m.cfg.Release != nil && m.cfg.Release.PushReleaseBranches != nil && *m.cfg.Release.PushReleaseBranches {
 		sendStatus(statusCh, fmt.Sprintf("[%s][push] pushing release branch %s", svc.Name, svc.ReleaseBranch))
@@ -273,37 +243,26 @@ func (m *manager) executeReleaseService(ctx context.Context, release *domain.Rel
 		}
 	}
 
-	if m.cfg.Release != nil && m.cfg.Release.PushTags != nil && *m.cfg.Release.PushTags {
-		sendStatus(statusCh, fmt.Sprintf("[%s][push] pushing tag %s", svc.Name, svc.Tag))
-		if err := m.git.PushTag(ctx, pushPath, svc.Tag); err != nil {
-			return fmt.Errorf("%w: service=%s tag=%s: %v", ErrReleaseOperationInProgress, svc.Name, svc.Tag, err)
-		}
-		svc.PushedTag = true
-		if err := m.persistCheckpoint(release, "push_tag", nil); err != nil {
+	if !keepIntegration {
+		if err := m.persistCheckpoint(release, "cleanup_prepare", nil); err != nil {
+			cleanupIntegration()
 			return err
 		}
+		cleanupIntegration()
 	}
 
-	svc.Status = domain.ReleaseStatusReleased
-	if err := m.persistCheckpoint(release, "service_done", nil); err != nil {
+	svc.Status = domain.ReleaseStatusPrepared
+	if err := m.persistCheckpoint(release, "service_prepared", nil); err != nil {
 		return err
 	}
 
-	sendStatus(statusCh, fmt.Sprintf("[%s][done] released", svc.Name))
+	sendStatus(statusCh, fmt.Sprintf("[%s][done] prepared", svc.Name))
 	return nil
 }
 
 func (m *manager) ensureReleaseReadyForReleased(release *domain.Release) error {
 	switch release.Status {
-	case domain.ReleaseStatusMerging:
-		if err := m.moveReleaseStatus(release, domain.ReleaseStatusBranching, "branch", nil); err != nil {
-			return err
-		}
-		if _, err := m.writeReleaseManifest(*release); err != nil {
-			return err
-		}
-		fallthrough
-	case domain.ReleaseStatusBranching:
+	case domain.ReleaseStatusPrepared:
 		if err := m.moveReleaseStatus(release, domain.ReleaseStatusTagging, "tag", nil); err != nil {
 			return err
 		}
@@ -318,25 +277,55 @@ func (m *manager) ensureReleaseReadyForReleased(release *domain.Release) error {
 		if _, err := m.writeReleaseManifest(*release); err != nil {
 			return err
 		}
+		fallthrough
 	case domain.ReleaseStatusPushing:
+		if err := m.moveReleaseStatus(release, domain.ReleaseStatusReleased, "final", nil); err != nil {
+			return err
+		}
+		if _, err := m.writeReleaseManifest(*release); err != nil {
+			return err
+		}
 		return nil
 	default:
 		return fmt.Errorf("%w: %s -> released", ErrReleaseInvalidStatusTransition, release.Status)
 	}
-
-	return nil
 }
 
-var releaseResolveRefSHA = func(ctx context.Context, repoPath, ref string) (string, error) {
-	out, runErr := exec.CommandContext(ctx, "git", "-C", repoPath, "rev-parse", ref).Output()
-	if runErr != nil {
-		return "", runErr
+func (m *manager) ensureReleaseReadyForPrepared(release *domain.Release) error {
+	switch release.Status {
+	case domain.ReleaseStatusMerging:
+		if err := m.moveReleaseStatus(release, domain.ReleaseStatusBranching, "branch", nil); err != nil {
+			return err
+		}
+		if _, err := m.writeReleaseManifest(*release); err != nil {
+			return err
+		}
+		fallthrough
+	case domain.ReleaseStatusBranching:
+		if err := m.moveReleaseStatus(release, domain.ReleaseStatusPushing, "push_branch", nil); err != nil {
+			return err
+		}
+		if _, err := m.writeReleaseManifest(*release); err != nil {
+			return err
+		}
+		fallthrough
+	case domain.ReleaseStatusPushing:
+		if err := m.moveReleaseStatus(release, domain.ReleaseStatusPrepared, "prepared", nil); err != nil {
+			return err
+		}
+		if _, err := m.writeReleaseManifest(*release); err != nil {
+			return err
+		}
+		return nil
+	case domain.ReleaseStatusPrepared:
+		return nil
+	default:
+		return fmt.Errorf("%w: %s -> prepared", ErrReleaseInvalidStatusTransition, release.Status)
 	}
-	return strings.TrimSpace(string(out)), nil
 }
 
-func resolveReleaseRefSHA(ctx context.Context, repoPath, ref string) (string, error) {
-	sha, err := releaseResolveRefSHA(ctx, repoPath, ref)
+func (m *manager) resolveReleaseRefSHA(ctx context.Context, repoPath, ref string) (string, error) {
+	sha, err := m.git.ResolveRef(ctx, repoPath, ref)
 	if err != nil {
 		return "", fmt.Errorf("release: resolve ref sha repo=%s ref=%s: %w", repoPath, ref, err)
 	}
@@ -382,6 +371,22 @@ func (m *manager) failRelease(release *domain.Release, releaseErr *domain.Releas
 }
 
 func classifyReleaseError(err error, svc *domain.ReleaseService) *domain.ReleaseError {
+	if errors.Is(err, ErrReleaseRetryUnsafe) {
+		re := &domain.ReleaseError{
+			Code:        "ERR_RELEASE_RETRY_UNSAFE",
+			Message:     ErrReleaseRetryUnsafe.Error(),
+			Stage:       "finish_validate",
+			ServiceName: safeServiceName(svc),
+			Recoverable: false,
+			Cause:       err.Error(),
+		}
+		if svc != nil {
+			svc.Status = domain.ReleaseStatusFailed
+			svc.Error = re
+		}
+		return re
+	}
+
 	if errors.Is(err, ErrReleaseMergeConflict) {
 		msg := ErrReleaseMergeConflict.Error()
 		if svc != nil {
@@ -390,7 +395,7 @@ func classifyReleaseError(err error, svc *domain.ReleaseService) *domain.Release
 				Code:        "ERR_RELEASE_MERGE_CONFLICT",
 				Message:     msg,
 				Stage:       "merge",
-				ServiceName: svc.Name,
+				ServiceName: safeServiceName(svc),
 				Recoverable: true,
 				Cause:       err.Error(),
 			}
@@ -404,14 +409,27 @@ func classifyReleaseError(err error, svc *domain.ReleaseService) *domain.Release
 	if errors.Is(err, ErrReleaseTagExists) {
 		return &domain.ReleaseError{Code: "ERR_RELEASE_TAG_EXISTS", Message: ErrReleaseTagExists.Error(), Stage: "tag", Recoverable: true, Cause: err.Error()}
 	}
+	if errors.Is(err, ErrReleaseTagCreateFailed) {
+		return &domain.ReleaseError{Code: "ERR_RELEASE_TAG_CREATE", Message: "failed to create release tag", Stage: "tag", ServiceName: safeServiceName(svc), Recoverable: true, Cause: err.Error()}
+	}
+	if errors.Is(err, ErrReleaseTagPushFailed) {
+		return &domain.ReleaseError{Code: "ERR_RELEASE_TAG_PUSH", Message: "failed to push release tag", Stage: "push_tag", ServiceName: safeServiceName(svc), Recoverable: true, Cause: err.Error()}
+	}
 
 	if svc != nil {
 		svc.Status = domain.ReleaseStatusFailed
-		svc.Error = &domain.ReleaseError{Code: "ERR_RELEASE_PUSH_FAILED", Message: "release step failed", Stage: "push", ServiceName: svc.Name, Recoverable: true, Cause: err.Error()}
+		svc.Error = &domain.ReleaseError{Code: "ERR_RELEASE_PUSH_FAILED", Message: "release step failed", Stage: "push", ServiceName: safeServiceName(svc), Recoverable: true, Cause: err.Error()}
 		return svc.Error
 	}
 
 	return &domain.ReleaseError{Code: "ERR_RELEASE_PUSH_FAILED", Message: "release step failed", Stage: "push", Recoverable: true, Cause: err.Error()}
+}
+
+func safeServiceName(svc *domain.ReleaseService) string {
+	if svc == nil {
+		return ""
+	}
+	return svc.Name
 }
 
 func containsMergeConflictState(states []domain.RepoState) bool {
