@@ -26,6 +26,7 @@ type forgeAction int
 
 const (
 	forgeActionCreateMR forgeAction = iota
+	forgeActionMergeMR
 	forgeActionPipelineStatus
 	forgeActionListIssues
 )
@@ -35,7 +36,7 @@ func NewForgeMenuModal(serviceName string, provider forge.ForgeProvider, width, 
 	return &ForgeMenuModal{
 		serviceName:    serviceName,
 		provider:       provider,
-		actions:        []forgeAction{forgeActionCreateMR, forgeActionPipelineStatus, forgeActionListIssues},
+		actions:        []forgeAction{forgeActionCreateMR, forgeActionMergeMR, forgeActionPipelineStatus, forgeActionListIssues},
 		available:      available,
 		selectedIndex:  0,
 		terminalWidth:  width,
@@ -82,8 +83,13 @@ func (m *ForgeMenuModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 		switch m.actions[m.selectedIndex] {
 		case forgeActionCreateMR:
 			return m, func() tea.Msg { return ForgeCreateMRMsg{TaskID: taskID, ServiceName: serviceName} }
+		case forgeActionMergeMR:
+			return m, func() tea.Msg { return ForgeMergeMRMsg{TaskID: taskID, ServiceName: serviceName} }
 		case forgeActionPipelineStatus:
-			return m, func() tea.Msg { return ForgePipelineStatusMsg{TaskID: taskID, ServiceName: serviceName} }
+			provider := m.provider
+			return m, func() tea.Msg {
+				return ForgePipelineStatusMsg{TaskID: taskID, ServiceName: serviceName, Provider: provider}
+			}
 		case forgeActionListIssues:
 			return m, func() tea.Msg { return ForgeListIssuesMsg{TaskID: taskID, ServiceName: serviceName} }
 		default:
@@ -110,7 +116,7 @@ func (m *ForgeMenuModal) View() string {
 		return sb.String()
 	}
 
-	names := []string{"Create MR/PR", "View Pipeline Status", "List Issues"}
+	names := []string{"Create MR/PR", "Merge MR", "View Pipeline Status", "List Issues"}
 	for i, name := range names {
 		prefix := "○ "
 		style := dimStyle

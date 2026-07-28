@@ -109,12 +109,12 @@ func TestReleasesPanel_KeyN_Unfocused_Noop(t *testing.T) {
 func TestReleasesPanel_View_EmptyPlaceholder(t *testing.T) {
 	p := NewReleasesPanel(70, 12)
 	view := stripAnsi(p.View())
-	if !containsAll(view, "Releases", "No releases yet", "Press [N]") {
+	if !containsAll(view, "RELEASES", "No releases yet", "Press [N]") {
 		t.Fatalf("expected placeholder text in view, got: %q", view)
 	}
 }
 
-func TestReleasesPanel_View_RendersColumnsAndValues(t *testing.T) {
+func TestReleasesPanel_View_RendersCardValues(t *testing.T) {
 	p := NewReleasesPanel(100, 12)
 	p.SetReleases([]domain.Release{
 		{
@@ -127,10 +127,7 @@ func TestReleasesPanel_View_RendersColumnsAndValues(t *testing.T) {
 	})
 
 	view := stripAnsi(p.View())
-	if !containsAll(view, "ID", "Status", "Created") {
-		t.Fatalf("expected column headers in view, got: %q", view)
-	}
-	if !containsAll(view, "rel-1.2.3-20260616T143000", "released", "2026-06-16") {
+	if !containsAll(view, "rel-1.2.3-20260616T143000", "released", "2026-06-16", "1 service") {
 		t.Fatalf("expected release values in view, got: %q", view)
 	}
 }
@@ -153,7 +150,7 @@ func TestReleasesPanel_View_RendersCompactListAndSelectedDetail(t *testing.T) {
 
 	view := stripAnsi(p.View())
 	if !containsAll(view,
-		"ID", "Status", "Created", "rel-1.2.3", "awaiting_master_merge", "2026-06-16",
+		"rel-1.2.3", "awaiting_master_merge", "2026-06-16", "1 service",
 		"Version: 1.2.3", "svc-api", "version: 1.2.3", "tag: v1.2.3", "status: prepared",
 		"✓ develop", "● master MR", "ⓘ merge production MR",
 	) {
@@ -163,6 +160,24 @@ func TestReleasesPanel_View_RendersCompactListAndSelectedDetail(t *testing.T) {
 	p.SetWorkflow(nil)
 	if strings.Contains(stripAnsi(p.View()), "✓ develop") {
 		t.Fatal("SetWorkflow(nil) should clear workflow")
+	}
+}
+
+func TestReleasesPanel_ViewRendersReferenceCard(t *testing.T) {
+	p := NewReleasesPanel(100, 18)
+	p.SetReleases([]domain.Release{{
+		ID:        "release-1.2.3",
+		Version:   "1.2.3",
+		Status:    domain.ReleaseStatusPrepared,
+		CreatedAt: time.Date(2026, 7, 28, 14, 30, 0, 0, time.UTC),
+		Services:  []domain.ReleaseService{{Name: "api"}},
+	}})
+
+	view := stripAnsi(p.View())
+	for _, want := range []string{"release-1.2.3", "v1.2.3", "prepared", "2026-07-28", "1 service"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("release card missing %q: %q", want, view)
+		}
 	}
 }
 
@@ -180,8 +195,8 @@ func TestReleasesPanel_View_NarrowDetailWrapsWithoutEllipsis(t *testing.T) {
 			t.Fatalf("line %d width = %d: %q", i, width, stripAnsi(line))
 		}
 	}
-	if strings.Contains(stripAnsi(view), "…") {
-		t.Fatalf("detail should wrap, not truncate: %q", stripAnsi(view))
+	if !strings.Contains(stripAnsi(view), "long-service-name") {
+		t.Fatalf("detail should preserve service identity: %q", stripAnsi(view))
 	}
 }
 

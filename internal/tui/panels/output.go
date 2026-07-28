@@ -2,10 +2,13 @@ package panels
 
 import (
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	uitheme "github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 const (
@@ -19,6 +22,7 @@ type OutputPanel struct {
 	focused  bool
 	width    int
 	height   int
+	now      func() time.Time
 }
 
 func NewOutputPanel(width, height int) OutputPanel {
@@ -29,12 +33,19 @@ func NewOutputPanel(width, height int) OutputPanel {
 		viewport: vp,
 		width:    width,
 		height:   height,
+		now:      time.Now,
 	}
 }
 
 func (p *OutputPanel) AppendLine(line string) {
+	now := time.Now
+	if p.now != nil {
+		now = p.now
+	}
+	symbol, color := outputSymbol(line)
 	dimStyle := lipgloss.NewStyle().Foreground(outColorDim)
-	formatted := dimStyle.Render("> ") +
+	formatted := dimStyle.Render(now().Format("15:04:05")+"   ") +
+		lipgloss.NewStyle().Foreground(color).Render(symbol+"  ") +
 		lipgloss.NewStyle().Foreground(outColorNormal).Render(line)
 	p.lines = append(p.lines, formatted)
 	p.rebuildContent()
@@ -91,7 +102,7 @@ func (p OutputPanel) Update(msg tea.Msg) (OutputPanel, tea.Cmd) {
 
 func (p OutputPanel) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary)
-	title := titleStyle.Render("[0] Output")
+	title := titleStyle.Render("▣  OUTPUT")
 
 	inner := innerDimensions(p.width, p.height)
 	content := lipgloss.JoinVertical(lipgloss.Left,
@@ -104,6 +115,20 @@ func (p OutputPanel) View() string {
 		Width(inner.w).
 		Height(inner.h).
 		Render(content)
+}
+
+func outputSymbol(line string) (string, lipgloss.Color) {
+	lower := strings.ToLower(line)
+	switch {
+	case strings.Contains(lower, "failed"), strings.Contains(lower, "error"), strings.Contains(lower, "cancelled"):
+		return "✗", uitheme.Danger
+	case strings.Contains(lower, "warning"), strings.Contains(lower, "dirty"), strings.Contains(lower, "modified"):
+		return "!", uitheme.Warning
+	case strings.Contains(lower, "clean"), strings.Contains(lower, "complete"), strings.Contains(lower, "created"), strings.Contains(lower, "merged"):
+		return "✓", uitheme.Success
+	default:
+		return "›", uitheme.TextMuted
+	}
 }
 
 func (p *OutputPanel) rebuildContent() {

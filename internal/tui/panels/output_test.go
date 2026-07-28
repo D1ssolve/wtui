@@ -3,9 +3,23 @@ package panels
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestOutputPanel_AppendLineAddsPresentationTimestamp(t *testing.T) {
+	p := NewOutputPanel(80, 8)
+	p.now = func() time.Time {
+		return time.Date(2026, 7, 28, 14, 36, 52, 0, time.Local)
+	}
+	p.AppendLine("paymentservice is clean")
+
+	got := stripAnsi(p.View())
+	if !strings.Contains(got, "14:36:52") || !strings.Contains(got, "paymentservice is clean") {
+		t.Fatalf("output = %q", got)
+	}
+}
 
 func TestOutputPanel_New_EmptyViewport(t *testing.T) {
 	p := NewOutputPanel(80, 10)
@@ -14,7 +28,7 @@ func TestOutputPanel_New_EmptyViewport(t *testing.T) {
 	}
 }
 
-func TestOutputPanel_AppendLine_PrefixedWithArrow(t *testing.T) {
+func TestOutputPanel_AppendLine_PrefixedWithNeutralMarker(t *testing.T) {
 	p := NewOutputPanel(80, 10)
 	p.AppendLine("build started")
 	lines := p.lines
@@ -23,8 +37,8 @@ func TestOutputPanel_AppendLine_PrefixedWithArrow(t *testing.T) {
 	}
 
 	combined := strings.Join(lines, "")
-	if !strings.Contains(combined, ">") {
-		t.Errorf("AppendLine should prefix with '>': %q", combined)
+	if !strings.Contains(combined, "›") {
+		t.Errorf("AppendLine should prefix with neutral marker: %q", combined)
 	}
 	if !strings.Contains(combined, "build started") {
 		t.Errorf("AppendLine should contain original text: %q", combined)
@@ -164,8 +178,8 @@ func TestOutputPanel_Unfocused_KeysIgnored(t *testing.T) {
 func TestOutputPanel_View_ContainsTitle(t *testing.T) {
 	p := NewOutputPanel(80, 10)
 	view := stripAnsi(p.View())
-	if !strings.Contains(view, "Output") {
-		t.Errorf("View should contain 'Output' title, got: %q", view)
+	if !strings.Contains(view, "OUTPUT") {
+		t.Errorf("View should contain 'OUTPUT' title, got: %q", view)
 	}
 }
 

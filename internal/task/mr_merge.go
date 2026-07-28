@@ -101,6 +101,14 @@ func (m *manager) inspectTaskMerge(ctx context.Context, taskID string) (TaskMerg
 }
 
 func (m *manager) MergeTaskMRs(ctx context.Context, taskID string) (TaskMergeResult, error) {
+	return m.mergeTaskMRs(ctx, taskID, "")
+}
+
+func (m *manager) MergeServiceMR(ctx context.Context, taskID, serviceName string) (TaskMergeResult, error) {
+	return m.mergeTaskMRs(ctx, taskID, serviceName)
+}
+
+func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string) (TaskMergeResult, error) {
 	inspection, services, err := m.inspectTaskMerge(ctx, taskID)
 	if err != nil {
 		return TaskMergeResult{}, err
@@ -108,6 +116,9 @@ func (m *manager) MergeTaskMRs(ctx context.Context, taskID string) (TaskMergeRes
 
 	result := TaskMergeResult{TaskID: taskID, Errs: make(map[string]error)}
 	for _, item := range inspection.Services {
+		if serviceName != "" && item.ServiceName != serviceName {
+			continue
+		}
 		if item.Status != "ready" {
 			result.Skipped = append(result.Skipped, item.ServiceName)
 			result.Steps = append(result.Steps, item.ServiceName+": "+item.Status)

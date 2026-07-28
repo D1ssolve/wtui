@@ -178,7 +178,7 @@ func (d *CreateReleaseDialog) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
 	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
-	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F87171"))
+	errorStyle := lipgloss.NewStyle().Foreground(modalColorDanger)
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(d.Title()))
@@ -213,7 +213,17 @@ func (d *CreateReleaseDialog) View() string {
 			if strings.TrimSpace(phase) == "" {
 				phase = "unknown"
 			}
-			line := fmt.Sprintf("%s%s %s (%d services, %s)", cursor, checkbox, row.task.ID, len(row.task.Services), phase)
+			serviceNames := make([]string, 0, len(row.task.Services))
+			for _, service := range row.task.Services {
+				if name := strings.TrimSpace(service.Name); name != "" {
+					serviceNames = append(serviceNames, name)
+				}
+			}
+			services := "no services"
+			if len(serviceNames) > 0 {
+				services = strings.Join(serviceNames, ", ")
+			}
+			line := fmt.Sprintf("%s%s %s [%s] (%s)", cursor, checkbox, row.task.ID, services, phase)
 			if row.selectable {
 				if i == d.taskCursor {
 					b.WriteString(normalStyle.Bold(true).Render(line))

@@ -491,8 +491,8 @@ func TestTasksPanel_View_ContainsTitle(t *testing.T) {
 	p := NewTasksPanel(60, 20)
 	p.SetTasks(makeTasks("IN-001", "IN-002"))
 	view := p.View()
-	if !strings.Contains(stripAnsi(view), "Tasks") {
-		t.Error("View should contain 'Tasks' in title")
+	if !strings.Contains(stripAnsi(view), "TASKS") {
+		t.Error("View should contain 'TASKS' in title")
 	}
 }
 
@@ -506,14 +506,14 @@ func TestTasksPanel_View_ContainsItemCount(t *testing.T) {
 	}
 }
 
-func TestTasksPanel_View_ServiceCount(t *testing.T) {
+func TestTasksPanel_View_HealthMarkerForTaskWithServices(t *testing.T) {
 	p := NewTasksPanel(60, 20)
 	task := makeTasksWithServices("IN-001", "collection", "databridge")
 	p.SetTasks([]domain.Task{task})
 	view := stripAnsi(p.View())
 
-	if !strings.Contains(view, "2 service") {
-		t.Errorf("View should render service count, got: %q", view)
+	if !strings.Contains(view, "●") {
+		t.Errorf("selected task should render active health marker, got: %q", view)
 	}
 }
 
@@ -983,12 +983,12 @@ func TestTreePageStarts_NoOrphanedGroupHeader(t *testing.T) {
 	// meaning that header appears at the end of page 0 and its child on page 1.
 	// treePageStarts must shift the boundary to index 3 instead.
 	rows := []treeRow{
-		{kind: treeRowKindGroup},  // 0
-		{kind: treeRowKindTask},   // 1
-		{kind: treeRowKindTask},   // 2
-		{kind: treeRowKindTask},   // 3
-		{kind: treeRowKindGroup},  // 4 ← would be last on page 0 with naive split
-		{kind: treeRowKindTask},   // 5
+		{kind: treeRowKindGroup}, // 0
+		{kind: treeRowKindTask},  // 1
+		{kind: treeRowKindTask},  // 2
+		{kind: treeRowKindTask},  // 3
+		{kind: treeRowKindGroup}, // 4 ← would be last on page 0 with naive split
+		{kind: treeRowKindTask},  // 5
 	}
 
 	starts := treePageStarts(rows, 4)
@@ -1032,6 +1032,19 @@ func TestTreePageStarts_GroupHeaderAlwaysWithChild(t *testing.T) {
 	for i, v := range expected {
 		if starts[i] != v {
 			t.Errorf("starts[%d]: want %d got %d", i, v, starts[i])
+		}
+	}
+}
+
+func TestTasksPanel_ViewRendersReferenceTaskCard(t *testing.T) {
+	p := NewTasksPanel(42, 12)
+	p.SetTasks([]domain.Task{{ID: "IIPR-596", Phase: "feature"}})
+	p.SetFocused(true)
+
+	view := stripAnsi(p.View())
+	for _, want := range []string{"TASKS", "IIPR-596", "feature/IIPR-596", "├─"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("task card missing %q: %q", want, view)
 		}
 	}
 }

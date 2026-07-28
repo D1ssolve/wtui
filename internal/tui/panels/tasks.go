@@ -10,15 +10,16 @@ import (
 	"github.com/charmbracelet/bubbles/paginator"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/gitflow"
+	uitheme "github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 const (
-	tasksColorInactive = colorInactive
-	tasksColorNormal   = colorNormal
-	tasksColorDim      = colorDim
+	tasksColorNormal = colorNormal
+	tasksColorDim    = colorDim
 )
 
 type taskItem struct {
@@ -29,9 +30,7 @@ func (t taskItem) FilterValue() string { return t.task.ID }
 
 type taskDelegate struct{}
 
-func (d taskDelegate) Height() int { return 1 }
-
-func (d taskDelegate) Spacing() int { return 0 }
+func (d taskDelegate) Spacing() int { return 1 }
 
 func (d taskDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
@@ -41,36 +40,53 @@ func (d taskDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		return
 	}
 
-	isSelected := index == m.Index()
-	isStale := ti.task.Stale
+	fmt.Fprint(w, renderTaskCard(ti.task, index == m.Index(), max(0, m.Width())))
+}
 
-	label := ti.task.ID
-	if n := len(ti.task.Services); n > 0 {
-		serviceWord := "service"
-		if n != 1 {
-			serviceWord = "services"
+func (d taskDelegate) Height() int { return 2 }
+
+func renderTaskCard(task domain.Task, selected bool, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	status, statusColor := "○", tasksColorDim
+	if task.Stale {
+		status, statusColor = "✗", uitheme.Danger
+	} else if selected {
+		status, statusColor = "●", panelColorPrimary
+	} else if len(task.Services) > 0 {
+		status, statusColor = "✓", uitheme.Success
+	}
+	marker := "▸"
+	rail := " "
+	if selected {
+		rail = "▌"
+	}
+	left := fmt.Sprintf("%s %s  ◌ %s", rail, marker, task.ID)
+	gap := max(1, width-lipgloss.Width(left)-1)
+	line1 := left + strings.Repeat(" ", gap) + lipgloss.NewStyle().Foreground(statusColor).Render(status)
+	line1 = ansi.Truncate(line1, width, "…")
+	line2 := ansi.Truncate("    ├─ "+taskBranchLabel(task), width, "…")
+	style := lipgloss.NewStyle().Width(width).Foreground(tasksColorNormal)
+	if selected {
+		style = style.Bold(true).Foreground(panelColorPrimary)
+	} else if task.Stale {
+		style = style.Foreground(tasksColorDim)
+	}
+	return style.Render(line1) + "\n" + style.Render(line2)
+}
+
+func taskBranchLabel(task domain.Task) string {
+	if task.Phase == string(gitflow.BranchTypeRelease) || task.Phase == string(gitflow.BranchTypeHotfix) {
+		if task.Version != "" {
+			return task.Phase + "/" + task.Version
 		}
-		label = fmt.Sprintf("%-16s (%d %s)", ti.task.ID, n, serviceWord)
+		return task.Phase
 	}
-
-	var line string
-	if isStale {
-
-		line = lipgloss.NewStyle().
-			Foreground(tasksColorDim).
-			Render("  [?] " + label)
-	} else if isSelected {
-		line = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(panelColorPrimary).
-			Render("  " + label)
-	} else {
-		line = lipgloss.NewStyle().
-			Foreground(tasksColorNormal).
-			Render("  " + label)
+	if task.Phase == string(gitflow.BranchTypeFeature) || task.Phase == "" {
+		return "feature/" + task.ID
 	}
-
-	fmt.Fprint(w, line)
+	return task.Phase + "/" + task.ID
 }
 
 type TasksPanel struct {
@@ -527,7 +543,7 @@ func (p TasksPanel) View() string {
 	if total > 0 {
 		current = p.list.Index() + 1
 	}
-	title := fmt.Sprintf("[1] Tasks  [%d/%d]", current, total)
+	title := fmt.Sprintf("TASKS  [%d/%d]", current, total)
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -901,11 +917,10 @@ func innerDimensions(width, height int) dims {
 }
 
 func panelBorderStyle(focused bool) lipgloss.Style {
-	s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder())
 	if focused {
-		return s.BorderForeground(panelColorPrimary)
+		return uitheme.FocusedGlassBorder(panelColorPrimary)
 	}
-	return s.BorderForeground(tasksColorInactive)
+	return uitheme.GlassBorder(uitheme.GlassHighlight)
 }
 
 func truncatePath(p string) string {

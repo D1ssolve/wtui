@@ -16,13 +16,14 @@ type MergeServiceStatus struct {
 }
 
 type MergeConfirmDialog struct {
-	taskID    string
-	releaseID string
-	services  []MergeServiceStatus
+	taskID      string
+	releaseID   string
+	serviceName string
+	services    []MergeServiceStatus
 }
 
-func NewMergeConfirmDialog(taskID, releaseID string, services []MergeServiceStatus) *MergeConfirmDialog {
-	return &MergeConfirmDialog{taskID: taskID, releaseID: releaseID, services: append([]MergeServiceStatus(nil), services...)}
+func NewMergeConfirmDialog(taskID, releaseID, serviceName string, services []MergeServiceStatus) *MergeConfirmDialog {
+	return &MergeConfirmDialog{taskID: taskID, releaseID: releaseID, serviceName: serviceName, services: append([]MergeServiceStatus(nil), services...)}
 }
 
 func (d *MergeConfirmDialog) Title() string { return "Confirm Merge Ready MRs" }
@@ -36,7 +37,9 @@ func (d *MergeConfirmDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	}
 	switch keyMsg.String() {
 	case "enter", "y":
-		return d, func() tea.Msg { return ConfirmMergeMsg{TaskID: d.taskID, ReleaseID: d.releaseID} }
+		return d, func() tea.Msg {
+			return ConfirmMergeMsg{TaskID: d.taskID, ReleaseID: d.releaseID, ServiceName: d.serviceName}
+		}
 	case "esc", "n":
 		return d, func() tea.Msg { return CloseModalMsg{} }
 	default:

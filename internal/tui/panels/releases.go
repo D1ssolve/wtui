@@ -10,16 +10,17 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	uitheme "github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 const (
-	releasesColorReleased            = lipgloss.Color("#22C55E")
-	releasesColorInProgress          = lipgloss.Color("#F59E0B")
-	releasesColorFailed              = lipgloss.Color("#EF4444")
-	releasesColorPrepared            = lipgloss.Color("#3B82F6")
-	releasesColorAwaitingMasterMerge = lipgloss.Color("#A855F7")
-	releasesColorMasterMerged        = lipgloss.Color("#14B8A6")
-	releasesColorSyncingDevelop      = lipgloss.Color("#06B6D4")
+	releasesColorReleased            = uitheme.Success
+	releasesColorInProgress          = uitheme.Warning
+	releasesColorFailed              = uitheme.Danger
+	releasesColorPrepared            = uitheme.Info
+	releasesColorAwaitingMasterMerge = uitheme.Primary
+	releasesColorMasterMerged        = uitheme.Success
+	releasesColorSyncingDevelop      = uitheme.Info
 	releasesColorDim                 = colorDim
 )
 
@@ -126,8 +127,8 @@ func (p ReleasesPanel) View() string {
 	if total > 0 {
 		current = p.cursor + 1
 	}
-	title := fmt.Sprintf("[3] Releases  [%d/%d]", current, total)
-	titleRendered := renderPaneTitle(title, "[2] Services", inner.w)
+	title := fmt.Sprintf("RELEASES  [%d/%d]", current, total)
+	titleRendered := renderPaneTitle(title, "SERVICES  ‹", inner.w)
 
 	body := p.renderBody(inner.w, max(0, inner.h-1))
 	content := lipgloss.JoinVertical(lipgloss.Left, titleRendered, body)
@@ -156,41 +157,50 @@ func (p ReleasesPanel) renderBody(width, height int) string {
 }
 
 func (p ReleasesPanel) renderList(width, height int) string {
-	headStyle := lipgloss.NewStyle().Bold(true).Foreground(colorBold)
-	header := ansi.Truncate(headStyle.Render(fmt.Sprintf("%-28s %-22s  %s", "ID", "Status", "Created")), width, "")
-	lines := []string{header}
-
-	visible := max(0, height-1)
+	if width < 3 || height < 3 {
+		return ""
+	}
+	visible := max(1, height/3)
 	start := max(0, p.cursor-visible+1)
 	end := min(len(p.releases), start+visible)
+	cards := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
 		rel := p.releases[i]
 		id := rel.ID
 		if id == "" {
 			id = "-"
 		}
-		if len(id) > 28 {
-			id = id[:25] + "..."
-		}
-
 		status := string(rel.Status)
-		statusStyled := lipgloss.NewStyle().Foreground(releaseStatusColor(rel.Status)).Render(status)
+		statusStyled := lipgloss.NewStyle().
+			Foreground(releaseStatusColor(rel.Status)).
+			Padding(0, 1).
+			Render(status)
 
 		created := "-"
 		if !rel.CreatedAt.IsZero() {
 			created = rel.CreatedAt.In(time.UTC).Format("2006-01-02")
 		}
 
-		line := fmt.Sprintf("%-28s %-22s  %s", id, statusStyled, created)
-		if i == p.cursor {
-			line = lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary).Render(line)
-		} else {
-			line = lipgloss.NewStyle().Foreground(colorNormal).Render(line)
+		version := valueOrDash(rel.Version)
+		serviceLabel := "services"
+		if len(rel.Services) == 1 {
+			serviceLabel = "service"
 		}
-		lines = append(lines, ansi.Truncate(line, width, ""))
+		rail := " "
+		if i == p.cursor {
+			rail = "▌"
+		}
+		line := fmt.Sprintf("%s %s  v%s  %s  %s  %d %s", rail, id, version, statusStyled, created, len(rel.Services), serviceLabel)
+		line = ansi.Truncate(line, max(0, width-2), "…")
+		style := uitheme.GlassBorder(uitheme.GlassHighlight).
+			Foreground(colorNormal).
+			Width(max(0, width-2))
+		if i == p.cursor {
+			style = style.Bold(true).BorderTopForeground(panelColorPrimary).BorderLeftForeground(panelColorPrimary)
+		}
+		cards = append(cards, style.Render(line))
 	}
-
-	return fitLines(lines, height)
+	return fitLines(strings.Split(lipgloss.JoinVertical(lipgloss.Left, cards...), "\n"), height)
 }
 
 func (p ReleasesPanel) renderDetail(width int) string {

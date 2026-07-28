@@ -4,8 +4,26 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/D1ssolve/wtui/internal/domain"
 )
+
+func TestRenderFooter_CompactKeepsPrimaryAndNavigationHints(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.width = 80
+	m.focus = FocusServices
+
+	got := stripANSIForModel(renderFooter(m))
+	for _, want := range []string{"[a] add", "[?] help", "[Esc] back"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("footer missing %q: %q", want, got)
+		}
+	}
+	if lipgloss.Width(got) > 80 {
+		t.Fatalf("footer width = %d", lipgloss.Width(got))
+	}
+}
 
 func TestRenderFooter_FocusTasks_IncludesCoreHints(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
@@ -16,6 +34,7 @@ func TestRenderFooter_FocusTasks_IncludesCoreHints(t *testing.T) {
 		"[Enter] services",
 		"[i] init",
 		"[C] close",
+		"[M] merge MRs",
 		"[.] status",
 		"[?] help",
 		"[q] quit",
@@ -64,7 +83,6 @@ func TestRenderFooter_FocusServices_IncludesCoreHints(t *testing.T) {
 	for _, want := range []string{
 		"[a] add",
 		"[m] forge",
-		"[p] pipeline",
 		"[v] validate",
 		"[Esc] back",
 		"[.] status",
@@ -83,6 +101,8 @@ func TestRenderFooter_FocusServices_DoesNotIncludeVerboseHints(t *testing.T) {
 	footer := renderFooter(m)
 	for _, forbidden := range []string{
 		"[/] filter",
+		"[p] pipeline",
+		"[M] merge MRs",
 	} {
 		if strings.Contains(footer, forbidden) {
 			t.Errorf("services footer should not include verbose hint %q, got %q", forbidden, footer)

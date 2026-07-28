@@ -348,43 +348,61 @@ func (c *GlabClient) supportsSHAPin(ctx context.Context, worktreePath string) bo
 }
 
 func (c *GlabClient) PipelineStatus(ctx context.Context, branch, repo string) ([]PipelineStatus, error) {
-	args := []string{"ci", "status", "--branch", branch, "--output", "json", "--repo", repo}
+	args := []string{"ci", "get", "--branch", branch, "--output", "json", "--repo", repo}
 	stdout, _, err := c.run(ctx, c.worktreePath, args...)
 	if err != nil {
 		return nil, err
 	}
 
-	type glabPipeline struct {
+	type glabJob struct {
 		ID     any    `json:"id"`
-		Status string `json:"status"`
-		Ref    string `json:"ref"`
 		Name   string `json:"name"`
+		Stage  string `json:"stage"`
+		Status string `json:"status"`
 		WebURL string `json:"web_url"`
 	}
-	type glabCIStatus struct {
-		Pipeline *glabPipeline `json:"pipeline"`
+	type glabPipeline struct {
+		ID     any       `json:"id"`
+		Status string    `json:"status"`
+		Ref    string    `json:"ref"`
+		Name   string    `json:"name"`
+		WebURL string    `json:"web_url"`
+		Jobs   []glabJob `json:"jobs"`
 	}
 
-	var raw glabCIStatus
+	if strings.TrimSpace(stdout) == "null" {
+		return nil, nil
+	}
+	var raw glabPipeline
 	if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
 		return nil, &ForgeError{Category: ErrCategoryParseError, Cause: err, Stderr: strings.TrimSpace(stdout)}
 	}
-	if raw.Pipeline == nil {
+	if fmt.Sprint(raw.ID) == "<nil>" {
 		return nil, nil
 	}
 
-	p := raw.Pipeline
-	workflowName := p.Name
+	workflowName := raw.Name
 	if workflowName == "" {
 		workflowName = "pipeline"
 	}
+	jobs := make([]PipelineJob, len(raw.Jobs))
+	for i, job := range raw.Jobs {
+		jobs[i] = PipelineJob{
+			ID:     fmt.Sprint(job.ID),
+			Name:   job.Name,
+			Stage:  job.Stage,
+			Status: job.Status,
+			URL:    job.WebURL,
+		}
+	}
 
 	return []PipelineStatus{{
-		ID:           fmt.Sprint(p.ID),
-		Status:       p.Status,
-		Branch:       p.Ref,
-		URL:          p.WebURL,
+		ID:           fmt.Sprint(raw.ID),
+		Status:       raw.Status,
+		Branch:       raw.Ref,
+		URL:          raw.WebURL,
 		WorkflowName: workflowName,
+		Jobs:         jobs,
 	}}, nil
 }
 

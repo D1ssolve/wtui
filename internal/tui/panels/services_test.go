@@ -163,23 +163,15 @@ func TestServicesPanel_KeyM_EmitsOpenForgeMenuMsg(t *testing.T) {
 	}
 }
 
-func TestServicesPanel_KeyP_EmitsForgePipelineStatusMsg(t *testing.T) {
+func TestServicesPanel_KeyP_DoesNothing(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection")
 	p.SetServices(tid, svcs)
 	p.SetFocused(true)
 
 	_, cmd := p.Update(sendKey("p"))
-	if cmd == nil {
-		t.Fatal("p key should return a cmd")
-	}
-	msg := cmd()
-	got, ok := msg.(ForgePipelineStatusMsg)
-	if !ok {
-		t.Fatalf("expected ForgePipelineStatusMsg, got %T", msg)
-	}
-	if got.TaskID != "IN-001" || got.ServiceName != "collection" {
-		t.Fatalf("unexpected payload: %+v", got)
+	if cmd != nil {
+		t.Fatal("p must not emit direct pipeline command")
 	}
 }
 
@@ -372,8 +364,8 @@ func TestServicesPanel_View_ContainsTitle(t *testing.T) {
 	tid, svcs := makeServices("IN-001", "collection")
 	p.SetServices(tid, svcs)
 	view := stripAnsi(p.View())
-	if !strings.Contains(view, "Services") {
-		t.Errorf("expected 'Services' in title, got: %q", view)
+	if !strings.Contains(view, "SERVICES") {
+		t.Errorf("expected 'SERVICES' in title, got: %q", view)
 	}
 	if !strings.Contains(view, "IN-001") {
 		t.Errorf("expected task ID in title, got: %q", view)
@@ -452,13 +444,13 @@ func TestServicesPanel_View_CleanService_ShowsCheckIcon(t *testing.T) {
 	}
 }
 
-func TestServiceDelegate_UsesOneLine(t *testing.T) {
-	if got := (serviceDelegate{}).Height(); got != 1 {
-		t.Fatalf("Height() = %d, want 1", got)
+func TestServiceDelegate_UsesBorderedCard(t *testing.T) {
+	if got := (serviceDelegate{}).Height(); got != 4 {
+		t.Fatalf("Height() = %d, want 4", got)
 	}
 }
 
-func TestServicesPanel_View_ShowsCompactGitStateWithoutBranchOrPath(t *testing.T) {
+func TestServicesPanel_View_ShowsReferenceGitMetadata(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	p.SetServices("IN-001", []domain.Service{{
 		Name:         "collection",
@@ -470,14 +462,9 @@ func TestServicesPanel_View_ShowsCompactGitStateWithoutBranchOrPath(t *testing.T
 	}})
 
 	view := stripAnsi(p.View())
-	for _, want := range []string{"clean", "↑2", "↓1"} {
+	for _, want := range []string{"clean", "↑2", "↓1", "feature/IN-001", "Path:", "/tmp/.tasks/IN-001/collection"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q: %q", want, view)
-		}
-	}
-	for _, unwanted := range []string{"branch:", "path:", "feature/IN-001"} {
-		if strings.Contains(view, unwanted) {
-			t.Errorf("view contains obsolete %q: %q", unwanted, view)
 		}
 	}
 }
@@ -782,5 +769,21 @@ func TestServicesPanel_FilterMode_EnterExitsFilterMode(t *testing.T) {
 
 	if p.list.FilterState() != list.FilterApplied {
 		t.Error("Filter should still be applied after ENTER")
+	}
+}
+
+func TestServicesPanel_ViewRendersReferenceServiceCard(t *testing.T) {
+	p := NewServicesPanel(100, 18)
+	p.SetServices("IIPR-596", []domain.Service{{
+		Name:     "paymentservice",
+		Branch:   "feature/IIPR-596",
+		RepoPath: "/dev/tasks/IIPR-596/services/paymentservice",
+	}})
+
+	view := stripAnsi(p.View())
+	for _, want := range []string{"paymentservice", "✓ clean", "feature/IIPR-596", "Path:"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("service card missing %q: %q", want, view)
+		}
 	}
 }

@@ -360,7 +360,6 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		"Open sync strategy selection",
 		"Refresh tasks and repository cache",
 		"Open forge action menu",
-		"Show pipeline status",
 		"Validate current task",
 		"Push service",
 		"Stash service changes",
@@ -375,6 +374,9 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("HelpOverlay.View() missing expected text %q", want)
 		}
+	}
+	if strings.Contains(view, "Show pipeline status") {
+		t.Fatal("help must not advertise direct pipeline shortcut")
 	}
 
 	for _, forbidden := range []string{"1", "2", "3"} {
@@ -550,9 +552,9 @@ func TestInitDialogWithFlow_MultipleBranchTypes_ShowsSelectorAndOptions(t *testi
 		IntegrationBranch: "develop",
 		DefaultBranchType: gitflow.BranchTypeFeature,
 		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
-		gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
-		gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "master"},
-		gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}, BaseBranch: "develop"},
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "master"},
+			gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}, BaseBranch: "develop"},
 		},
 	}
 

@@ -42,8 +42,9 @@ type Model struct {
 	previousFocus FocusPanel
 	rightPane     FocusPanel
 
-	width  int
-	height int
+	width   int
+	height  int
+	version string
 
 	ready bool
 
@@ -57,8 +58,9 @@ type Model struct {
 
 	modal modal.Modal
 
-	logOverlay *LogOverlay
-	logPath    string
+	logOverlay   *LogOverlay
+	logPath      string
+	pipelineView *PipelineView
 
 	spinner                   spinner.Model
 	opRunning                 bool
@@ -85,10 +87,11 @@ type Model struct {
 }
 
 type mergeInspectionRequest struct {
-	generation uint64
-	focus      FocusPanel
-	taskID     string
-	releaseID  string
+	generation  uint64
+	focus       FocusPanel
+	taskID      string
+	releaseID   string
+	serviceName string
 }
 
 type Options struct {
@@ -97,6 +100,7 @@ type Options struct {
 	GhAvailable      bool
 	ForgeClients     map[forge.ForgeProvider]forge.ForgeClient
 	ResolvedFlow     *gitflow.ResolvedGitFlow
+	Version          string
 }
 
 func New(cfg *config.Config, mgr task.Manager, logger *slog.Logger) (Model, error) {
@@ -135,6 +139,7 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 		ghAvailable:      opts.GhAvailable,
 		spinner:          sp,
 		logPath:          logPath,
+		version:          strings.TrimSpace(opts.Version),
 		tasksPanel:       panels.NewTasksPanel(25, 10),
 		servicesPanel:    panels.NewServicesPanel(55, 10),
 		releasesPanel:    panels.NewReleasesPanel(25, 10),
@@ -195,6 +200,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.logOverlay != nil {
 			m.logOverlay.SetSize(msg.Width, msg.Height)
 		}
+		if m.pipelineView != nil {
+			m.pipelineView.SetSize(msg.Width, msg.Height)
+		}
 
 		if m.modal != nil {
 			m.modal.SetTerminalSize(msg.Width, msg.Height)
@@ -214,6 +222,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, logTickCmd()
 
 	case tea.KeyMsg:
+		if m.pipelineView != nil {
+			if key.Matches(msg, m.keymap.Escape) {
+				m.pipelineView = nil
+				return m, nil
+			}
+			newView, cmd := m.pipelineView.Update(msg)
+			m.pipelineView = newView
+			return m, cmd
+		}
+
 		if m.logOverlay != nil {
 			if key.Matches(msg, m.keymap.ToggleLogs) || key.Matches(msg, m.keymap.Escape) {
 				m.logOverlay = nil
@@ -436,14 +454,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		fm.SetTaskID(msg.TaskID)
 		m.modal = fm
 		return m, nil
-
-	case panels.ForgePipelineStatusMsg:
-		m.opRunning = true
-		m.outputPanel.AppendLine("Loading pipeline status for " + msg.ServiceName + "...")
-		return m, tea.Batch(
-			forgeOpCmd(m.mgr, "pipeline_status", msg.TaskID, msg.ServiceName, forgePipelineStatusParams{Branch: msg.Branch}),
-			m.spinner.Tick,
-		)
 
 	case panels.PushTaskMsg:
 		pendingPush := modal.SubmitPushMsg{TaskID: msg.TaskID, ServiceName: ""}
@@ -745,6 +755,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = nil
 		m.pendingMerge = nil
 		m.opRunning = true
+		if msg.ServiceName != "" {
+			m.outputPanel.AppendLine("Merging ready MR for service " + msg.ServiceName + "...")
+			return m, tea.Batch(mergeServiceMRCmd(m.mgr, msg.TaskID, msg.ServiceName), m.spinner.Tick)
+		}
 		if msg.TaskID != "" {
 			m.outputPanel.AppendLine("Merging ready MRs for task " + msg.TaskID + "...")
 			return m, tea.Batch(mergeTaskMRsCmd(m.mgr, msg.TaskID), m.spinner.Tick)
@@ -786,6 +800,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner.Tick,
 		)
 
+	case modal.ForgeMergeMRMsg:
+		m.modal = nil
+		svc := m.servicesPanel.SelectedService()
+		if svc == nil || svc.Name != msg.ServiceName || m.servicesPanel.TaskID() != msg.TaskID {
+			m.outputPanel.AppendLine("Merge MR failed: selected service not found.")
+			return m, nil
+		}
+		m.opRunning = true
+		m.beginMergeInspection(FocusServices, msg.TaskID, "", msg.ServiceName)
+		m.outputPanel.AppendLine("Inspecting MR for service " + msg.ServiceName + "...")
+		return m, tea.Batch(inspectTaskMergeCmd(m.mgr, msg.TaskID, m.mergeInspectionGeneration), m.spinner.Tick)
+
 	case modal.ForgePipelineStatusMsg:
 		m.modal = nil
 		svc := m.servicesPanel.SelectedService()
@@ -796,7 +822,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = true
 		m.outputPanel.AppendLine("Loading pipeline status for " + msg.ServiceName + "...")
 		return m, tea.Batch(
-			forgeOpCmd(m.mgr, "pipeline_status", msg.TaskID, msg.ServiceName, forgePipelineStatusParams{Branch: svc.Branch}),
+			forgeOpCmd(m.mgr, "pipeline_status", msg.TaskID, msg.ServiceName, forgePipelineStatusParams{Branch: svc.Branch, Provider: msg.Provider}),
 			m.spinner.Tick,
 		)
 
@@ -866,13 +892,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outputPanel.AppendLine("Inspect task MRs failed: " + msg.Err.Error())
 			return m, nil
 		}
-		services := make([]modal.MergeServiceStatus, len(msg.Inspection.Services))
-		for i, service := range msg.Inspection.Services {
+		inspected := msg.Inspection.Services
+		if request.serviceName != "" {
+			inspected = nil
+			for _, service := range msg.Inspection.Services {
+				if service.ServiceName == request.serviceName {
+					inspected = append(inspected, service)
+					break
+				}
+			}
+			if len(inspected) == 0 {
+				m.outputPanel.AppendLine("Inspect service MR failed: service not found.")
+				return m, nil
+			}
+		}
+		services := make([]modal.MergeServiceStatus, len(inspected))
+		for i, service := range inspected {
 			services[i] = modal.MergeServiceStatus{ServiceName: service.ServiceName, Status: service.Status, Blockers: service.Blockers}
 		}
-		pending := modal.ConfirmMergeMsg{TaskID: msg.TaskID}
+		pending := modal.ConfirmMergeMsg{TaskID: msg.TaskID, ServiceName: request.serviceName}
 		m.pendingMerge = &pending
-		m.modal = modal.NewMergeConfirmDialog(pending.TaskID, "", services)
+		m.modal = modal.NewMergeConfirmDialog(pending.TaskID, "", pending.ServiceName, services)
 		m.modal.SetTerminalSize(m.width, m.height)
 		return m, nil
 
@@ -893,7 +933,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		pending := modal.ConfirmMergeMsg{ReleaseID: msg.ReleaseID}
 		m.pendingMerge = &pending
-		m.modal = modal.NewMergeConfirmDialog("", pending.ReleaseID, services)
+		m.modal = modal.NewMergeConfirmDialog("", pending.ReleaseID, "", services)
 		m.modal.SetTerminalSize(m.width, m.height)
 		return m, nil
 
@@ -1047,6 +1087,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = false
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Forge " + msg.Op + " failed for " + msg.ServiceName + ": " + msg.Err.Error())
+			return m, nil
+		}
+		if msg.Op == "pipeline_status" && msg.Provider == forge.ForgeProviderGitLab {
+			statuses, ok := msg.Data.([]forge.PipelineStatus)
+			if !ok {
+				m.outputPanel.AppendLine("Forge pipeline_status failed for " + msg.ServiceName + ": invalid result")
+				return m, nil
+			}
+			var pipeline forge.PipelineStatus
+			if len(statuses) > 0 {
+				pipeline = statuses[0]
+			}
+			m.pipelineView = NewPipelineView(msg.ServiceName, pipeline, m.width, m.height)
 			return m, nil
 		}
 		m.outputPanel.AppendLine(fmt.Sprintf("Forge %s done for %s: %+v", msg.Op, msg.ServiceName, msg.Data))
@@ -1208,6 +1261,9 @@ func (m Model) View() string {
 	if !m.ready {
 		return "Loading..."
 	}
+	if m.pipelineView != nil {
+		return m.pipelineView.View()
+	}
 
 	header := renderHeader(m)
 	footer := renderFooter(m)
@@ -1219,14 +1275,24 @@ func (m Model) View() string {
 	} else {
 		rightView = m.servicesPanel.View()
 	}
-	mainRow := lipgloss.JoinHorizontal(lipgloss.Top, tasksView, rightView)
+	layout := calculateLayout(m.width, m.height, m.preferredOutputHeight())
+	var mainRow string
+	if layout.tier == layoutNarrow {
+		mainRow = lipgloss.JoinVertical(lipgloss.Left, tasksView, "", rightView)
+	} else {
+		gutter := lipgloss.NewStyle().
+			Width(layout.gutter).
+			Height(layout.mainHeight).
+			Render("")
+		mainRow = lipgloss.JoinHorizontal(lipgloss.Top, tasksView, gutter, rightView)
+	}
 	outputView := m.outputPanel.View()
-	fullView := lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		mainRow,
-		outputView,
-		footer,
-	)
+	var fullView string
+	if layout.tier == layoutNarrow {
+		fullView = lipgloss.JoinVertical(lipgloss.Left, header, mainRow, "", outputView, footer)
+	} else {
+		fullView = lipgloss.JoinVertical(lipgloss.Left, header, "", mainRow, "", outputView, "", footer)
+	}
 
 	if m.logOverlay != nil {
 		return m.logOverlay.View()
@@ -1240,26 +1306,32 @@ func (m Model) View() string {
 	return fullView
 }
 func (m *Model) recalculateDimensions() {
-	const headerHeight = 1
-	const footerHeight = 1
-
-	avail := m.height - headerHeight - footerHeight
-	minMainHeight := 3
-	outputPanelHeight := max(m.cfg.OutputPanelLines+1, avail*35/100)
-	if outputPanelHeight > avail-minMainHeight {
-		outputPanelHeight = avail - minMainHeight
+	layout := calculateLayout(m.width, m.height, m.preferredOutputHeight())
+	if layout.tier == layoutNarrow {
+		available := max(0, layout.mainHeight-1)
+		tasksHeight := min(7, available)
+		rightHeight := min(9, max(0, available-tasksHeight))
+		extra := max(0, available-tasksHeight-rightHeight)
+		if m.focus == FocusServices || m.focus == FocusReleases {
+			rightHeight += extra
+		} else {
+			tasksHeight += extra
+		}
+		m.tasksPanel.SetSize(layout.tasksWidth, tasksHeight)
+		m.servicesPanel.SetSize(layout.rightWidth, rightHeight)
+		m.releasesPanel.SetSize(layout.rightWidth, rightHeight)
+	} else {
+		m.tasksPanel.SetSize(layout.tasksWidth, layout.mainHeight)
+		m.servicesPanel.SetSize(layout.rightWidth, layout.mainHeight)
+		m.releasesPanel.SetSize(layout.rightWidth, layout.mainHeight)
 	}
-	if outputPanelHeight < 3 {
-		outputPanelHeight = min(avail, 3)
-	}
-	mainPanelHeight := avail - outputPanelHeight
+	m.outputPanel.SetSize(m.width, layout.outputHeight)
+}
 
-	tasksWidth, rightWidth := twoPanelWidths(m.width)
-
-	m.tasksPanel.SetSize(tasksWidth, mainPanelHeight)
-	m.servicesPanel.SetSize(rightWidth, mainPanelHeight)
-	m.releasesPanel.SetSize(rightWidth, mainPanelHeight)
-	m.outputPanel.SetSize(m.width, outputPanelHeight)
+func (m Model) preferredOutputHeight() int {
+	configured := max(3, m.cfg.OutputPanelLines+2)
+	proportional := max(3, m.height*22/100)
+	return min(configured, proportional)
 }
 
 func (m Model) cycleFocusForward() Model {
@@ -1313,19 +1385,9 @@ func (m Model) startMergeInspection() (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.opRunning = true
-		m.beginMergeInspection(FocusTasks, taskItem.ID, "")
+		m.beginMergeInspection(FocusTasks, taskItem.ID, "", "")
 		m.outputPanel.AppendLine("Inspecting MRs for task " + taskItem.ID + "...")
 		return m, tea.Batch(inspectTaskMergeCmd(m.mgr, taskItem.ID, m.mergeInspectionGeneration), m.spinner.Tick)
-	case FocusServices:
-		taskID := m.servicesPanel.TaskID()
-		if taskID == "" {
-			m.outputPanel.AppendLine("Merge MRs unavailable: no task selected.")
-			return m, nil
-		}
-		m.opRunning = true
-		m.beginMergeInspection(FocusServices, taskID, "")
-		m.outputPanel.AppendLine("Inspecting MRs for task " + taskID + "...")
-		return m, tea.Batch(inspectTaskMergeCmd(m.mgr, taskID, m.mergeInspectionGeneration), m.spinner.Tick)
 	case FocusReleases:
 		release := m.releasesPanel.SelectedRelease()
 		if release == nil || release.Status != domain.ReleaseStatusAwaitingMasterMerge {
@@ -1333,7 +1395,7 @@ func (m Model) startMergeInspection() (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.opRunning = true
-		m.beginMergeInspection(FocusReleases, "", release.ID)
+		m.beginMergeInspection(FocusReleases, "", release.ID, "")
 		m.outputPanel.AppendLine("Inspecting MRs for release " + release.ID + "...")
 		return m, tea.Batch(inspectReleaseMergeCmd(m.mgr, release.ID, m.mergeInspectionGeneration), m.spinner.Tick)
 	default:
@@ -1388,9 +1450,15 @@ func (m *Model) loadTaskSelectionCmd(taskID string) tea.Cmd {
 	)
 }
 
-func (m *Model) beginMergeInspection(focus FocusPanel, taskID, releaseID string) {
+func (m *Model) beginMergeInspection(focus FocusPanel, taskID, releaseID, serviceName string) {
 	m.mergeInspectionGeneration++
-	m.mergeInspection = &mergeInspectionRequest{generation: m.mergeInspectionGeneration, focus: focus, taskID: taskID, releaseID: releaseID}
+	m.mergeInspection = &mergeInspectionRequest{
+		generation:  m.mergeInspectionGeneration,
+		focus:       focus,
+		taskID:      taskID,
+		releaseID:   releaseID,
+		serviceName: serviceName,
+	}
 }
 
 func (m *Model) invalidateMergeInspection() {

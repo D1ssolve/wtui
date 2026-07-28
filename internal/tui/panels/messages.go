@@ -86,13 +86,6 @@ type OpenForgeMenuMsg struct {
 	Provider    forge.ForgeProvider
 }
 
-type ForgePipelineStatusMsg struct {
-	TaskID      string
-	ServiceName string
-	Branch      string
-	RepoPath    string
-}
-
 type OpenCreateReleaseDialogMsg struct{}
 
 type ReleaseVersionsLoadedMsg struct {

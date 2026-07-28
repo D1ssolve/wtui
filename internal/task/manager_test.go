@@ -1426,6 +1426,10 @@ func TestList_EnrichesPhaseParentAndGroupMetadata(t *testing.T) {
 	if !gotByID["ZA-553"].IsGroup {
 		t.Fatalf("ZA-553 IsGroup = false, want true")
 	}
+	featureTask := gotByID["ZA-553"]
+	if len(featureTask.Services) != 2 || featureTask.Services[0].Name != "api" || featureTask.Services[1].Name != "worker" {
+		t.Fatalf("ZA-553 services = %#v, want api and worker", featureTask.Services)
+	}
 
 	if got := gotByID["ZA-553-release"]; got.ParentID != "ZA-553" {
 		t.Fatalf("ZA-553-release ParentID = %q, want %q", got.ParentID, "ZA-553")

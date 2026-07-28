@@ -87,6 +87,7 @@ func runTUI() error {
 		GhAvailable:      deps.GhAvailable,
 		ForgeClients:     deps.ForgeClients,
 		ResolvedFlow:     deps.ResolvedFlow,
+		Version:          resolveVersion(),
 	})
 	if err != nil {
 		return fmt.Errorf("create TUI model: %w", err)

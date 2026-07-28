@@ -450,6 +450,15 @@ func mergeTaskMRsCmd(mgr task.Manager, taskID string) tea.Cmd {
 	}
 }
 
+func mergeServiceMRCmd(mgr task.Manager, taskID, serviceName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 10*time.Minute)
+		defer cancel()
+		result, err := mgr.MergeServiceMR(ctx, taskID, serviceName)
+		return TaskMergeDoneMsg{Result: result, Err: err}
+	}
+}
+
 func mergeReleaseMRsCmd(mgr task.Manager, releaseID string) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan ReleaseMergeDoneMsg, 1)
@@ -590,7 +599,8 @@ func loadReleaseVersionsCmd(mgr task.Manager, taskIDs []string) tea.Cmd {
 }
 
 type forgePipelineStatusParams struct {
-	Branch string
+	Branch   string
+	Provider forge.ForgeProvider
 }
 
 func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, params any) tea.Cmd {
@@ -617,7 +627,7 @@ func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, 
 				return ForgeResultMsg{ServiceName: serviceName, Op: op, Err: errors.New("invalid params for pipeline_status")}
 			}
 			result, err := mgr.ForgePipelineStatus(ctx, taskID, serviceName, p.Branch)
-			return ForgeResultMsg{ServiceName: serviceName, Op: op, Data: result, Err: err}
+			return ForgeResultMsg{ServiceName: serviceName, Op: op, Provider: p.Provider, Data: result, Err: err}
 
 		case "list_issues":
 			p, ok := params.(forge.ListIssuesParams)

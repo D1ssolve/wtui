@@ -7,11 +7,12 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	uitheme "github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 const (
-	workflowColorDone    = lipgloss.Color("#22C55E")
-	workflowColorBlocked = lipgloss.Color("#EF4444")
+	workflowColorDone    = uitheme.Success
+	workflowColorBlocked = uitheme.Danger
 )
 
 func renderPaneTitle(left, peerTab string, width int) string {
@@ -35,9 +36,17 @@ func renderWorkflow(wf *domain.WorkflowSummary, width int) string {
 
 	chain := renderWorkflowChain(wf.Steps)
 	lines := make([]string, 0, 2)
-	if lipgloss.Width(chain) <= width {
+	if width >= 90 {
+		cards := renderWorkflowCards(wf.Steps)
+		if lipgloss.Width(cards) <= width {
+			lines = append(lines, lipgloss.PlaceHorizontal(width, lipgloss.Center, cards))
+		} else if lipgloss.Width(chain) <= width {
+			lines = append(lines, lipgloss.PlaceHorizontal(width, lipgloss.Center, chain))
+		}
+	} else if lipgloss.Width(chain) <= width {
 		lines = append(lines, lipgloss.PlaceHorizontal(width, lipgloss.Center, chain))
-	} else {
+	}
+	if len(lines) == 0 {
 		for start := 0; start < len(wf.Steps); {
 			end := workflowRowEnd(wf.Steps, start, width)
 			row := renderWorkflowChain(wf.Steps[start:end])
@@ -58,6 +67,60 @@ func renderWorkflow(wf *domain.WorkflowSummary, width int) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func renderWorkflowCards(steps []domain.WorkflowStep) string {
+	if len(steps) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(steps)*2-1)
+	for i, step := range steps {
+		if i > 0 {
+			parts = append(parts, lipgloss.NewStyle().Foreground(uitheme.TextMuted).Padding(1, 1).Render("→"))
+		}
+		marker := "○"
+		switch step.State {
+		case "done":
+			marker = "✓"
+		case "now":
+			marker = "●"
+		case "blocked":
+			marker = "✗"
+		}
+		parts = append(parts, workflowCardStyle(step.State).Render(workflowIcon(step.Phase)+"  "+marker+" "+step.Label))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+}
+
+func workflowCardStyle(state string) lipgloss.Style {
+	color := uitheme.BorderStrong
+	foreground := uitheme.TextMuted
+	switch state {
+	case "done":
+		color, foreground = uitheme.Success, uitheme.Success
+	case "now":
+		color, foreground = uitheme.Primary, uitheme.Primary
+	case "blocked":
+		color, foreground = uitheme.Danger, uitheme.Danger
+	}
+	return uitheme.GlassBorder(color).
+		Foreground(foreground).
+		Padding(0, 1)
+}
+
+func workflowIcon(phase domain.WorkflowPhase) string {
+	switch phase {
+	case domain.TaskWorkflowCode:
+		return "</>"
+	case domain.TaskWorkflowMR, domain.TaskWorkflowMerge, domain.ReleaseWorkflowMasterMR:
+		return "⎇"
+	case domain.TaskWorkflowReviewCI, domain.ReleaseWorkflowRegression:
+		return "⟳"
+	case domain.ReleaseWorkflowTag:
+		return "◆"
+	default:
+		return "◇"
+	}
 }
 
 func renderWorkflowChain(steps []domain.WorkflowStep) string {

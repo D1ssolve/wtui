@@ -149,7 +149,7 @@ func TestForgeMenuModal_AvailableShowsActionsAndEnterTriggersMessages(t *testing
 	m.SetTaskID("IN-4242")
 
 	view := stripAnsi(m.View())
-	for _, want := range []string{"Create MR/PR", "View Pipeline Status", "List Issues"} {
+	for _, want := range []string{"Create MR/PR", "Merge MR", "View Pipeline Status", "List Issues"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("forge menu missing %q in view: %s", want, view)
 		}
@@ -169,11 +169,23 @@ func TestForgeMenuModal_AvailableShowsActionsAndEnterTriggersMessages(t *testing
 	m = modal.(*ForgeMenuModal)
 	_, cmd = m.Update(sendSpecialKey(tea.KeyEnter))
 	if cmd == nil {
-		t.Fatal("enter should emit pipeline msg on second option")
+		t.Fatal("enter should emit merge msg on second option")
+	}
+	if msg, ok := execCmd(cmd).(ForgeMergeMRMsg); !ok {
+		t.Fatalf("expected ForgeMergeMRMsg, got %T", execCmd(cmd))
+	} else if msg.TaskID != "IN-4242" || msg.ServiceName != "api" {
+		t.Fatalf("unexpected merge msg payload: %+v", msg)
+	}
+
+	modal, _ = m.Update(sendKey("j"))
+	m = modal.(*ForgeMenuModal)
+	_, cmd = m.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("enter should emit pipeline msg on third option")
 	}
 	if msg, ok := execCmd(cmd).(ForgePipelineStatusMsg); !ok {
 		t.Fatalf("expected ForgePipelineStatusMsg, got %T", execCmd(cmd))
-	} else if msg.TaskID != "IN-4242" || msg.ServiceName != "api" {
+	} else if msg.TaskID != "IN-4242" || msg.ServiceName != "api" || msg.Provider != forge.ForgeProviderGitLab {
 		t.Fatalf("unexpected pipeline msg payload: %+v", msg)
 	}
 
@@ -181,7 +193,7 @@ func TestForgeMenuModal_AvailableShowsActionsAndEnterTriggersMessages(t *testing
 	m = modal.(*ForgeMenuModal)
 	_, cmd = m.Update(sendSpecialKey(tea.KeyEnter))
 	if cmd == nil {
-		t.Fatal("enter should emit list issues msg on third option")
+		t.Fatal("enter should emit list issues msg on fourth option")
 	}
 	if msg, ok := execCmd(cmd).(ForgeListIssuesMsg); !ok {
 		t.Fatalf("expected ForgeListIssuesMsg, got %T", execCmd(cmd))

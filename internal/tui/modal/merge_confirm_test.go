@@ -8,7 +8,7 @@ import (
 )
 
 func TestMergeConfirmDialog_ViewListsStatusesAndBlockers(t *testing.T) {
-	d := NewMergeConfirmDialog("TASK-1", "", []MergeServiceStatus{
+	d := NewMergeConfirmDialog("TASK-1", "", "", []MergeServiceStatus{
 		{ServiceName: "api", Status: "ready"},
 		{ServiceName: "worker", Status: "blocked", Blockers: []string{"CI failed", "approval required"}},
 	})
@@ -22,7 +22,7 @@ func TestMergeConfirmDialog_ViewListsStatusesAndBlockers(t *testing.T) {
 }
 
 func TestMergeConfirmDialog_ConfirmAndCancel(t *testing.T) {
-	d := NewMergeConfirmDialog("", "rel-1", nil)
+	d := NewMergeConfirmDialog("", "rel-1", "", nil)
 	_, cmd := d.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	confirm, ok := execCmd(cmd).(ConfirmMergeMsg)
 	if !ok || confirm.ReleaseID != "rel-1" || confirm.TaskID != "" {
@@ -32,5 +32,14 @@ func TestMergeConfirmDialog_ConfirmAndCancel(t *testing.T) {
 	_, cmd = d.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if _, ok := execCmd(cmd).(CloseModalMsg); !ok {
 		t.Fatalf("cancel = %T, want CloseModalMsg", execCmd(cmd))
+	}
+}
+
+func TestMergeConfirmDialog_ConfirmIncludesServiceName(t *testing.T) {
+	d := NewMergeConfirmDialog("TASK-1", "", "api", nil)
+	_, cmd := d.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	confirm, ok := execCmd(cmd).(ConfirmMergeMsg)
+	if !ok || confirm.TaskID != "TASK-1" || confirm.ServiceName != "api" {
+		t.Fatalf("confirm = %#v, want task TASK-1 service api", execCmd(cmd))
 	}
 }

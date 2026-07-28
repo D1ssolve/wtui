@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -64,6 +65,8 @@ type mockManager struct {
 	pushServiceCalls int
 	pushServiceTask  string
 	pushServiceName  string
+	mergeServiceTask string
+	mergeServiceName string
 
 	isProtectedBranchResult map[string]bool
 }
@@ -195,6 +198,12 @@ func (m *mockManager) InspectTaskMerge(_ context.Context, taskID string) (task.T
 
 func (m *mockManager) MergeTaskMRs(_ context.Context, taskID string) (task.TaskMergeResult, error) {
 	return task.TaskMergeResult{TaskID: taskID}, nil
+}
+
+func (m *mockManager) MergeServiceMR(_ context.Context, taskID, serviceName string) (task.TaskMergeResult, error) {
+	m.mergeServiceTask = taskID
+	m.mergeServiceName = serviceName
+	return task.TaskMergeResult{TaskID: taskID, Merged: []string{serviceName}}, nil
 }
 
 func (m *mockManager) TaskWorkflow(_ context.Context, _ string) (domain.WorkflowSummary, error) {
@@ -400,12 +409,39 @@ func TestView_AfterWindowSize_NotLoading(t *testing.T) {
 	}
 }
 
+func TestView_DoesNotRenderBackgroundColors(t *testing.T) {
+	originalProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(originalProfile) })
+
+	m := newTestModel(t, &mockManager{})
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "ITPR-209", Phase: "feature"}})
+	m.servicesPanel.SetServices("ITPR-209", []domain.Service{{Name: "subsvc", Branch: "feature/ITPR-209"}})
+	workflow := &domain.WorkflowSummary{
+		Steps:    []domain.WorkflowStep{{Phase: domain.TaskWorkflowMR, Label: "MR", State: "now"}},
+		Services: []domain.ServiceWorkflow{{ServiceName: "subsvc", Status: "ready"}},
+	}
+	m.servicesPanel.SetWorkflow(workflow)
+	m.releasesPanel.SetReleases([]domain.Release{{ID: "release-1", Status: domain.ReleaseStatusPrepared, Version: "1.0.0"}})
+	m.releasesPanel.SetWorkflow(workflow)
+	m = sendWindowSize(m, 140, 40)
+
+	views := map[string]string{"services": m.View()}
+	m.setFocus(FocusReleases)
+	views["releases"] = m.View()
+	for name, view := range views {
+		if strings.Contains(view, "\x1b[48;2;") {
+			t.Errorf("%s view contains ANSI background color", name)
+		}
+	}
+}
+
 func TestView_AfterWindowSize_RendersOnlyActiveRightPane(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 140, 40)
 
 	view := stripANSIForModel(m.View())
-	if !strings.Contains(view, "[2] Services") || !strings.Contains(view, "[3] Releases") {
+	if !strings.Contains(view, "SERVICES") || !strings.Contains(view, "RELEASES") {
 		t.Fatalf("tab strip should show both right panes, got %q", view)
 	}
 	if strings.Contains(view, "No releases yet") {
@@ -444,6 +480,59 @@ func TestRecalculateDimensions_UsesFullTerminalHeight(t *testing.T) {
 		got := lipgloss.Height(view)
 		if got != height {
 			t.Errorf("View() height for terminal %d = %d, want %d", height, got, height)
+		}
+	}
+}
+
+func TestView_WideUsesExactTerminalDimensions(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 140, 40)
+	view := m.View()
+	if got := lipgloss.Width(view); got != 140 {
+		t.Fatalf("view width = %d, want 140", got)
+	}
+	if got := lipgloss.Height(view); got != 40 {
+		t.Fatalf("view height = %d, want 40", got)
+	}
+}
+
+func TestView_NarrowStacksTasksBeforeServices(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "IIPR-596", Phase: "feature"}})
+	m.servicesPanel.SetServices("IIPR-596", []domain.Service{{Name: "paymentservice"}})
+	m = sendWindowSize(m, 70, 30)
+
+	view := stripANSIForModel(m.View())
+	tasksAt := strings.Index(view, "TASKS")
+	servicesAt := strings.Index(view, "SERVICES")
+	if tasksAt < 0 || servicesAt < 0 || tasksAt >= servicesAt {
+		t.Fatalf("narrow composition order = %q", view)
+	}
+}
+
+func TestView_ReferenceFixturesKeepHierarchyAndDimensions(t *testing.T) {
+	for _, size := range []struct {
+		width  int
+		height int
+	}{{160, 42}, {100, 30}, {70, 26}} {
+		m := newTestModelWithOptions(t, &mockManager{}, Options{Version: "v0.4.0"})
+		m.tasksPanel.SetTasks([]domain.Task{{ID: "IIPR-596", Phase: "feature"}})
+		m.servicesPanel.SetServices("IIPR-596", []domain.Service{{
+			Name: "paymentservice", Branch: "feature/IIPR-596", RepoPath: "/dev/IIPR-596/services/paymentservice",
+		}})
+		m = sendWindowSize(m, size.width, size.height)
+
+		view := m.View()
+		if lipgloss.Width(view) != size.width || lipgloss.Height(view) != size.height {
+			t.Fatalf("%dx%d fixture rendered %dx%d (header=%d tasks=%d services=%d output=%d footer=%d)",
+				size.width, size.height, lipgloss.Width(view), lipgloss.Height(view),
+				lipgloss.Height(renderHeader(m)), lipgloss.Height(m.tasksPanel.View()), lipgloss.Height(m.servicesPanel.View()),
+				lipgloss.Height(m.outputPanel.View()), lipgloss.Height(renderFooter(m)))
+		}
+		plain := stripANSIForModel(view)
+		for _, want := range []string{"wtui", "TASKS", "IIPR-596", "paymentservice", "OUTPUT"} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("%dx%d fixture missing %q", size.width, size.height, want)
+			}
 		}
 	}
 }
@@ -1200,6 +1289,68 @@ func TestUpdate_TaskWorkflowLoadedMsg_IgnoresStaleTask(t *testing.T) {
 	m = updated.(Model)
 	if !strings.Contains(m.servicesPanel.View(), "merge now") {
 		t.Fatal("selected task workflow must reach services panel")
+	}
+}
+
+func TestUpdate_ForgeMergeMRMsg_InspectsSelectedService(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.setFocus(FocusServices)
+	m.servicesPanel.SetServices("TASK-1", []domain.Service{{Name: "api"}})
+
+	updated, cmd := m.Update(modal.ForgeMergeMRMsg{TaskID: "TASK-1", ServiceName: "api"})
+	m = updated.(Model)
+	if cmd == nil || m.mergeInspection == nil || m.mergeInspection.serviceName != "api" {
+		t.Fatalf("merge inspection = %#v, cmd nil = %v", m.mergeInspection, cmd == nil)
+	}
+}
+
+func TestUpdate_ServiceMergeInspection_ConfirmsOnlySelectedService(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.setFocus(FocusServices)
+	m.servicesPanel.SetServices("TASK-1", []domain.Service{{Name: "api"}, {Name: "worker"}})
+	m.mergeInspectionGeneration = 1
+	m.mergeInspection = &mergeInspectionRequest{generation: 1, focus: FocusServices, taskID: "TASK-1", serviceName: "api"}
+	m.servicesPanel, _ = m.servicesPanel.Update(sendKey("j"))
+
+	updated, _ := m.Update(TaskMergeInspectionMsg{TaskID: "TASK-1", Generation: 1, Inspection: task.TaskMergeInspection{
+		TaskID: "TASK-1",
+		Services: []task.ServiceMergeInspection{
+			{ServiceName: "api", Status: "ready"},
+			{ServiceName: "worker", Status: "ready"},
+		},
+	}})
+	m = updated.(Model)
+	if m.modal == nil {
+		t.Fatal("service merge result was discarded after cursor moved")
+	}
+	view := m.modal.View()
+	if !strings.Contains(view, "api") || strings.Contains(view, "worker") {
+		t.Fatalf("service merge dialog = %q", view)
+	}
+}
+
+func TestUpdate_ConfirmServiceMerge_StartsScopedCommand(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	pending := modal.ConfirmMergeMsg{TaskID: "TASK-1", ServiceName: "api"}
+	m.pendingMerge = &pending
+	m.modal = modal.NewMergeConfirmDialog("TASK-1", "", "api", nil)
+
+	updated, cmd := m.Update(pending)
+	m = updated.(Model)
+	if cmd == nil || !m.opRunning || !strings.Contains(m.outputPanel.View(), "api") {
+		t.Fatalf("service merge did not start: cmd nil=%v output=%q", cmd == nil, m.outputPanel.View())
+	}
+}
+
+func TestUpdate_MergeKeyOnServicesDoesNothing(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.setFocus(FocusServices)
+	m.servicesPanel.SetServices("TASK-1", []domain.Service{{Name: "api"}})
+
+	updated, cmd := m.Update(sendKey("M"))
+	m = updated.(Model)
+	if cmd != nil || m.mergeInspection != nil {
+		t.Fatalf("services M started merge: cmd=%v inspection=%#v", cmd, m.mergeInspection)
 	}
 }
 
@@ -1989,6 +2140,46 @@ func TestUpdate_OpenForgeMenuMsg_OpensForgeMenuModal(t *testing.T) {
 	m = updated.(Model)
 	if _, ok := m.modal.(*modal.ForgeMenuModal); !ok {
 		t.Fatalf("expected ForgeMenuModal, got %T", m.modal)
+	}
+}
+
+func TestUpdate_GitLabPipelineResultOpensFullscreenViewAndEscCloses(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	result := []forge.PipelineStatus{{
+		ID: "42", Status: "running", Branch: "develop",
+		Jobs: []forge.PipelineJob{{Name: "compile", Stage: "build", Status: "success"}},
+	}}
+
+	updated, _ := m.Update(ForgeResultMsg{
+		ServiceName: "api",
+		Op:          "pipeline_status",
+		Provider:    forge.ForgeProviderGitLab,
+		Data:        result,
+	})
+	m = updated.(Model)
+	if m.pipelineView == nil || !strings.Contains(stripANSIForModel(m.View()), "compile") {
+		t.Fatalf("GitLab pipeline view not opened: %#v", m.pipelineView)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.pipelineView != nil {
+		t.Fatal("Esc must close pipeline view")
+	}
+}
+
+func TestUpdate_GitHubPipelineResultKeepsOutputBehavior(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+
+	updated, _ := m.Update(ForgeResultMsg{
+		ServiceName: "api",
+		Op:          "pipeline_status",
+		Provider:    forge.ForgeProviderGitHub,
+		Data:        []forge.PipelineStatus{{ID: "42"}},
+	})
+	m = updated.(Model)
+	if m.pipelineView != nil || !strings.Contains(m.outputPanel.View(), "Forge pipeline_status done for api") {
+		t.Fatalf("GitHub pipeline behavior changed: view=%#v output=%q", m.pipelineView, m.outputPanel.View())
 	}
 }
 

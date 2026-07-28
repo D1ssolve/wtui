@@ -1,25 +1,27 @@
 package panels
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
 
-const panelColorPrimary = lipgloss.Color("#7C3AED")
+	uitheme "github.com/D1ssolve/wtui/internal/tui/theme"
+)
+
+const panelColorPrimary = uitheme.Primary
 
 const (
-	colorInactive = lipgloss.Color("#4A4A4A")
-	colorDim      = lipgloss.Color("#6B7280")
-	colorNormal   = lipgloss.Color("#D1D5DB")
-	colorBold     = lipgloss.Color("#F3F4F6")
-	colorDirty    = lipgloss.Color("#F59E0B")
+	colorDim    = uitheme.TextMuted
+	colorNormal = uitheme.Text
+	colorBold   = uitheme.Text
+	colorDirty  = uitheme.Warning
 )
 
 var (
 	badgeStyle = lipgloss.NewStyle().
 			Foreground(colorBold).
-			Background(lipgloss.Color("#374151")).
 			Padding(0, 1)
 
-	branchTypeFeatureStyle = badgeStyle.Copy().Background(lipgloss.Color("#2563EB"))
-	branchTypeHotfixStyle  = badgeStyle.Copy().Background(lipgloss.Color("#DC2626"))
-	branchTypeReleaseStyle = badgeStyle.Copy().Background(lipgloss.Color("#7C3AED"))
-	forgeBadgeStyle        = badgeStyle.Copy().Background(lipgloss.Color("#065F46"))
+	branchTypeFeatureStyle = badgeStyle.Copy().Foreground(uitheme.Info)
+	branchTypeHotfixStyle  = badgeStyle.Copy().Foreground(uitheme.Danger)
+	branchTypeReleaseStyle = badgeStyle.Copy().Foreground(uitheme.Primary)
+	forgeBadgeStyle        = badgeStyle.Copy().Foreground(uitheme.Success)
 )

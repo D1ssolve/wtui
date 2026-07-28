@@ -11,15 +11,18 @@ import (
 func TestGlabPipelineStatus_ParsesCIStatusObject(t *testing.T) {
 	binDir := t.TempDir()
 	worktree := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args")
 
 	fake := filepath.Join(binDir, "glab")
 	script := `#!/bin/sh
-printf '{"jobs":[{"id":1}],"pipeline":{"id":146529,"status":"manual","ref":"develop","name":"","web_url":"https://gitlab.mfi-ap.asia/g/p/-/pipelines/146529"}}'
+printf '%s' "$*" > "$ARGS_FILE"
+printf '{"id":146529,"status":"running","ref":"develop","name":"","web_url":"https://gitlab.mfi-ap.asia/g/p/-/pipelines/146529","jobs":[{"id":1,"name":"compile","stage":"build","status":"success","web_url":"https://gitlab.mfi-ap.asia/g/p/-/jobs/1"},{"id":2,"name":"unit","stage":"test","status":"running","web_url":"https://gitlab.mfi-ap.asia/g/p/-/jobs/2"}]}'
 `
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake glab: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ARGS_FILE", argsFile)
 
 	client := NewGlabClient(worktree)
 	got, err := client.PipelineStatus(t.Context(), "develop", "group/proj")
@@ -30,7 +33,7 @@ printf '{"jobs":[{"id":1}],"pipeline":{"id":146529,"status":"manual","ref":"deve
 		t.Fatalf("PipelineStatus() len = %d, want 1", len(got))
 	}
 	status := got[0]
-	if status.ID != "146529" || status.Status != "manual" || status.Branch != "develop" {
+	if status.ID != "146529" || status.Status != "running" || status.Branch != "develop" {
 		t.Fatalf("PipelineStatus() = %+v", status)
 	}
 	if status.URL != "https://gitlab.mfi-ap.asia/g/p/-/pipelines/146529" {
@@ -38,6 +41,16 @@ printf '{"jobs":[{"id":1}],"pipeline":{"id":146529,"status":"manual","ref":"deve
 	}
 	if status.WorkflowName != "pipeline" {
 		t.Fatalf("WorkflowName = %q, want fallback %q", status.WorkflowName, "pipeline")
+	}
+	if len(status.Jobs) != 2 || status.Jobs[0].Stage != "build" || status.Jobs[0].Name != "compile" || status.Jobs[1].Status != "running" {
+		t.Fatalf("Jobs = %+v", status.Jobs)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(args), "ci get --branch develop --output json --repo group/proj"; got != want {
+		t.Fatalf("argv = %q, want %q", got, want)
 	}
 }
 

@@ -79,18 +79,43 @@ func TestRenderWorkflow_Width40WrapsWithoutTruncation(t *testing.T) {
 }
 
 func TestRenderPaneTitle_RightAlignsPeerTab(t *testing.T) {
-	got := stripAnsi(renderPaneTitle("[2] Services · ITPR-1  [1/2]", "[3] Releases", 60))
-	if !strings.Contains(got, "[2] Services · ITPR-1") || !strings.Contains(got, "[3] Releases") {
+	got := stripAnsi(renderPaneTitle("SERVICES - ITPR-1  [1/2]", "RELEASES  [3]  ›", 60))
+	if !strings.Contains(got, "SERVICES - ITPR-1") || !strings.Contains(got, "RELEASES") {
 		t.Fatalf("renderPaneTitle() = %q", got)
 	}
-	if !strings.HasSuffix(got, "[3] Releases") {
+	if !strings.HasSuffix(got, "RELEASES  [3]  ›") {
 		t.Fatalf("peer tab should be right-aligned: %q", got)
 	}
 }
 
 func TestRenderPaneTitle_NarrowWidthTruncatesLeft(t *testing.T) {
-	got := renderPaneTitle("[2] Services · LONG-TASK-ID", "[3] Releases", 10)
+	got := renderPaneTitle("SERVICES - LONG-TASK-ID", "RELEASES", 10)
 	if lipgloss.Width(got) > 10 {
 		t.Fatalf("title width = %d, want <= 10: %q", lipgloss.Width(got), stripAnsi(got))
+	}
+}
+
+func TestRenderWorkflow_WideUsesCards(t *testing.T) {
+	wf := &domain.WorkflowSummary{Steps: []domain.WorkflowStep{
+		{Phase: domain.TaskWorkflowCode, Label: "code", State: "done"},
+		{Phase: domain.TaskWorkflowMR, Label: "MR", State: "now"},
+		{Phase: domain.TaskWorkflowReviewCI, Label: "review + CI", State: "next"},
+	}}
+
+	got := stripAnsi(renderWorkflow(wf, 100))
+	if !strings.Contains(got, "╭") || !strings.Contains(got, "→") {
+		t.Fatalf("wide workflow is not card based: %q", got)
+	}
+}
+
+func TestRenderWorkflow_CompactUsesChain(t *testing.T) {
+	wf := &domain.WorkflowSummary{Steps: []domain.WorkflowStep{
+		{Label: "code", State: "done"},
+		{Label: "MR", State: "now"},
+	}}
+
+	got := stripAnsi(renderWorkflow(wf, 40))
+	if strings.Contains(got, "╭") || !strings.Contains(got, "code") {
+		t.Fatalf("compact workflow = %q", got)
 	}
 }

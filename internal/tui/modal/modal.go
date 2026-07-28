@@ -3,6 +3,8 @@ package modal
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 type Modal interface {
@@ -14,16 +16,17 @@ type Modal interface {
 }
 
 const (
-	modalColorBorder  = lipgloss.Color("#7C3AED")
-	modalColorDim     = lipgloss.Color("#6B7280")
-	modalColorNormal  = lipgloss.Color("#D1D5DB")
-	modalColorWarning = lipgloss.Color("#F59E0B")
+	modalColorBorder  = theme.Primary
+	modalColorDim     = theme.TextMuted
+	modalColorNormal  = theme.Text
+	modalColorWarning = theme.Warning
+	modalColorDanger  = theme.Danger
+	modalColorSuccess = theme.Success
+	modalColorInfo    = theme.Info
 )
 
 func boxStyle(innerWidth int) lipgloss.Style {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(modalColorBorder).
+	return theme.FocusedGlassBorder(modalColorBorder).
 		Width(innerWidth).
 		Padding(0, 1)
 }

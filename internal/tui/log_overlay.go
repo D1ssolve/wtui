@@ -11,17 +11,19 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 const (
-	logColorBorder = lipgloss.Color("#7C3AED")
-	logColorTitle  = lipgloss.Color("#7C3AED")
-	logColorTime   = lipgloss.Color("#6B7280")
-	logColorPrefix = lipgloss.Color("#10B981")
-	logColorCmd    = lipgloss.Color("#9CA3AF")
-	logColorHint   = lipgloss.Color("#4A4A4A")
-	logColorEmpty  = lipgloss.Color("#6B7280")
-	logColorFilter = lipgloss.Color("#F59E0B")
+	logColorBorder = theme.Primary
+	logColorTitle  = theme.Primary
+	logColorTime   = theme.TextMuted
+	logColorPrefix = theme.Success
+	logColorCmd    = theme.Text
+	logColorHint   = theme.TextMuted
+	logColorEmpty  = theme.TextMuted
+	logColorFilter = theme.Warning
 )
 
 type LogTickMsg struct{}
@@ -239,9 +241,7 @@ func (o *LogOverlay) View() string {
 		hintStyle.Render(hint),
 	)
 
-	boxed := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(logColorBorder).
+	boxed := theme.FocusedGlassBorder(logColorBorder).
 		Width(bw-4).
 		Height(bh-2).
 		Padding(0, 1).

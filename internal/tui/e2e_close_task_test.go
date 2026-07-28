@@ -158,6 +158,9 @@ func (m *closeTaskE2EManager) InspectTaskMerge(_ context.Context, taskID string)
 func (m *closeTaskE2EManager) MergeTaskMRs(_ context.Context, taskID string) (task.TaskMergeResult, error) {
 	return task.TaskMergeResult{TaskID: taskID}, nil
 }
+func (m *closeTaskE2EManager) MergeServiceMR(_ context.Context, taskID, serviceName string) (task.TaskMergeResult, error) {
+	return task.TaskMergeResult{TaskID: taskID, Merged: []string{serviceName}}, nil
+}
 func (m *closeTaskE2EManager) TaskWorkflow(_ context.Context, _ string) (domain.WorkflowSummary, error) {
 	return domain.WorkflowSummary{}, nil
 }

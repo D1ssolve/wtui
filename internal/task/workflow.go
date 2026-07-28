@@ -37,24 +37,25 @@ func (m *manager) TaskWorkflow(ctx context.Context, taskID string) (domain.Workf
 	} else if m.cfg != nil && m.cfg.BaseBranch != "" {
 		integrationBranch = m.cfg.BaseBranch
 	}
+	remoteIntegrationBranch := "origin/" + integrationBranch
 
 	mergedResults := make([]bool, len(services))
 	mergeErrs := make([]error, len(services))
 	m.runWorkflowChecks(len(services), func(i int) {
 		svc := services[i]
-		mergedResults[i], mergeErrs[i] = m.git.IsAncestor(ctx, svc.RepoPath, svc.Branch, integrationBranch)
+		mergedResults[i], mergeErrs[i] = m.git.IsAncestor(ctx, svc.RepoPath, svc.Branch, remoteIntegrationBranch)
 	})
 	allMerged := len(services) > 0
 	for i, svc := range services {
 		if mergeErrs[i] != nil {
-			return domain.WorkflowSummary{}, fmt.Errorf("workflow: check service %s merged into %s: %w", svc.Name, integrationBranch, mergeErrs[i])
+			return domain.WorkflowSummary{}, fmt.Errorf("workflow: check service %s merged into %s: %w", svc.Name, remoteIntegrationBranch, mergeErrs[i])
 		}
 		allMerged = allMerged && mergedResults[i]
 	}
 	if allMerged {
 		rows := make([]domain.ServiceWorkflow, len(services))
 		for i, svc := range services {
-			rows[i] = domain.ServiceWorkflow{ServiceName: svc.Name, Status: "merged", Detail: "merged into " + integrationBranch}
+			rows[i] = domain.ServiceWorkflow{ServiceName: svc.Name, Status: "merged", Detail: "merged into " + remoteIntegrationBranch}
 		}
 		return workflowSummaryWithServices(taskWorkflowSteps, domain.TaskWorkflowReleaseEligible, "select in release (N)", "", true, false, rows), nil
 	}

@@ -1,5 +1,5 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import "github.com/D1ssolve/wtui/internal/tui/theme"
 
-const ColorPrimary = lipgloss.Color("#7C3AED")
+const ColorPrimary = theme.Primary

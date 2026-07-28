@@ -172,6 +172,8 @@ type cmdManager struct {
 	inspectTaskResult task.TaskMergeInspection
 	mergeTaskID       string
 	mergeTaskResult   task.TaskMergeResult
+	mergeServiceTask  string
+	mergeServiceName  string
 	promoteReleaseID  string
 	promoteResult     domain.Release
 
@@ -280,6 +282,12 @@ func (m *cmdManager) InspectTaskMerge(_ context.Context, taskID string) (task.Ta
 
 func (m *cmdManager) MergeTaskMRs(_ context.Context, taskID string) (task.TaskMergeResult, error) {
 	m.mergeTaskID = taskID
+	return m.mergeTaskResult, nil
+}
+
+func (m *cmdManager) MergeServiceMR(_ context.Context, taskID, serviceName string) (task.TaskMergeResult, error) {
+	m.mergeServiceTask = taskID
+	m.mergeServiceName = serviceName
 	return m.mergeTaskResult, nil
 }
 
@@ -450,7 +458,7 @@ func TestForgeOpCmdDelegatesCreateMR(t *testing.T) {
 
 func TestForgeOpCmdDelegatesPipelineStatus(t *testing.T) {
 	mgr := &cmdManager{forgePipelineResult: []forge.PipelineStatus{{ID: "1"}}}
-	params := forgePipelineStatusParams{Branch: "develop"}
+	params := forgePipelineStatusParams{Branch: "develop", Provider: forge.ForgeProviderGitLab}
 
 	msg := forgeOpCmd(mgr, "pipeline_status", "T14", "svc", params)()
 	got := msg.(ForgeResultMsg)
@@ -460,6 +468,9 @@ func TestForgeOpCmdDelegatesPipelineStatus(t *testing.T) {
 	}
 	if len(data) != 1 || data[0].ID != "1" {
 		t.Fatalf("data = %#v, want [{ID:1}]", data)
+	}
+	if got.Provider != forge.ForgeProviderGitLab {
+		t.Fatalf("Provider = %q, want gitlab", got.Provider)
 	}
 }
 
@@ -661,6 +672,15 @@ func TestInspectAndMergeTaskCommandsPreserveTaskID(t *testing.T) {
 	merged := mergeTaskMRsCmd(mgr, "TASK-1")().(TaskMergeDoneMsg)
 	if len(merged.Result.Merged) != 1 || mgr.mergeTaskID != "TASK-1" {
 		t.Fatalf("merge = %#v, called with %q", merged, mgr.mergeTaskID)
+	}
+}
+
+func TestMergeServiceMRCmdPreservesTaskAndService(t *testing.T) {
+	mgr := &cmdManager{mergeTaskResult: task.TaskMergeResult{TaskID: "TASK-1", Merged: []string{"api"}}}
+
+	merged := mergeServiceMRCmd(mgr, "TASK-1", "api")().(TaskMergeDoneMsg)
+	if len(merged.Result.Merged) != 1 || mgr.mergeServiceTask != "TASK-1" || mgr.mergeServiceName != "api" {
+		t.Fatalf("merge = %#v, called with task=%q service=%q", merged, mgr.mergeServiceTask, mgr.mergeServiceName)
 	}
 }
 

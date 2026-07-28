@@ -2,10 +2,9 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-const (
-	colorDimText  = lipgloss.Color("#6B7280")
-	colorHeaderBg = lipgloss.Color("#1E1E2E")
-)
+import "github.com/D1ssolve/wtui/internal/tui/theme"
+
+const colorDimText = theme.TextMuted
 
 type Styles struct {
 	Header lipgloss.Style
@@ -17,9 +16,7 @@ func NewStyles() Styles {
 		Header: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorPrimary).
-			Background(colorHeaderBg).
-			PaddingLeft(1).
-			PaddingRight(1),
+			Padding(0, 1),
 
 		Footer: lipgloss.NewStyle().
 			Foreground(colorDimText).

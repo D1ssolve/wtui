@@ -74,6 +74,25 @@ func TestMergeTaskMRs_MergesOnlyReadyServices(t *testing.T) {
 	}
 }
 
+func TestMergeServiceMR_MergesOnlySelectedService(t *testing.T) {
+	client := &mergeForgeClient{readiness: map[string]forge.MRReadiness{
+		"feature/api":    {Number: 1, State: "open", HeadSHA: "api-sha", Ready: true, SupportsSHAPin: true},
+		"feature/worker": {Number: 2, State: "open", HeadSHA: "worker-sha", Ready: true, SupportsSHAPin: true},
+	}}
+	mgr := newMRMergeTestManager(t, map[string]string{"api": "feature/api", "worker": "feature/worker"}, "git@gitlab.com:group/repo.git", client)
+
+	result, err := mgr.MergeServiceMR(t.Context(), "TASK-1", "worker")
+	if err != nil {
+		t.Fatalf("MergeServiceMR() err = %v", err)
+	}
+	if !slices.Equal(result.Merged, []string{"worker"}) {
+		t.Fatalf("Merged = %v, want [worker]", result.Merged)
+	}
+	if len(client.merges) != 1 || client.merges[0].Number != 2 {
+		t.Fatalf("merges = %#v, want only worker MR 2", client.merges)
+	}
+}
+
 func TestMergeTaskMRs_RecordsHeadDriftAndContinues(t *testing.T) {
 	headDrift := errors.New("head SHA changed")
 	client := &mergeForgeClient{

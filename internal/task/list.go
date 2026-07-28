@@ -76,6 +76,7 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 				return
 			}
 
+			tasks[i].Services = services
 			phase, version := detectTaskPhase(services, m.flow)
 			tasks[i].Phase = phase
 			tasks[i].Version = version

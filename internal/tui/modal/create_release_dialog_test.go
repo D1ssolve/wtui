@@ -48,6 +48,19 @@ func TestCreateReleaseDialog_Phase1_EnterRequiresSelection(t *testing.T) {
 	}
 }
 
+func TestCreateReleaseDialog_Phase1_ShowsServiceNames(t *testing.T) {
+	d := NewCreateReleaseDialog([]domain.Task{{
+		ID:       "FEAT-1",
+		Phase:    "feature",
+		Services: []domain.Service{{Name: "api"}, {Name: "worker"}},
+	}}, 100, 30)
+
+	view := stripAnsi(d.View())
+	if !strings.Contains(view, "FEAT-1 [api, worker] (feature)") {
+		t.Fatalf("expected service names in task row, got %q", view)
+	}
+}
+
 func TestCreateReleaseDialog_PhaseFlow_EscFromPhase2ReturnsToPhase1WithSelection(t *testing.T) {
 	d := NewCreateReleaseDialog([]domain.Task{
 		{ID: "FEAT-1", Phase: "feature", Services: []domain.Service{{Name: "api"}}},

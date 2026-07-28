@@ -66,10 +66,10 @@ func (m *SystemInfoModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 func (m *SystemInfoModal) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorNormal)
-	availableStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399"))
-	missingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F87171"))
+	availableStyle := lipgloss.NewStyle().Foreground(modalColorSuccess)
+	missingStyle := lipgloss.NewStyle().Foreground(modalColorDanger)
 	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
-	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Width(14)
+	keyStyle := lipgloss.NewStyle().Foreground(modalColorInfo).Width(14)
 
 	row := func(name, value string) string {
 		return "  " + keyStyle.Render(name) + value

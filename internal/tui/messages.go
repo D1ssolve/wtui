@@ -2,6 +2,7 @@ package tui
 
 import (
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/task"
 )
 
@@ -38,6 +39,7 @@ type TagListMsg struct {
 type ForgeResultMsg struct {
 	ServiceName string
 	Op          string
+	Provider    forge.ForgeProvider
 	Data        any
 	Err         error
 }

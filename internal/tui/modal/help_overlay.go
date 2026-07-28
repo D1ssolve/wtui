@@ -67,7 +67,7 @@ func (h *HelpOverlay) contentLines() []string {
 		Foreground(modalColorNormal)
 
 	keyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#A78BFA")).
+		Foreground(modalColorInfo).
 		Width(16)
 
 	descStyle := lipgloss.NewStyle().
@@ -128,8 +128,6 @@ func (h *HelpOverlay) contentLines() []string {
 		sb.WriteString("\n")
 		sb.WriteString(row("m", "Open forge action menu"))
 		sb.WriteString("\n")
-		sb.WriteString(row("p", "Show pipeline status"))
-		sb.WriteString("\n")
 		sb.WriteString(row("v", "Validate current task"))
 		sb.WriteString("\n")
 	} else {
@@ -138,8 +136,6 @@ func (h *HelpOverlay) contentLines() []string {
 		sb.WriteString(row("s", "Sync service (fetch + merge/rebase)"))
 		sb.WriteString("\n")
 		sb.WriteString(row("m", "Open forge action menu"))
-		sb.WriteString("\n")
-		sb.WriteString(row("p", "Show pipeline status"))
 		sb.WriteString("\n")
 		sb.WriteString(row("v", "Validate current task"))
 		sb.WriteString("\n")

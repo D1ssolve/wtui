@@ -232,8 +232,8 @@ func newWorkflowTestManager(t *testing.T, readiness map[string]forge.MRReadiness
 		remoteURLRes:          "git@gitlab.com:group/repo.git",
 		remoteBranchExistsRes: pushed,
 		isAncestorFn: func(_, _, descendant string) (bool, error) {
-			if descendant != "develop" {
-				t.Fatalf("descendant = %q, want develop", descendant)
+			if descendant != "origin/develop" {
+				t.Fatalf("descendant = %q, want origin/develop", descendant)
 			}
 			return merged, nil
 		},

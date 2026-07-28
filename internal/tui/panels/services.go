@@ -14,6 +14,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/gitflow"
+	uitheme "github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 const (
@@ -37,7 +38,7 @@ func (s serviceItem) FilterValue() string { return s.service.Name }
 
 type serviceDelegate struct{}
 
-func (d serviceDelegate) Height() int { return 1 }
+func (d serviceDelegate) Height() int { return 4 }
 
 func (d serviceDelegate) Spacing() int { return 1 }
 
@@ -48,61 +49,67 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	if !ok {
 		return
 	}
+	fmt.Fprint(w, renderServiceCard(si, index == m.Index(), max(0, m.Width())))
+}
+
+func renderServiceCard(si serviceItem, selected bool, width int) string {
+	if width < 3 {
+		return ""
+	}
+	contentWidth := max(0, width-2)
 	svc := si.service
-	width := max(0, m.Width())
-	dimStyle := lipgloss.NewStyle().Foreground(svcColorDim)
-
+	rail := " "
+	if selected {
+		rail = "▌"
+	}
+	icon, state, stateColor := "✓", "clean", uitheme.Success
+	if svc.IsDirty {
+		icon, state, stateColor = "⚠", "modified", uitheme.Warning
+	}
 	if svc.Stale {
-		staleStyle := lipgloss.NewStyle().Bold(true).Foreground(svcColorDirty)
-		nameStyle := lipgloss.NewStyle().Foreground(svcColorDim)
-		line := fmt.Sprintf("  ✗ %s %s", nameStyle.Render(svc.Name), staleStyle.Render("[STALE] worktree missing"))
-		fmt.Fprint(w, ansi.Truncate(line, width, "…"))
-		return
+		icon, state, stateColor = "✗", "STALE worktree missing", uitheme.Danger
 	}
-
-	icon := "✓"
-	nameStyle := lipgloss.NewStyle().Bold(true).Foreground(svcColorBold)
-
-	if svc.IsDirty {
-		icon = "⚠"
-		nameStyle = lipgloss.NewStyle().Bold(true).Foreground(svcColorDirty)
+	nameColor := svcColorBold
+	if selected {
+		nameColor = panelColorPrimary
 	}
-
-	if index == m.Index() {
-		nameStyle = nameStyle.Foreground(panelColorPrimary)
-	}
-
-	state := "clean"
-	if svc.IsDirty {
-		state = "modified"
-	}
-
-	line := fmt.Sprintf("  %s %-22s %-8s", icon, nameStyle.Render(svc.Name), dimStyle.Render(state))
-
+	line := fmt.Sprintf("%s  ▣  %s   %s", rail,
+		lipgloss.NewStyle().Bold(true).Foreground(nameColor).Render(svc.Name),
+		lipgloss.NewStyle().Foreground(stateColor).Render(icon+" "+state))
 	if si.wfStatus != "" {
-		wfText := si.wfStatus
-		if si.wfDetail != "" {
-			wfText += " — " + si.wfDetail
-		}
-		wfStyle := dimStyle
-		if si.wfStatus == "ready" {
-			wfStyle = lipgloss.NewStyle().Foreground(workflowColorDone)
-		} else if si.wfStatus == "blocked" || si.wfStatus == "failed" {
-			wfStyle = lipgloss.NewStyle().Foreground(workflowColorBlocked)
-		}
-		line += " " + wfStyle.Render(wfText)
+		line += "   " + workflowBadge(si.wfStatus)
 	}
-
+	if svc.Branch != "" {
+		line += "   " + lipgloss.NewStyle().Foreground(uitheme.Primary).Render("⎇ "+svc.Branch)
+	}
 	if svc.Ahead > 0 || svc.Behind > 0 {
-		aheadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399"))
-		behindStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F87171"))
-		line += fmt.Sprintf("  %s %s",
-			aheadStyle.Render(fmt.Sprintf("↑%d", svc.Ahead)),
-			behindStyle.Render(fmt.Sprintf("↓%d", svc.Behind)),
-		)
+		line += fmt.Sprintf("   %s %s",
+			lipgloss.NewStyle().Foreground(uitheme.Success).Render(fmt.Sprintf("↑%d", svc.Ahead)),
+			lipgloss.NewStyle().Foreground(uitheme.Danger).Render(fmt.Sprintf("↓%d", svc.Behind)))
 	}
+	line = ansi.Truncate(line, contentWidth, "…")
+	path := svc.RepoPath
+	if path == "" {
+		path = svc.WorktreePath
+	}
+	line2 := ansi.Truncate("     Path: "+path, contentWidth, "…")
+	style := uitheme.GlassBorder(uitheme.GlassHighlight).
+		Width(contentWidth).
+		Foreground(svcColorDim)
+	if selected {
+		style = style.BorderTopForeground(panelColorPrimary).BorderLeftForeground(panelColorPrimary)
+	}
+	return style.Render(line + "\n" + line2)
+}
 
-	fmt.Fprint(w, ansi.Truncate(line, width, "…"))
+func workflowBadge(status string) string {
+	color := uitheme.TextMuted
+	if status == "ready" || status == "done" {
+		color = uitheme.Success
+	} else if status == "blocked" || status == "failed" {
+		color = uitheme.Danger
+	}
+	return lipgloss.NewStyle().Foreground(color).Padding(0, 1).Render(status)
 }
 
 type ServicesPanel struct {
@@ -303,20 +310,6 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			}
 			return p, func() tea.Msg { return OpenAddServiceMsg{TaskID: tid, ExistingServices: existing} }
 
-		case "p":
-			svc := p.SelectedService()
-			if svc == nil {
-				return p, nil
-			}
-			return p, func() tea.Msg {
-				return ForgePipelineStatusMsg{
-					TaskID:      p.taskID,
-					ServiceName: svc.Name,
-					Branch:      svc.Branch,
-					RepoPath:    svc.RepoPath,
-				}
-			}
-
 		case "P":
 			if p.lazygitAvailable {
 				return p, nil
@@ -462,18 +455,18 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 func (p ServicesPanel) View() string {
 	var titleText string
 	if p.taskID == "" {
-		titleText = "[2] Services"
+		titleText = "SERVICES"
 	} else {
 		total := len(p.list.Items())
 		current := 0
 		if total > 0 {
 			current = p.list.Index() + 1
 		}
-		titleText = fmt.Sprintf("[2] Services · %s  [%d/%d]", p.taskID, current, total)
+		titleText = fmt.Sprintf("SERVICES - %s  [%d/%d]", p.taskID, current, total)
 	}
 
 	inner := innerDimensions(p.width, p.height)
-	title := renderPaneTitle(titleText, "[3] Releases", inner.w)
+	title := renderPaneTitle(titleText, "RELEASES  ›", inner.w)
 
 	workflow := renderWorkflow(p.workflow, inner.w)
 	bodyHeight := max(0, inner.h-1)

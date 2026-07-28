@@ -183,7 +183,7 @@ func (d *RemoteBranchConflictDialog) View() string {
 
 	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
 	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
-	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F87171"))
+	errorStyle := lipgloss.NewStyle().Foreground(modalColorDanger)
 
 	var sb strings.Builder
 

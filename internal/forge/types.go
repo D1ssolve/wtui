@@ -75,6 +75,15 @@ type PipelineStatus struct {
 	Branch       string
 	URL          string
 	WorkflowName string
+	Jobs         []PipelineJob
+}
+
+type PipelineJob struct {
+	ID     string
+	Name   string
+	Stage  string
+	Status string
+	URL    string
 }
 
 type TriggerPipelineParams struct {
