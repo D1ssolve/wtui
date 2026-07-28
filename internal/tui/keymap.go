@@ -25,6 +25,8 @@ type KeyMap struct {
 	ForgeMenu       key.Binding
 	PipelineStatus  key.Binding
 	NewRelease      key.Binding
+	MergeMRs        key.Binding
+	ReleaseAction   key.Binding
 	ServiceValidate key.Binding
 }
 
@@ -101,6 +103,14 @@ func DefaultKeyMap() KeyMap {
 		NewRelease: key.NewBinding(
 			key.WithKeys("N"),
 			key.WithHelp("N", "new release"),
+		),
+		MergeMRs: key.NewBinding(
+			key.WithKeys("M"),
+			key.WithHelp("M", "merge ready MRs"),
+		),
+		ReleaseAction: key.NewBinding(
+			key.WithKeys("F"),
+			key.WithHelp("F", "promote/finalize release"),
 		),
 		ServiceValidate: key.NewBinding(
 			key.WithKeys("v"),

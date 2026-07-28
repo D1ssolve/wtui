@@ -589,6 +589,10 @@ func newCloseTestConfig(rootDir, tasksRoot string) *config.Config {
 	if _, err := cfg.Effective(); err != nil {
 		panic(err)
 	}
+	releaseRule := cfg.GitFlow.BranchTypes[string(gitflow.BranchTypeRelease)]
+	releaseRule.CloseStrategy = string(gitflow.CloseStrategyDirectMerge)
+	releaseRule.TagOnClose = true
+	cfg.GitFlow.BranchTypes[string(gitflow.BranchTypeRelease)] = releaseRule
 	cfg.RootDir = rootDir
 	cfg.TasksRoot = tasksRoot
 	return cfg

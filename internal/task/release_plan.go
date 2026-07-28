@@ -132,6 +132,15 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 				idx = len(plannedServices) - 1
 			}
 
+			remoteIntegration := "origin/" + m.flow.IntegrationBranch
+			merged, err := m.git.IsAncestor(ctx, svc.RepoPath, svc.Branch, remoteIntegration)
+			if err != nil {
+				return releasePlan{}, fmt.Errorf("release plan: verify task branch service=%s branch=%s integration=%s: %w", svc.Name, svc.Branch, remoteIntegration, err)
+			}
+			if !merged {
+				return releasePlan{}, fmt.Errorf("%w: service=%s branch=%s integration=%s", ErrReleaseTaskNotMerged, svc.Name, svc.Branch, remoteIntegration)
+			}
+
 			plannedServices[idx].FeatureBranches = append(plannedServices[idx].FeatureBranches, domain.ReleaseFeatureBranch{
 				TaskID:       taskID,
 				ServiceName:  svc.Name,

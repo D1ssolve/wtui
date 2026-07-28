@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,8 +36,8 @@ func TestWriteAndLoadReleaseManifest_PersistsVersionAndUTCAndUnknownFields(t *te
 		t.Fatalf("writeReleaseManifest() error = %v", err)
 	}
 
-	if written.ManifestVersion != releaseManifestVersion {
-		t.Fatalf("ManifestVersion = %d, want %d", written.ManifestVersion, releaseManifestVersion)
+	if written.ManifestVersion != 2 {
+		t.Fatalf("ManifestVersion = %d, want 2", written.ManifestVersion)
 	}
 	if written.CreatedAt.Location() != time.UTC {
 		t.Fatalf("CreatedAt location = %v, want UTC", written.CreatedAt.Location())
@@ -94,8 +95,8 @@ func TestWriteAndLoadReleaseManifest_PersistsVersionAndUTCAndUnknownFields(t *te
 	if loaded.ID != release.ID {
 		t.Fatalf("loaded.ID = %q, want %q", loaded.ID, release.ID)
 	}
-	if loaded.ManifestVersion != releaseManifestVersion {
-		t.Fatalf("loaded.ManifestVersion = %d, want %d", loaded.ManifestVersion, releaseManifestVersion)
+	if loaded.ManifestVersion != 2 {
+		t.Fatalf("loaded.ManifestVersion = %d, want 2", loaded.ManifestVersion)
 	}
 }
 
@@ -133,6 +134,50 @@ func TestLoadReleaseManifest_Corrupt_ReturnsErrReleaseManifestInvalid(t *testing
 	_, err = m.loadReleaseManifest(releaseID)
 	if !errors.Is(err, ErrReleaseManifestInvalid) {
 		t.Fatalf("loadReleaseManifest() error = %v, want ErrReleaseManifestInvalid", err)
+	}
+}
+
+func TestLoadReleaseManifest_AcceptsLegacyVersions(t *testing.T) {
+	rootDir := t.TempDir()
+	mgr := newTestManager(t, filepath.Join(rootDir, ".tasks"), rootDir, &mockGitClient{})
+	m := mgr.(*manager)
+
+	for _, version := range []int{0, 1} {
+		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
+			releaseID := fmt.Sprintf("rel-legacy-%d", version)
+			releaseDir, err := m.ensureReleaseDir(releaseID, true)
+			if err != nil {
+				t.Fatalf("ensureReleaseDir() error = %v", err)
+			}
+
+			manifest := map[string]any{
+				"id":         releaseID,
+				"status":     domain.ReleaseStatusPrepared,
+				"created_at": time.Now().UTC(),
+				"updated_at": time.Now().UTC(),
+			}
+			if version != 0 {
+				manifest["manifest_version"] = version
+			}
+			data, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(releaseDir, releaseManifestFileName), data, 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			loaded, err := m.loadReleaseManifest(releaseID)
+			if err != nil {
+				t.Fatalf("loadReleaseManifest() error = %v", err)
+			}
+			if loaded.ManifestVersion != version {
+				t.Fatalf("ManifestVersion = %d, want %d", loaded.ManifestVersion, version)
+			}
+			if !IsLegacyManifest(loaded) {
+				t.Fatal("IsLegacyManifest() = false, want true")
+			}
+		})
 	}
 }
 

@@ -191,10 +191,11 @@ func TestRetryRelease_Stage1Failure_RetriesToPrepared(t *testing.T) {
 	}
 }
 
-func TestRetryRelease_Stage2Failure_RetriesToReleased(t *testing.T) {
+func TestRetryRelease_V2FinalizeFailure_RetriesThroughFinalize(t *testing.T) {
 	ctx := context.Background()
 	gitMock := &mockGitClient{}
 	m, _ := newReleasePlanTestManager(t, gitMock)
+	m.flow.ProductionBranch = "master"
 
 	preparedAt := time.Date(2026, 6, 16, 12, 30, 0, 0, time.UTC)
 	rel := domain.Release{
@@ -219,6 +220,7 @@ func TestRetryRelease_Stage2Failure_RetriesToReleased(t *testing.T) {
 				ReleaseSHA:          "release/1.2.3-sha",
 				TagRef:              "v1.2.3",
 				TagSHA:              "v1.2.3^{}-sha",
+				AcceptedMergeSHA:    "accepted-sha",
 				PushedIntegration:   true,
 				PushedReleaseBranch: true,
 				PushedTag:           true,
@@ -239,6 +241,12 @@ func TestRetryRelease_Stage2Failure_RetriesToReleased(t *testing.T) {
 	gitMock.branchExistsFn = func(_ string, _ string) (bool, error) { return true, nil }
 	gitMock.tagExistsRes = true
 	gitMock.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
+	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+		if ref == "origin/master" || ref == "v1.2.3^{}" {
+			return "accepted-sha", nil
+		}
+		return ref + "-sha", nil
+	}
 
 	out, err := m.RetryRelease(ctx, rel.ID)
 	if err != nil {
@@ -337,6 +345,7 @@ func TestRetryRelease_PreparedAtDispatch(t *testing.T) {
 	t.Run("PreparedAt set dispatches to stage-2 and ends at released", func(t *testing.T) {
 		gitMock := &mockGitClient{}
 		m, _ := newReleasePlanTestManager(t, gitMock)
+		m.flow.ProductionBranch = "master"
 		preparedAt := time.Date(2026, 6, 16, 12, 30, 0, 0, time.UTC)
 		rel := domain.Release{
 			ID:         "rel-stage2-20260616T120000",
@@ -360,6 +369,7 @@ func TestRetryRelease_PreparedAtDispatch(t *testing.T) {
 					ReleaseSHA:          "release/1.2.3-sha",
 					TagRef:              "v1.2.3",
 					TagSHA:              "v1.2.3^{}-sha",
+					AcceptedMergeSHA:    "accepted-sha",
 					PushedIntegration:   true,
 					PushedReleaseBranch: true,
 					PushedTag:           true,
@@ -379,6 +389,12 @@ func TestRetryRelease_PreparedAtDispatch(t *testing.T) {
 		gitMock.branchExistsFn = func(_ string, _ string) (bool, error) { return true, nil }
 		gitMock.tagExistsRes = true
 		gitMock.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
+		gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+			if ref == "origin/master" || ref == "v1.2.3^{}" {
+				return "accepted-sha", nil
+			}
+			return ref + "-sha", nil
+		}
 
 		out, err := m.RetryRelease(ctx, rel.ID)
 		if err != nil {
@@ -390,3 +406,60 @@ func TestRetryRelease_PreparedAtDispatch(t *testing.T) {
 	})
 }
 
+func TestRetryRelease_V2PartialPromoteResumesWithoutDuplicateMR(t *testing.T) {
+	m, _, client := newPromoteTestManager(t)
+	preparedAt := time.Now().UTC()
+	api := promoteService("api", "/repos/api", "release/1.2.3")
+	api.ProductionMR = &domain.ProductionMRRef{Number: 41, URL: "existing", SourceSHA: "api-sha", State: "open"}
+	worker := promoteService("worker", "/repos/worker", "release/1.2.3")
+	release := writePromoteRelease(t, m, domain.ReleaseStatusFailed, api, worker)
+	release.PreparedAt = &preparedAt
+	release.Error = &domain.ReleaseError{Recoverable: true, Stage: "promote"}
+	if _, err := m.writeReleaseManifest(release); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := m.RetryRelease(t.Context(), release.ID)
+	if err != nil {
+		t.Fatalf("RetryRelease() error = %v", err)
+	}
+	if got.Status != domain.ReleaseStatusAwaitingMasterMerge || len(client.creates) != 1 || got.Services[0].ProductionMR.Number != 41 || got.Services[1].ProductionMR.Number == 0 {
+		t.Fatalf("release = %#v, creates = %#v", got, client.creates)
+	}
+}
+
+func TestRetryRelease_V2CrashAfterMRMergeReturnsToAwaitingMerge(t *testing.T) {
+	m, _, client := newPromoteTestManager(t)
+	preparedAt := time.Now().UTC()
+	svc := promoteService("api", "/repos/api", "release/1.2.3")
+	svc.ProductionMR = &domain.ProductionMRRef{Number: 77, URL: "merged-on-forge", SourceSHA: "source", State: "open"}
+	release := writePromoteRelease(t, m, domain.ReleaseStatusFailed, svc)
+	release.PreparedAt = &preparedAt
+	release.Error = &domain.ReleaseError{Recoverable: true, Stage: "merge"}
+	if _, err := m.writeReleaseManifest(release); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := m.RetryRelease(t.Context(), release.ID)
+	if err != nil || got.Status != domain.ReleaseStatusAwaitingMasterMerge || len(client.creates) != 0 || got.Services[0].ProductionMR.Number != 77 {
+		t.Fatalf("release = %#v, creates = %#v, error = %v", got, client.creates, err)
+	}
+}
+
+func TestRetryRelease_V2MasterMovedBeforeFinalizeFails(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	gitMock.resolveRefRes = "moved-master"
+	preparedAt := time.Now().UTC()
+	svc := finalizeService(m)
+	release := writeRelease(t, m, domain.ReleaseStatusFailed, svc)
+	release.PreparedAt = &preparedAt
+	release.Error = &domain.ReleaseError{Recoverable: true, Stage: "finalize_validate"}
+	if _, err := m.writeReleaseManifest(release); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := m.RetryRelease(t.Context(), release.ID)
+	if !errors.Is(err, ErrReleaseMasterMoved) || got.Status != domain.ReleaseStatusFailed || gitMock.createTagCalls != 0 {
+		t.Fatalf("release = %#v, error = %v, create tags = %d", got, err, gitMock.createTagCalls)
+	}
+}

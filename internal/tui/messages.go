@@ -52,7 +52,40 @@ type CreateReleaseDoneMsg struct {
 	Err     error
 }
 
-type FinishReleaseDoneMsg struct {
+type TaskMergeInspectionMsg struct {
+	TaskID     string
+	Generation uint64
+	Inspection task.TaskMergeInspection
+	Err        error
+}
+
+type ReleaseMergeInspectionMsg struct {
+	ReleaseID  string
+	Generation uint64
+	Inspection task.ReleaseMergeInspection
+	Err        error
+}
+
+type TaskMergeDoneMsg struct {
+	Result task.TaskMergeResult
+	Err    error
+}
+
+type ReleaseMergeDoneMsg struct {
+	Release domain.Release
+	Result  task.ReleaseMergeResult
+	Err     error
+}
+
+type ReleaseActionDoneMsg struct {
+	Action  string
 	Release domain.Release
 	Err     error
+}
+
+type TaskWorkflowLoadedMsg struct {
+	TaskID     string
+	Generation uint64
+	Workflow   domain.WorkflowSummary
+	Err        error
 }

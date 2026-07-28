@@ -12,7 +12,14 @@ import (
 
 func TestCreateRelease_StopsAtPrepared(t *testing.T) {
 	ctx := context.Background()
-	gitMock := &mockGitClient{}
+	gitMock := &mockGitClient{
+		resolveRefFn: func(_ string, ref string) (string, error) {
+			if ref == "HEAD" {
+				return "synced-develop-sha", nil
+			}
+			return ref + "-sha", nil
+		},
+	}
 	m, _ := newReleasePlanTestManager(t, gitMock)
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-2", ServiceName: "svc-api", Branch: "feature/APP-2", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
@@ -72,12 +79,20 @@ func TestCreateRelease_StopsAtPrepared(t *testing.T) {
 
 	gitMock.mu.Lock()
 	mergeCalls := append([]mergeCall(nil), gitMock.mergeCalls...)
+	ffCalls := append([]mergeFFOnlyCall(nil), gitMock.mergeFFOnlyCalls...)
+	branchCalls := append([]createBranchFromBranchCall(nil), gitMock.createBranchFromBranchCalls...)
 	gitMock.mu.Unlock()
-	if len(mergeCalls) != 2 {
-		t.Fatalf("merge call count = %d, want 2", len(mergeCalls))
+	if len(mergeCalls) != 0 {
+		t.Fatalf("feature merge call count = %d, want 0", len(mergeCalls))
 	}
-	if mergeCalls[0].Branch != "feature/APP-2" || mergeCalls[1].Branch != "feature/APP-1" {
-		t.Fatalf("merge order = [%s,%s], want [feature/APP-2,feature/APP-1]", mergeCalls[0].Branch, mergeCalls[1].Branch)
+	if len(ffCalls) != 1 || ffCalls[0].Ref != "origin/develop" {
+		t.Fatalf("MergeFFOnly calls = %#v, want one origin/develop call", ffCalls)
+	}
+	if len(branchCalls) != 1 || branchCalls[0].RepoPath != svc.RepoPath || branchCalls[0].FromBranch != "develop" {
+		t.Fatalf("CreateBranchFromBranch calls = %#v, want release from ff-synced develop worktree", branchCalls)
+	}
+	if svc.PostIntegrationSHA != "synced-develop-sha" {
+		t.Fatalf("PostIntegrationSHA = %q, want synced-develop-sha", svc.PostIntegrationSHA)
 	}
 
 	persisted, err := m.loadReleaseManifest(rel.ID)
@@ -96,7 +111,7 @@ func TestCreateRelease_StopsAtPrepared(t *testing.T) {
 
 	lines := drainStatusLines(statusCh)
 	assertStatusHasPrefix(t, lines, "[svc-api][fetch]")
-	assertStatusHasPrefix(t, lines, "[svc-api][merge]")
+	assertStatusHasPrefix(t, lines, "[svc-api][sync]")
 	assertStatusHasPrefix(t, lines, "[svc-api][branch]")
 	assertStatusHasPrefix(t, lines, "[svc-api][push]")
 	assertStatusHasPrefix(t, lines, "[svc-api][done]")
@@ -113,35 +128,29 @@ func TestCreateRelease_StopsAtPrepared(t *testing.T) {
 	}
 }
 
-func TestCreateRelease_MergeConflict_AbortAndFail(t *testing.T) {
+func TestCreateRelease_FastForwardFailure_Fails(t *testing.T) {
 	ctx := context.Background()
 	gitMock := &mockGitClient{}
 	m, _ := newReleasePlanTestManager(t, gitMock)
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "svc-api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
 	)
-	gitMock.mergeFn = func(_ string, _ string) error { return errors.New("merge conflict") }
-	gitMock.operationStateFn = func(path string) ([]domain.RepoState, error) {
-		if strings.Contains(path, ".work") {
-			return []domain.RepoState{domain.RepoStateMerging}, nil
-		}
-		return nil, nil
-	}
+	gitMock.mergeFFOnlyErr = errors.New("not possible to fast-forward")
 
 	_, err := m.CreateRelease(ctx, CreateReleaseParams{
 		TaskIDs:          []string{"APP-1"},
 		ServiceVersions:  map[string]string{"svc-api": "1.2.3"},
 		StartImmediately: true,
 	})
-	if !errors.Is(err, ErrReleaseMergeConflict) {
-		t.Fatalf("CreateRelease() error = %v, want ErrReleaseMergeConflict", err)
+	if err == nil {
+		t.Fatalf("CreateRelease() error=nil, want fast-forward failure")
 	}
 
 	gitMock.mu.Lock()
-	abortCalls := append([]string(nil), gitMock.mergeAbortCalls...)
+	mergeCalls := append([]mergeCall(nil), gitMock.mergeCalls...)
 	gitMock.mu.Unlock()
-	if len(abortCalls) != 1 {
-		t.Fatalf("merge abort call count = %d, want 1", len(abortCalls))
+	if len(mergeCalls) != 0 {
+		t.Fatalf("feature merge call count = %d, want 0", len(mergeCalls))
 	}
 
 	releases, err := m.listReleaseManifests()
@@ -151,11 +160,35 @@ func TestCreateRelease_MergeConflict_AbortAndFail(t *testing.T) {
 	if releases[0].Status != domain.ReleaseStatusFailed {
 		t.Fatalf("release status = %q, want %q", releases[0].Status, domain.ReleaseStatusFailed)
 	}
-	if releases[0].Error == nil || releases[0].Error.Code != "ERR_RELEASE_MERGE_CONFLICT" {
-		t.Fatalf("release error = %#v, want ERR_RELEASE_MERGE_CONFLICT", releases[0].Error)
+	if releases[0].Services[0].IntegrationWorktreePath != "" {
+		t.Fatalf("integration worktree path = %q, want cleaned", releases[0].Services[0].IntegrationWorktreePath)
 	}
-	if releases[0].Services[0].IntegrationWorktreePath == "" {
-		t.Fatalf("integration worktree path = empty, want preserved on conflict")
+}
+
+func TestExecutePrepareService_RemoteEligibilityDriftBeforeBranchingFails(t *testing.T) {
+	gitMock := &mockGitClient{commonDirResult: "/git/common", isAncestorFn: func(_, _, _ string) (bool, error) { return false, nil }}
+	m, _ := newReleasePlanTestManager(t, gitMock)
+	release := domain.Release{ID: "rel-drift", Dir: t.TempDir(), Status: domain.ReleaseStatusMerging}
+	svc := domain.ReleaseService{
+		Name: "api", RepoPath: "/repos/api", IntegrationBranch: "develop", ReleaseBranch: "release/1.2.3",
+		FeatureBranches: []domain.ReleaseFeatureBranch{{Branch: "feature/APP-1"}},
+	}
+
+	err := m.executePrepareService(t.Context(), &release, &svc, nil)
+	if !errors.Is(err, ErrReleaseTaskNotMerged) || len(gitMock.createBranchFromBranchCalls) != 0 || svc.IntegrationWorktreePath != "" {
+		t.Fatalf("error = %v, branch calls = %#v, service = %#v", err, gitMock.createBranchFromBranchCalls, svc)
+	}
+}
+
+func TestExecutePrepareService_ResolveFailureAfterAddWorktreeCleansWorktree(t *testing.T) {
+	gitMock := &mockGitClient{commonDirResult: "/git/common", resolveRefErr: errors.New("resolve failed")}
+	m, _ := newReleasePlanTestManager(t, gitMock)
+	release := domain.Release{ID: "rel-cleanup", Dir: t.TempDir(), Status: domain.ReleaseStatusMerging}
+	svc := domain.ReleaseService{Name: "api", RepoPath: "/repos/api", IntegrationBranch: "develop"}
+
+	err := m.executePrepareService(t.Context(), &release, &svc, nil)
+	if err == nil || len(gitMock.removeWorktreeCalls) != 1 || svc.IntegrationWorktreePath != "" {
+		t.Fatalf("error = %v, remove calls = %#v, service = %#v", err, gitMock.removeWorktreeCalls, svc)
 	}
 }
 

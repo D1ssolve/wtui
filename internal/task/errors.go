@@ -38,6 +38,9 @@ var (
 	ErrReleaseTagPushFailed           = errors.New("release: tag push failed")
 	ErrReleaseRetryUnsafe             = errors.New("release: retry is unsafe")
 	ErrReleaseMergeConflict           = errors.New("release: merge conflict")
+	ErrReleaseTaskNotMerged           = errors.New("release: task not merged")
+	ErrReleaseLegacyManifest          = errors.New("release: legacy manifest")
+	ErrReleaseMasterMoved             = errors.New("release: master moved")
 
 	ErrPushProtectedBranch = errors.New("refusing to push protected branch")
 )

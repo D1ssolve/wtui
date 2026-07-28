@@ -64,13 +64,13 @@ type CreateReleaseParams struct {
 	StatusCh         chan<- string
 }
 
-// FinishReleaseParams carries Stage-2 (tag + push tag) inputs for FinishRelease.
+// FinishReleaseParams carries release finalization inputs.
 type FinishReleaseParams struct {
-	// ReleaseID is the prepared release to finish. Required.
+	// ReleaseID is the master-merged release to finalize. Required.
 	ReleaseID string
 
 	// StatusCh, when non-nil, receives human-readable progress lines streamed
-	// from the finish pipeline (mirrors CreateReleaseParams.StatusCh). The
+	// from the finalization pipeline (mirrors CreateReleaseParams.StatusCh). The
 	// channel is never closed by the manager; the caller owns it.
 	StatusCh chan<- string
 }
@@ -105,14 +105,20 @@ type Manager interface {
 	PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, error)
 
 	CloseTask(ctx context.Context, params CloseTaskParams) (CloseTaskResult, error)
+	InspectTaskMerge(ctx context.Context, taskID string) (TaskMergeInspection, error)
+	MergeTaskMRs(ctx context.Context, taskID string) (TaskMergeResult, error)
+	TaskWorkflow(ctx context.Context, taskID string) (domain.WorkflowSummary, error)
 
 	ListReleases(ctx context.Context) ([]domain.Release, error)
 
 	GetRelease(ctx context.Context, releaseID string) (domain.Release, error)
 
 	CreateRelease(ctx context.Context, params CreateReleaseParams) (domain.Release, error)
+	PromoteRelease(ctx context.Context, releaseID string, statusCh chan<- string) (domain.Release, error)
+	InspectReleaseMerge(ctx context.Context, releaseID string) (ReleaseMergeInspection, error)
+	MergeReleaseMRs(ctx context.Context, releaseID string, statusCh chan<- string) (domain.Release, ReleaseMergeResult, error)
 
-	FinishRelease(ctx context.Context, params FinishReleaseParams) (domain.Release, error)
+	FinalizeRelease(ctx context.Context, params FinishReleaseParams) (domain.Release, error)
 
 	// IsProtectedBranch reports whether branch is protected under the resolved
 	// git-flow policy. A branch is protected if it exactly equals the resolved

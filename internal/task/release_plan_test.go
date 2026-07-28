@@ -135,6 +135,50 @@ func TestBuildReleasePlan_OverlappingServiceAggregatesFeatureBranchesInTaskOrder
 	}
 }
 
+func TestBuildReleasePlan_TaskBranchNotMergedIntoIntegration(t *testing.T) {
+	ctx := context.Background()
+	gitMock := &mockGitClient{
+		isAncestorFn: func(_, _, _ string) (bool, error) { return false, nil },
+	}
+	m, _ := newReleasePlanTestManager(t, gitMock)
+	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
+		releasePlanTaskService{TaskID: "APP-1", ServiceName: "svc-api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
+	)
+
+	_, err := m.buildReleasePlan(ctx, CreateReleaseParams{
+		TaskIDs:         []string{"APP-1"},
+		ServiceVersions: map[string]string{"svc-api": "1.2.3"},
+	})
+	if !errors.Is(err, ErrReleaseTaskNotMerged) {
+		t.Fatalf("buildReleasePlan() error = %v, want ErrReleaseTaskNotMerged", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := append([]isAncestorCall(nil), gitMock.isAncestorCalls...)
+	gitMock.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("IsAncestor call count = %d, want 1", len(calls))
+	}
+	if calls[0].Ancestor != "feature/APP-1" || calls[0].Descendant != "origin/develop" {
+		t.Fatalf("IsAncestor refs = (%q,%q), want (%q,%q)", calls[0].Ancestor, calls[0].Descendant, "feature/APP-1", "origin/develop")
+	}
+}
+
+func TestBuildReleasePlan_LocalIntegrationContainsTaskButOriginDoesNot(t *testing.T) {
+	gitMock := &mockGitClient{isAncestorFn: func(_, _, descendant string) (bool, error) {
+		return descendant == "develop", nil
+	}}
+	m, _ := newReleasePlanTestManager(t, gitMock)
+	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
+		releasePlanTaskService{TaskID: "APP-1", ServiceName: "svc-api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
+	)
+
+	_, err := m.buildReleasePlan(t.Context(), CreateReleaseParams{TaskIDs: []string{"APP-1"}, ServiceVersions: map[string]string{"svc-api": "1.2.3"}})
+	if !errors.Is(err, ErrReleaseTaskNotMerged) {
+		t.Fatalf("buildReleasePlan() error = %v, want ErrReleaseTaskNotMerged", err)
+	}
+}
+
 func TestBuildReleasePlan_ServiceRepoConflict(t *testing.T) {
 	ctx := context.Background()
 	m, gitMock := newReleasePlanTestManager(t, &mockGitClient{})
@@ -280,6 +324,9 @@ type releasePlanTaskService struct {
 
 func newReleasePlanTestManager(t *testing.T, gitMock *mockGitClient) (*manager, *mockGitClient) {
 	t.Helper()
+	if gitMock.isAncestorFn == nil {
+		gitMock.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
+	}
 
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")

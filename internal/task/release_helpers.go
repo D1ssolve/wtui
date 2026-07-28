@@ -160,6 +160,9 @@ func isReleaseActiveStatus(status domain.ReleaseStatus) bool {
 		domain.ReleaseStatusMerging,
 		domain.ReleaseStatusBranching,
 		domain.ReleaseStatusPrepared,
+		domain.ReleaseStatusAwaitingMasterMerge,
+		domain.ReleaseStatusMasterMerged,
+		domain.ReleaseStatusSyncingDevelop,
 		domain.ReleaseStatusTagging,
 		domain.ReleaseStatusPushing:
 		return true
@@ -171,6 +174,9 @@ func isReleaseActiveStatus(status domain.ReleaseStatus) bool {
 func canTransitionReleaseStatus(from, to domain.ReleaseStatus) bool {
 	if from == "" {
 		return to == domain.ReleaseStatusDraft
+	}
+	if to == domain.ReleaseStatusFailed && isReleaseActiveStatus(from) {
+		return true
 	}
 
 	switch from {
@@ -187,12 +193,22 @@ func canTransitionReleaseStatus(from, to domain.ReleaseStatus) bool {
 	case domain.ReleaseStatusPushing:
 		return to == domain.ReleaseStatusPrepared || to == domain.ReleaseStatusReleased || to == domain.ReleaseStatusFailed
 	case domain.ReleaseStatusPrepared:
-		return to == domain.ReleaseStatusTagging || to == domain.ReleaseStatusRejected || to == domain.ReleaseStatusFailed
+		return to == domain.ReleaseStatusAwaitingMasterMerge || to == domain.ReleaseStatusTagging || to == domain.ReleaseStatusRejected || to == domain.ReleaseStatusFailed
+	case domain.ReleaseStatusAwaitingMasterMerge:
+		return to == domain.ReleaseStatusMasterMerged
+	case domain.ReleaseStatusMasterMerged:
+		return to == domain.ReleaseStatusSyncingDevelop
+	case domain.ReleaseStatusSyncingDevelop:
+		return to == domain.ReleaseStatusTagging
 	case domain.ReleaseStatusFailed:
-		return to == domain.ReleaseStatusValidating || to == domain.ReleaseStatusPrepared || to == domain.ReleaseStatusRejected
+		return to == domain.ReleaseStatusValidating || to == domain.ReleaseStatusPrepared || to == domain.ReleaseStatusMasterMerged || to == domain.ReleaseStatusRejected
 	default:
 		return false
 	}
+}
+
+func IsLegacyManifest(release domain.Release) bool {
+	return release.ManifestVersion == 0 || release.ManifestVersion == 1
 }
 
 func validateReleaseStatusTransition(from, to domain.ReleaseStatus) error {

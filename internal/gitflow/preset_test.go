@@ -7,66 +7,92 @@ import (
 	"github.com/D1ssolve/wtui/internal/config"
 )
 
-func TestEffectiveConfig_GitFlowPresetDefaults(t *testing.T) {
+func TestEffectiveConfig_PresetDefaults(t *testing.T) {
 	t.Parallel()
 
-	flow, err := EffectiveConfig(&config.GitFlowConfig{Preset: "git-flow"})
-	if err != nil {
-		t.Fatalf("EffectiveConfig() error: %v", err)
+	tests := []struct {
+		name          string
+		preset        string
+		production    string
+		integration   string
+		featureTarget string
+		wantRelease   bool
+		wantHotfix    bool
+		releaseTarget string
+	}{
+		{
+			name:          "git flow",
+			preset:        "git-flow",
+			production:    "master",
+			integration:   "develop",
+			featureTarget: "develop",
+			wantRelease:   true,
+			wantHotfix:    true,
+			releaseTarget: "master",
+		},
+		{
+			name:          "github flow",
+			preset:        "github-flow",
+			production:    "main",
+			integration:   "main",
+			featureTarget: "main",
+		},
+		{
+			name:          "gitlab flow",
+			preset:        "gitlab-flow",
+			production:    "production",
+			integration:   "main",
+			featureTarget: "main",
+		},
 	}
 
-	if flow.ProductionBranch != "master" {
-		t.Fatalf("ProductionBranch = %q, want master", flow.ProductionBranch)
-	}
-	if flow.IntegrationBranch != "develop" {
-		t.Fatalf("IntegrationBranch = %q, want develop", flow.IntegrationBranch)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	hotfix, ok := flow.BranchTypes[BranchTypeHotfix]
-	if !ok {
-		t.Fatalf("hotfix branch type not found")
-	}
-	if len(hotfix.MergeTargets) != 2 || hotfix.MergeTargets[0] != "master" || hotfix.MergeTargets[1] != "develop" {
-		t.Fatalf("hotfix targets = %+v, want [master develop]", hotfix.MergeTargets)
-	}
-}
+			flow, err := EffectiveConfig(&config.GitFlowConfig{Preset: tt.preset})
+			if err != nil {
+				t.Fatalf("EffectiveConfig() error: %v", err)
+			}
+			if flow.ProductionBranch != tt.production || flow.IntegrationBranch != tt.integration {
+				t.Fatalf("flow branches = %q/%q, want %s/%s", flow.ProductionBranch, flow.IntegrationBranch, tt.production, tt.integration)
+			}
 
-func TestEffectiveConfig_GitHubFlowPresetDefaults(t *testing.T) {
-	t.Parallel()
+			feature := flow.BranchTypes[BranchTypeFeature]
+			if feature.CloseStrategy != CloseStrategyReviewRequest {
+				t.Fatalf("feature.CloseStrategy = %q, want %q", feature.CloseStrategy, CloseStrategyReviewRequest)
+			}
+			if len(feature.ReviewTargets) != 1 || feature.ReviewTargets[0] != tt.featureTarget {
+				t.Fatalf("feature.ReviewTargets = %+v, want [%s]", feature.ReviewTargets, tt.featureTarget)
+			}
 
-	flow, err := EffectiveConfig(&config.GitFlowConfig{Preset: "github-flow"})
-	if err != nil {
-		t.Fatalf("EffectiveConfig() error: %v", err)
-	}
+			release, hasRelease := flow.BranchTypes[BranchTypeRelease]
+			if hasRelease != tt.wantRelease {
+				t.Fatalf("release branch type exists = %t, want %t", hasRelease, tt.wantRelease)
+			}
+			if hasRelease {
+				if release.CloseStrategy != CloseStrategyReviewRequest {
+					t.Fatalf("release.CloseStrategy = %q, want %q", release.CloseStrategy, CloseStrategyReviewRequest)
+				}
+				if len(release.ReviewTargets) != 1 || release.ReviewTargets[0] != tt.releaseTarget {
+					t.Fatalf("release.ReviewTargets = %+v, want [%s]", release.ReviewTargets, tt.releaseTarget)
+				}
+				if len(release.MergeTargets) != 2 || release.MergeTargets[0] != "master" || release.MergeTargets[1] != "develop" {
+					t.Fatalf("release.MergeTargets = %+v, want [master develop]", release.MergeTargets)
+				}
+				if release.TagOnClose {
+					t.Fatal("release.TagOnClose = true, want false")
+				}
+			}
 
-	if flow.ProductionBranch != "main" {
-		t.Fatalf("ProductionBranch = %q, want main", flow.ProductionBranch)
-	}
-	if flow.IntegrationBranch != "main" {
-		t.Fatalf("IntegrationBranch = %q, want main", flow.IntegrationBranch)
-	}
-
-	feature := flow.BranchTypes[BranchTypeFeature]
-	if feature.CloseStrategy != CloseStrategyReviewRequest {
-		t.Fatalf("feature.CloseStrategy = %q, want %q", feature.CloseStrategy, CloseStrategyReviewRequest)
-	}
-}
-
-func TestEffectiveConfig_GitLabFlowPresetDefaults(t *testing.T) {
-	t.Parallel()
-
-	flow, err := EffectiveConfig(&config.GitFlowConfig{Preset: "gitlab-flow"})
-	if err != nil {
-		t.Fatalf("EffectiveConfig() error: %v", err)
-	}
-
-	if flow.ProductionBranch != "main" {
-		t.Fatalf("ProductionBranch = %q, want main", flow.ProductionBranch)
-	}
-
-	feature := flow.BranchTypes[BranchTypeFeature]
-	if feature.CloseStrategy != CloseStrategyReviewRequest {
-		t.Fatalf("feature.CloseStrategy = %q, want %q", feature.CloseStrategy, CloseStrategyReviewRequest)
+			hotfix, hasHotfix := flow.BranchTypes[BranchTypeHotfix]
+			if hasHotfix != tt.wantHotfix {
+				t.Fatalf("hotfix branch type exists = %t, want %t", hasHotfix, tt.wantHotfix)
+			}
+			if hasHotfix && !hotfix.TagOnClose {
+				t.Fatal("hotfix.TagOnClose = false, want true")
+			}
+		})
 	}
 }
 

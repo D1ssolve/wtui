@@ -116,6 +116,21 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 		return err
 	}
 	svc.IntegrationWorktreePath = integrationPath
+	keepIntegration := m.cfg.Release != nil && m.cfg.Release.KeepIntegrationWorktrees != nil && *m.cfg.Release.KeepIntegrationWorktrees
+	cleanupIntegration := func() {
+		commonDir, cleanupErr := m.git.CommonDir(ctx, integrationPath)
+		if cleanupErr == nil {
+			_ = m.git.RemoveWorktree(ctx, commonDir, integrationPath, true)
+		}
+		_ = os.RemoveAll(integrationPath)
+		svc.IntegrationWorktreePath = ""
+	}
+	defer func() {
+		if svc.IntegrationWorktreePath != "" && !keepIntegration {
+			cleanupIntegration()
+		}
+	}()
+
 	svc.PreIntegrationRef = svc.IntegrationBranch
 	preIntegrationSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, svc.IntegrationBranch)
 	if err != nil {
@@ -126,44 +141,19 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 		return err
 	}
 
-	keepIntegration := m.cfg.Release != nil && m.cfg.Release.KeepIntegrationWorktrees != nil && *m.cfg.Release.KeepIntegrationWorktrees
-	mergeConflict := false
-	cleanupIntegration := func() {
-		commonDir, err := m.git.CommonDir(ctx, integrationPath)
-		if err == nil {
-			_ = m.git.RemoveWorktree(ctx, commonDir, integrationPath, true)
-		}
-		_ = os.RemoveAll(integrationPath)
-		svc.IntegrationWorktreePath = ""
+	sendStatus(statusCh, fmt.Sprintf("[%s][sync] fast-forwarding %s", svc.Name, svc.IntegrationBranch))
+	if err := m.git.MergeFFOnly(ctx, integrationPath, "origin/"+svc.IntegrationBranch); err != nil {
+		return fmt.Errorf("release prepare: fast-forward service=%s integration=%s: %w", svc.Name, svc.IntegrationBranch, err)
 	}
-	defer func() {
-		if svc.IntegrationWorktreePath == "" {
-			return
-		}
-		if err != nil {
-			if keepIntegration || mergeConflict {
-				return
-			}
-			cleanupIntegration()
-			return
-		}
-		if !keepIntegration {
-			cleanupIntegration()
-		}
-	}()
 
-	sendStatus(statusCh, fmt.Sprintf("[%s][merge] merging feature branches", svc.Name))
 	for fbIdx := range svc.FeatureBranches {
 		fb := &svc.FeatureBranches[fbIdx]
-		sendStatus(statusCh, fmt.Sprintf("[%s][merge] %s", svc.Name, fb.Branch))
-		if err := m.git.Merge(ctx, integrationPath, fb.Branch); err != nil {
-			states, stateErr := m.git.OperationState(ctx, integrationPath)
-			if stateErr == nil && containsMergeConflictState(states) {
-				mergeConflict = true
-				_ = m.git.MergeAbort(ctx, integrationPath)
-				return fmt.Errorf("%w: service=%s branch=%s", ErrReleaseMergeConflict, svc.Name, fb.Branch)
-			}
-			return err
+		merged, verifyErr := m.git.IsAncestor(ctx, svc.RepoPath, fb.Branch, "origin/"+svc.IntegrationBranch)
+		if verifyErr != nil {
+			return fmt.Errorf("release prepare: verify task branch service=%s branch=%s integration=origin/%s: %w", svc.Name, fb.Branch, svc.IntegrationBranch, verifyErr)
+		}
+		if !merged {
+			return fmt.Errorf("%w: service=%s branch=%s integration=origin/%s", ErrReleaseTaskNotMerged, svc.Name, fb.Branch, svc.IntegrationBranch)
 		}
 		fb.Merged = true
 		mergeSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, fb.Branch)
@@ -171,9 +161,6 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 			return resolveErr
 		}
 		fb.MergeRef = mergeSHA
-		if err := m.persistCheckpoint(release, "merge", nil); err != nil {
-			return err
-		}
 	}
 
 	svc.PostIntegrationRef = svc.IntegrationBranch
@@ -371,6 +358,13 @@ func (m *manager) failRelease(release *domain.Release, releaseErr *domain.Releas
 }
 
 func classifyReleaseError(err error, svc *domain.ReleaseService) *domain.ReleaseError {
+	if errors.Is(err, ErrReleaseMasterMoved) {
+		re := &domain.ReleaseError{Code: "ERR_RELEASE_MASTER_MOVED", Message: ErrReleaseMasterMoved.Error(), Stage: "finalize_validate", ServiceName: safeServiceName(svc), Recoverable: false, Cause: err.Error()}
+		if svc != nil {
+			svc.Status, svc.Error = domain.ReleaseStatusFailed, re
+		}
+		return re
+	}
 	if errors.Is(err, ErrReleaseRetryUnsafe) {
 		re := &domain.ReleaseError{
 			Code:        "ERR_RELEASE_RETRY_UNSAFE",

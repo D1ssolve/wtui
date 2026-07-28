@@ -8,11 +8,15 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 type GlabClient struct {
-	worktreePath string
+	worktreePath       string
+	shaPinOnce         sync.Once
+	supportsSHAPinFlag bool
 }
 
 func NewGlabClient(worktreePath string) *GlabClient {
@@ -67,8 +71,13 @@ func (c *GlabClient) CreateMR(ctx context.Context, params CreateMRParams) (MRInf
 	if url == "" {
 		return MRInfo{}, &ForgeError{Category: ErrCategoryParseError, Cause: errors.New("glab mr create: missing MR URL in output"), Stderr: strings.TrimSpace(stdout)}
 	}
+	number, err := numberFromURL(url, "/merge_requests/")
+	if err != nil {
+		return MRInfo{}, &ForgeError{Category: ErrCategoryParseError, Cause: fmt.Errorf("glab mr create: invalid MR URL: %w", err), Stderr: strings.TrimSpace(stdout)}
+	}
 
 	return MRInfo{
+		Number:       number,
 		Title:        params.Title,
 		State:        "open",
 		URL:          url,
@@ -129,6 +138,215 @@ func (c *GlabClient) MRStatus(ctx context.Context, sourceBranch, repo string) ([
 	return out, nil
 }
 
+func (c *GlabClient) MRReadiness(ctx context.Context, sourceBranch, repo, worktreePath string) (MRReadiness, error) {
+	worktreePath = pickWorktree(c.worktreePath, worktreePath)
+	supportsSHAPin := c.supportsSHAPin(ctx, worktreePath)
+	stdout, _, err := c.run(ctx, worktreePath, "mr", "list", "--source-branch", sourceBranch, "--output", "json", "--repo", repo)
+	if err != nil {
+		return MRReadiness{}, err
+	}
+
+	type listedMR struct {
+		IID    int    `json:"iid"`
+		ID     int    `json:"id"`
+		Number int    `json:"number"`
+		State  string `json:"state"`
+	}
+	var listed []listedMR
+	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
+		return MRReadiness{}, &ForgeError{Category: ErrCategoryParseError, Cause: err, Stderr: strings.TrimSpace(stdout)}
+	}
+
+	number := 0
+	for _, mr := range listed {
+		if !strings.EqualFold(mr.State, "opened") && !strings.EqualFold(mr.State, "open") {
+			continue
+		}
+		number = mr.Number
+		if number == 0 {
+			number = mr.IID
+		}
+		if number == 0 {
+			number = mr.ID
+		}
+		if number != 0 {
+			break
+		}
+	}
+	if number == 0 {
+		return MRReadiness{SourceBranch: sourceBranch, SupportsSHAPin: supportsSHAPin, Blockers: []string{"merge request not found"}}, nil
+	}
+	return c.mrReadinessByNumber(ctx, number, repo, worktreePath, sourceBranch, supportsSHAPin)
+}
+
+func (c *GlabClient) MRReadinessByNumber(ctx context.Context, number int, repo, worktreePath string) (MRReadiness, error) {
+	worktreePath = pickWorktree(c.worktreePath, worktreePath)
+	return c.mrReadinessByNumber(ctx, number, repo, worktreePath, "", c.supportsSHAPin(ctx, worktreePath))
+}
+
+func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, worktreePath, sourceBranch string, supportsSHAPin bool) (MRReadiness, error) {
+	stdout, _, err := c.run(ctx, worktreePath, "mr", "view", strconv.Itoa(number), "--output", "json", "--repo", repo)
+	if err != nil {
+		return MRReadiness{}, err
+	}
+	type pipeline struct {
+		Status string `json:"status"`
+	}
+	var detail struct {
+		IID          int    `json:"iid"`
+		ID           int    `json:"id"`
+		Number       int    `json:"number"`
+		State        string `json:"state"`
+		WebURL       string `json:"web_url"`
+		URL          string `json:"url"`
+		SourceBranch string `json:"source_branch"`
+		TargetBranch string `json:"target_branch"`
+		SHA          string `json:"sha"`
+		DiffRefs     struct {
+			HeadSHA string `json:"head_sha"`
+		} `json:"diff_refs"`
+		BlockingDiscussionsResolved *bool     `json:"blocking_discussions_resolved"`
+		DetailedMergeStatus         string    `json:"detailed_merge_status"`
+		MergeStatus                 string    `json:"merge_status"`
+		HasConflicts                bool      `json:"has_conflicts"`
+		HeadPipeline                *pipeline `json:"head_pipeline"`
+		Pipeline                    *pipeline `json:"pipeline"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &detail); err != nil {
+		return MRReadiness{}, &ForgeError{Category: ErrCategoryParseError, Cause: err, Stderr: strings.TrimSpace(stdout)}
+	}
+
+	if detail.Number != 0 {
+		number = detail.Number
+	} else if detail.IID != 0 {
+		number = detail.IID
+	} else if detail.ID != 0 {
+		number = detail.ID
+	}
+	state := strings.ToLower(detail.State)
+	if state == "opened" {
+		state = "open"
+	}
+	url := detail.URL
+	if url == "" {
+		url = detail.WebURL
+	}
+	headSHA := detail.SHA
+	if headSHA == "" {
+		headSHA = detail.DiffRefs.HeadSHA
+	}
+	if detail.SourceBranch == "" {
+		detail.SourceBranch = sourceBranch
+	}
+	mergeStatus := strings.ToLower(detail.DetailedMergeStatus)
+	if mergeStatus == "" {
+		mergeStatus = strings.ToLower(detail.MergeStatus)
+	}
+	mergeable := !detail.HasConflicts && (mergeStatus == "mergeable" || mergeStatus == "can_be_merged")
+	approved := mergeStatus != "" && mergeStatus != "not_approved"
+
+	ciState := "success"
+	pipelineStatus := ""
+	pipelinePresent := false
+	if detail.HeadPipeline != nil {
+		pipelinePresent = true
+		pipelineStatus = strings.ToLower(detail.HeadPipeline.Status)
+	} else if detail.Pipeline != nil {
+		pipelinePresent = true
+		pipelineStatus = strings.ToLower(detail.Pipeline.Status)
+	}
+	if pipelinePresent && pipelineStatus != "success" {
+		switch pipelineStatus {
+		case "created", "waiting_for_resource", "preparing", "pending", "running", "scheduled", "manual":
+			ciState = "pending"
+		default:
+			ciState = "failure"
+		}
+	}
+
+	blockers := make([]string, 0, 4)
+	if state != "open" {
+		if state == "" {
+			blockers = append(blockers, "merge request state unknown")
+		} else {
+			blockers = append(blockers, "merge request is "+state)
+		}
+	}
+	if !mergeable {
+		switch mergeStatus {
+		case "not_approved":
+			blockers = append(blockers, "not approved")
+		case "conflict", "conflicts", "cannot_be_merged":
+			blockers = append(blockers, "conflicts")
+		case "ci_must_pass", "ci_still_running", "checking", "unchecked", "blocked_status":
+			// ponytail: approval-only policy, CI statuses do not block merge readiness
+		case "":
+			blockers = append(blockers, "mergeability unknown")
+		default:
+			blockers = append(blockers, "merge blocked: "+strings.ReplaceAll(mergeStatus, "_", " "))
+		}
+	}
+	if detail.BlockingDiscussionsResolved == nil {
+		blockers = append(blockers, "discussion status unknown")
+	} else if !*detail.BlockingDiscussionsResolved {
+		blockers = append(blockers, "unresolved discussions")
+	}
+
+	return MRReadiness{
+		Number:         number,
+		State:          state,
+		URL:            url,
+		SourceBranch:   detail.SourceBranch,
+		TargetBranch:   detail.TargetBranch,
+		HeadSHA:        headSHA,
+		Approved:       approved,
+		CIState:        ciState,
+		Mergeable:      mergeable,
+		Ready:          len(blockers) == 0,
+		Blockers:       blockers,
+		SupportsSHAPin: supportsSHAPin,
+	}, nil
+}
+
+func (c *GlabClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMergeResult, error) {
+	worktreePath := pickWorktree(c.worktreePath, params.WorktreePath)
+	number := strconv.Itoa(params.Number)
+	args := []string{"mr", "merge", number, "--auto-merge=false", "--yes", "--repo", params.Repo}
+	switch params.Method {
+	case "squash":
+		args = append(args, "--squash")
+	case "rebase":
+		args = append(args, "--rebase")
+	}
+	if params.ExpectedHeadSHA != "" && c.supportsSHAPin(ctx, worktreePath) {
+		args = append(args, "--sha", params.ExpectedHeadSHA)
+	}
+	if _, _, err := c.run(ctx, worktreePath, args...); err != nil {
+		return MRMergeResult{}, err
+	}
+
+	result := MRMergeResult{Merged: true}
+	stdout, _, err := c.run(ctx, worktreePath, "mr", "view", number, "--output", "json", "--repo", params.Repo)
+	if err != nil {
+		return result, nil
+	}
+	var view struct {
+		MergeCommitSHA string `json:"merge_commit_sha"`
+	}
+	if json.Unmarshal([]byte(stdout), &view) == nil {
+		result.MergeCommitSHA = view.MergeCommitSHA
+	}
+	return result, nil
+}
+
+func (c *GlabClient) supportsSHAPin(ctx context.Context, worktreePath string) bool {
+	c.shaPinOnce.Do(func() {
+		stdout, stderr, err := c.run(ctx, worktreePath, "mr", "merge", "--help")
+		c.supportsSHAPinFlag = err == nil && strings.Contains(stdout+"\n"+stderr, "--sha")
+	})
+	return c.supportsSHAPinFlag
+}
+
 func (c *GlabClient) PipelineStatus(ctx context.Context, branch, repo string) ([]PipelineStatus, error) {
 	args := []string{"ci", "status", "--branch", branch, "--output", "json", "--repo", repo}
 	stdout, _, err := c.run(ctx, c.worktreePath, args...)
@@ -137,48 +355,37 @@ func (c *GlabClient) PipelineStatus(ctx context.Context, branch, repo string) ([
 	}
 
 	type glabPipeline struct {
-		ID         any    `json:"id"`
-		Status     string `json:"status"`
-		Conclusion string `json:"conclusion"`
-		Ref        string `json:"ref"`
-		Branch     string `json:"branch"`
-		WebURL     string `json:"web_url"`
-		URL        string `json:"url"`
-		Name       string `json:"name"`
-		Pipeline   string `json:"pipeline"`
+		ID     any    `json:"id"`
+		Status string `json:"status"`
+		Ref    string `json:"ref"`
+		Name   string `json:"name"`
+		WebURL string `json:"web_url"`
+	}
+	type glabCIStatus struct {
+		Pipeline *glabPipeline `json:"pipeline"`
 	}
 
-	var raw []glabPipeline
+	var raw glabCIStatus
 	if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
 		return nil, &ForgeError{Category: ErrCategoryParseError, Cause: err, Stderr: strings.TrimSpace(stdout)}
 	}
-
-	out := make([]PipelineStatus, 0, len(raw))
-	for _, item := range raw {
-		b := item.Branch
-		if b == "" {
-			b = item.Ref
-		}
-		url := item.URL
-		if url == "" {
-			url = item.WebURL
-		}
-		wf := item.Name
-		if wf == "" {
-			wf = item.Pipeline
-		}
-
-		out = append(out, PipelineStatus{
-			ID:           fmt.Sprint(item.ID),
-			Status:       item.Status,
-			Conclusion:   item.Conclusion,
-			Branch:       b,
-			URL:          url,
-			WorkflowName: wf,
-		})
+	if raw.Pipeline == nil {
+		return nil, nil
 	}
 
-	return out, nil
+	p := raw.Pipeline
+	workflowName := p.Name
+	if workflowName == "" {
+		workflowName = "pipeline"
+	}
+
+	return []PipelineStatus{{
+		ID:           fmt.Sprint(p.ID),
+		Status:       p.Status,
+		Branch:       p.Ref,
+		URL:          p.WebURL,
+		WorkflowName: workflowName,
+	}}, nil
 }
 
 func (c *GlabClient) TriggerPipeline(ctx context.Context, params TriggerPipelineParams) error {
@@ -297,6 +504,19 @@ var firstURLRe = regexp.MustCompile(`https?://[^\s]+`)
 func extractFirstURL(s string) string {
 	m := firstURLRe.FindString(strings.TrimSpace(s))
 	return strings.TrimRight(m, ").,")
+}
+
+func numberFromURL(rawURL, marker string) (int, error) {
+	path := strings.TrimSuffix(rawURL, "/")
+	i := strings.LastIndex(path, marker)
+	if i < 0 {
+		return 0, fmt.Errorf("missing %q path", marker)
+	}
+	number, err := strconv.Atoi(path[i+len(marker):])
+	if err != nil || number <= 0 {
+		return 0, fmt.Errorf("invalid number in %q", rawURL)
+	}
+	return number, nil
 }
 
 func pickWorktree(defaultPath, override string) string {

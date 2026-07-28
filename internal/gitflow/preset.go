@@ -58,7 +58,7 @@ func defaultGitFlowPreset() ResolvedGitFlow {
 				BaseBranch:    "develop",
 				MergeTargets:  []string{"develop"},
 				ReviewTargets: []string{"develop"},
-				CloseStrategy: CloseStrategyDirectMerge,
+				CloseStrategy: CloseStrategyReviewRequest,
 				MergeStrategy: MergeStrategyMerge,
 				RequiresClean: true,
 			},
@@ -77,11 +77,11 @@ func defaultGitFlowPreset() ResolvedGitFlow {
 				Prefixes:      []string{"release/"},
 				BaseBranch:    "develop",
 				MergeTargets:  []string{"master", "develop"},
-				ReviewTargets: []string{"master", "develop"},
-				CloseStrategy: CloseStrategyDirectMerge,
+				ReviewTargets: []string{"master"},
+				CloseStrategy: CloseStrategyReviewRequest,
 				MergeStrategy: MergeStrategyMerge,
 				RequiresClean: true,
-				TagOnClose:    true,
+				TagOnClose:    false,
 				TagSource:     "master",
 			},
 		},
@@ -104,34 +104,14 @@ func defaultGitHubFlowPreset() ResolvedGitFlow {
 				MergeStrategy: MergeStrategyMerge,
 				RequiresClean: true,
 			},
-			BranchTypeHotfix: {
-				Prefixes:      []string{"hotfix/"},
-				BaseBranch:    "main",
-				MergeTargets:  []string{"main"},
-				ReviewTargets: []string{"main"},
-				CloseStrategy: CloseStrategyReviewRequest,
-				MergeStrategy: MergeStrategyMerge,
-				RequiresClean: true,
-				TagOnClose:    true,
-				TagSource:     "main",
-			},
-			BranchTypeRelease: {
-				Prefixes:      []string{"release/"},
-				BaseBranch:    "main",
-				MergeTargets:  []string{"main"},
-				ReviewTargets: []string{"main"},
-				CloseStrategy: CloseStrategyReviewRequest,
-				MergeStrategy: MergeStrategyMerge,
-				RequiresClean: true,
-				TagOnClose:    true,
-				TagSource:     "main",
-			},
 		},
 	}
 }
 
 func defaultGitLabFlowPreset() ResolvedGitFlow {
-	return defaultGitHubFlowPreset()
+	flow := defaultGitHubFlowPreset()
+	flow.ProductionBranch = "production"
+	return flow
 }
 
 func customPreset(cfg *config.GitFlowConfig) (ResolvedGitFlow, error) {

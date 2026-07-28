@@ -14,7 +14,7 @@ import (
 
 const (
 	releaseManifestFileName = "release.json"
-	releaseManifestVersion  = 1
+	releaseManifestVersion  = 2
 )
 
 func (m *manager) releasesRootDir() string {
@@ -158,7 +158,7 @@ func (m *manager) loadReleaseManifestWithContext(ctx context.Context, releaseID 
 		return domain.Release{}, err
 	}
 
-	if release.ManifestVersion != releaseManifestVersion {
+	if release.ManifestVersion != releaseManifestVersion && !IsLegacyManifest(release) {
 		return domain.Release{}, fmt.Errorf("%w: manifest version %d unsupported", ErrReleaseManifestInvalid, release.ManifestVersion)
 	}
 

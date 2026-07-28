@@ -98,7 +98,3 @@ type OpenCreateReleaseDialogMsg struct{}
 type ReleaseVersionsLoadedMsg struct {
 	Versions map[string]string // serviceName → proposed version
 }
-
-type FinishReleaseMsg struct {
-	ReleaseID string
-}

@@ -40,6 +40,7 @@ type Model struct {
 
 	focus         FocusPanel
 	previousFocus FocusPanel
+	rightPane     FocusPanel
 
 	width  int
 	height int
@@ -59,9 +60,12 @@ type Model struct {
 	logOverlay *LogOverlay
 	logPath    string
 
-	spinner    spinner.Model
-	opRunning  bool
-	refreshing bool
+	spinner                   spinner.Model
+	opRunning                 bool
+	refreshing                bool
+	taskWorkflowGeneration    uint64
+	mergeInspectionGeneration uint64
+	mergeInspection           *mergeInspectionRequest
 
 	keymap KeyMap
 
@@ -74,10 +78,17 @@ type Model struct {
 
 	pendingAddParams     *task.AddParams
 	pendingPushSubmit    *modal.SubmitPushMsg
-	pendingReleaseSubmit   *modal.SubmitCreateReleaseMsg
-	pendingFinishReleaseID *string
-	pendingSyncTask        *modal.SubmitSyncStrategyMsg
-	pendingCloseTask       *domain.Task
+	pendingReleaseSubmit *modal.SubmitCreateReleaseMsg
+	pendingMerge         *modal.ConfirmMergeMsg
+	pendingSyncTask      *modal.SubmitSyncStrategyMsg
+	pendingCloseTask     *domain.Task
+}
+
+type mergeInspectionRequest struct {
+	generation uint64
+	focus      FocusPanel
+	taskID     string
+	releaseID  string
 }
 
 type Options struct {
@@ -118,6 +129,7 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 		keymap:           DefaultKeyMap(),
 		styles:           NewStyles(),
 		focus:            FocusTasks,
+		rightPane:        FocusServices,
 		lazygitAvailable: opts.LazygitAvailable,
 		glabAvailable:    opts.GlabAvailable,
 		ghAvailable:      opts.GhAvailable,
@@ -289,6 +301,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshing = true
 			cmds := []tea.Cmd{loadTasksCmd(m.mgr), loadReposCmd(m.mgr, true), loadReleasesCmd(m.mgr)}
 			return m, tea.Batch(cmds...)
+
+		case key.Matches(msg, m.keymap.MergeMRs):
+			return m.startMergeInspection()
+
+		case key.Matches(msg, m.keymap.ReleaseAction):
+			return m.startReleaseAction()
 		}
 
 		switch m.focus {
@@ -308,13 +326,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 
 		case FocusReleases:
+			before := selectedReleaseID(m.releasesPanel.SelectedRelease())
 			newPanel, cmd := m.releasesPanel.Update(msg)
 			m.releasesPanel = newPanel
+			if selectedReleaseID(m.releasesPanel.SelectedRelease()) != before {
+				m.invalidateMergeInspection()
+				m.setSelectedReleaseWorkflow()
+			}
 			return m, cmd
 		}
 
 	case panels.TaskSelectionChangedMsg:
-		return m, loadServicesCmd(m.mgr, msg.TaskID)
+		m.invalidateMergeInspection()
+		return m, m.loadTaskSelectionCmd(msg.TaskID)
 
 	case panels.FocusServicesMsg:
 		m.setFocus(FocusServices)
@@ -545,9 +569,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingReleaseSubmit = nil
 			m.outputPanel.AppendLine("Release execution cancelled.")
 		}
-		if _, ok := m.modal.(*modal.ReleaseFinishConfirmDialog); ok {
-			m.pendingFinishReleaseID = nil
-			m.outputPanel.AppendLine("Finish release cancelled.")
+		if _, ok := m.modal.(*modal.MergeConfirmDialog); ok {
+			m.pendingMerge = nil
+			m.outputPanel.AppendLine("Merge cancelled.")
 		}
 		m.modal = nil
 
@@ -711,46 +735,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			StartImmediately: true,
 		}), m.spinner.Tick)
 
-	case panels.FinishReleaseMsg:
-		selected := m.releasesPanel.SelectedRelease()
-		if selected == nil || selected.ID != msg.ReleaseID || selected.Status != domain.ReleaseStatusPrepared {
-			m.logger.Warn("FinishReleaseMsg ignored: selected release is not prepared or ID mismatch")
+	case modal.ConfirmMergeMsg:
+		if m.pendingMerge == nil || *m.pendingMerge != msg {
 			return m, nil
 		}
-		pendingID := msg.ReleaseID
-		m.pendingFinishReleaseID = &pendingID
-		m.modal = modal.NewReleaseFinishConfirmDialog(msg.ReleaseID, *selected, m.cfg)
-		m.modal.SetTerminalSize(m.width, m.height)
-		return m, nil
-
-	case modal.ConfirmFinishReleaseMsg:
-		if m.pendingFinishReleaseID == nil || *m.pendingFinishReleaseID != msg.ReleaseID {
-			m.logger.Warn("ConfirmFinishReleaseMsg ignored: pending ID mismatch",
-				slog.String("release_id", msg.ReleaseID),
-			)
+		if _, ok := m.modal.(*modal.MergeConfirmDialog); !ok {
 			return m, nil
 		}
-		if _, ok := m.modal.(*modal.ReleaseFinishConfirmDialog); !ok {
-			m.logger.Warn("ConfirmFinishReleaseMsg ignored: active modal is not finish confirm",
-				slog.String("release_id", msg.ReleaseID),
-			)
-			return m, nil
-		}
-
 		m.modal = nil
-		m.pendingFinishReleaseID = nil
+		m.pendingMerge = nil
 		m.opRunning = true
-		m.outputPanel.AppendLine("Finishing release " + msg.ReleaseID + "...")
-		return m, tea.Batch(finishReleaseCmd(m.mgr, msg.ReleaseID), m.spinner.Tick)
-
-	case FinishReleaseDoneMsg:
-		m.opRunning = false
-		if msg.Err != nil {
-			m.outputPanel.AppendLine("Finish release failed: " + msg.Err.Error())
-		} else {
-			m.outputPanel.AppendLine("Finish release done: " + msg.Release.ID)
+		if msg.TaskID != "" {
+			m.outputPanel.AppendLine("Merging ready MRs for task " + msg.TaskID + "...")
+			return m, tea.Batch(mergeTaskMRsCmd(m.mgr, msg.TaskID), m.spinner.Tick)
 		}
-		return m, loadReleasesCmd(m.mgr)
+		m.outputPanel.AppendLine("Merging ready MRs for release " + msg.ReleaseID + "...")
+		return m, tea.Batch(mergeReleaseMRsCmd(m.mgr, msg.ReleaseID), m.spinner.Tick)
 
 	case modal.RequestReleaseVersionsMsg:
 		if len(msg.TaskIDs) == 0 {
@@ -820,7 +820,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.refreshing {
 			m.outputPanel.AppendLine("Tasks refreshed.")
 		}
-		return m, m.maybeLoadServicesCmd()
+		selected := m.tasksPanel.SelectedTask()
+		if selected == nil {
+			return m, nil
+		}
+		return m, m.loadTaskSelectionCmd(selected.ID)
 
 	case ServicesLoadedMsg:
 		m.servicesPanel.SetServices(msg.TaskID, msg.Services)
@@ -832,10 +836,96 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.releasesPanel.SetReleases(msg.Releases)
+		m.setSelectedReleaseWorkflow()
 		if m.refreshing {
 			m.outputPanel.AppendLine("Releases refreshed.")
 		}
 		return m, nil
+
+	case TaskWorkflowLoadedMsg:
+		selected := m.tasksPanel.SelectedTask()
+		if msg.Generation != m.taskWorkflowGeneration || selected == nil || selected.ID != msg.TaskID {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.setServicesWorkflow(nil)
+			m.outputPanel.AppendLine("Load task workflow failed: " + msg.Err.Error())
+			return m, nil
+		}
+		m.setServicesWorkflow(&msg.Workflow)
+		return m, nil
+
+	case TaskMergeInspectionMsg:
+		request := m.mergeInspection
+		if request == nil || request.generation != msg.Generation || request.taskID != msg.TaskID || !m.mergeInspectionCurrent(*request) {
+			return m, nil
+		}
+		m.mergeInspection = nil
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Inspect task MRs failed: " + msg.Err.Error())
+			return m, nil
+		}
+		services := make([]modal.MergeServiceStatus, len(msg.Inspection.Services))
+		for i, service := range msg.Inspection.Services {
+			services[i] = modal.MergeServiceStatus{ServiceName: service.ServiceName, Status: service.Status, Blockers: service.Blockers}
+		}
+		pending := modal.ConfirmMergeMsg{TaskID: msg.TaskID}
+		m.pendingMerge = &pending
+		m.modal = modal.NewMergeConfirmDialog(pending.TaskID, "", services)
+		m.modal.SetTerminalSize(m.width, m.height)
+		return m, nil
+
+	case ReleaseMergeInspectionMsg:
+		request := m.mergeInspection
+		if request == nil || request.generation != msg.Generation || request.releaseID != msg.ReleaseID || !m.mergeInspectionCurrent(*request) {
+			return m, nil
+		}
+		m.mergeInspection = nil
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Inspect release MRs failed: " + msg.Err.Error())
+			return m, nil
+		}
+		services := make([]modal.MergeServiceStatus, len(msg.Inspection.Services))
+		for i, service := range msg.Inspection.Services {
+			services[i] = modal.MergeServiceStatus{ServiceName: service.ServiceName, Status: service.Status, Blockers: service.Blockers}
+		}
+		pending := modal.ConfirmMergeMsg{ReleaseID: msg.ReleaseID}
+		m.pendingMerge = &pending
+		m.modal = modal.NewMergeConfirmDialog("", pending.ReleaseID, services)
+		m.modal.SetTerminalSize(m.width, m.height)
+		return m, nil
+
+	case TaskMergeDoneMsg:
+		m.opRunning = false
+		for _, line := range msg.Result.Steps {
+			m.outputPanel.AppendLine(line)
+		}
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Merge task MRs failed: " + msg.Err.Error())
+		} else {
+			m.outputPanel.AppendLine("Merge task MRs done.")
+		}
+		return m, loadTasksCmd(m.mgr)
+
+	case ReleaseMergeDoneMsg:
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Merge release MRs failed: " + msg.Err.Error())
+		} else {
+			m.outputPanel.AppendLine("Merge release MRs done: " + msg.Release.ID)
+		}
+		return m, loadReleasesCmd(m.mgr)
+
+	case ReleaseActionDoneMsg:
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine(strings.ToUpper(msg.Action[:1]) + msg.Action[1:] + " release failed: " + msg.Err.Error())
+		} else {
+			m.outputPanel.AppendLine(strings.ToUpper(msg.Action[:1]) + msg.Action[1:] + " release done: " + msg.Release.ID)
+		}
+		return m, loadReleasesCmd(m.mgr)
 
 	case CloneSourceServicesLoadedMsg:
 		if msg.Err != nil {
@@ -1123,9 +1213,13 @@ func (m Model) View() string {
 	footer := renderFooter(m)
 
 	tasksView := m.tasksPanel.View()
-	servicesView := m.servicesPanel.View()
-	releasesView := m.releasesPanel.View()
-	mainRow := lipgloss.JoinHorizontal(lipgloss.Top, tasksView, servicesView, releasesView)
+	var rightView string
+	if m.rightPane == FocusReleases {
+		rightView = m.releasesPanel.View()
+	} else {
+		rightView = m.servicesPanel.View()
+	}
+	mainRow := lipgloss.JoinHorizontal(lipgloss.Top, tasksView, rightView)
 	outputView := m.outputPanel.View()
 	fullView := lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -1160,20 +1254,33 @@ func (m *Model) recalculateDimensions() {
 	}
 	mainPanelHeight := avail - outputPanelHeight
 
-	tasksWidth, servicesWidth, releasesWidth := threePanelWidths(m.width)
+	tasksWidth, rightWidth := twoPanelWidths(m.width)
 
 	m.tasksPanel.SetSize(tasksWidth, mainPanelHeight)
-	m.servicesPanel.SetSize(servicesWidth, mainPanelHeight)
-	m.releasesPanel.SetSize(releasesWidth, mainPanelHeight)
+	m.servicesPanel.SetSize(rightWidth, mainPanelHeight)
+	m.releasesPanel.SetSize(rightWidth, mainPanelHeight)
 	m.outputPanel.SetSize(m.width, outputPanelHeight)
 }
 
 func (m Model) cycleFocusForward() Model {
-	m.setFocus(m.focus.Next())
+	switch m.focus {
+	case FocusTasks:
+		m.setFocus(m.rightPane)
+	case FocusServices, FocusReleases:
+		m.setFocus(FocusOutput)
+	default:
+		m.setFocus(FocusTasks)
+	}
 	return m
 }
 
 func (m *Model) setFocus(focus FocusPanel) {
+	if focus != m.focus {
+		m.invalidateMergeInspection()
+	}
+	if focus == FocusServices || focus == FocusReleases {
+		m.rightPane = focus
+	}
 	m.focus = focus
 	m.tasksPanel.SetFocused(focus == FocusTasks)
 	m.servicesPanel.SetFocused(focus == FocusServices)
@@ -1181,33 +1288,12 @@ func (m *Model) setFocus(focus FocusPanel) {
 	m.releasesPanel.SetFocused(focus == FocusReleases)
 }
 
-func threePanelWidths(total int) (tasks, services, releases int) {
+func twoPanelWidths(total int) (tasks, right int) {
 	if total <= 0 {
-		return 0, 0, 0
+		return 0, 0
 	}
-
-	tasks = max(total*37/100, 25)
-	releases = tasks
-	services = total - tasks - releases
-
-	if services < 1 {
-		maxSide := max((total-1)/2, 0)
-		tasks = min(tasks, maxSide)
-		releases = tasks
-		services = total - tasks - releases
-		if services < 1 {
-			services = 1
-		}
-	}
-
-	if tasks+services+releases != total {
-		services += total - (tasks + services + releases)
-	}
-
-	if services < 0 {
-		services = 0
-	}
-	return tasks, services, releases
+	tasks = min(max(total/3, 25), max(total-1, 0))
+	return tasks, total - tasks
 }
 
 func (m Model) maybeLoadServicesCmd() tea.Cmd {
@@ -1216,6 +1302,123 @@ func (m Model) maybeLoadServicesCmd() tea.Cmd {
 		return nil
 	}
 	return loadServicesCmd(m.mgr, t.ID)
+}
+
+func (m Model) startMergeInspection() (Model, tea.Cmd) {
+	switch m.focus {
+	case FocusTasks:
+		taskItem := m.tasksPanel.SelectedTask()
+		if taskItem == nil {
+			m.outputPanel.AppendLine("Merge MRs unavailable: no task selected.")
+			return m, nil
+		}
+		m.opRunning = true
+		m.beginMergeInspection(FocusTasks, taskItem.ID, "")
+		m.outputPanel.AppendLine("Inspecting MRs for task " + taskItem.ID + "...")
+		return m, tea.Batch(inspectTaskMergeCmd(m.mgr, taskItem.ID, m.mergeInspectionGeneration), m.spinner.Tick)
+	case FocusServices:
+		taskID := m.servicesPanel.TaskID()
+		if taskID == "" {
+			m.outputPanel.AppendLine("Merge MRs unavailable: no task selected.")
+			return m, nil
+		}
+		m.opRunning = true
+		m.beginMergeInspection(FocusServices, taskID, "")
+		m.outputPanel.AppendLine("Inspecting MRs for task " + taskID + "...")
+		return m, tea.Batch(inspectTaskMergeCmd(m.mgr, taskID, m.mergeInspectionGeneration), m.spinner.Tick)
+	case FocusReleases:
+		release := m.releasesPanel.SelectedRelease()
+		if release == nil || release.Status != domain.ReleaseStatusAwaitingMasterMerge {
+			m.outputPanel.AppendLine("Merge MRs unavailable: release must be awaiting_master_merge.")
+			return m, nil
+		}
+		m.opRunning = true
+		m.beginMergeInspection(FocusReleases, "", release.ID)
+		m.outputPanel.AppendLine("Inspecting MRs for release " + release.ID + "...")
+		return m, tea.Batch(inspectReleaseMergeCmd(m.mgr, release.ID, m.mergeInspectionGeneration), m.spinner.Tick)
+	default:
+		return m, nil
+	}
+}
+
+func (m Model) startReleaseAction() (Model, tea.Cmd) {
+	if m.focus != FocusReleases {
+		return m, nil
+	}
+	release := m.releasesPanel.SelectedRelease()
+	if release == nil {
+		m.outputPanel.AppendLine("Release action unavailable: no release selected.")
+		return m, nil
+	}
+	m.opRunning = true
+	switch release.Status {
+	case domain.ReleaseStatusPrepared:
+		m.outputPanel.AppendLine("Promoting release " + release.ID + "...")
+		return m, tea.Batch(promoteReleaseCmd(m.mgr, release.ID), m.spinner.Tick)
+	case domain.ReleaseStatusMasterMerged:
+		m.outputPanel.AppendLine("Finalizing release " + release.ID + "...")
+		return m, tea.Batch(finalizeReleaseCmd(m.mgr, release.ID), m.spinner.Tick)
+	default:
+		m.opRunning = false
+		m.outputPanel.AppendLine("Release action unavailable for status " + string(release.Status) + ".")
+		return m, nil
+	}
+}
+
+func (m *Model) setServicesWorkflow(workflow *domain.WorkflowSummary) {
+	m.servicesPanel.SetWorkflow(workflow)
+}
+
+func (m *Model) setSelectedReleaseWorkflow() {
+	release := m.releasesPanel.SelectedRelease()
+	var workflow *domain.WorkflowSummary
+	if release != nil {
+		value := task.ReleaseWorkflow(*release)
+		workflow = &value
+	}
+	m.releasesPanel.SetWorkflow(workflow)
+}
+
+func (m *Model) loadTaskSelectionCmd(taskID string) tea.Cmd {
+	m.taskWorkflowGeneration++
+	m.setServicesWorkflow(nil)
+	return tea.Batch(
+		loadServicesCmd(m.mgr, taskID),
+		loadTaskWorkflowCmd(m.mgr, taskID, m.taskWorkflowGeneration),
+	)
+}
+
+func (m *Model) beginMergeInspection(focus FocusPanel, taskID, releaseID string) {
+	m.mergeInspectionGeneration++
+	m.mergeInspection = &mergeInspectionRequest{generation: m.mergeInspectionGeneration, focus: focus, taskID: taskID, releaseID: releaseID}
+}
+
+func (m *Model) invalidateMergeInspection() {
+	if m.mergeInspection != nil {
+		m.mergeInspection = nil
+		m.opRunning = false
+	}
+}
+
+func (m Model) mergeInspectionCurrent(request mergeInspectionRequest) bool {
+	if m.focus != request.focus {
+		return false
+	}
+	if request.releaseID != "" {
+		return selectedReleaseID(m.releasesPanel.SelectedRelease()) == request.releaseID
+	}
+	if request.focus == FocusServices {
+		return m.servicesPanel.TaskID() == request.taskID
+	}
+	selected := m.tasksPanel.SelectedTask()
+	return selected != nil && selected.ID == request.taskID
+}
+
+func selectedReleaseID(release *domain.Release) string {
+	if release == nil {
+		return ""
+	}
+	return release.ID
 }
 
 func (m Model) handleOpenLazygitServiceMsg(msg panels.OpenLazygitServiceMsg) (Model, tea.Cmd) {

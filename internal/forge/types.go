@@ -40,6 +40,34 @@ type MRInfo struct {
 	TargetBranch string
 }
 
+type MRReadiness struct {
+	Number         int
+	State          string
+	URL            string
+	SourceBranch   string
+	TargetBranch   string
+	HeadSHA        string
+	Approved       bool
+	CIState        string
+	Mergeable      bool
+	Ready          bool
+	Blockers       []string
+	SupportsSHAPin bool
+}
+
+type MergeMRParams struct {
+	WorktreePath    string
+	Repo            string
+	Number          int
+	ExpectedHeadSHA string
+	Method          string
+}
+
+type MRMergeResult struct {
+	Merged         bool
+	MergeCommitSHA string
+}
+
 type PipelineStatus struct {
 	ID           string
 	Status       string

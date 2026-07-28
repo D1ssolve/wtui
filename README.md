@@ -17,6 +17,7 @@ Terminal UI for task-scoped git worktree orchestration across multi-repo/microse
 - [TUI Key Bindings](#tui-key-bindings)
 - [Task Lifecycle Example](#task-lifecycle-example)
 - [Release Workflow Example](#release-workflow-example)
+- [Migration Notes](#migration-notes)
 - [FAQ](#faq)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
@@ -31,20 +32,20 @@ _Badge placeholders removed. Add real CI/release badges when URLs are available.
 
 - Create matching branches and worktrees in every repo automatically
 - Sync, stash, push, validate, and close everything as one unit
-- Create releases from the Releases panel (`3` to focus, `N` to prepare, `f` to finish) with per-service versions
+- Create releases from the Releases panel (`3` to show Releases, then `N` → `F` → `M` → `F`) with per-service versions
 - Auto-generate VS Code workspace and .NET solution files scoped to only the services you need
 
 A **task** groups multiple service worktrees under a single ticket ID. Releases are managed as first-class release entities in the Releases panel and can aggregate one or more ready feature tasks.
 
 ```text
-┌─────────────────────────┐ ┌──────────────────────────────┐ ┌──────────────────────────────┐
-│ [1] Tasks               │ │ [2] Services — PAY-442       │ │ [3] Releases (optional)      │
-│                         │ │                              │ │                              │
-│ ▼ PAY-442               │ │ ✓ gateway                    │ │ rel-1.2.0-20260610  released │
-│   ├─ feature/PAY-442    │ │   branch: feature/PAY-442    │ │ rel-1.2.1-20260616  failed   │
-│ PAY-443                 │ │ ✓ billing                    │ │                              │
-│                         │ │ ✓ ledger                     │ │                              │
-└─────────────────────────┘ └──────────────────────────────┘ └──────────────────────────────┘
+┌─────────────────────────┐ ┌─────────────────────────────────────────────────────────────┐
+│ [1] Tasks               │ │ [2] Services / [3] Releases                                 │
+│                         │ │                                                             │
+│ ▼ PAY-442               │ │ ✓ gateway                      workflow: review + CI → merge │
+│   ├─ feature/PAY-442    │ │ ✓ billing                                                   │
+│ PAY-443                 │ │ ✓ ledger                                                    │
+│                         │ │                                                             │
+└─────────────────────────┘ └─────────────────────────────────────────────────────────────┘
 
 ┌────────────────────────────────────────────────────────────────────────────────────────────┐
 │ [0] Output: validation, close, release progress, git errors                               │
@@ -78,14 +79,14 @@ Dependency rules (high-level):
 
 - **Task-scoped worktrees** — one ticket ID, many services, one screen
 - **Task phases** — feature/release/hotfix support with tree grouping when `git_flow` has release/hotfix branch types
-- **Releases panel workflow** — press `3` to focus Releases, `N` to prepare a release, and `f` to finish a `prepared` release after regression testing
+- **Releases panel workflow** — press `3` to show Releases, then `N` to prepare, `F` to create production MR/PRs, `M` to merge ready MR/PRs, and `F` to sync integration + tag
 - **Service auto-discovery** — scans `root_dir` for git repos on startup
 - **Bulk operations** — sync and push across all services in a task; stash is per-service (`Ctrl+s`/`Ctrl+u` in Services panel)
 - **Pre-flight validation** — blocks sync/close if any repo is dirty or in a broken state
 - **Configurable Git Flow** — presets for `git-flow`, `github-flow`, `gitlab-flow`, or fully custom rules
-- **Task Close Automation** — plan, merge (or open MR/PR), tag, push, and optionally trigger pipelines in one action
+- **Task Close Automation** — `C` opens MR/PRs by default; `M` inspects and merges ready reviews after confirmation
 - **Hotfix support** — branch from production, merge back to production + integration
-- **Tag management** — annotated semver tags with auto-version proposal
+- **Tag management** — annotated semver release tags on accepted production merge commits
 - **Feature Prune** — find merged tasks and clean up local directories safely
 - **Forge integration** — `glab` (GitLab) and `gh` (GitHub) for MR/PR, pipeline status, and issues
 - **IDE workspaces** — auto-generated `.code-workspace` and `.sln` per task
@@ -173,7 +174,7 @@ If a selected service already has a remote branch named `feature/PROJ-101` (or a
 
 ### 4. Create release (optional)
 
-1. Finish feature work and close feature tasks (`C`) so they are ready for release
+1. Finish feature work, create MR/PRs with `C`, then merge ready MR/PRs with `M`
 2. Press `3` to focus the Releases panel
 3. Press `N` to open Create Release
 4. Select one or more tasks (example: `PROJ-101`, `PROJ-103`)
@@ -189,8 +190,9 @@ When you are done with normal task flow:
 1. Press `V` to validate task state
 2. Press `C` to open close-task plan
 3. Review plan and confirm
-4. wtui merges (or opens MR/PR), creates tags when configured, pushes, and optionally triggers pipelines
-5. Press `P` later to scan/remove merged task directories
+4. wtui pushes each service branch and creates one MR/PR per service; it does not merge them
+5. After review and CI pass, press `M`, inspect readiness, and confirm merging ready MR/PRs
+6. Press `P` later to scan/remove merged task directories
 
 ---
 
@@ -223,7 +225,7 @@ Optional settings and presets are below.
 
 #### `git-flow` preset
 
-Classic git-flow defaults: feature branches from `develop`, release/hotfix support, and direct local merges on close.
+Classic git-flow defaults: feature branches from `develop`, release/hotfix support, and review-request close for feature and release branches.
 
 ```yaml
 root_dir: /Users/you/dev
@@ -232,11 +234,19 @@ editor: code
 
 git_flow:
   preset: git-flow
+  branch_types:
+    feature:
+      close_strategy: review_request
+    release:
+      close_strategy: review_request
+      tag_on_close: false
 ```
+
+These branch entries show the preset defaults and may be omitted. To restore legacy direct feature merging on `C`, override `git_flow.branch_types.feature.close_strategy` with `direct_merge`.
 
 #### `github-flow` preset
 
-Single long-lived branch (`main`) with review-request close strategy by default.
+Single long-lived branch (`main`) with review-request close strategy by default. This preset has no release branch type.
 
 ```yaml
 root_dir: /Users/you/dev
@@ -249,7 +259,7 @@ git_flow:
 
 #### `gitlab-flow` preset
 
-Similar to GitHub flow for branch model, with MR-driven close behavior by default.
+Feature MR/PRs target integration branch `main`; production branch is `production`. This preset has no release branch type.
 
 ```yaml
 root_dir: /Users/you/dev
@@ -281,7 +291,7 @@ git_flow:
       base_branch: develop
       merge_targets: [develop]
       review_targets: [develop]
-      close_strategy: direct_merge
+      close_strategy: review_request
       merge_strategy: merge_commit
       requires_clean: true
       tag_on_close: false
@@ -290,12 +300,11 @@ git_flow:
       prefixes: ["release/"]
       base_branch: develop
       merge_targets: [master, develop]
-      review_targets: [master, develop]
-      close_strategy: direct_merge
+      review_targets: [master]
+      close_strategy: review_request
       merge_strategy: merge_commit
       requires_clean: true
-      tag_on_close: true
-      tag_source: master
+      tag_on_close: false
 
     hotfix:
       prefixes: ["hotfix/"]
@@ -311,7 +320,7 @@ git_flow:
 
 #### `release:` block
 
-`release` controls Releases panel workflow (`3` → `N` to prepare, `f` on a prepared release to finish) and how wtui executes release git operations.
+`release` controls Releases panel workflow (`3`, then `N` → `F` → `M` → `F`) and how wtui executes release git operations.
 
 The integration branch and release branch prefix are taken from the resolved `git_flow` configuration (`git_flow.integration_branch` and `git_flow.branch_types.release.prefixes[0]`). They are no longer configured under `release`.
 
@@ -319,9 +328,9 @@ The integration branch and release branch prefix are taken from the resolved `gi
 |---|---|---|---|
 | `root_dir` | `string` | `<tasks_root>/.releases` | Directory where release manifests/worktrees are stored. |
 | `id_format` | `string` | `rel-{{.Version}}-{{.Timestamp}}` | Release ID template. |
-| `push_integration` | `bool` | `true` | Push integration branch updates during Stage 1. |
-| `push_release_branches` | `bool` | `true` | Push generated release branches during Stage 1. |
-| `push_tags` | `bool` | from `tag.push` or `true` | Push created release tags during Stage 2. |
+| `push_integration` | `bool` | `true` | Push integration branch updates during release preparation/finalization. |
+| `push_release_branches` | `bool` | `true` | Push generated release branches during preparation. |
+| `push_tags` | `bool` | from `tag.push` or `true` | Push tags created during finalization. |
 | `create_release_worktrees` | `bool` | `true` | Keep dedicated worktrees for generated release branches. |
 | `keep_integration_worktrees` | `bool` | `false` | Keep temp integration worktrees after run (for debugging). |
 | `allow_task_reuse` | `bool` | `false` | Allow task to participate in more than one active release. |
@@ -379,7 +388,7 @@ git_flow:
       base_branch: develop
       merge_targets: [develop]
       review_targets: [develop]
-      close_strategy: direct_merge   # direct_merge | review_request | none
+      close_strategy: review_request # direct_merge | review_request | none
       merge_strategy: merge_commit   # currently only merge_commit is applied
       requires_clean: true
       tag_on_close: false
@@ -403,12 +412,11 @@ git_flow:
       prefixes: ["release/"]
       base_branch: develop
       merge_targets: [master, develop]
-      review_targets: [master, develop]
-      close_strategy: direct_merge
+      review_targets: [master]
+      close_strategy: review_request
       merge_strategy: merge_commit
       requires_clean: true
-      tag_on_close: true
-      tag_source: master
+      tag_on_close: false
 
 # Release workflow (optional)
 release:
@@ -515,8 +523,8 @@ worktree:
 | YAML key/path | Type | Default / effective | Env override | Behavior | Bounds / normalization |
 |---|---|---|---|---|---|
 | `git_flow.preset` | `string` | `git-flow` | — | Branch-model preset. | Valid: `git-flow`, `github-flow`, `gitlab-flow`, `custom`. Invalid value fails config loading. |
-| `git_flow.production_branch` | `string` | `master` for `git-flow`; `main` otherwise | — | Long-lived production branch. | Used for protected-branch policy, release targets, and hotfix base. |
-| `git_flow.integration_branch` | `string` | `develop` for `git-flow`; `production_branch` otherwise | — | Branch where feature work is integrated. | Hotfixes merge here after production. |
+| `git_flow.production_branch` | `string` | `master` for `git-flow`; `main` for `github-flow`; `production` for `gitlab-flow` | — | Long-lived production branch. | Used for protected-branch policy, release targets, and hotfix base. |
+| `git_flow.integration_branch` | `string` | `develop` for `git-flow`; `main` for `github-flow` and `gitlab-flow` | — | Branch where feature work is integrated. | Hotfixes merge here after production. |
 | `git_flow.default_branch_type` | `string` | `feature` | — | Branch type used when a branch matches no configured prefix. | Must exist in `branch_types` for meaningful close behavior. |
 | `git_flow.allow_mixed_branch_types_on_close` | `bool` | `false` | — | Allow closing a task whose services have different branch types. | Plain bool: omitted → `false`. |
 | `git_flow.branch_types` | `map[string]BranchTypeRule` | legacy `feature` rule only when `git_flow` absent | — | Per-type branch rules indexed by type name. | At least one rule needed for close automation. |
@@ -536,7 +544,7 @@ All fields with `—` in the Default column are required for a `custom` preset. 
 | `close_strategy` | `string` | — | — | How close is executed. | Values: `direct_merge`, `review_request`, `none`. |
 | `merge_strategy` | `string` | — | — | Git merge style for `direct_merge`. Required. Currently only `merge_commit` is applied; `squash`, `rebase`, and `ff_only` are parsed but ignored. | Values: `merge_commit`, `squash`, `rebase`, `ff_only`. |
 | `requires_clean` | `bool` | `false` | — | Require a clean worktree before close. | Plain bool: omitted → `false`. |
-| `tag_on_close` | `bool` | `false` | — | Create a version tag when this branch type closes. | Plain bool: omitted → `false`. |
+| `tag_on_close` | `bool` | `false` | — | Create a version tag when this branch type closes. Releases panel finalization ignores this field and tags the accepted production merge; hotfix close still uses it. | Plain bool: omitted → `false`. |
 | `tag_source` | `string` | — | — | Branch checked out to create the tag. | Required when `tag_on_close` is `true`. |
 | `delete_source_branch_after_merge` | `bool` | `false` | — | Delete local source branch after successful merge. | Plain bool: omitted → `false`. |
 | `trigger_pipeline_on_close` | `bool` | `false` | — | Request forge pipeline run after close. | Plain bool: omitted → `false`. |
@@ -551,11 +559,11 @@ All fields with `—` in the Default column are required for a `custom` preset. 
 
 ### tag
 
-Note: `tag.enabled`, `tag.version_scheme`, `tag.parser`, `tag.strict`, `tag.bump`, `tag.source`, `tag.shared_version`, and `tag.create_after_all_targets` are parsed but currently not wired to behavior. Only `tag.format`, `tag.annotated`, `tag.message_template`, and `tag.push` affect tag creation.
+Note: `tag.enabled`, `tag.version_scheme`, `tag.parser`, `tag.strict`, `tag.bump`, `tag.source`, `tag.shared_version`, and `tag.create_after_all_targets` are parsed but currently not wired to behavior. Only `tag.format`, `tag.annotated`, `tag.message_template`, and `tag.push` affect tag creation. Releases panel finalization tags the accepted production merge regardless of the release branch rule's `tag_on_close`; hotfix close still honors `tag_on_close`.
 
 | YAML key/path | Type | Default / effective | Env override | Behavior | Bounds / normalization |
 |---|---|---|---|---|---|
-| `tag.enabled` | `bool` | `true` when block absent; `false` when block present but omitted | — | Parsed but currently ignored. Tags are created when the branch rule has `tag_on_close: true`. | Plain bool: omitted → `false`. |
+| `tag.enabled` | `bool` | `true` when block absent; `false` when block present but omitted | — | Parsed but currently ignored. Close-flow tags use branch `tag_on_close`; Releases panel finalization always creates its release tag. | Plain bool: omitted → `false`. |
 | `tag.format` | `string` | `v{{.Version}}` | — | Template for the tag name. | Empty → `v{{.Version}}`. |
 | `tag.version_scheme` | `string` | `semver` | — | Versioning scheme for proposals. | Empty → `semver`. |
 | `tag.parser` | `string` | `masterminds-semver` | — | Parser used to interpret existing tags. | Empty → `masterminds-semver`. |
@@ -576,9 +584,9 @@ All `release` booleans are `*bool`. Omitting a field falls back to the documente
 |---|---|---|---|---|---|
 | `release.root_dir` | `string` | `<tasks_root>/.releases` | — | Directory for release manifests and worktrees. | Empty → `<tasks_root>/.releases`. |
 | `release.id_format` | `string` | `rel-{{.Version}}-{{.Timestamp}}` | — | Release ID template. | Empty → `rel-{{.Version}}-{{.Timestamp}}`. |
-| `release.push_integration` | `*bool` | `true` | — | Push integration branch during Stage 1. | Omitted → `true`. |
-| `release.push_release_branches` | `*bool` | `true` | — | Push generated release branches during Stage 1. | Omitted → `true`. |
-| `release.push_tags` | `*bool` | `tag.push` if `tag` block exists, otherwise `true` | — | Push created tags during Stage 2. | Omitted → derived from `tag.push` or `true`. |
+| `release.push_integration` | `*bool` | `true` | — | Push integration branch during release preparation/finalization. | Omitted → `true`. |
+| `release.push_release_branches` | `*bool` | `true` | — | Push generated release branches during preparation. | Omitted → `true`. |
+| `release.push_tags` | `*bool` | `tag.push` if `tag` block exists, otherwise `true` | — | Push tags created during finalization. | Omitted → derived from `tag.push` or `true`. |
 | `release.create_release_worktrees` | `*bool` | `true` | — | Create dedicated worktrees for release branches. | Omitted → `true`. |
 | `release.keep_integration_worktrees` | `*bool` | `false` | — | Preserve temporary integration worktrees after run. | Omitted → `false`. |
 | `release.allow_task_reuse` | `*bool` | `false` | — | Allow a task to belong to multiple active releases. | Omitted → `false`. |
@@ -646,14 +654,14 @@ Choose a preset or define your own rules.
 
 **Presets:**
 
-| Preset | Production | Integration | Default close strategy |
-|---|---|---|---|
-| `git-flow` | `master` | `develop` | direct merge |
-| `github-flow` | `main` | `main` | review request (MR/PR) |
-| `gitlab-flow` | `main` | `main` | review request (MR/PR) |
-| `custom` | you define | you define | you define |
+| Preset | Production | Integration | Release type | Default feature close |
+|---|---|---|---|---|
+| `git-flow` | `master` | `develop` | `release/*` → review request to `master` | review request to `develop` |
+| `github-flow` | `main` | `main` | none (main only) | review request to `main` |
+| `gitlab-flow` | `production` | `main` | none | review request to `main` |
+| `custom` | you define | you define | you define | you define |
 
-With `github-flow` or `gitlab-flow`, wtui skips local merges and creates MR/PRs instead.
+All built-in presets create MR/PRs for feature close. `github-flow` and `gitlab-flow` have no release branch type, so the Releases panel workflow is unavailable unless custom rules add one.
 
 **Per-branch-type rules you can customize:**
 
@@ -749,14 +757,15 @@ Notes:
 
 | Context | Key | Action | Notes |
 |---|---|---|---|
-| Global | `Tab` | Focus next panel | cycle: Tasks → Services → Releases → Output |
-| Global | `1` / `2` / `0` / `3` | Focus Tasks / Services / Output / Releases | Output is key `0` |
+| Global | `Tab` | Focus next panel | cycle: Tasks → active right pane → Output |
+| Global | `1` / `2` / `3` / `0` | Focus Tasks / Services / Releases / Output | `2` and `3` switch the shared right pane; Output is key `0` |
 | Tasks | `Enter` | Open selected task in Services panel | |
 | Tasks | `i` | Init new task | |
 | Tasks | `c` | Clone selected task | |
 | Tasks | `d` | Remove selected task | |
 | Tasks | `S` | Open sync strategy selection | sync all services in task |
-| Tasks | `C` | Close task (plan + execute automation) | |
+| Tasks | `C` | Validate, push, and create one MR/PR per service | does not merge; preset rules choose targets |
+| Tasks | `M` | Inspect and merge ready task MR/PRs | explicit confirmation; blocked services remain untouched |
 | Tasks | `P` | Prune merged tasks | scan + remove flow |
 | Tasks | `V` | Validate task | |
 | Tasks | `T` | Browse tags for selected task | |
@@ -785,8 +794,9 @@ Notes:
 | Output | `g/G` | Jump top/bottom | |
 | Output | `Esc` | Back to tasks | |
 | Releases | `j/k` or arrows | Move release selection | |
-| Releases | `N` | Open Create Release dialog (Stage 1: Prepare) | |
-| Releases | `f` | Finish selected `prepared` release (Stage 2) | ignored if selection is not `prepared` |
+| Releases | `N` | Prepare release from fast-forward-synced integration branch | selected task branches must already be merged |
+| Releases | `M` | Inspect and merge ready production MR/PRs | explicit confirmation; blocked services remain untouched |
+| Releases | `F` | Promote or finalize selected release by status | `prepared`: create production MR/PRs; `master_merged`: sync integration if needed and tag production merge |
 | Releases | `r` | Refresh releases | |
 | Global | `L` | Toggle log overlay | |
 | Global | `?` | Help overlay | |
@@ -821,7 +831,8 @@ Working on ticket `PAY-442` that touches `gateway`, `billing`, and `ledger`:
 5. **Close feature task**
    - Press `C`
    - Review generated close plan
-   - Confirm execution to merge `feature/PAY-442` into integration branch (usually `develop`)
+   - Confirm to push branches and create one MR/PR per service into integration (usually `develop`)
+   - After review and CI pass, press `M`, inspect readiness, and confirm merging ready MR/PRs
 
 6. **Create release entry from Releases panel**
    - Press `3` to focus Releases
@@ -831,11 +842,12 @@ Working on ticket `PAY-442` that touches `gateway`, `billing`, and `ledger`:
      - `gateway: 1.2.0`
      - `billing: 1.2.0`
      - `ledger: 2.4.1`
-   - Confirm to run Stage 1 (prepare). Release row appears with `prepared` status.
+   - Confirm preparation. Release row appears with `prepared` status.
 
-7. **Finish release after regression testing**
-   - With the `prepared` release selected, press `f`
-   - Confirm to run Stage 2 (tag + push tag)
+7. **Promote and finish release after regression testing**
+   - With the `prepared` release selected, press `F` to create release-to-production MR/PRs
+   - After review and CI pass, press `M`, inspect readiness, and confirm merging ready MR/PRs
+   - When status becomes `master_merged`, press `F` again to sync `release/*` to integration if diverged and tag the accepted production merge commit
 
 8. **Clean up old tasks**
    - Press `P` to scan merged tasks
@@ -861,33 +873,50 @@ release:
 
 Flow:
 
-1. Close feature tasks first (`C`) so branches are merged and clean.
+1. Press `C` on each feature task to create service MR/PRs, then `M` after review and CI to merge ready MR/PRs. All selected task branches must already be merged into `develop`.
 2. Press `3` to focus Releases panel.
-3. Press `N` to start **Stage 1: Prepare**.
+3. Press `N` to **Prepare** from fast-forward-synced `develop`.
 4. Select `PAY-442` and `PAY-447`.
 5. Set versions per affected service:
    - `gateway = 1.3.0`
    - `billing = 1.9.0`
    - `ledger = 2.5.0`
 6. Confirm.
-7. Watch Output panel for stages: validate → merge → branch → push.
+7. Watch Output panel for: validate merged tasks → fast-forward `develop` → create `release/*` → push.
 8. The release stops at `prepared` status. Run regression tests on the pushed release branches.
-9. When ready, select the prepared release and press `f` to start **Stage 2: Finish**.
-10. Watch Output panel for stages: validate → tag → push.
-11. Verify release row updates to `released` status.
+9. Press `F` to create one release-to-`master` MR/PR per service. Status becomes `awaiting_master_merge`.
+10. After review and CI pass, press `M`, inspect readiness, and confirm merging ready production MR/PRs. When all merge, status becomes `master_merged`.
+11. Press `F` again. wtui verifies each accepted `master` merge commit, syncs `release/*` to `develop` only when diverged, creates an annotated tag at that accepted `master` commit, and pushes the tag.
+12. Verify release row updates to `released` status.
 
-> Stage 1 creates/pushes release branches but does **not** create tags. Stage 2 creates and pushes annotated tags after regression testing.
+> Preparation never re-merges feature branches. Tags point to accepted `master` merge commits, not release branches.
+
+---
+
+## Migration Notes
+
+- Legacy `prepared` release manifests (manifest v1) cannot be promoted or finalized by this version. Reject and re-prepare the release, or finish it with the old binary before upgrading.
+- Default `git-flow` task `C` behavior changed from direct merge to MR/PR creation. To restore the old behavior, set:
+
+```yaml
+git_flow:
+  preset: git-flow
+  branch_types:
+    feature:
+      close_strategy: direct_merge
+```
+
 ---
 
 ## FAQ
 
 ### How do I merge feature branch into `develop`?
 
-Close feature task with `C` in Tasks panel. Close flow prepares and executes merge according to configured close strategy (for `git-flow`, default direct merge into `develop`).
+Press `C` in Tasks to create service MR/PRs into `develop`. After review and CI pass, press `M`, inspect readiness, and confirm merging ready MR/PRs. Set feature `close_strategy: direct_merge` to restore legacy direct merging on `C`.
 
 ### Does Close task work for release branches?
 
-Yes. With `release` branch type configured, close flow merges release branch into production (`master` by default) and integration (`develop` by default), then creates/pushes tag when branch rule has `tag_on_close: true`.
+Yes, according to configured branch rules. For Releases panel entities, use `F` → `M` → `F`: create production MR/PRs, merge ready MR/PRs, then sync integration and tag the accepted production merge. Release finalization does not use release `tag_on_close`; hotfix close still does.
 
 ### When should I create release entity in Releases panel?
 
@@ -902,14 +931,20 @@ After one or more feature tasks are ready and you want single release run across
 
 ### What does release workflow actually create?
 
-Stage 1 (Prepare, `N`):
+Prepare (`N`):
 - Release manifest: `<tasks_root>/.releases/<release-id>/release.json`
-- Integration merge commits (if configured)
-- Release branch per service
+- Release branch per service from fast-forward-synced integration
 - Optional release worktrees
 
-Stage 2 (Finish, `f` on a `prepared` release):
-- Annotated release tag per service
+Promote (`F` on `prepared`):
+- Release-to-production MR/PR per service
+
+Merge (`M` on `awaiting_master_merge`):
+- Accepted production merge commit per ready service
+
+Finalize (`F` on `master_merged`):
+- Integration sync from `release/*` only when diverged
+- Annotated release tag per service at the accepted production merge commit
 - Pushed tag (if `release.push_tags` is enabled)
 
 ### What does validation block?
@@ -956,8 +991,8 @@ gh auth login
 
 - Press `3` then `N` (release creation exists only in Releases panel)
 - Ensure `git_flow` defines a `release` branch type
-- Ensure selected tasks are root feature tasks and not already blocked by active release policy
-- Check Output panel for exact stage failure (`validating`, `merging`, `branching`, `pushing`, `tag`, `push_tag`)
+- Ensure selected tasks are root feature tasks already merged into integration and not blocked by active release policy
+- Check Output panel for exact workflow failure (prepare, production MR/PR readiness/merge, integration sync, tag, or push tag)
 - Use `.` to verify detected Git Flow + tool availability
 
 ---

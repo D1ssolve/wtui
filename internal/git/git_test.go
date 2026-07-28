@@ -659,6 +659,64 @@ exit 0
 	}
 }
 
+func TestCommandClient_MergeFFOnly(t *testing.T) {
+	t.Run("uses expected argv", func(t *testing.T) {
+		binDir := t.TempDir()
+		argsFile := filepath.Join(t.TempDir(), "git-args")
+		fakeGit := filepath.Join(binDir, "git")
+		script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+		if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake git: %v", err)
+		}
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("GIT_ARGS_FILE", argsFile)
+
+		client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		if err := client.MergeFFOnly(t.Context(), "/repo", "origin/develop"); err != nil {
+			t.Fatalf("MergeFFOnly returned error: %v", err)
+		}
+
+		args, err := os.ReadFile(argsFile)
+		if err != nil {
+			t.Fatalf("read args file: %v", err)
+		}
+		want := "-C /repo merge --ff-only origin/develop\n"
+		if string(args) != want {
+			t.Fatalf("git args = %q, want %q", string(args), want)
+		}
+	})
+
+	t.Run("returns ExecError on git failure", func(t *testing.T) {
+		binDir := t.TempDir()
+		fakeGit := filepath.Join(binDir, "git")
+		script := `#!/bin/sh
+printf '%s' 'fatal: Not possible to fast-forward, aborting.' >&2
+exit 128
+`
+		if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake git: %v", err)
+		}
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		err := client.MergeFFOnly(t.Context(), "/repo", "origin/develop")
+		if err == nil {
+			t.Fatal("MergeFFOnly error = nil, want error")
+		}
+
+		var execErr *ExecError
+		if !errors.As(err, &execErr) {
+			t.Fatalf("MergeFFOnly error = %T, want *ExecError", err)
+		}
+		if execErr.ExitCode != 128 {
+			t.Fatalf("ExitCode = %d, want 128", execErr.ExitCode)
+		}
+	})
+}
+
 func TestCommandClient_ListTagsSortedBySemver(t *testing.T) {
 	binDir := t.TempDir()
 	fakeGit := filepath.Join(binDir, "git")

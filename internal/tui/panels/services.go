@@ -29,13 +29,15 @@ type serviceItem struct {
 	resolvedFlow      *gitflow.ResolvedGitFlow
 	forgeAvailable    bool
 	forgeProvider     forge.ForgeProvider
+	wfStatus          string
+	wfDetail          string
 }
 
 func (s serviceItem) FilterValue() string { return s.service.Name }
 
 type serviceDelegate struct{}
 
-func (d serviceDelegate) Height() int { return 2 }
+func (d serviceDelegate) Height() int { return 1 }
 
 func (d serviceDelegate) Spacing() int { return 1 }
 
@@ -53,10 +55,8 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	if svc.Stale {
 		staleStyle := lipgloss.NewStyle().Bold(true).Foreground(svcColorDirty)
 		nameStyle := lipgloss.NewStyle().Foreground(svcColorDim)
-		line1 := fmt.Sprintf("  ✗ %s %s", nameStyle.Render(svc.Name), staleStyle.Render("[STALE]"))
-		line2 := fmt.Sprintf("    %s", dimStyle.Render("worktree missing"))
-		fmt.Fprintln(w, ansi.Truncate(line1, width, "…"))
-		fmt.Fprint(w, ansi.Truncate(line2, width, "…"))
+		line := fmt.Sprintf("  ✗ %s %s", nameStyle.Render(svc.Name), staleStyle.Render("[STALE] worktree missing"))
+		fmt.Fprint(w, ansi.Truncate(line, width, "…"))
 		return
 	}
 
@@ -71,24 +71,38 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	if index == m.Index() {
 		nameStyle = nameStyle.Foreground(panelColorPrimary)
 	}
-	line1 := fmt.Sprintf("  %s %s", icon, nameStyle.Render(svc.Name))
+
 	state := "clean"
 	if svc.IsDirty {
 		state = "modified"
 	}
-	aheadBehindSuffix := ""
+
+	line := fmt.Sprintf("  %s %-22s %-8s", icon, nameStyle.Render(svc.Name), dimStyle.Render(state))
+
+	if si.wfStatus != "" {
+		wfText := si.wfStatus
+		if si.wfDetail != "" {
+			wfText += " — " + si.wfDetail
+		}
+		wfStyle := dimStyle
+		if si.wfStatus == "ready" {
+			wfStyle = lipgloss.NewStyle().Foreground(workflowColorDone)
+		} else if si.wfStatus == "blocked" || si.wfStatus == "failed" {
+			wfStyle = lipgloss.NewStyle().Foreground(workflowColorBlocked)
+		}
+		line += " " + wfStyle.Render(wfText)
+	}
+
 	if svc.Ahead > 0 || svc.Behind > 0 {
 		aheadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399"))
 		behindStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F87171"))
-		aheadBehindSuffix = fmt.Sprintf("  %s %s",
+		line += fmt.Sprintf("  %s %s",
 			aheadStyle.Render(fmt.Sprintf("↑%d", svc.Ahead)),
 			behindStyle.Render(fmt.Sprintf("↓%d", svc.Behind)),
 		)
 	}
-	line2 := fmt.Sprintf("    %s%s", dimStyle.Render(state), aheadBehindSuffix)
 
-	fmt.Fprintln(w, ansi.Truncate(line1, width, "…"))
-	fmt.Fprint(w, ansi.Truncate(line2, width, "…"))
+	fmt.Fprint(w, ansi.Truncate(line, width, "…"))
 }
 
 type ServicesPanel struct {
@@ -107,6 +121,7 @@ type ServicesPanel struct {
 	forgeCfg          *config.ForgeConfig
 
 	services []domain.Service
+	workflow *domain.WorkflowSummary
 }
 
 func NewServicesPanel(width, height int) ServicesPanel {
@@ -133,6 +148,11 @@ func (p *ServicesPanel) SetServices(taskID string, services []domain.Service) {
 	p.refreshItems()
 }
 
+func (p *ServicesPanel) SetWorkflow(wf *domain.WorkflowSummary) {
+	p.workflow = wf
+	p.refreshItems()
+}
+
 func (p *ServicesPanel) SetGitFlow(flow *gitflow.ResolvedGitFlow, preset string, showBadges bool) {
 	p.resolvedFlow = flow
 	p.gitFlowPreset = strings.TrimSpace(preset)
@@ -147,11 +167,17 @@ func (p *ServicesPanel) SetForgeClients(clients map[forge.ForgeProvider]forge.Fo
 }
 
 func (p *ServicesPanel) refreshItems() {
+	wfByName := make(map[string]domain.ServiceWorkflow)
+	if p.workflow != nil {
+		for _, sw := range p.workflow.Services {
+			wfByName[sw.ServiceName] = sw
+		}
+	}
 	items := make([]list.Item, len(p.services))
 	for i, s := range p.services {
 		provider := detectServiceProvider(s, p.forgeCfg)
 		_, forgeAvailable := p.forgeClients[provider]
-		items[i] = serviceItem{
+		item := serviceItem{
 			service:           s,
 			preset:            p.gitFlowPreset,
 			showGitFlowBadges: p.showGitFlowBadges,
@@ -159,6 +185,11 @@ func (p *ServicesPanel) refreshItems() {
 			forgeAvailable:    forgeAvailable,
 			forgeProvider:     provider,
 		}
+		if sw, ok := wfByName[s.Name]; ok {
+			item.wfStatus = sw.Status
+			item.wfDetail = sw.Detail
+		}
+		items[i] = item
 	}
 	p.list.SetItems(items)
 	p.list.Select(0)
@@ -431,19 +462,24 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 func (p ServicesPanel) View() string {
 	var titleText string
 	if p.taskID == "" {
-		titleText = "Services"
+		titleText = "[2] Services"
 	} else {
 		total := len(p.list.Items())
 		current := 0
 		if total > 0 {
 			current = p.list.Index() + 1
 		}
-		titleText = fmt.Sprintf("[2] Services — %s  [%d/%d]", p.taskID, current, total)
+		titleText = fmt.Sprintf("[2] Services · %s  [%d/%d]", p.taskID, current, total)
 	}
 
 	inner := innerDimensions(p.width, p.height)
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary).MaxWidth(inner.w)
-	titleText = ansi.Truncate(titleText, max(0, inner.w), "…")
+	title := renderPaneTitle(titleText, "[3] Releases", inner.w)
+
+	workflow := renderWorkflow(p.workflow, inner.w)
+	bodyHeight := max(0, inner.h-1)
+	if workflow != "" {
+		bodyHeight = max(0, bodyHeight-lipgloss.Height(workflow)-1)
+	}
 
 	var body string
 
@@ -460,12 +496,15 @@ func (p ServicesPanel) View() string {
 
 	default:
 		listCopy := p.list
-		listCopy.SetSize(inner.w, max(0, inner.h-1))
+		listCopy.SetSize(inner.w, bodyHeight)
 		body = listCopy.View()
+	}
+	if workflow != "" {
+		body = lipgloss.JoinVertical(lipgloss.Left, workflow, "", body)
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render(titleText),
+		title,
 		body,
 	)
 

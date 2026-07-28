@@ -178,7 +178,7 @@ func (m *mockManager) CreateRelease(_ context.Context, params task.CreateRelease
 	return m.createReleaseResult, m.createReleaseErr
 }
 
-func (m *mockManager) FinishRelease(_ context.Context, params task.FinishReleaseParams) (domain.Release, error) {
+func (m *mockManager) FinalizeRelease(_ context.Context, params task.FinishReleaseParams) (domain.Release, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.finishReleaseCalls++
@@ -187,6 +187,30 @@ func (m *mockManager) FinishRelease(_ context.Context, params task.FinishRelease
 		close(m.finishReleaseDone)
 	}
 	return m.finishReleaseResult, m.finishReleaseErr
+}
+
+func (m *mockManager) InspectTaskMerge(_ context.Context, taskID string) (task.TaskMergeInspection, error) {
+	return task.TaskMergeInspection{TaskID: taskID}, nil
+}
+
+func (m *mockManager) MergeTaskMRs(_ context.Context, taskID string) (task.TaskMergeResult, error) {
+	return task.TaskMergeResult{TaskID: taskID}, nil
+}
+
+func (m *mockManager) TaskWorkflow(_ context.Context, _ string) (domain.WorkflowSummary, error) {
+	return domain.WorkflowSummary{}, nil
+}
+
+func (m *mockManager) PromoteRelease(_ context.Context, releaseID string, _ chan<- string) (domain.Release, error) {
+	return domain.Release{ID: releaseID}, nil
+}
+
+func (m *mockManager) InspectReleaseMerge(_ context.Context, releaseID string) (task.ReleaseMergeInspection, error) {
+	return task.ReleaseMergeInspection{ReleaseID: releaseID}, nil
+}
+
+func (m *mockManager) MergeReleaseMRs(_ context.Context, releaseID string, _ chan<- string) (domain.Release, task.ReleaseMergeResult, error) {
+	return domain.Release{ID: releaseID}, task.ReleaseMergeResult{ReleaseID: releaseID}, nil
 }
 
 func (m *mockManager) IsProtectedBranch(_ context.Context, branch string) bool {
@@ -360,9 +384,9 @@ func TestUpdate_WindowSizeMsg_SetsReady(t *testing.T) {
 		t.Errorf("height: expected 40, got %d", m.height)
 	}
 
-	tasksWidth, _, releasesWidth := threePanelWidths(m.width)
-	if tasksWidth != releasesWidth {
-		t.Fatalf("tasks and releases width should match, got tasks=%d releases=%d", tasksWidth, releasesWidth)
+	tasksWidth, rightWidth := twoPanelWidths(m.width)
+	if tasksWidth != 40 || rightWidth != 80 {
+		t.Fatalf("panel widths = %d/%d, want 40/80", tasksWidth, rightWidth)
 	}
 }
 
@@ -376,39 +400,37 @@ func TestView_AfterWindowSize_NotLoading(t *testing.T) {
 	}
 }
 
-func TestView_AfterWindowSize_IncludesReleasesPanel(t *testing.T) {
+func TestView_AfterWindowSize_RendersOnlyActiveRightPane(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 140, 40)
 
 	view := stripANSIForModel(m.View())
-	if !strings.Contains(view, "[3] Releases") {
-		t.Fatalf("view should include releases panel title, got %q", view)
+	if !strings.Contains(view, "[2] Services") || !strings.Contains(view, "[3] Releases") {
+		t.Fatalf("tab strip should show both right panes, got %q", view)
+	}
+	if strings.Contains(view, "No releases yet") {
+		t.Fatalf("default right pane should be services only, got %q", view)
+	}
+	m.setFocus(FocusReleases)
+	view = stripANSIForModel(m.View())
+	if !strings.Contains(view, "No releases yet") {
+		t.Fatalf("release right pane should render, got %q", view)
 	}
 }
 
-func TestThreePanelWidths_DistributesTasksAndReleasesEqually(t *testing.T) {
+func TestTwoPanelWidths_UsesOneThirdForTasksWithMinimum(t *testing.T) {
 	cases := []struct {
-		total           int
-		wantTasks       int
-		wantServices    int
-		wantReleases    int
+		total, wantTasks, wantRight int
 	}{
-		{120, 44, 32, 44},
-		{80, 29, 22, 29},
-		{60, 25, 10, 25},
+		{120, 40, 80},
+		{80, 26, 54},
+		{60, 25, 35},
 	}
 
 	for _, tc := range cases {
-		tasks, services, releases := threePanelWidths(tc.total)
-		if tasks != tc.wantTasks || services != tc.wantServices || releases != tc.wantReleases {
-			t.Errorf("threePanelWidths(%d) = tasks=%d services=%d releases=%d, want tasks=%d services=%d releases=%d",
-				tc.total, tasks, services, releases, tc.wantTasks, tc.wantServices, tc.wantReleases)
-		}
-		if tasks+services+releases != tc.total {
-			t.Errorf("threePanelWidths(%d) sums to %d, want %d", tc.total, tasks+services+releases, tc.total)
-		}
-		if tasks != releases {
-			t.Errorf("threePanelWidths(%d): tasks (%d) != releases (%d)", tc.total, tasks, releases)
+		tasks, right := twoPanelWidths(tc.total)
+		if tasks != tc.wantTasks || right != tc.wantRight {
+			t.Errorf("twoPanelWidths(%d) = %d/%d, want %d/%d", tc.total, tasks, right, tc.wantTasks, tc.wantRight)
 		}
 	}
 }
@@ -499,20 +521,20 @@ func TestUpdate_Tab_CyclesFocusForward(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
-	if m.focus != FocusReleases {
-		t.Errorf("after Tab×2: expected FocusReleases, got %v", m.focus)
-	}
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = updated.(Model)
 	if m.focus != FocusOutput {
-		t.Errorf("after Tab×3: expected FocusOutput, got %v", m.focus)
+		t.Errorf("after Tab×2: expected FocusOutput, got %v", m.focus)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	if m.focus != FocusTasks {
-		t.Errorf("after Tab×4 (wrap): expected FocusTasks, got %v", m.focus)
+		t.Errorf("after Tab×3: expected FocusTasks, got %v", m.focus)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(Model)
+	if m.focus != FocusServices {
+		t.Errorf("after Tab×4: expected FocusServices, got %v", m.focus)
 	}
 }
 
@@ -1099,154 +1121,19 @@ func TestUpdate_CreateReleaseDone_AppendsOutputAndRefreshesReleases(t *testing.T
 	}
 }
 
-func TestUpdate_FinishReleaseMsg_OpensFinishConfirmDialog(t *testing.T) {
-	m := newTestModel(t, &mockManager{})
-	m = sendWindowSize(m, 120, 40)
-	rel := domain.Release{
-		ID:     "rel-1",
-		Status: domain.ReleaseStatusPrepared,
-		Services: []domain.ReleaseService{
-			{Name: "api", Version: "1.2.3", Tag: "v1.2.3"},
-		},
-	}
-	m.releasesPanel.SetReleases([]domain.Release{rel})
-
-	updated, _ := m.Update(panels.FinishReleaseMsg{ReleaseID: "rel-1"})
-	m = updated.(Model)
-
-	if m.pendingFinishReleaseID == nil || *m.pendingFinishReleaseID != "rel-1" {
-		t.Fatal("pendingFinishReleaseID should be set to release ID")
-	}
-	if _, ok := m.modal.(*modal.ReleaseFinishConfirmDialog); !ok {
-		t.Fatalf("expected ReleaseFinishConfirmDialog, got %T", m.modal)
-	}
-}
-
-func TestUpdate_ConfirmFinishReleaseMsg_StartsOperation(t *testing.T) {
-	mgr := &mockManager{
-		finishReleaseResult: domain.Release{ID: "rel-1"},
-		finishReleaseDone:   make(chan struct{}),
-	}
-	m := newTestModel(t, mgr)
-	m = sendWindowSize(m, 120, 40)
-	pending := "rel-1"
-	m.pendingFinishReleaseID = &pending
-	m.modal = modal.NewReleaseFinishConfirmDialog("rel-1", domain.Release{ID: "rel-1"}, m.cfg)
-
-	updated, cmd := m.Update(modal.ConfirmFinishReleaseMsg{ReleaseID: "rel-1"})
-	m = updated.(Model)
-
-	if !m.opRunning {
-		t.Fatal("confirm finish release should set opRunning=true")
-	}
-	if cmd == nil {
-		t.Fatal("confirm finish release should return command")
-	}
-	if m.modal != nil {
-		t.Fatal("modal should be cleared after confirm")
-	}
-	if m.pendingFinishReleaseID != nil {
-		t.Fatal("pending finish release ID should be cleared after confirm")
-	}
-	if !strings.Contains(m.outputPanel.View(), "Finishing release rel-1...") {
-		t.Fatalf("output should include finish start line, got %q", m.outputPanel.View())
-	}
-
-	select {
-	case <-mgr.finishReleaseDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("FinishRelease was not called")
-	}
-
-	mgr.mu.Lock()
-	calls := mgr.finishReleaseCalls
-	id := mgr.finishReleaseID
-	mgr.mu.Unlock()
-	if calls != 1 {
-		t.Fatalf("FinishRelease calls = %d, want 1", calls)
-	}
-	if id != "rel-1" {
-		t.Fatalf("FinishRelease releaseID = %q, want rel-1", id)
-	}
-}
-
-func TestUpdate_ConfirmFinishReleaseMsg_NoPending_DoesNotExecute(t *testing.T) {
-	mgr := &mockManager{finishReleaseResult: domain.Release{ID: "rel-1"}}
-	m := newTestModel(t, mgr)
-	m = sendWindowSize(m, 120, 40)
-	m.modal = modal.NewReleaseFinishConfirmDialog("rel-1", domain.Release{ID: "rel-1"}, m.cfg)
-
-	updated, cmd := m.Update(modal.ConfirmFinishReleaseMsg{ReleaseID: "rel-1"})
-	m = updated.(Model)
-
-	if cmd != nil {
-		t.Fatal("confirm finish release without pending ID must not return command")
-	}
-	if m.opRunning {
-		t.Fatal("confirm finish release without pending ID must not set opRunning")
-	}
-	if mgr.finishReleaseCalls != 0 {
-		t.Fatalf("finish release should not execute, got calls=%d", mgr.finishReleaseCalls)
-	}
-}
-
-func TestUpdate_ConfirmFinishReleaseMsg_WrongModal_DoesNotExecute(t *testing.T) {
-	mgr := &mockManager{finishReleaseResult: domain.Release{ID: "rel-1"}}
-	m := newTestModel(t, mgr)
-	m = sendWindowSize(m, 120, 40)
-	pending := "rel-1"
-	m.pendingFinishReleaseID = &pending
-	m.modal = modal.NewHelpOverlayWithOptions(false)
-
-	updated, cmd := m.Update(modal.ConfirmFinishReleaseMsg{ReleaseID: "rel-1"})
-	m = updated.(Model)
-
-	if cmd != nil {
-		t.Fatal("confirm finish release with wrong active modal must not return command")
-	}
-	if m.opRunning {
-		t.Fatal("confirm finish release with wrong active modal must not set opRunning")
-	}
-	if mgr.finishReleaseCalls != 0 {
-		t.Fatalf("finish release should not execute, got calls=%d", mgr.finishReleaseCalls)
-	}
-}
-
-func TestUpdate_ConfirmFinishReleaseMsg_MismatchedID_DoesNotExecute(t *testing.T) {
-	mgr := &mockManager{finishReleaseResult: domain.Release{ID: "rel-1"}}
-	m := newTestModel(t, mgr)
-	m = sendWindowSize(m, 120, 40)
-	pending := "rel-1"
-	m.pendingFinishReleaseID = &pending
-	m.modal = modal.NewReleaseFinishConfirmDialog("rel-1", domain.Release{ID: "rel-1"}, m.cfg)
-
-	updated, cmd := m.Update(modal.ConfirmFinishReleaseMsg{ReleaseID: "rel-2"})
-	m = updated.(Model)
-
-	if cmd != nil {
-		t.Fatal("confirm finish release with mismatched ID must not return command")
-	}
-	if m.opRunning {
-		t.Fatal("confirm finish release with mismatched ID must not set opRunning")
-	}
-	if mgr.finishReleaseCalls != 0 {
-		t.Fatalf("finish release should not execute, got calls=%d", mgr.finishReleaseCalls)
-	}
-}
-
 func TestUpdate_FinishReleaseDoneMsg_Success_AppendsDoneAndReloads(t *testing.T) {
 	mgr := &mockManager{}
 	m := newTestModel(t, mgr)
 	m = sendWindowSize(m, 120, 40)
 	m.opRunning = true
 
-	updated, cmd := m.Update(FinishReleaseDoneMsg{Release: domain.Release{ID: "rel-1"}})
+	updated, cmd := m.Update(ReleaseActionDoneMsg{Action: "finalize", Release: domain.Release{ID: "rel-1"}})
 	m = updated.(Model)
 
 	if m.opRunning {
 		t.Fatal("FinishReleaseDoneMsg should clear opRunning")
 	}
-	if !strings.Contains(m.outputPanel.View(), "Finish release done: rel-1") {
+	if !strings.Contains(m.outputPanel.View(), "Finalize release done: rel-1") {
 		t.Fatalf("output should include finish done line, got %q", m.outputPanel.View())
 	}
 	if cmd == nil {
@@ -1264,13 +1151,13 @@ func TestUpdate_FinishReleaseDoneMsg_Error_AppendsFailureAndReloads(t *testing.T
 	m = sendWindowSize(m, 120, 40)
 	m.opRunning = true
 
-	updated, cmd := m.Update(FinishReleaseDoneMsg{Release: domain.Release{ID: "rel-1"}, Err: &mockError{msg: "tag push failed"}})
+	updated, cmd := m.Update(ReleaseActionDoneMsg{Action: "finalize", Release: domain.Release{ID: "rel-1"}, Err: &mockError{msg: "tag push failed"}})
 	m = updated.(Model)
 
 	if m.opRunning {
 		t.Fatal("FinishReleaseDoneMsg should clear opRunning")
 	}
-	if !strings.Contains(m.outputPanel.View(), "Finish release failed: tag push failed") {
+	if !strings.Contains(m.outputPanel.View(), "Finalize release failed: tag push failed") {
 		t.Fatalf("output should include finish failure line, got %q", m.outputPanel.View())
 	}
 	if cmd == nil {
@@ -1282,36 +1169,93 @@ func TestUpdate_FinishReleaseDoneMsg_Error_AppendsFailureAndReloads(t *testing.T
 	}
 }
 
-func TestUpdate_CloseModalMsg_FinishConfirm_ClearsPendingAndAppendsCancelled(t *testing.T) {
-	m := newTestModel(t, &mockManager{})
-	m = sendWindowSize(m, 120, 40)
-	pending := "rel-1"
-	m.pendingFinishReleaseID = &pending
-	m.modal = modal.NewReleaseFinishConfirmDialog("rel-1", domain.Release{ID: "rel-1"}, m.cfg)
-
-	updated, _ := m.Update(modal.CloseModalMsg{})
-	m = updated.(Model)
-
-	if m.pendingFinishReleaseID != nil {
-		t.Fatal("pending finish release ID should be cleared on cancel")
-	}
-	if m.modal != nil {
-		t.Fatal("modal should be cleared on cancel")
-	}
-	if !strings.Contains(m.outputPanel.View(), "Finish release cancelled.") {
-		t.Fatalf("output should include finish cancellation, got %q", m.outputPanel.View())
-	}
-}
-
 func TestUpdate_ServicesLoadedMsg_DoesNotAppendCompletionLog(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
 	m.refreshing = true
 
-	updated, _ := m.Update(ServicesLoadedMsg{TaskID: "IN-1", Services: []domain.Service{{Name: "api"}}})
+	updated, cmd := m.Update(ServicesLoadedMsg{TaskID: "IN-1", Services: []domain.Service{{Name: "api"}}})
 	m = updated.(Model)
+	if cmd != nil {
+		t.Fatal("services result must not trigger duplicate workflow load")
+	}
 	if strings.Contains(m.outputPanel.View(), "Services loaded for task IN-1.") {
 		t.Fatalf("services load should not append noisy completion log, got %q", m.outputPanel.View())
+	}
+}
+
+func TestUpdate_TaskWorkflowLoadedMsg_IgnoresStaleTask(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "TASK-2"}})
+	m.servicesPanel.SetServices("TASK-2", []domain.Service{{Name: "api"}})
+
+	m.taskWorkflowGeneration = 2
+	updated, _ := m.Update(TaskWorkflowLoadedMsg{TaskID: "TASK-1", Generation: 1, Workflow: domain.WorkflowSummary{NextAction: "stale action"}})
+	m = updated.(Model)
+	if strings.Contains(m.servicesPanel.View(), "stale action") {
+		t.Fatal("stale workflow must not reach services panel")
+	}
+
+	updated, _ = m.Update(TaskWorkflowLoadedMsg{TaskID: "TASK-2", Generation: 2, Workflow: domain.WorkflowSummary{NextAction: "merge now"}})
+	m = updated.(Model)
+	if !strings.Contains(m.servicesPanel.View(), "merge now") {
+		t.Fatal("selected task workflow must reach services panel")
+	}
+}
+
+func TestUpdate_StaleTaskMergeInspectionDoesNotOpenModalOrClearNewOperation(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "TASK-1"}})
+
+	updated, _ := m.Update(sendKey("M"))
+	m = updated.(Model)
+	generation := m.mergeInspectionGeneration
+	m.setFocus(FocusReleases)
+	m.opRunning = true
+
+	updated, _ = m.Update(TaskMergeInspectionMsg{
+		TaskID: "TASK-1", Generation: generation,
+		Inspection: task.TaskMergeInspection{TaskID: "TASK-1"},
+	})
+	m = updated.(Model)
+	if m.modal != nil {
+		t.Fatalf("stale inspection opened modal %T", m.modal)
+	}
+	if !m.opRunning {
+		t.Fatal("stale inspection cleared newer operation")
+	}
+}
+
+func TestUpdate_StaleReleaseMergeInspectionDoesNotOpenModal(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.setFocus(FocusReleases)
+	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusAwaitingMasterMerge}, {ID: "rel-2", Status: domain.ReleaseStatusAwaitingMasterMerge}})
+
+	updated, _ := m.Update(sendKey("M"))
+	m = updated.(Model)
+	generation := m.mergeInspectionGeneration
+	m.releasesPanel.SetFocused(true)
+	m.releasesPanel, _ = m.releasesPanel.Update(sendKey("j"))
+
+	updated, _ = m.Update(ReleaseMergeInspectionMsg{
+		ReleaseID: "rel-1", Generation: generation,
+		Inspection: task.ReleaseMergeInspection{ReleaseID: "rel-1"},
+	})
+	m = updated.(Model)
+	if m.modal != nil {
+		t.Fatalf("stale inspection opened modal %T", m.modal)
+	}
+}
+
+func TestUpdate_ReleaseSelectionChange_RecomputesWorkflow(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.setFocus(FocusReleases)
+	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1"}, {ID: "rel-2", Status: domain.ReleaseStatusPrepared}})
+
+	updated, _ := m.Update(sendKey("j"))
+	m = updated.(Model)
+	if !strings.Contains(m.releasesPanel.View(), "press F to create master MRs") {
+		t.Fatal("release selection change must update workflow")
 	}
 }
 

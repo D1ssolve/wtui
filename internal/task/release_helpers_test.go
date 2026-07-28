@@ -168,6 +168,9 @@ func TestReleaseStatusHelpers(t *testing.T) {
 		{status: domain.ReleaseStatusMerging, wantActive: true, wantTerminal: false},
 		{status: domain.ReleaseStatusBranching, wantActive: true, wantTerminal: false},
 		{status: domain.ReleaseStatusPrepared, wantActive: true, wantTerminal: false},
+		{status: domain.ReleaseStatusAwaitingMasterMerge, wantActive: true, wantTerminal: false},
+		{status: domain.ReleaseStatusMasterMerged, wantActive: true, wantTerminal: false},
+		{status: domain.ReleaseStatusSyncingDevelop, wantActive: true, wantTerminal: false},
 		{status: domain.ReleaseStatusTagging, wantActive: true, wantTerminal: false},
 		{status: domain.ReleaseStatusPushing, wantActive: true, wantTerminal: false},
 		{status: domain.ReleaseStatusReleased, wantActive: false, wantTerminal: true},
@@ -205,6 +208,10 @@ func TestValidateReleaseStatusTransition(t *testing.T) {
 		{name: "pushing to released", from: domain.ReleaseStatusPushing, to: domain.ReleaseStatusReleased, wantErr: false},
 		{name: "pushing to prepared", from: domain.ReleaseStatusPushing, to: domain.ReleaseStatusPrepared, wantErr: false},
 		{name: "prepared to tagging", from: domain.ReleaseStatusPrepared, to: domain.ReleaseStatusTagging, wantErr: false},
+		{name: "prepared to awaiting master merge", from: domain.ReleaseStatusPrepared, to: domain.ReleaseStatusAwaitingMasterMerge, wantErr: false},
+		{name: "awaiting master merge to master merged", from: domain.ReleaseStatusAwaitingMasterMerge, to: domain.ReleaseStatusMasterMerged, wantErr: false},
+		{name: "master merged to syncing develop", from: domain.ReleaseStatusMasterMerged, to: domain.ReleaseStatusSyncingDevelop, wantErr: false},
+		{name: "syncing develop to tagging", from: domain.ReleaseStatusSyncingDevelop, to: domain.ReleaseStatusTagging, wantErr: false},
 		{name: "prepared to rejected", from: domain.ReleaseStatusPrepared, to: domain.ReleaseStatusRejected, wantErr: false},
 		{name: "prepared to failed", from: domain.ReleaseStatusPrepared, to: domain.ReleaseStatusFailed, wantErr: false},
 		{name: "failed to validating", from: domain.ReleaseStatusFailed, to: domain.ReleaseStatusValidating, wantErr: false},
@@ -217,6 +224,9 @@ func TestValidateReleaseStatusTransition(t *testing.T) {
 		{name: "released to failed forbidden", from: domain.ReleaseStatusReleased, to: domain.ReleaseStatusFailed, wantErr: true},
 		{name: "rejected to validating forbidden", from: domain.ReleaseStatusRejected, to: domain.ReleaseStatusValidating, wantErr: true},
 		{name: "none to validating forbidden", from: "", to: domain.ReleaseStatusValidating, wantErr: true},
+		{name: "awaiting master merge to tagging forbidden", from: domain.ReleaseStatusAwaitingMasterMerge, to: domain.ReleaseStatusTagging, wantErr: true},
+		{name: "master merged to tagging forbidden", from: domain.ReleaseStatusMasterMerged, to: domain.ReleaseStatusTagging, wantErr: true},
+		{name: "syncing develop to released forbidden", from: domain.ReleaseStatusSyncingDevelop, to: domain.ReleaseStatusReleased, wantErr: true},
 	}
 
 	for _, tc := range tests {
@@ -234,6 +244,51 @@ func TestValidateReleaseStatusTransition(t *testing.T) {
 
 			if err != nil {
 				t.Fatalf("validateReleaseStatusTransition(%q, %q) error = %v, want nil", tc.from, tc.to, err)
+			}
+		})
+	}
+}
+
+func TestValidateReleaseStatusTransition_ActiveStatusesCanFail(t *testing.T) {
+	statuses := []domain.ReleaseStatus{
+		domain.ReleaseStatusDraft,
+		domain.ReleaseStatusValidating,
+		domain.ReleaseStatusMerging,
+		domain.ReleaseStatusBranching,
+		domain.ReleaseStatusPrepared,
+		domain.ReleaseStatusAwaitingMasterMerge,
+		domain.ReleaseStatusMasterMerged,
+		domain.ReleaseStatusSyncingDevelop,
+		domain.ReleaseStatusTagging,
+		domain.ReleaseStatusPushing,
+	}
+
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			if err := validateReleaseStatusTransition(status, domain.ReleaseStatusFailed); err != nil {
+				t.Fatalf("validateReleaseStatusTransition(%q, failed) error = %v, want nil", status, err)
+			}
+		})
+	}
+}
+
+func TestIsLegacyManifest(t *testing.T) {
+	tests := []struct {
+		name    string
+		version int
+		want    bool
+	}{
+		{name: "missing version", version: 0, want: true},
+		{name: "version one", version: 1, want: true},
+		{name: "version two", version: 2, want: false},
+		{name: "future version", version: 3, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsLegacyManifest(domain.Release{ManifestVersion: tc.version})
+			if got != tc.want {
+				t.Fatalf("IsLegacyManifest(version=%d) = %v, want %v", tc.version, got, tc.want)
 			}
 		})
 	}

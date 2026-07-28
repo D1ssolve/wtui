@@ -41,6 +41,20 @@ func (m *manager) RetryRelease(ctx context.Context, releaseID string) (domain.Re
 		return domain.Release{}, fmt.Errorf("%w: failed release is not recoverable", ErrReleaseInvalidStatusTransition)
 	}
 
+	if !IsLegacyManifest(release) {
+		switch {
+		case release.PreparedAt == nil:
+			if err := m.validateRetrySafety(ctx, release); err != nil {
+				return domain.Release{}, err
+			}
+			return m.retryPrepareRelease(ctx, release)
+		case releaseHasAcceptedMerges(release):
+			return m.retryFinalizeRelease(ctx, release)
+		default:
+			return m.retryPromoteRelease(ctx, release)
+		}
+	}
+
 	if err := m.validateRetrySafety(ctx, release); err != nil {
 		return domain.Release{}, err
 	}
@@ -49,6 +63,50 @@ func (m *manager) RetryRelease(ctx context.Context, releaseID string) (domain.Re
 		return m.retryFinishRelease(ctx, release)
 	}
 	return m.retryPrepareRelease(ctx, release)
+}
+
+func (m *manager) retryPromoteRelease(ctx context.Context, release domain.Release) (domain.Release, error) {
+	release.CompletedAt = nil
+	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusPrepared, "prepared", nil); err != nil {
+		return domain.Release{}, err
+	}
+	for i := range release.Services {
+		if release.Services[i].ProductionMR == nil {
+			release.Services[i].Status = domain.ReleaseStatusPrepared
+		}
+		release.Services[i].Error = nil
+	}
+	if _, err := m.writeReleaseManifest(release); err != nil {
+		return domain.Release{}, err
+	}
+	return m.PromoteRelease(ctx, release.ID, nil)
+}
+
+func (m *manager) retryFinalizeRelease(ctx context.Context, release domain.Release) (domain.Release, error) {
+	release.CompletedAt = nil
+	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusMasterMerged, "master_merged", nil); err != nil {
+		return domain.Release{}, err
+	}
+	for i := range release.Services {
+		release.Services[i].Status = domain.ReleaseStatusMasterMerged
+		release.Services[i].Error = nil
+	}
+	if _, err := m.writeReleaseManifest(release); err != nil {
+		return domain.Release{}, err
+	}
+	return m.FinalizeRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
+}
+
+func releaseHasAcceptedMerges(release domain.Release) bool {
+	if len(release.Services) == 0 {
+		return false
+	}
+	for _, svc := range release.Services {
+		if svc.AcceptedMergeSHA == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *manager) retryPrepareRelease(ctx context.Context, release domain.Release) (domain.Release, error) {
@@ -306,21 +364,25 @@ func (m *manager) retryPrepareService(ctx context.Context, release *domain.Relea
 		svc.IntegrationWorktreePath = ""
 	}
 
+	if err := m.git.MergeFFOnly(ctx, integrationPath, "origin/"+svc.IntegrationBranch); err != nil {
+		return fmt.Errorf("release prepare retry: fast-forward service=%s integration=%s: %w", svc.Name, svc.IntegrationBranch, err)
+	}
+
 	for fbIdx := range svc.FeatureBranches {
 		fb := &svc.FeatureBranches[fbIdx]
-		if fb.Merged {
-			continue
+		merged, verifyErr := m.git.IsAncestor(ctx, svc.RepoPath, fb.Branch, "origin/"+svc.IntegrationBranch)
+		if verifyErr != nil {
+			return verifyErr
 		}
-		if err := m.git.Merge(ctx, integrationPath, fb.Branch); err != nil {
-			states, stateErr := m.git.OperationState(ctx, integrationPath)
-			if stateErr == nil && containsMergeConflictState(states) {
-				_ = m.git.MergeAbort(ctx, integrationPath)
-				return fmt.Errorf("%w: service=%s branch=%s", ErrReleaseMergeConflict, svc.Name, fb.Branch)
-			}
-			return err
+		if !merged {
+			return fmt.Errorf("%w: service=%s branch=%s integration=origin/%s", ErrReleaseTaskNotMerged, svc.Name, fb.Branch, svc.IntegrationBranch)
 		}
 		fb.Merged = true
-		fb.MergeRef = fb.Branch
+		mergeSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, fb.Branch)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		fb.MergeRef = mergeSHA
 		if err := m.persistCheckpoint(release, "merge", nil); err != nil {
 			return err
 		}

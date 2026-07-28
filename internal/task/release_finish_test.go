@@ -2,7 +2,9 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,17 +14,15 @@ import (
 
 func newFinishTestManager(t *testing.T) (*manager, *mockGitClient) {
 	t.Helper()
-	gitMock := &mockGitClient{branchExistsRes: true}
+	gitMock := &mockGitClient{branchExistsRes: true, commonDirResult: "/git/common"}
 	m, _ := newReleasePlanTestManager(t, gitMock)
+	m.flow.ProductionBranch = "master"
+	gitMock.isAncestorFn = func(_, _, _ string) (bool, error) { return false, nil }
 	return m, gitMock
 }
 
 func writeRelease(t *testing.T, m *manager, status domain.ReleaseStatus, svc domain.ReleaseService) domain.Release {
 	t.Helper()
-
-	if svc.Name == "" {
-		t.Fatalf("service name required")
-	}
 	if svc.Version == "" {
 		svc.Version = "1.2.3"
 	}
@@ -32,19 +32,13 @@ func writeRelease(t *testing.T, m *manager, status domain.ReleaseStatus, svc dom
 	if svc.ReleaseBranch == "" {
 		svc.ReleaseBranch = releaseBranchName(m.flow, svc.Version)
 	}
-
-	fixed := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
-	oldNow := defaultReleaseNow
-	defaultReleaseNow = func() time.Time { return fixed }
-	defer func() { defaultReleaseNow = oldNow }()
-
-	releaseID, err := generateReleaseID(m.cfg.Release.IDFormat, svc.Version, defaultReleaseNow)
-	if err != nil {
-		t.Fatalf("generateReleaseID error = %v", err)
+	if svc.IntegrationBranch == "" {
+		svc.IntegrationBranch = m.flow.IntegrationBranch
 	}
 
+	fixed := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
 	release := domain.Release{
-		ID:         releaseID,
+		ID:         "rel-1.2.3-20260616T120000",
 		Status:     status,
 		Checkpoint: string(status),
 		Version:    svc.Version,
@@ -54,476 +48,155 @@ func writeRelease(t *testing.T, m *manager, status domain.ReleaseStatus, svc dom
 		CreatedAt:  fixed,
 		UpdatedAt:  fixed,
 	}
-	if status == domain.ReleaseStatusPrepared {
-		release.PreparedAt = &fixed
-	}
-
-	release, err = m.writeReleaseManifest(release)
+	release, err := m.writeReleaseManifest(release)
 	if err != nil {
 		t.Fatalf("writeReleaseManifest error = %v", err)
 	}
 	return release
 }
 
-func TestFinishRelease_HappyPath(t *testing.T) {
-	ctx := context.Background()
-	m, gitMock := newFinishTestManager(t)
-	repoPath := filepath.Join(m.cfg.RootDir, "repo-api")
-
-	release := writeRelease(t, m, domain.ReleaseStatusPrepared, domain.ReleaseService{
-		Name:                "svc-api",
-		RepoPath:            repoPath,
-		Version:             "1.2.3",
-		ReleaseSHA:          "release/1.2.3-sha",
-		PushedReleaseBranch: true,
-	})
-
-	result, err := m.FinishRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
-	if err != nil {
-		t.Fatalf("FinishRelease() error = %v", err)
-	}
-	if result.Status != domain.ReleaseStatusReleased {
-		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusReleased)
-	}
-	if result.CompletedAt == nil {
-		t.Fatalf("release CompletedAt=nil, want non-nil")
-	}
-	if result.Error != nil {
-		t.Fatalf("release error = %#v, want nil", result.Error)
-	}
-	if len(result.Services) != 1 {
-		t.Fatalf("len(services) = %d, want 1", len(result.Services))
-	}
-
-	svc := result.Services[0]
-	if svc.Status != domain.ReleaseStatusReleased {
-		t.Fatalf("service status = %q, want %q", svc.Status, domain.ReleaseStatusReleased)
-	}
-	if svc.TagRef != "v1.2.3" {
-		t.Fatalf("service TagRef = %q, want %q", svc.TagRef, "v1.2.3")
-	}
-	if svc.TagSHA != "v1.2.3^{}-sha" {
-		t.Fatalf("service TagSHA = %q, want %q", svc.TagSHA, "v1.2.3^{}-sha")
-	}
-	if !svc.PushedTag {
-		t.Fatalf("service PushedTag = %v, want true", svc.PushedTag)
-	}
-
-	if gitMock.createTagCalls != 1 {
-		t.Fatalf("CreateTag calls = %d, want 1", gitMock.createTagCalls)
-	}
-	if gitMock.pushTagCalls != 1 {
-		t.Fatalf("PushTag calls = %d, want 1", gitMock.pushTagCalls)
-	}
-	if len(gitMock.createTagCallList) != 1 {
-		t.Fatalf("CreateTag call records = %d, want 1", len(gitMock.createTagCallList))
-	}
-	if got := gitMock.createTagCallList[0].Message; got != "wtui release "+release.ID {
-		t.Fatalf("CreateTag message = %q, want %q", got, "wtui release "+release.ID)
-	}
-	if len(gitMock.pushTagCallList) != 1 {
-		t.Fatalf("PushTag call records = %d, want 1", len(gitMock.pushTagCallList))
-	}
-	if got := gitMock.pushTagCallList[0].RepoPath; got != repoPath {
-		t.Fatalf("PushTag repo path = %q, want %q", got, repoPath)
+func finalizeService(m *manager) domain.ReleaseService {
+	return domain.ReleaseService{
+		Name:              "svc-api",
+		RepoPath:          filepath.Join(m.cfg.RootDir, "repo-api"),
+		Version:           "1.2.3",
+		ReleaseBranch:     "release/1.2.3",
+		IntegrationBranch: "develop",
+		AcceptedMergeSHA:  "accepted-sha",
+		Status:            domain.ReleaseStatusMasterMerged,
 	}
 }
 
-func TestFinishRelease_NotPrepared_Rejects(t *testing.T) {
-	ctx := context.Background()
-	statuses := []domain.ReleaseStatus{
-		domain.ReleaseStatusDraft,
-		domain.ReleaseStatusValidating,
-		domain.ReleaseStatusMerging,
-		domain.ReleaseStatusBranching,
-		domain.ReleaseStatusPushing,
-		domain.ReleaseStatusTagging,
-		domain.ReleaseStatusReleased,
-		domain.ReleaseStatusFailed,
-		domain.ReleaseStatusRejected,
-	}
-
-	for _, status := range statuses {
-		t.Run(string(status), func(t *testing.T) {
-			m, gitMock := newFinishTestManager(t)
-			release := writeRelease(t, m, status, domain.ReleaseService{
-				Name:       "svc-api",
-				RepoPath:   filepath.Join(m.cfg.RootDir, "repo-api"),
-				Version:    "1.2.3",
-				ReleaseSHA: "release/1.2.3-sha",
-			})
-
-			_, err := m.FinishRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
-			if !errors.Is(err, ErrReleaseInvalidStatusTransition) {
-				t.Fatalf("FinishRelease() error = %v, want ErrReleaseInvalidStatusTransition", err)
-			}
-			if gitMock.createTagCalls != 0 {
-				t.Fatalf("CreateTag calls = %d, want 0", gitMock.createTagCalls)
-			}
-			if gitMock.pushTagCalls != 0 {
-				t.Fatalf("PushTag calls = %d, want 0", gitMock.pushTagCalls)
-			}
-		})
-	}
-}
-
-func TestFinishRelease_TagCreationFails(t *testing.T) {
-	ctx := context.Background()
-	m, gitMock := newFinishTestManager(t)
-	gitMock.createTagErr = errors.New("tag create failed")
-
-	release := writeRelease(t, m, domain.ReleaseStatusPrepared, domain.ReleaseService{
-		Name:                "svc-api",
-		RepoPath:            filepath.Join(m.cfg.RootDir, "repo-api"),
-		Version:             "1.2.3",
-		ReleaseSHA:          "release/1.2.3-sha",
-		PushedReleaseBranch: true,
-	})
-
-	result, err := m.FinishRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
-	if err == nil {
-		t.Fatalf("FinishRelease() error=nil, want non-nil")
-	}
-	if !errors.Is(err, ErrReleaseTagCreateFailed) {
-		t.Fatalf("FinishRelease() error = %v, want ErrReleaseTagCreateFailed", err)
-	}
-	if result.Status != domain.ReleaseStatusFailed {
-		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusFailed)
-	}
-	if result.Error == nil {
-		t.Fatalf("release error=nil, want non-nil")
-	}
-	if result.Error.Stage != "tag" {
-		t.Fatalf("release error stage = %q, want %q", result.Error.Stage, "tag")
-	}
-	if !result.Error.Recoverable {
-		t.Fatalf("release error Recoverable = %v, want true", result.Error.Recoverable)
-	}
-	if result.Error.Code != "ERR_RELEASE_TAG_CREATE" {
-		t.Fatalf("release error code = %q, want %q", result.Error.Code, "ERR_RELEASE_TAG_CREATE")
-	}
-	if gitMock.createTagCalls != 1 {
-		t.Fatalf("CreateTag calls = %d, want 1", gitMock.createTagCalls)
-	}
-	if gitMock.pushTagCalls != 0 {
-		t.Fatalf("PushTag calls = %d, want 0", gitMock.pushTagCalls)
-	}
-}
-
-func TestFinishRelease_TagPushFails(t *testing.T) {
-	ctx := context.Background()
-	m, gitMock := newFinishTestManager(t)
-	gitMock.pushTagErr = errors.New("push tag failed")
-
-	release := writeRelease(t, m, domain.ReleaseStatusPrepared, domain.ReleaseService{
-		Name:                "svc-api",
-		RepoPath:            filepath.Join(m.cfg.RootDir, "repo-api"),
-		Version:             "1.2.3",
-		ReleaseSHA:          "release/1.2.3-sha",
-		PushedReleaseBranch: true,
-	})
-
-	result, err := m.FinishRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
-	if err == nil {
-		t.Fatalf("FinishRelease() error=nil, want non-nil")
-	}
-	if !errors.Is(err, ErrReleaseTagPushFailed) {
-		t.Fatalf("FinishRelease() error = %v, want ErrReleaseTagPushFailed", err)
-	}
-	if result.Status != domain.ReleaseStatusFailed {
-		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusFailed)
-	}
-	if result.Error == nil {
-		t.Fatalf("release error=nil, want non-nil")
-	}
-	if result.Error.Stage != "push_tag" {
-		t.Fatalf("release error stage = %q, want %q", result.Error.Stage, "push_tag")
-	}
-	if !result.Error.Recoverable {
-		t.Fatalf("release error Recoverable = %v, want true", result.Error.Recoverable)
-	}
-	if result.Error.Code != "ERR_RELEASE_TAG_PUSH" {
-		t.Fatalf("release error code = %q, want %q", result.Error.Code, "ERR_RELEASE_TAG_PUSH")
-	}
-	if gitMock.createTagCalls != 1 {
-		t.Fatalf("CreateTag calls = %d, want 1", gitMock.createTagCalls)
-	}
-	if gitMock.pushTagCalls != 1 {
-		t.Fatalf("PushTag calls = %d, want 1", gitMock.pushTagCalls)
-	}
-}
-
-func TestFinishRelease_IdempotentRetry(t *testing.T) {
-	ctx := context.Background()
-	m, gitMock := newFinishTestManager(t)
-
-	release := writeRelease(t, m, domain.ReleaseStatusPrepared, domain.ReleaseService{
-		Name:                "svc-api",
-		RepoPath:            filepath.Join(m.cfg.RootDir, "repo-api"),
-		Version:             "1.2.3",
-		ReleaseSHA:          "release/1.2.3-sha",
-		PushedReleaseBranch: true,
-		PushedTag:           true,
-		TagRef:              "v1.2.3",
-	})
-
-	result, err := m.FinishRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
-	if err != nil {
-		t.Fatalf("FinishRelease() error = %v", err)
-	}
-	if result.Status != domain.ReleaseStatusReleased {
-		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusReleased)
-	}
-	if result.CompletedAt == nil {
-		t.Fatalf("release CompletedAt=nil, want non-nil")
-	}
-	if gitMock.createTagCalls != 0 {
-		t.Fatalf("CreateTag calls = %d, want 0", gitMock.createTagCalls)
-	}
-	if gitMock.pushTagCalls != 0 {
-		t.Fatalf("PushTag calls = %d, want 0", gitMock.pushTagCalls)
-	}
-	if !result.Services[0].PushedTag {
-		t.Fatalf("service PushedTag = %v, want true", result.Services[0].PushedTag)
-	}
-}
-
-func TestFinishRelease_SHADrift_Rejects(t *testing.T) {
-	ctx := context.Background()
-	m, gitMock := newFinishTestManager(t)
-	gitMock.resolveRefFn = func(repoPath, ref string) (string, error) {
-		if ref == "release/1.2.3" {
-			return "drifted-sha", nil
+func matchingMaster(gitMock *mockGitClient) {
+	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+		switch ref {
+		case "origin/master", "v1.2.3^{}":
+			return "accepted-sha", nil
+		default:
+			return ref + "-sha", nil
 		}
-		return ref + "-sha", nil
-	}
-
-	release := writeRelease(t, m, domain.ReleaseStatusPrepared, domain.ReleaseService{
-		Name:                "svc-api",
-		RepoPath:            filepath.Join(m.cfg.RootDir, "repo-api"),
-		Version:             "1.2.3",
-		ReleaseSHA:          "release/1.2.3-sha",
-		PushedReleaseBranch: true,
-	})
-
-	result, err := m.FinishRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
-	if !errors.Is(err, ErrReleaseRetryUnsafe) {
-		t.Fatalf("FinishRelease() error = %v, want ErrReleaseRetryUnsafe", err)
-	}
-	if gitMock.createTagCalls != 0 {
-		t.Fatalf("CreateTag calls = %d, want 0", gitMock.createTagCalls)
-	}
-	if gitMock.pushTagCalls != 0 {
-		t.Fatalf("PushTag calls = %d, want 0", gitMock.pushTagCalls)
-	}
-	if result.Status != domain.ReleaseStatusFailed {
-		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusFailed)
 	}
 }
 
-func TestFinishRelease_TagAlreadyExists_Rejects(t *testing.T) {
-	ctx := context.Background()
+func TestFinalizeRelease_HappyPath_MergesDevelopAndTagsAcceptedMasterSHA(t *testing.T) {
 	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
+
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err != nil {
+		t.Fatalf("FinalizeRelease() error = %v", err)
+	}
+	if got.Status != domain.ReleaseStatusReleased || got.CompletedAt == nil || !got.Services[0].PushedTag {
+		t.Fatalf("release = %#v", got)
+	}
+	if len(gitMock.mergeFFOnlyCalls) != 1 || gitMock.mergeFFOnlyCalls[0].Ref != "origin/develop" {
+		t.Fatalf("MergeFFOnly calls = %#v", gitMock.mergeFFOnlyCalls)
+	}
+	if len(gitMock.mergeCalls) != 1 || gitMock.mergeCalls[0].Branch != "release/1.2.3" {
+		t.Fatalf("Merge calls = %#v", gitMock.mergeCalls)
+	}
+	if len(gitMock.createTagCallList) != 1 || gitMock.createTagCallList[0].Target != "accepted-sha" {
+		t.Fatalf("CreateTag calls = %#v", gitMock.createTagCallList)
+	}
+	if len(gitMock.pushBranchExplicitCalls) != 1 || gitMock.pushTagCalls != 1 {
+		t.Fatalf("push integration = %#v, push tags = %d", gitMock.pushBranchExplicitCalls, gitMock.pushTagCalls)
+	}
+}
+
+func TestFinalizeRelease_MasterMoved_FailsWithoutTag(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	gitMock.resolveRefRes = "new-master-sha"
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
+
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if !errors.Is(err, ErrReleaseMasterMoved) || gitMock.createTagCalls != 0 {
+		t.Fatalf("error = %v, CreateTag calls = %d", err, gitMock.createTagCalls)
+	}
+	if got.Status != domain.ReleaseStatusFailed || got.Error == nil || got.Error.Code != "ERR_RELEASE_MASTER_MOVED" {
+		t.Fatalf("release = %#v", got)
+	}
+}
+
+func TestFinalizeRelease_DevelopAlreadyContainsRelease_SkipsMerge(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	gitMock.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
+
+	_, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err != nil || len(gitMock.mergeCalls) != 0 || gitMock.createTagCalls != 1 {
+		t.Fatalf("error = %v, Merge calls = %#v, CreateTag calls = %d", err, gitMock.mergeCalls, gitMock.createTagCalls)
+	}
+}
+
+func TestFinalizeRelease_ExistingTagAtAcceptedSHA_IsIdempotent(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
 	gitMock.tagExistsRes = true
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
 
-	release := writeRelease(t, m, domain.ReleaseStatusPrepared, domain.ReleaseService{
-		Name:                "svc-api",
-		RepoPath:            filepath.Join(m.cfg.RootDir, "repo-api"),
-		Version:             "1.2.3",
-		ReleaseSHA:          "release/1.2.3-sha",
-		PushedReleaseBranch: true,
-	})
-
-	result, err := m.FinishRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
-	if !errors.Is(err, ErrReleaseRetryUnsafe) {
-		t.Fatalf("FinishRelease() error = %v, want ErrReleaseRetryUnsafe", err)
-	}
-	if gitMock.createTagCalls != 0 {
-		t.Fatalf("CreateTag calls = %d, want 0", gitMock.createTagCalls)
-	}
-	if gitMock.pushTagCalls != 0 {
-		t.Fatalf("PushTag calls = %d, want 0", gitMock.pushTagCalls)
-	}
-	if result.Status != domain.ReleaseStatusFailed {
-		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusFailed)
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err != nil || gitMock.createTagCalls != 0 || gitMock.pushTagCalls != 1 || got.Services[0].TagSHA != "accepted-sha" {
+		t.Fatalf("error = %v, release = %#v, create = %d, push = %d", err, got, gitMock.createTagCalls, gitMock.pushTagCalls)
 	}
 }
 
-func TestFinishRelease_FetchFailure_PersistsFailedManifest_ReturnsLoadedRelease(t *testing.T) {
-	ctx := context.Background()
+func TestFinalizeRelease_ExistingTagAtDifferentSHA_IsUnsafe(t *testing.T) {
 	m, gitMock := newFinishTestManager(t)
-	fetchErr := errors.New("fetch boom")
-	gitMock.fetchErr = fetchErr
+	matchingMaster(gitMock)
+	gitMock.tagExistsRes = true
+	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+		if ref == "origin/master" {
+			return "accepted-sha", nil
+		}
+		return "different-sha", nil
+	}
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
 
-	release := writeRelease(t, m, domain.ReleaseStatusPrepared, domain.ReleaseService{
-		Name:                "svc-api",
-		RepoPath:            filepath.Join(m.cfg.RootDir, "repo-api"),
-		Version:             "1.2.3",
-		ReleaseSHA:          "release/1.2.3-sha",
-		PushedReleaseBranch: true,
-	})
-
-	result, err := m.FinishRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
-	if err == nil {
-		t.Fatalf("FinishRelease() error=nil, want non-nil")
-	}
-	if !errors.Is(err, ErrReleaseOperationInProgress) {
-		t.Fatalf("FinishRelease() error = %v, want ErrReleaseOperationInProgress", err)
-	}
-	if !errors.Is(err, fetchErr) {
-		t.Fatalf("FinishRelease() error = %v, does not wrap injected fetchErr", err)
-	}
-	if result.ID != release.ID {
-		t.Fatalf("result.ID = %q, want %q", result.ID, release.ID)
-	}
-	if result.Status != domain.ReleaseStatusFailed {
-		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusFailed)
-	}
-	if result.Error == nil {
-		t.Fatalf("release error=nil, want non-nil")
-	}
-	if result.Error.Stage != "finish_fetch" {
-		t.Fatalf("release error stage = %q, want %q", result.Error.Stage, "finish_fetch")
-	}
-	if !result.Error.Recoverable {
-		t.Fatalf("release error Recoverable = %v, want true", result.Error.Recoverable)
-	}
-	if result.Error.Code != "ERR_RELEASE_FETCH" {
-		t.Fatalf("release error code = %q, want %q", result.Error.Code, "ERR_RELEASE_FETCH")
-	}
-
-	loaded, loadErr := m.loadReleaseManifest(release.ID)
-	if loadErr != nil {
-		t.Fatalf("loadReleaseManifest error = %v", loadErr)
-	}
-	if loaded.Status != domain.ReleaseStatusFailed {
-		t.Fatalf("loaded release status = %q, want %q", loaded.Status, domain.ReleaseStatusFailed)
-	}
-	if loaded.Error == nil || loaded.Error.Stage != "finish_fetch" {
-		t.Fatalf("loaded release error stage = %q, want finish_fetch", loaded.Error.Stage)
-	}
-	if !loaded.Error.Recoverable {
-		t.Fatalf("loaded release error Recoverable = %v, want true", loaded.Error.Recoverable)
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if !errors.Is(err, ErrReleaseRetryUnsafe) || gitMock.createTagCalls != 0 || got.Status != domain.ReleaseStatusFailed {
+		t.Fatalf("error = %v, CreateTag calls = %d, status = %s", err, gitMock.createTagCalls, got.Status)
 	}
 }
 
-func TestFinishRelease_TagCreateFailure_ReachedTaggingCheckpoint(t *testing.T) {
-	ctx := context.Background()
+func TestFinalizeRelease_DevelopConflict_AbortsFailsAndCleansWorktree(t *testing.T) {
 	m, gitMock := newFinishTestManager(t)
-	createErr := errors.New("tag create failed")
-	gitMock.createTagErr = createErr
+	matchingMaster(gitMock)
+	gitMock.mergeErr = errors.New("conflict")
+	gitMock.operationStateFn = func(string) ([]domain.RepoState, error) { return []domain.RepoState{domain.RepoStateConflicted}, nil }
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
 
-	release := writeRelease(t, m, domain.ReleaseStatusPrepared, domain.ReleaseService{
-		Name:                "svc-api",
-		RepoPath:            filepath.Join(m.cfg.RootDir, "repo-api"),
-		Version:             "1.2.3",
-		ReleaseSHA:          "release/1.2.3-sha",
-		PushedReleaseBranch: true,
-	})
-
-	gitMock.createTagFn = func(repoPath, tag, target, message string) error {
-		loaded, loadErr := m.loadReleaseManifest(release.ID)
-		if loadErr != nil {
-			t.Errorf("load manifest during CreateTag: %v", loadErr)
-			return createErr
-		}
-		if loaded.Status != domain.ReleaseStatusTagging {
-			t.Errorf("manifest status during CreateTag = %q, want %q", loaded.Status, domain.ReleaseStatusTagging)
-		}
-		if loaded.Checkpoint != "tagging" {
-			t.Errorf("manifest checkpoint during CreateTag = %q, want %q", loaded.Checkpoint, "tagging")
-		}
-		return createErr
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if !errors.Is(err, ErrReleaseMergeConflict) || len(gitMock.mergeAbortCalls) != 1 || len(gitMock.removeWorktreeCalls) != 1 {
+		t.Fatalf("error = %v, abort = %#v, remove = %#v", err, gitMock.mergeAbortCalls, gitMock.removeWorktreeCalls)
 	}
-
-	result, err := m.FinishRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
-	if err == nil {
-		t.Fatalf("FinishRelease() error=nil, want non-nil")
-	}
-	if !errors.Is(err, ErrReleaseTagCreateFailed) {
-		t.Fatalf("FinishRelease() error = %v, want ErrReleaseTagCreateFailed", err)
-	}
-	if result.Status != domain.ReleaseStatusFailed {
-		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusFailed)
-	}
-	if result.Error == nil || result.Error.Stage != "tag" {
-		t.Fatalf("release error stage = %q, want tag", result.Error.Stage)
+	if got.Status != domain.ReleaseStatusFailed || gitMock.createTagCalls != 0 || got.Services[0].IntegrationWorktreePath != "" {
+		t.Fatalf("release = %#v, CreateTag calls = %d", got, gitMock.createTagCalls)
 	}
 }
 
-func TestFinishRelease_TagPushFailure_ReachedPushingCheckpoint(t *testing.T) {
-	ctx := context.Background()
+func TestFinalizeRelease_LegacyManifestRejected(t *testing.T) {
 	m, gitMock := newFinishTestManager(t)
-	pushErr := errors.New("push tag failed")
-	gitMock.pushTagErr = pushErr
-
-	release := writeRelease(t, m, domain.ReleaseStatusPrepared, domain.ReleaseService{
-		Name:                "svc-api",
-		RepoPath:            filepath.Join(m.cfg.RootDir, "repo-api"),
-		Version:             "1.2.3",
-		ReleaseSHA:          "release/1.2.3-sha",
-		PushedReleaseBranch: true,
-	})
-
-	gitMock.pushTagFn = func(repoPath, tag string) error {
-		loaded, loadErr := m.loadReleaseManifest(release.ID)
-		if loadErr != nil {
-			t.Errorf("load manifest during PushTag: %v", loadErr)
-			return pushErr
-		}
-		if loaded.Status != domain.ReleaseStatusPushing {
-			t.Errorf("manifest status during PushTag = %q, want %q", loaded.Status, domain.ReleaseStatusPushing)
-		}
-		if loaded.Checkpoint != "pushing" {
-			t.Errorf("manifest checkpoint during PushTag = %q, want %q", loaded.Checkpoint, "pushing")
-		}
-		return pushErr
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
+	release.ManifestVersion = 1
+	data, _ := json.Marshal(release)
+	if err := os.WriteFile(m.releaseManifestPath(release.ID), data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	result, err := m.FinishRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
-	if err == nil {
-		t.Fatalf("FinishRelease() error=nil, want non-nil")
-	}
-	if !errors.Is(err, ErrReleaseTagPushFailed) {
-		t.Fatalf("FinishRelease() error = %v, want ErrReleaseTagPushFailed", err)
-	}
-	if result.Status != domain.ReleaseStatusFailed {
-		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusFailed)
-	}
-	if result.Error == nil || result.Error.Stage != "push_tag" {
-		t.Fatalf("release error stage = %q, want push_tag", result.Error.Stage)
+	_, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if !errors.Is(err, ErrReleaseLegacyManifest) || len(gitMock.fetchCalls) != 0 {
+		t.Fatalf("error = %v, fetch calls = %#v", err, gitMock.fetchCalls)
 	}
 }
 
-func TestFinishRelease_Success_TransitionsToReleased(t *testing.T) {
-	ctx := context.Background()
+func TestFinalizeRelease_WrongStatusRejected(t *testing.T) {
 	m, gitMock := newFinishTestManager(t)
+	release := writeRelease(t, m, domain.ReleaseStatusPrepared, finalizeService(m))
 
-	release := writeRelease(t, m, domain.ReleaseStatusPrepared, domain.ReleaseService{
-		Name:                "svc-api",
-		RepoPath:            filepath.Join(m.cfg.RootDir, "repo-api"),
-		Version:             "1.2.3",
-		ReleaseSHA:          "release/1.2.3-sha",
-		PushedReleaseBranch: true,
-	})
-
-	result, err := m.FinishRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
-	if err != nil {
-		t.Fatalf("FinishRelease() error = %v", err)
-	}
-	if result.Status != domain.ReleaseStatusReleased {
-		t.Fatalf("release status = %q, want %q", result.Status, domain.ReleaseStatusReleased)
-	}
-	if result.CompletedAt == nil {
-		t.Fatalf("release CompletedAt=nil, want non-nil")
-	}
-	if result.Error != nil {
-		t.Fatalf("release error = %#v, want nil", result.Error)
-	}
-	if gitMock.createTagCalls != 1 {
-		t.Fatalf("CreateTag calls = %d, want 1", gitMock.createTagCalls)
-	}
-	if gitMock.pushTagCalls != 1 {
-		t.Fatalf("PushTag calls = %d, want 1", gitMock.pushTagCalls)
+	_, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if !errors.Is(err, ErrReleaseInvalidStatusTransition) || len(gitMock.fetchCalls) != 0 {
+		t.Fatalf("error = %v, fetch calls = %#v", err, gitMock.fetchCalls)
 	}
 }

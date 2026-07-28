@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 )
@@ -105,44 +106,6 @@ func TestReleasesPanel_KeyN_Unfocused_Noop(t *testing.T) {
 	}
 }
 
-func TestReleasesPanel_KeyF_Prepared_EmitsFinishReleaseMsg(t *testing.T) {
-	p := NewReleasesPanel(60, 20)
-	release := domain.Release{
-		ID:     "rel-1",
-		Status: domain.ReleaseStatusPrepared,
-	}
-	p.SetReleases([]domain.Release{release})
-	p.SetFocused(true)
-
-	_, cmd := p.Update(sendKey("f"))
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd for f key on prepared release")
-	}
-
-	msg := cmd()
-	relMsg, ok := msg.(FinishReleaseMsg)
-	if !ok {
-		t.Fatalf("expected FinishReleaseMsg, got %T", msg)
-	}
-	if relMsg.ReleaseID != release.ID {
-		t.Fatalf("expected ReleaseID=%q, got %q", release.ID, relMsg.ReleaseID)
-	}
-}
-
-func TestReleasesPanel_KeyF_NotPrepared_NoOp(t *testing.T) {
-	p := NewReleasesPanel(60, 20)
-	p.SetReleases([]domain.Release{{
-		ID:     "rel-2",
-		Status: domain.ReleaseStatusReleased,
-	}})
-	p.SetFocused(true)
-
-	_, cmd := p.Update(sendKey("f"))
-	if cmd != nil {
-		t.Fatal("expected nil cmd for f key when release is not prepared")
-	}
-}
-
 func TestReleasesPanel_View_EmptyPlaceholder(t *testing.T) {
 	p := NewReleasesPanel(70, 12)
 	view := stripAnsi(p.View())
@@ -164,11 +127,61 @@ func TestReleasesPanel_View_RendersColumnsAndValues(t *testing.T) {
 	})
 
 	view := stripAnsi(p.View())
-	if !containsAll(view, "ID", "Status", "Tasks", "Services", "Created") {
+	if !containsAll(view, "ID", "Status", "Created") {
 		t.Fatalf("expected column headers in view, got: %q", view)
 	}
-	if !containsAll(view, "rel-1.2.3-20260616T143000", "released", "2", "1", "2026-06-16") {
+	if !containsAll(view, "rel-1.2.3-20260616T143000", "released", "2026-06-16") {
 		t.Fatalf("expected release values in view, got: %q", view)
+	}
+}
+
+func TestReleasesPanel_View_RendersCompactListAndSelectedDetail(t *testing.T) {
+	p := NewReleasesPanel(90, 24)
+	p.SetReleases([]domain.Release{{
+		ID:        "rel-1.2.3",
+		Version:   "1.2.3",
+		Status:    domain.ReleaseStatusAwaitingMasterMerge,
+		CreatedAt: time.Date(2026, 6, 16, 14, 30, 0, 0, time.UTC),
+		Services: []domain.ReleaseService{{
+			Name: "svc-api", Version: "1.2.3", Tag: "v1.2.3", Status: domain.ReleaseStatusPrepared,
+		}},
+	}})
+	p.SetWorkflow(&domain.WorkflowSummary{
+		Steps:      []domain.WorkflowStep{{Label: "develop", State: "done"}, {Label: "master MR", State: "now"}},
+		NextAction: "merge production MR",
+	})
+
+	view := stripAnsi(p.View())
+	if !containsAll(view,
+		"ID", "Status", "Created", "rel-1.2.3", "awaiting_master_merge", "2026-06-16",
+		"Version: 1.2.3", "svc-api", "version: 1.2.3", "tag: v1.2.3", "status: prepared",
+		"✓ develop", "● master MR", "ⓘ merge production MR",
+	) {
+		t.Fatalf("release list/detail incomplete: %q", view)
+	}
+
+	p.SetWorkflow(nil)
+	if strings.Contains(stripAnsi(p.View()), "✓ develop") {
+		t.Fatal("SetWorkflow(nil) should clear workflow")
+	}
+}
+
+func TestReleasesPanel_View_NarrowDetailWrapsWithoutEllipsis(t *testing.T) {
+	p := NewReleasesPanel(40, 30)
+	p.SetReleases([]domain.Release{{
+		ID: "rel-1", Version: "1.2.3", Status: domain.ReleaseStatusPrepared,
+		Services: []domain.ReleaseService{{Name: "long-service-name", Version: "1.2.3", Tag: "release-1.2.3", Status: domain.ReleaseStatusAwaitingMasterMerge}},
+	}})
+	p.SetWorkflow(&domain.WorkflowSummary{Steps: []domain.WorkflowStep{{Label: "develop", State: "done"}, {Label: "release", State: "now"}, {Label: "regression", State: "next"}}, NextAction: "complete regression checks"})
+
+	view := p.View()
+	for i, line := range strings.Split(view, "\n") {
+		if width := lipgloss.Width(line); width > 40 {
+			t.Fatalf("line %d width = %d: %q", i, width, stripAnsi(line))
+		}
+	}
+	if strings.Contains(stripAnsi(view), "…") {
+		t.Fatalf("detail should wrap, not truncate: %q", stripAnsi(view))
 	}
 }
 
@@ -218,6 +231,9 @@ func TestReleaseStatusColor_Mapping(t *testing.T) {
 		{name: "failed red", status: domain.ReleaseStatusFailed, want: string(releasesColorFailed)},
 		{name: "draft dim", status: domain.ReleaseStatusDraft, want: string(releasesColorDim)},
 		{name: "rejected dim", status: domain.ReleaseStatusRejected, want: string(releasesColorDim)},
+		{name: "awaiting master merge", status: domain.ReleaseStatusAwaitingMasterMerge, want: string(releasesColorAwaitingMasterMerge)},
+		{name: "master merged", status: domain.ReleaseStatusMasterMerged, want: string(releasesColorMasterMerged)},
+		{name: "syncing develop", status: domain.ReleaseStatusSyncingDevelop, want: string(releasesColorSyncingDevelop)},
 	}
 
 	for _, tt := range tests {

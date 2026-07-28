@@ -6,11 +6,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
 type GhClient struct {
 	worktreePath string
+}
+
+type ghCheck struct {
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
+}
+
+type ghPR struct {
+	Number            int       `json:"number"`
+	State             string    `json:"state"`
+	URL               string    `json:"url"`
+	HeadRefName       string    `json:"headRefName"`
+	BaseRefName       string    `json:"baseRefName"`
+	HeadRefOID        string    `json:"headRefOid"`
+	Mergeable         string    `json:"mergeable"`
+	ReviewDecision    string    `json:"reviewDecision"`
+	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
 }
 
 func NewGhClient(worktreePath string) *GhClient {
@@ -50,8 +69,13 @@ func (c *GhClient) CreateMR(ctx context.Context, params CreateMRParams) (MRInfo,
 	if url == "" {
 		return MRInfo{}, &ForgeError{Category: ErrCategoryParseError, Cause: fmt.Errorf("gh pr create: missing PR URL in output"), Stderr: strings.TrimSpace(stdout)}
 	}
+	number, err := numberFromURL(url, "/pull/")
+	if err != nil {
+		return MRInfo{}, &ForgeError{Category: ErrCategoryParseError, Cause: fmt.Errorf("gh pr create: invalid PR URL: %w", err), Stderr: strings.TrimSpace(stdout)}
+	}
 
 	return MRInfo{
+		Number:       number,
 		Title:        params.Title,
 		State:        "open",
 		URL:          url,
@@ -91,6 +115,146 @@ func (c *GhClient) MRStatus(ctx context.Context, sourceBranch, repo string) ([]M
 	}
 
 	return out, nil
+}
+
+func (c *GhClient) MRReadiness(ctx context.Context, sourceBranch, repo, worktreePath string) (MRReadiness, error) {
+	const fields = "number,title,state,url,headRefOid,mergeable,reviewDecision,statusCheckRollup,headRefName,baseRefName"
+	args := []string{"pr", "list", "--head", sourceBranch, "--json", fields, "--repo", repo}
+	stdout, _, err := c.run(ctx, pickWorktree(c.worktreePath, worktreePath), args...)
+	if err != nil {
+		return MRReadiness{}, err
+	}
+
+	var raw []ghPR
+	if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
+		return MRReadiness{}, &ForgeError{Category: ErrCategoryParseError, Cause: err, Stderr: strings.TrimSpace(stdout)}
+	}
+	if len(raw) == 0 {
+		return MRReadiness{SourceBranch: sourceBranch, SupportsSHAPin: true, Blockers: []string{"pull request not found"}}, nil
+	}
+
+	return ghReadiness(raw[0], sourceBranch), nil
+}
+
+func (c *GhClient) MRReadinessByNumber(ctx context.Context, number int, repo, worktreePath string) (MRReadiness, error) {
+	const fields = "number,state,url,headRefOid,mergeable,reviewDecision,statusCheckRollup"
+	stdout, _, err := c.run(ctx, pickWorktree(c.worktreePath, worktreePath), "pr", "view", strconv.Itoa(number), "--json", fields, "--repo", repo)
+	if err != nil {
+		return MRReadiness{}, err
+	}
+
+	var pr ghPR
+	if err := json.Unmarshal([]byte(stdout), &pr); err != nil {
+		return MRReadiness{}, &ForgeError{Category: ErrCategoryParseError, Cause: err, Stderr: strings.TrimSpace(stdout)}
+	}
+	return ghReadiness(pr, ""), nil
+}
+
+func ghReadiness(pr ghPR, sourceBranch string) MRReadiness {
+	if pr.HeadRefName == "" {
+		pr.HeadRefName = sourceBranch
+	}
+	state := strings.ToLower(pr.State)
+	approved := strings.EqualFold(pr.ReviewDecision, "APPROVED")
+	ciState := ghChecksState(pr.StatusCheckRollup)
+	mergeable := strings.EqualFold(pr.Mergeable, "MERGEABLE")
+	blockers := make([]string, 0, 4)
+	if state != "open" {
+		blockers = append(blockers, "pull request is "+state)
+	}
+	if !approved {
+		blockers = append(blockers, "not approved")
+	}
+	switch ciState {
+	case "pending":
+		blockers = append(blockers, "checks pending")
+	case "failure":
+		blockers = append(blockers, "checks failing")
+	}
+	if !mergeable {
+		if strings.EqualFold(pr.Mergeable, "CONFLICTING") {
+			blockers = append(blockers, "conflicts")
+		} else {
+			blockers = append(blockers, "mergeability unknown")
+		}
+	}
+
+	return MRReadiness{
+		Number:         pr.Number,
+		State:          state,
+		URL:            pr.URL,
+		SourceBranch:   pr.HeadRefName,
+		TargetBranch:   pr.BaseRefName,
+		HeadSHA:        pr.HeadRefOID,
+		Approved:       approved,
+		CIState:        ciState,
+		Mergeable:      mergeable,
+		Ready:          len(blockers) == 0,
+		Blockers:       blockers,
+		SupportsSHAPin: true,
+	}
+}
+
+func ghChecksState(checks []ghCheck) string {
+	pending := false
+	for _, check := range checks {
+		state := strings.ToUpper(check.State)
+		if state != "" {
+			switch state {
+			case "SUCCESS", "NEUTRAL", "SKIPPED":
+				continue
+			case "PENDING", "EXPECTED":
+				pending = true
+				continue
+			default:
+				return "failure"
+			}
+		}
+		if !strings.EqualFold(check.Status, "COMPLETED") {
+			pending = true
+			continue
+		}
+		switch strings.ToUpper(check.Conclusion) {
+		case "SUCCESS", "NEUTRAL", "SKIPPED":
+		default:
+			return "failure"
+		}
+	}
+	if pending {
+		return "pending"
+	}
+	return "success"
+}
+
+func (c *GhClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMergeResult, error) {
+	worktreePath := pickWorktree(c.worktreePath, params.WorktreePath)
+	number := strconv.Itoa(params.Number)
+	method := params.Method
+	if method == "" {
+		method = "merge"
+	}
+	args := []string{"pr", "merge", number, "--" + method, "--repo", params.Repo}
+	if params.ExpectedHeadSHA != "" {
+		args = append(args, "--match-head-commit", params.ExpectedHeadSHA)
+	}
+	if _, _, err := c.run(ctx, worktreePath, args...); err != nil {
+		return MRMergeResult{}, err
+	}
+
+	result := MRMergeResult{Merged: true}
+	stdout, _, err := c.run(ctx, worktreePath, "pr", "view", number, "--json", "mergeCommit", "--repo", params.Repo)
+	if err != nil {
+		return result, nil
+	}
+	var view struct {
+		MergeCommit *struct {
+			OID string `json:"oid"`
+		} `json:"mergeCommit"`
+	}
+	if json.Unmarshal([]byte(stdout), &view) == nil && view.MergeCommit != nil {
+		result.MergeCommitSHA = view.MergeCommit.OID
+	}
+	return result, nil
 }
 
 func (c *GhClient) PipelineStatus(ctx context.Context, branch, repo string) ([]PipelineStatus, error) {

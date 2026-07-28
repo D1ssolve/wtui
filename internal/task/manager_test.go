@@ -35,6 +35,18 @@ type fakeFindAllRepoResolver struct {
 	findAllCalls int
 }
 
+func (m *mockForgeClient) MRReadiness(_ context.Context, _, _, _ string) (forge.MRReadiness, error) {
+	return forge.MRReadiness{}, nil
+}
+
+func (m *mockForgeClient) MRReadinessByNumber(_ context.Context, _ int, _, _ string) (forge.MRReadiness, error) {
+	return forge.MRReadiness{}, nil
+}
+
+func (m *mockForgeClient) MergeMR(_ context.Context, _ forge.MergeMRParams) (forge.MRMergeResult, error) {
+	return forge.MRMergeResult{}, nil
+}
+
 func (f *fakeRepoResolver) Resolve(_ context.Context, _ string) (string, error) { return "", nil }
 
 func (f *fakeRepoResolver) FindAll(_ context.Context) ([]domain.Repo, error) {
@@ -89,6 +101,7 @@ type mockGitClient struct {
 	fetchErr             error
 	rebaseErr            error
 	mergeErr             error
+	mergeFFOnlyErr       error
 	mergeAbortErr        error
 	pushErr              error
 	worktreeBranchResult string
@@ -96,6 +109,7 @@ type mockGitClient struct {
 	fetchFn              func(path string) error
 	rebaseFn             func(path, upstream string) error
 	mergeFn              func(path, branch string) error
+	mergeFFOnlyFn        func(path, ref string) error
 	pushFn               func(path string, lineCh chan<- string) error
 	getWorktreeBranchFn  func(path string) (string, error)
 	stashErr             error
@@ -126,6 +140,7 @@ type mockGitClient struct {
 	fetchCalls                   []string
 	rebaseCalls                  []rebaseCall
 	mergeCalls                   []mergeCall
+	mergeFFOnlyCalls             []mergeFFOnlyCall
 	mergeAbortCalls              []string
 	pushCalls                    []string
 	pushBranchExplicitCalls      []pushBranchExplicitCall
@@ -204,6 +219,11 @@ type rebaseCall struct {
 type mergeCall struct {
 	WorktreePath string
 	Branch       string
+}
+
+type mergeFFOnlyCall struct {
+	WorktreePath string
+	Ref          string
 }
 
 type isAncestorCall struct {
@@ -418,6 +438,18 @@ func (m *mockGitClient) Merge(_ context.Context, path, branch string) error {
 	}
 
 	return m.mergeErr
+}
+
+func (m *mockGitClient) MergeFFOnly(_ context.Context, path, ref string) error {
+	m.mu.Lock()
+	m.mergeFFOnlyCalls = append(m.mergeFFOnlyCalls, mergeFFOnlyCall{WorktreePath: path, Ref: ref})
+	m.mu.Unlock()
+
+	if m.mergeFFOnlyFn != nil {
+		return m.mergeFFOnlyFn(path, ref)
+	}
+
+	return m.mergeFFOnlyErr
 }
 
 func (m *mockGitClient) MergeAbort(_ context.Context, worktreePath string) error {

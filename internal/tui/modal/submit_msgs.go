@@ -33,6 +33,7 @@ type ConfirmReleaseExecuteMsg struct {
 	Versions map[string]string
 }
 
-type ConfirmFinishReleaseMsg struct {
+type ConfirmMergeMsg struct {
+	TaskID    string
 	ReleaseID string
 }

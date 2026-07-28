@@ -5,16 +5,19 @@ import "time"
 type ReleaseStatus string
 
 const (
-	ReleaseStatusDraft      ReleaseStatus = "draft"
-	ReleaseStatusValidating ReleaseStatus = "validating"
-	ReleaseStatusMerging    ReleaseStatus = "merging"
-	ReleaseStatusBranching  ReleaseStatus = "branching"
-	ReleaseStatusPushing    ReleaseStatus = "pushing"
-	ReleaseStatusPrepared   ReleaseStatus = "prepared"
-	ReleaseStatusTagging    ReleaseStatus = "tagging"
-	ReleaseStatusReleased   ReleaseStatus = "released"
-	ReleaseStatusFailed     ReleaseStatus = "failed"
-	ReleaseStatusRejected   ReleaseStatus = "rejected"
+	ReleaseStatusDraft               ReleaseStatus = "draft"
+	ReleaseStatusValidating          ReleaseStatus = "validating"
+	ReleaseStatusMerging             ReleaseStatus = "merging"
+	ReleaseStatusBranching           ReleaseStatus = "branching"
+	ReleaseStatusPushing             ReleaseStatus = "pushing"
+	ReleaseStatusPrepared            ReleaseStatus = "prepared"
+	ReleaseStatusAwaitingMasterMerge ReleaseStatus = "awaiting_master_merge"
+	ReleaseStatusMasterMerged        ReleaseStatus = "master_merged"
+	ReleaseStatusSyncingDevelop      ReleaseStatus = "syncing_develop"
+	ReleaseStatusTagging             ReleaseStatus = "tagging"
+	ReleaseStatusReleased            ReleaseStatus = "released"
+	ReleaseStatusFailed              ReleaseStatus = "failed"
+	ReleaseStatusRejected            ReleaseStatus = "rejected"
 )
 
 type Release struct {
@@ -60,12 +63,21 @@ type ReleaseService struct {
 	PostIntegrationSHA      string                 `json:"post_integration_sha,omitempty"`
 	ReleaseRef              string                 `json:"release_ref,omitempty"`
 	ReleaseSHA              string                 `json:"release_sha,omitempty"`
+	ProductionMR            *ProductionMRRef       `json:"production_mr,omitempty"`
+	AcceptedMergeSHA        string                 `json:"accepted_merge_sha,omitempty"`
 	TagRef                  string                 `json:"tag_ref,omitempty"`
 	TagSHA                  string                 `json:"tag_sha,omitempty"`
 	PushedIntegration       bool                   `json:"pushed_integration"`
 	PushedReleaseBranch     bool                   `json:"pushed_release_branch"`
 	PushedTag               bool                   `json:"pushed_tag"`
 	Error                   *ReleaseError          `json:"error,omitempty"`
+}
+
+type ProductionMRRef struct {
+	Number    int    `json:"number"`
+	URL       string `json:"url"`
+	SourceSHA string `json:"source_sha"`
+	State     string `json:"state"`
 }
 
 type ReleaseFeatureBranch struct {

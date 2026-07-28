@@ -7,16 +7,20 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 const (
-	releasesColorReleased   = lipgloss.Color("#22C55E")
-	releasesColorInProgress = lipgloss.Color("#F59E0B")
-	releasesColorFailed     = lipgloss.Color("#EF4444")
-	releasesColorPrepared   = lipgloss.Color("#3B82F6")
-	releasesColorDim        = colorDim
+	releasesColorReleased            = lipgloss.Color("#22C55E")
+	releasesColorInProgress          = lipgloss.Color("#F59E0B")
+	releasesColorFailed              = lipgloss.Color("#EF4444")
+	releasesColorPrepared            = lipgloss.Color("#3B82F6")
+	releasesColorAwaitingMasterMerge = lipgloss.Color("#A855F7")
+	releasesColorMasterMerged        = lipgloss.Color("#14B8A6")
+	releasesColorSyncingDevelop      = lipgloss.Color("#06B6D4")
+	releasesColorDim                 = colorDim
 )
 
 type ReleasesPanel struct {
@@ -25,6 +29,7 @@ type ReleasesPanel struct {
 	focused  bool
 	width    int
 	height   int
+	workflow *domain.WorkflowSummary
 }
 
 func NewReleasesPanel(width, height int) ReleasesPanel {
@@ -59,6 +64,10 @@ func (p *ReleasesPanel) SetReleases(releases []domain.Release) {
 	if p.cursor >= len(p.releases) {
 		p.cursor = len(p.releases) - 1
 	}
+}
+
+func (p *ReleasesPanel) SetWorkflow(wf *domain.WorkflowSummary) {
+	p.workflow = wf
 }
 
 func (p *ReleasesPanel) SetFocused(focused bool) {
@@ -100,14 +109,6 @@ func (p ReleasesPanel) Update(msg tea.Msg) (ReleasesPanel, tea.Cmd) {
 			return p, nil
 		case "N":
 			return p, func() tea.Msg { return OpenCreateReleaseDialogMsg{} }
-		case "f":
-			rel := p.SelectedRelease()
-			if rel != nil && rel.Status == domain.ReleaseStatusPrepared {
-				return p, func() tea.Msg {
-					return FinishReleaseMsg{ReleaseID: rel.ID}
-				}
-			}
-			return p, nil
 		}
 	}
 
@@ -126,10 +127,10 @@ func (p ReleasesPanel) View() string {
 		current = p.cursor + 1
 	}
 	title := fmt.Sprintf("[3] Releases  [%d/%d]", current, total)
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary).MaxWidth(inner.w)
+	titleRendered := renderPaneTitle(title, "[2] Services", inner.w)
 
 	body := p.renderBody(inner.w, max(0, inner.h-1))
-	content := lipgloss.JoinVertical(lipgloss.Left, titleStyle.Render(title), body)
+	content := lipgloss.JoinVertical(lipgloss.Left, titleRendered, body)
 
 	borderStyle := panelBorderStyle(p.focused)
 	return borderStyle.
@@ -148,11 +149,22 @@ func (p ReleasesPanel) renderBody(width, height int) string {
 		return fitLines([]string{lipgloss.NewStyle().MaxWidth(width).Render(placeholder)}, height)
 	}
 
+	listHeight := max(2, height/2)
+	listView := p.renderList(width, listHeight)
+	detail := p.renderDetail(width)
+	return fitLines(strings.Split(lipgloss.JoinVertical(lipgloss.Left, listView, "", detail), "\n"), height)
+}
+
+func (p ReleasesPanel) renderList(width, height int) string {
 	headStyle := lipgloss.NewStyle().Bold(true).Foreground(colorBold)
-	header := headStyle.MaxWidth(width).Render(fmt.Sprintf("%-28s %-12s %5s %8s  %s", "ID", "Status", "Tasks", "Services", "Created"))
+	header := ansi.Truncate(headStyle.Render(fmt.Sprintf("%-28s %-22s  %s", "ID", "Status", "Created")), width, "")
 	lines := []string{header}
 
-	for i, rel := range p.releases {
+	visible := max(0, height-1)
+	start := max(0, p.cursor-visible+1)
+	end := min(len(p.releases), start+visible)
+	for i := start; i < end; i++ {
+		rel := p.releases[i]
 		id := rel.ID
 		if id == "" {
 			id = "-"
@@ -169,16 +181,51 @@ func (p ReleasesPanel) renderBody(width, height int) string {
 			created = rel.CreatedAt.In(time.UTC).Format("2006-01-02")
 		}
 
-		line := fmt.Sprintf("%-28s %-12s %5d %8d  %s", id, statusStyled, len(rel.TaskIDs), len(rel.Services), created)
+		line := fmt.Sprintf("%-28s %-22s  %s", id, statusStyled, created)
 		if i == p.cursor {
-			line = lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary).MaxWidth(width).Render(line)
+			line = lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary).Render(line)
 		} else {
-			line = lipgloss.NewStyle().Foreground(colorNormal).MaxWidth(width).Render(line)
+			line = lipgloss.NewStyle().Foreground(colorNormal).Render(line)
 		}
-		lines = append(lines, line)
+		lines = append(lines, ansi.Truncate(line, width, ""))
 	}
 
 	return fitLines(lines, height)
+}
+
+func (p ReleasesPanel) renderDetail(width int) string {
+	rel := p.SelectedRelease()
+	if rel == nil {
+		return ""
+	}
+
+	version := rel.Version
+	if version == "" {
+		version = "-"
+	}
+	lines := []string{lipgloss.NewStyle().Bold(true).Foreground(colorBold).Render("Version: " + version)}
+	if workflow := renderWorkflow(p.workflow, width); workflow != "" {
+		lines = append(lines, workflow)
+	}
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorBold).Render("Services:"))
+	if len(rel.Services) == 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(releasesColorDim).Render("No services."))
+	}
+	for _, service := range rel.Services {
+		line := fmt.Sprintf("%s  version: %s  tag: %s  status: %s", service.Name, valueOrDash(service.Version), valueOrDash(service.Tag), service.Status)
+		if service.ProductionMR != nil {
+			line += fmt.Sprintf("  MR: %s", valueOrDash(service.ProductionMR.State))
+		}
+		lines = append(lines, ansi.Wrap(lipgloss.NewStyle().Foreground(colorNormal).Render(line), width, " "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func valueOrDash(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 func fitLines(lines []string, height int) string {
@@ -206,6 +253,12 @@ func releaseStatusColor(status domain.ReleaseStatus) lipgloss.Color {
 		return releasesColorInProgress
 	case domain.ReleaseStatusPrepared:
 		return releasesColorPrepared
+	case domain.ReleaseStatusAwaitingMasterMerge:
+		return releasesColorAwaitingMasterMerge
+	case domain.ReleaseStatusMasterMerged:
+		return releasesColorMasterMerged
+	case domain.ReleaseStatusSyncingDevelop:
+		return releasesColorSyncingDevelop
 	case domain.ReleaseStatusFailed:
 		return releasesColorFailed
 	case domain.ReleaseStatusDraft, domain.ReleaseStatusRejected:

@@ -16,6 +16,7 @@ func renderFooter(m Model) string {
 			"[Enter] services",
 			"[i] init",
 			"[C] close",
+			"[M] merge MRs",
 		}
 		parts = append(parts, "[.] status", "[?] help", "[q] quit")
 		hints = joinFooterHints(parts)
@@ -25,6 +26,7 @@ func renderFooter(m Model) string {
 			"[m] forge",
 			"[p] pipeline",
 			"[v] validate",
+			"[M] merge MRs",
 			"[Esc] back",
 			"[.] status",
 			"[?] help",
@@ -37,8 +39,15 @@ func renderFooter(m Model) string {
 			"[N] prepare release",
 			"[r] refresh",
 		}
-		if rel := m.releasesPanel.SelectedRelease(); rel != nil && rel.Status == domain.ReleaseStatusPrepared {
-			parts = append(parts, "[f] finish release")
+		if rel := m.releasesPanel.SelectedRelease(); rel != nil {
+			switch rel.Status {
+			case domain.ReleaseStatusPrepared:
+				parts = append(parts, "[F] promote")
+			case domain.ReleaseStatusAwaitingMasterMerge:
+				parts = append(parts, "[M] merge MRs")
+			case domain.ReleaseStatusMasterMerged:
+				parts = append(parts, "[F] finalize")
+			}
 		}
 		parts = append(parts, "[?] help", "[q] quit")
 		hints = joinFooterHints(parts)

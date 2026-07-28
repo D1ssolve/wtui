@@ -168,6 +168,13 @@ type cmdManager struct {
 	finishReleaseResult domain.Release
 	finishReleaseErr    error
 
+	inspectTaskID     string
+	inspectTaskResult task.TaskMergeInspection
+	mergeTaskID       string
+	mergeTaskResult   task.TaskMergeResult
+	promoteReleaseID  string
+	promoteResult     domain.Release
+
 	forgeCreateMRArgs      forge.CreateMRParams
 	forgePipelineStatusArg forgePipelineStatusParams
 	forgeListIssuesArgs    forge.ListIssuesParams
@@ -260,10 +267,26 @@ func (m *cmdManager) CreateRelease(ctx context.Context, params task.CreateReleas
 	return m.createReleaseResult, m.createReleaseErr
 }
 
-func (m *cmdManager) FinishRelease(ctx context.Context, params task.FinishReleaseParams) (domain.Release, error) {
+func (m *cmdManager) FinalizeRelease(ctx context.Context, params task.FinishReleaseParams) (domain.Release, error) {
 	m.finishReleaseCtx = ctx
 	m.finishReleaseParams = params
 	return m.finishReleaseResult, m.finishReleaseErr
+}
+
+func (m *cmdManager) InspectTaskMerge(_ context.Context, taskID string) (task.TaskMergeInspection, error) {
+	m.inspectTaskID = taskID
+	return m.inspectTaskResult, nil
+}
+
+func (m *cmdManager) MergeTaskMRs(_ context.Context, taskID string) (task.TaskMergeResult, error) {
+	m.mergeTaskID = taskID
+	return m.mergeTaskResult, nil
+}
+
+func (m *cmdManager) PromoteRelease(_ context.Context, releaseID string, statusCh chan<- string) (domain.Release, error) {
+	m.promoteReleaseID = releaseID
+	statusCh <- "promoting"
+	return m.promoteResult, nil
 }
 
 func (m *cmdManager) RetryRelease(_ context.Context, _ string) (domain.Release, error) {
@@ -583,25 +606,19 @@ func TestCreateReleaseCmdReturnsErrorInMessage(t *testing.T) {
 	}
 }
 
-func TestFinishReleaseCmdStreamsStatusAndReturnsDoneMsg(t *testing.T) {
+func TestFinalizeReleaseCmdReturnsDoneMsg(t *testing.T) {
 	expected := domain.Release{ID: "rel-1", Status: domain.ReleaseStatusPrepared}
 	mgr := &cmdManager{finishReleaseResult: expected}
 
-	cmd := finishReleaseCmd(mgr, "rel-1")
+	cmd := finalizeReleaseCmd(mgr, "rel-1")
 
-	msg1 := cmd()
-	line1, ok := msg1.(OutputLineMsg)
+	msg2 := cmd()
+	done, ok := msg2.(ReleaseActionDoneMsg)
 	if !ok {
-		t.Fatalf("msg1 = %T, want OutputLineMsg", msg1)
+		t.Fatalf("msg2 = %T, want ReleaseActionDoneMsg", msg2)
 	}
-	if line1.Line != "Finishing release rel-1" {
-		t.Fatalf("line1 = %q, want Finishing release rel-1", line1.Line)
-	}
-
-	msg2 := line1.Next()
-	done, ok := msg2.(FinishReleaseDoneMsg)
-	if !ok {
-		t.Fatalf("msg2 = %T, want FinishReleaseDoneMsg", msg2)
+	if done.Action != "finalize" {
+		t.Fatalf("action = %q, want finalize", done.Action)
 	}
 	if done.Release.ID != "rel-1" {
 		t.Fatalf("done.Release.ID = %q, want rel-1", done.Release.ID)
@@ -625,6 +642,38 @@ func TestFinishReleaseCmdStreamsStatusAndReturnsDoneMsg(t *testing.T) {
 	remaining := time.Until(deadline)
 	if remaining > 10*time.Minute || remaining < 9*time.Minute+59*time.Second {
 		t.Fatalf("FinishRelease timeout ~10m, got remaining=%s", remaining)
+	}
+}
+
+func TestInspectAndMergeTaskCommandsPreserveTaskID(t *testing.T) {
+	mgr := &cmdManager{
+		inspectTaskResult: task.TaskMergeInspection{TaskID: "TASK-1"},
+		mergeTaskResult:   task.TaskMergeResult{TaskID: "TASK-1", Merged: []string{"api"}},
+	}
+
+	inspection := inspectTaskMergeCmd(mgr, "TASK-1", 7)().(TaskMergeInspectionMsg)
+	if inspection.Inspection.TaskID != "TASK-1" || mgr.inspectTaskID != "TASK-1" {
+		t.Fatalf("inspection = %#v, called with %q", inspection, mgr.inspectTaskID)
+	}
+	if inspection.Generation != 7 {
+		t.Fatalf("generation = %d, want 7", inspection.Generation)
+	}
+	merged := mergeTaskMRsCmd(mgr, "TASK-1")().(TaskMergeDoneMsg)
+	if len(merged.Result.Merged) != 1 || mgr.mergeTaskID != "TASK-1" {
+		t.Fatalf("merge = %#v, called with %q", merged, mgr.mergeTaskID)
+	}
+}
+
+func TestPromoteReleaseCmdStreamsStatusAndReturnsDone(t *testing.T) {
+	mgr := &cmdManager{promoteResult: domain.Release{ID: "rel-1"}}
+	msg := promoteReleaseCmd(mgr, "rel-1")()
+	line, ok := msg.(OutputLineMsg)
+	if !ok || line.Line != "promoting" {
+		t.Fatalf("first message = %#v, want promoting output", msg)
+	}
+	done, ok := line.Next().(ReleaseActionDoneMsg)
+	if !ok || done.Action != "promote" || done.Release.ID != "rel-1" || mgr.promoteReleaseID != "rel-1" {
+		t.Fatalf("done = %#v, release ID call = %q", done, mgr.promoteReleaseID)
 	}
 }
 

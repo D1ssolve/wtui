@@ -380,6 +380,30 @@ func TestServicesPanel_View_ContainsTitle(t *testing.T) {
 	}
 }
 
+func TestServicesPanel_View_ShowsWorkflowAboveServices(t *testing.T) {
+	p := NewServicesPanel(70, 20)
+	p.SetServices("IN-001", []domain.Service{{Name: "collection"}})
+	p.SetWorkflow(&domain.WorkflowSummary{
+		Steps:      []domain.WorkflowStep{{Label: "code", State: "done"}, {Label: "MR", State: "now"}},
+		NextAction: "request review",
+	})
+
+	view := stripAnsi(p.View())
+	workflowAt := strings.Index(view, "✓ code")
+	serviceAt := strings.Index(view, "collection")
+	if workflowAt < 0 || serviceAt < 0 || workflowAt >= serviceAt {
+		t.Fatalf("workflow should precede service list: %q", view)
+	}
+	if !strings.Contains(view, "ⓘ request review") {
+		t.Fatalf("view missing next action: %q", view)
+	}
+
+	p.SetWorkflow(nil)
+	if strings.Contains(stripAnsi(p.View()), "✓ code") {
+		t.Fatal("SetWorkflow(nil) should clear workflow")
+	}
+}
+
 func TestServicesPanel_View_ItemCount(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection", "databridge")
@@ -428,9 +452,9 @@ func TestServicesPanel_View_CleanService_ShowsCheckIcon(t *testing.T) {
 	}
 }
 
-func TestServiceDelegate_UsesTwoLines(t *testing.T) {
-	if got := (serviceDelegate{}).Height(); got != 2 {
-		t.Fatalf("Height() = %d, want 2", got)
+func TestServiceDelegate_UsesOneLine(t *testing.T) {
+	if got := (serviceDelegate{}).Height(); got != 1 {
+		t.Fatalf("Height() = %d, want 1", got)
 	}
 }
 

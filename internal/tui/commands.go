@@ -423,22 +423,84 @@ func createReleaseCmd(mgr task.Manager, params task.CreateReleaseParams) tea.Cmd
 	return readStatusOrDone(statusCh, doneCh)
 }
 
-func finishReleaseCmd(mgr task.Manager, releaseID string) tea.Cmd {
+func inspectTaskMergeCmd(mgr task.Manager, taskID string, generation uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 2*time.Minute)
+		defer cancel()
+		inspection, err := mgr.InspectTaskMerge(ctx, taskID)
+		return TaskMergeInspectionMsg{TaskID: taskID, Generation: generation, Inspection: inspection, Err: err}
+	}
+}
+
+func inspectReleaseMergeCmd(mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		inspection, err := mgr.InspectReleaseMerge(ctx, releaseID)
+		return ReleaseMergeInspectionMsg{ReleaseID: releaseID, Generation: generation, Inspection: inspection, Err: err}
+	}
+}
+
+func mergeTaskMRsCmd(mgr task.Manager, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 10*time.Minute)
+		defer cancel()
+		result, err := mgr.MergeTaskMRs(ctx, taskID)
+		return TaskMergeDoneMsg{Result: result, Err: err}
+	}
+}
+
+func mergeReleaseMRsCmd(mgr task.Manager, releaseID string) tea.Cmd {
 	statusCh := make(chan string, 32)
-	doneCh := make(chan FinishReleaseDoneMsg, 1)
-	statusCh <- "Finishing release " + releaseID
+	doneCh := make(chan ReleaseMergeDoneMsg, 1)
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-
-		release, err := mgr.FinishRelease(ctx, task.FinishReleaseParams{ReleaseID: releaseID, StatusCh: statusCh})
+		release, result, err := mgr.MergeReleaseMRs(ctx, releaseID, statusCh)
 		close(statusCh)
-		doneCh <- FinishReleaseDoneMsg{Release: release, Err: err}
+		doneCh <- ReleaseMergeDoneMsg{Release: release, Result: result, Err: err}
 		close(doneCh)
 	}()
 
 	return readStatusOrDone(statusCh, doneCh)
+}
+
+func promoteReleaseCmd(mgr task.Manager, releaseID string) tea.Cmd {
+	return releaseActionCmd(mgr, "promote", releaseID)
+}
+
+func finalizeReleaseCmd(mgr task.Manager, releaseID string) tea.Cmd {
+	return releaseActionCmd(mgr, "finalize", releaseID)
+}
+
+func releaseActionCmd(mgr task.Manager, action, releaseID string) tea.Cmd {
+	statusCh := make(chan string, 32)
+	doneCh := make(chan ReleaseActionDoneMsg, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		var release domain.Release
+		var err error
+		if action == "promote" {
+			release, err = mgr.PromoteRelease(ctx, releaseID, statusCh)
+		} else {
+			release, err = mgr.FinalizeRelease(ctx, task.FinishReleaseParams{ReleaseID: releaseID, StatusCh: statusCh})
+		}
+		close(statusCh)
+		doneCh <- ReleaseActionDoneMsg{Action: action, Release: release, Err: err}
+		close(doneCh)
+	}()
+	return readStatusOrDone(statusCh, doneCh)
+}
+
+func loadTaskWorkflowCmd(mgr task.Manager, taskID string, generation uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
+		defer cancel()
+		workflow, err := mgr.TaskWorkflow(ctx, taskID)
+		return TaskWorkflowLoadedMsg{TaskID: taskID, Generation: generation, Workflow: workflow, Err: err}
+	}
 }
 
 func loadReleaseVersionsCmd(mgr task.Manager, taskIDs []string) tea.Cmd {

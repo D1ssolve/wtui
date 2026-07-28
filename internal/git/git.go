@@ -70,6 +70,7 @@ type Client interface {
 	Checkout(ctx context.Context, worktreePath, branch string) error
 
 	Merge(ctx context.Context, worktreePath, branch string) error
+	MergeFFOnly(ctx context.Context, worktreePath, ref string) error
 
 	MergeAbort(ctx context.Context, worktreePath string) error
 
@@ -403,6 +404,11 @@ func (c *CommandClient) Checkout(ctx context.Context, worktreePath, branch strin
 
 func (c *CommandClient) Merge(ctx context.Context, worktreePath, branch string) error {
 	_, err := c.execGit(ctx, "-C", worktreePath, "merge", branch)
+	return err
+}
+
+func (c *CommandClient) MergeFFOnly(ctx context.Context, worktreePath, ref string) error {
+	_, err := c.execGit(ctx, "-C", worktreePath, "merge", "--ff-only", ref)
 	return err
 }
 

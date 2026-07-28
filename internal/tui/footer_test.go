@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 func TestRenderFooter_FocusTasks_IncludesCoreHints(t *testing.T) {
@@ -117,6 +119,24 @@ func TestRenderFooter_FocusReleases_IncludesReleaseHints(t *testing.T) {
 	} {
 		if !strings.Contains(footer, want) {
 			t.Errorf("releases footer should include %q, got %q", want, footer)
+		}
+	}
+}
+
+func TestRenderFooter_FocusReleases_ShowsStatusAction(t *testing.T) {
+	for _, tc := range []struct {
+		status domain.ReleaseStatus
+		want   string
+	}{
+		{domain.ReleaseStatusPrepared, "[F] promote"},
+		{domain.ReleaseStatusAwaitingMasterMerge, "[M] merge MRs"},
+		{domain.ReleaseStatusMasterMerged, "[F] finalize"},
+	} {
+		m := newTestModel(t, &mockManager{})
+		m.focus = FocusReleases
+		m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: tc.status}})
+		if footer := renderFooter(m); !strings.Contains(footer, tc.want) {
+			t.Errorf("status %s footer missing %q: %s", tc.status, tc.want, footer)
 		}
 	}
 }

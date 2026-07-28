@@ -148,8 +148,27 @@ func (m *closeTaskE2EManager) CreateRelease(_ context.Context, _ task.CreateRele
 	return domain.Release{}, nil
 }
 
-func (m *closeTaskE2EManager) FinishRelease(_ context.Context, _ task.FinishReleaseParams) (domain.Release, error) {
+func (m *closeTaskE2EManager) FinalizeRelease(_ context.Context, _ task.FinishReleaseParams) (domain.Release, error) {
 	return domain.Release{}, nil
+}
+
+func (m *closeTaskE2EManager) InspectTaskMerge(_ context.Context, taskID string) (task.TaskMergeInspection, error) {
+	return task.TaskMergeInspection{TaskID: taskID}, nil
+}
+func (m *closeTaskE2EManager) MergeTaskMRs(_ context.Context, taskID string) (task.TaskMergeResult, error) {
+	return task.TaskMergeResult{TaskID: taskID}, nil
+}
+func (m *closeTaskE2EManager) TaskWorkflow(_ context.Context, _ string) (domain.WorkflowSummary, error) {
+	return domain.WorkflowSummary{}, nil
+}
+func (m *closeTaskE2EManager) PromoteRelease(_ context.Context, releaseID string, _ chan<- string) (domain.Release, error) {
+	return domain.Release{ID: releaseID}, nil
+}
+func (m *closeTaskE2EManager) InspectReleaseMerge(_ context.Context, releaseID string) (task.ReleaseMergeInspection, error) {
+	return task.ReleaseMergeInspection{ReleaseID: releaseID}, nil
+}
+func (m *closeTaskE2EManager) MergeReleaseMRs(_ context.Context, releaseID string, _ chan<- string) (domain.Release, task.ReleaseMergeResult, error) {
+	return domain.Release{ID: releaseID}, task.ReleaseMergeResult{ReleaseID: releaseID}, nil
 }
 
 func (m *closeTaskE2EManager) IsProtectedBranch(_ context.Context, _ string) bool { return false }
