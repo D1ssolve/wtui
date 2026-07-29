@@ -18,8 +18,6 @@ var (
 
 	ErrMixedBranchTypes = errors.New("mixed branch types are not allowed")
 
-	ErrTagAlreadyExists = errors.New("tag already exists")
-
 	ErrReleaseNotFound                = errors.New("release: not found")
 	ErrReleaseManifestInvalid         = errors.New("release: manifest invalid")
 	ErrReleaseInvalidStatusTransition = errors.New("release: invalid status transition")

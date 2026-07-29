@@ -8,10 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
-	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 func makeServices(taskID string, names ...string) (string, []domain.Service) {
@@ -25,16 +23,6 @@ func makeServices(taskID string, names ...string) (string, []domain.Service) {
 		}
 	}
 	return taskID, svcs
-}
-
-func testResolvedFlow() *gitflow.ResolvedGitFlow {
-	return &gitflow.ResolvedGitFlow{
-		DefaultBranchType: gitflow.BranchTypeFeature,
-		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
-			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
-			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
-		},
-	}
 }
 
 func TestServicesPanel_New_EmptyByDefault(t *testing.T) {
@@ -507,79 +495,6 @@ func TestServicesPanel_View_LongContentDoesNotExceedPanelWidth(t *testing.T) {
 	}
 	if !strings.Contains(stripAnsi(view), "…") {
 		t.Fatalf("view = %q, want truncation ellipsis", stripAnsi(view))
-	}
-}
-
-func TestServicesPanel_View_NoPresetBadge(t *testing.T) {
-	p := NewServicesPanel(100, 20)
-	p.SetGitFlow(testResolvedFlow(), "git-flow", true)
-	p.SetServices("IN-001", []domain.Service{{
-		Name:         "collection",
-		Branch:       "feature/ABC-123",
-		BaseBranch:   "develop",
-		WorktreePath: "/tmp/.tasks/IN-001/collection",
-	}})
-
-	view := stripAnsi(p.View())
-	if strings.Contains(view, "[git-flow]") {
-		t.Fatalf("unexpected git-flow preset badge, got: %q", view)
-	}
-	if strings.Contains(view, "[feature]") {
-		t.Fatalf("unexpected feature branch type badge, got: %q", view)
-	}
-}
-
-func TestServicesPanel_View_NoHotfixBadge(t *testing.T) {
-	p := NewServicesPanel(100, 20)
-	p.SetGitFlow(testResolvedFlow(), "git-flow", true)
-	p.SetServices("IN-001", []domain.Service{{
-		Name:         "collection",
-		Branch:       "hotfix/1.2.1",
-		BaseBranch:   "master",
-		WorktreePath: "/tmp/.tasks/IN-001/collection",
-	}})
-
-	view := stripAnsi(p.View())
-	if strings.Contains(view, "[hotfix]") {
-		t.Fatalf("unexpected hotfix branch type badge, got: %q", view)
-	}
-}
-
-func TestServicesPanel_View_NoForgeIndicator(t *testing.T) {
-	p := NewServicesPanel(100, 20)
-	p.SetForgeClients(
-		map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitLab: nil},
-		&config.ForgeConfig{GitLabHost: "gitlab.com", GitHubHost: "github.com"},
-	)
-	p.SetServices("IN-001", []domain.Service{{
-		Name:         "collection",
-		RemoteURL:    "git@gitlab.com:group/collection.git",
-		Branch:       "feature/ABC-123",
-		BaseBranch:   "develop",
-		WorktreePath: "/tmp/.tasks/IN-001/collection",
-	}})
-
-	view := stripAnsi(p.View())
-	if strings.Contains(view, "[forge]") {
-		t.Fatalf("unexpected forge indicator, got: %q", view)
-	}
-}
-
-func TestServicesPanel_View_NoGitFlowConfig_NoBadges(t *testing.T) {
-	p := NewServicesPanel(100, 20)
-	p.SetServices("IN-001", []domain.Service{{
-		Name:         "collection",
-		Branch:       "feature/ABC-123",
-		BaseBranch:   "develop",
-		WorktreePath: "/tmp/.tasks/IN-001/collection",
-	}})
-
-	view := stripAnsi(p.View())
-	if strings.Contains(view, "[git-flow]") {
-		t.Fatalf("unexpected preset badge without git_flow config: %q", view)
-	}
-	if strings.Contains(view, "[feature]") {
-		t.Fatalf("unexpected branch badge without git_flow config: %q", view)
 	}
 }
 

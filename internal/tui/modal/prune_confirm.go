@@ -13,10 +13,8 @@ import (
 var _ Modal = (*PruneConfirmModal)(nil)
 
 type PruneConfirmModal struct {
-	rows           []pruneCandidateRow
-	selectedIndex  int
-	terminalWidth  int
-	terminalHeight int
+	rows          []pruneCandidateRow
+	selectedIndex int
 }
 
 type pruneCandidateRow struct {
@@ -49,9 +47,7 @@ func NewPruneConfirmModal(candidates []domain.PruneCandidate, width, height int)
 	}
 
 	m := &PruneConfirmModal{
-		rows:           rows,
-		terminalWidth:  width,
-		terminalHeight: height,
+		rows: rows,
 	}
 	m.selectedIndex = m.firstSelectableIndex()
 	return m
@@ -59,10 +55,7 @@ func NewPruneConfirmModal(candidates []domain.PruneCandidate, width, height int)
 
 func (m *PruneConfirmModal) Title() string { return "Prune Tasks" }
 
-func (m *PruneConfirmModal) SetTerminalSize(width, height int) {
-	m.terminalWidth = width
-	m.terminalHeight = height
-}
+func (m *PruneConfirmModal) SetTerminalSize(_, _ int) {}
 
 func (m *PruneConfirmModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)

@@ -16,7 +16,6 @@ var _ Modal = (*ConfigModal)(nil)
 type ConfigModal struct {
 	cfg            *config.Config
 	scrollOffset   int
-	terminalWidth  int
 	terminalHeight int
 }
 
@@ -30,8 +29,7 @@ func NewConfigModal(cfg *config.Config) *ConfigModal {
 
 func (m *ConfigModal) Title() string { return "Configuration" }
 
-func (m *ConfigModal) SetTerminalSize(width, height int) {
-	m.terminalWidth = width
+func (m *ConfigModal) SetTerminalSize(_ int, height int) {
 	m.terminalHeight = height
 }
 

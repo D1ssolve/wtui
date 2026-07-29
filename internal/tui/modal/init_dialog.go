@@ -24,7 +24,6 @@ type InitDialog struct {
 	cloneSourceBranches map[string]string
 
 	terminalHeight int
-	terminalWidth  int
 
 	repoList          list.Model
 	repoPickerFocused bool
@@ -91,7 +90,6 @@ func NewInitDialog(defaultBranchPrefix string, repos []domain.Repo, termWidth, t
 	d := &InitDialog{
 		defaultBranchPrefix: defaultBranchPrefix,
 		hasRepos:            len(repos) > 0,
-		terminalWidth:       termWidth,
 		terminalHeight:      termHeight,
 	}
 
@@ -186,8 +184,7 @@ func (d *InitDialog) Title() string {
 	return "New Task"
 }
 
-func (d *InitDialog) SetTerminalSize(width, height int) {
-	d.terminalWidth = width
+func (d *InitDialog) SetTerminalSize(_ int, height int) {
 	d.terminalHeight = height
 	if d.hasRepos {
 		d.repoList.SetSize(40, d.visibleListHeight())

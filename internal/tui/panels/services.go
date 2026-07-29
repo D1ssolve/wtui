@@ -3,7 +3,6 @@ package panels
 import (
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -13,25 +12,18 @@ import (
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
-	"github.com/D1ssolve/wtui/internal/gitflow"
 	uitheme "github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 const (
-	svcColorDim   = colorDim
-	svcColorBold  = colorBold
-	svcColorDirty = colorDirty
+	svcColorDim  = colorDim
+	svcColorBold = colorBold
 )
 
 type serviceItem struct {
-	service           domain.Service
-	preset            string
-	showGitFlowBadges bool
-	resolvedFlow      *gitflow.ResolvedGitFlow
-	forgeAvailable    bool
-	forgeProvider     forge.ForgeProvider
-	wfStatus          string
-	wfDetail          string
+	service       domain.Service
+	forgeProvider forge.ForgeProvider
+	wfStatus      string
 }
 
 func (s serviceItem) FilterValue() string { return s.service.Name }
@@ -121,11 +113,7 @@ type ServicesPanel struct {
 
 	lazygitAvailable bool
 
-	resolvedFlow      *gitflow.ResolvedGitFlow
-	gitFlowPreset     string
-	showGitFlowBadges bool
-	forgeClients      map[forge.ForgeProvider]forge.ForgeClient
-	forgeCfg          *config.ForgeConfig
+	forgeCfg *config.ForgeConfig
 
 	services []domain.Service
 	workflow *domain.WorkflowSummary
@@ -160,15 +148,7 @@ func (p *ServicesPanel) SetWorkflow(wf *domain.WorkflowSummary) {
 	p.refreshItems()
 }
 
-func (p *ServicesPanel) SetGitFlow(flow *gitflow.ResolvedGitFlow, preset string, showBadges bool) {
-	p.resolvedFlow = flow
-	p.gitFlowPreset = strings.TrimSpace(preset)
-	p.showGitFlowBadges = showBadges
-	p.refreshItems()
-}
-
-func (p *ServicesPanel) SetForgeClients(clients map[forge.ForgeProvider]forge.ForgeClient, cfg *config.ForgeConfig) {
-	p.forgeClients = clients
+func (p *ServicesPanel) SetForgeConfig(cfg *config.ForgeConfig) {
 	p.forgeCfg = cfg
 	p.refreshItems()
 }
@@ -183,18 +163,12 @@ func (p *ServicesPanel) refreshItems() {
 	items := make([]list.Item, len(p.services))
 	for i, s := range p.services {
 		provider := detectServiceProvider(s, p.forgeCfg)
-		_, forgeAvailable := p.forgeClients[provider]
 		item := serviceItem{
-			service:           s,
-			preset:            p.gitFlowPreset,
-			showGitFlowBadges: p.showGitFlowBadges,
-			resolvedFlow:      p.resolvedFlow,
-			forgeAvailable:    forgeAvailable,
-			forgeProvider:     provider,
+			service:       s,
+			forgeProvider: provider,
 		}
 		if sw, ok := wfByName[s.Name]; ok {
 			item.wfStatus = sw.Status
-			item.wfDetail = sw.Detail
 		}
 		items[i] = item
 	}
@@ -203,26 +177,7 @@ func (p *ServicesPanel) refreshItems() {
 }
 
 func detectServiceProvider(service domain.Service, cfg *config.ForgeConfig) forge.ForgeProvider {
-	provider := forge.DetectProvider(service.RemoteURL, cfg)
-	if provider != forge.ForgeProviderUnknown {
-		return provider
-	}
-
-	return forge.ForgeProviderUnknown
-}
-
-func renderBranchTypeBadge(branchType gitflow.BranchType) string {
-	text := "[" + string(branchType) + "]"
-	switch branchType {
-	case gitflow.BranchTypeFeature:
-		return branchTypeFeatureStyle.Render(text)
-	case gitflow.BranchTypeHotfix:
-		return branchTypeHotfixStyle.Render(text)
-	case gitflow.BranchTypeRelease:
-		return branchTypeReleaseStyle.Render(text)
-	default:
-		return badgeStyle.Render(text)
-	}
+	return forge.DetectProvider(service.RemoteURL, cfg)
 }
 
 func (p *ServicesPanel) SetSize(width, height int) {

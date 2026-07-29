@@ -22,8 +22,6 @@ type CloseTaskConfirmModal struct {
 	hasTagColumn   bool
 	hasPipelineCol bool
 	hasForgeColumn bool
-	terminalWidth  int
-	terminalHeight int
 }
 
 func NewCloseTaskConfirmModal(taskInfo domain.Task, plan task.ClosePlan, width, height int) *CloseTaskConfirmModal {
@@ -67,8 +65,6 @@ func NewCloseTaskConfirmModal(taskInfo domain.Task, plan task.ClosePlan, width, 
 		hasTagColumn:   hasTag,
 		hasPipelineCol: hasPipeline,
 		hasForgeColumn: hasForge,
-		terminalWidth:  width,
-		terminalHeight: height,
 	}
 	if hasTag {
 		m.tagInput.Focus()
@@ -80,10 +76,7 @@ func (m *CloseTaskConfirmModal) Title() string {
 	return closeTaskModalTitle(m.task, m.plan.TaskID)
 }
 
-func (m *CloseTaskConfirmModal) SetTerminalSize(width, height int) {
-	m.terminalWidth = width
-	m.terminalHeight = height
-}
+func (m *CloseTaskConfirmModal) SetTerminalSize(_, _ int) {}
 
 func (m *CloseTaskConfirmModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {

@@ -215,7 +215,3 @@ func (m *manager) runFinishService(ctx context.Context, release *domain.Release,
 	svc.Status = domain.ReleaseStatusReleased
 	return nil
 }
-
-func (m *manager) validateFinishSafety(context.Context, domain.ReleaseService) *domain.ReleaseError {
-	return nil
-}

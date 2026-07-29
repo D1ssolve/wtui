@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,7 +92,7 @@ func (c *CommandClient) IsAncestor(ctx context.Context, repoPath, ancestor, desc
 	}
 
 	var execErr *ExecError
-	if isExecError(err, &execErr) && execErr.ExitCode == 1 {
+	if errors.As(err, &execErr) && execErr.ExitCode == 1 {
 		return false, nil
 	}
 

@@ -198,48 +198,29 @@ func syncTaskCmd(mgr task.Manager, taskID string, strategy task.SyncStrategy) te
 }
 
 func riderTaskCmd(taskID, dir string) tea.Cmd {
-	name, args := riderTaskArgs(taskID)
-	return execProcessCmd(name, args, dir, "Open Rider for "+taskID)
-}
-
-func riderTaskArgs(taskID string) (string, []string) {
-	return "rider", []string{taskID + ".sln"}
+	return execProcessCmd("rider", []string{taskID + ".sln"}, dir, "Open Rider for "+taskID)
 }
 
 func codeWorkspaceTaskCmd(editor, taskID, dir string) tea.Cmd {
-	name, args := codeWorkspaceTaskArgs(editor, taskID)
-	return execProcessCmd(name, args, dir, "Open "+editor+" for "+taskID)
-}
-
-func codeWorkspaceTaskArgs(editor, taskID string) (string, []string) {
-	return editor, []string{taskID + ".code-workspace"}
+	return execProcessCmd(editor, []string{taskID + ".code-workspace"}, dir, "Open "+editor+" for "+taskID)
 }
 
 func lazygitServiceCmd(taskID, serviceName, worktreePath string) tea.Cmd {
 	c := lazygitServiceExecCmd(worktreePath)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
-		return lazygitServiceDoneMsg(taskID, serviceName, worktreePath, err)
+		return LazygitDoneMsg{
+			TaskID:       taskID,
+			ServiceName:  serviceName,
+			WorktreePath: worktreePath,
+			Err:          err,
+		}
 	})
 }
 
 func lazygitServiceExecCmd(worktreePath string) *exec.Cmd {
-	name, args := lazygitServiceArgs(worktreePath)
-	c := exec.Command(name, args...)
+	c := exec.Command("lazygit", "-p", worktreePath)
 	c.Dir = worktreePath
 	return c
-}
-
-func lazygitServiceArgs(worktreePath string) (string, []string) {
-	return "lazygit", []string{"-p", worktreePath}
-}
-
-func lazygitServiceDoneMsg(taskID, serviceName, worktreePath string, err error) tea.Msg {
-	return LazygitDoneMsg{
-		TaskID:       taskID,
-		ServiceName:  serviceName,
-		WorktreePath: worktreePath,
-		Err:          err,
-	}
 }
 
 func pushTaskCmd(mgr task.Manager, taskID string) tea.Cmd {

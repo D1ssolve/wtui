@@ -187,6 +187,24 @@ func TestSyncStrategyDialog_Enter_EmitsSubmitSyncStrategyMsg(t *testing.T) {
 	}
 }
 
+func TestSyncServiceStrategyDialog_Enter_EmitsSubmitSyncServiceStrategyMsg(t *testing.T) {
+	d := NewSyncServiceStrategyDialog("TASK-1", "api")
+
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("Enter must return a cmd")
+	}
+
+	msg := execCmd(cmd)
+	got, ok := msg.(SubmitSyncServiceStrategyMsg)
+	if !ok {
+		t.Fatalf("expected SubmitSyncServiceStrategyMsg, got %T", msg)
+	}
+	if got.TaskID != "TASK-1" || got.ServiceName != "api" || got.Strategy != task.SyncStrategyMerge {
+		t.Fatalf("message = %+v, want task TASK-1, service api, merge", got)
+	}
+}
+
 func TestSyncStrategyDialog_Enter_EmitsCorrectStrategy_WhenRebaseSelected(t *testing.T) {
 	d := NewSyncStrategyDialog("IN-5678")
 
@@ -278,19 +296,6 @@ func TestSyncStrategyDialog_View_ShowsSelectionIndicator(t *testing.T) {
 	}
 	if !strings.Contains(view, "○") {
 		t.Error("View should contain unselected indicator '○'")
-	}
-}
-
-func TestSyncStrategyDialog_SetTerminalSize(t *testing.T) {
-	d := NewSyncStrategyDialog("IN-1234")
-
-	d.SetTerminalSize(120, 40)
-
-	if d.terminalWidth != 120 {
-		t.Errorf("terminalWidth: expected 120, got %d", d.terminalWidth)
-	}
-	if d.terminalHeight != 40 {
-		t.Errorf("terminalHeight: expected 40, got %d", d.terminalHeight)
 	}
 }
 

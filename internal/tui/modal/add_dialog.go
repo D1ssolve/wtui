@@ -21,7 +21,6 @@ type AddDialog struct {
 	focusIndex  int
 
 	terminalHeight int
-	terminalWidth  int
 
 	repoList          list.Model
 	repoPickerFocused bool
@@ -50,7 +49,6 @@ func NewAddDialog(taskID string, repos []domain.Repo, existingServices []string,
 	d := &AddDialog{
 		taskID:         taskID,
 		hasRepos:       len(filteredRepos) > 0,
-		terminalWidth:  termWidth,
 		terminalHeight: termHeight,
 	}
 
@@ -109,8 +107,7 @@ func (d *AddDialog) Title() string {
 	return fmt.Sprintf("Add Service to %s", d.taskID)
 }
 
-func (d *AddDialog) SetTerminalSize(width, height int) {
-	d.terminalWidth = width
+func (d *AddDialog) SetTerminalSize(_ int, height int) {
 	d.terminalHeight = height
 	if d.hasRepos {
 		d.repoList.SetSize(40, d.visibleListHeight())

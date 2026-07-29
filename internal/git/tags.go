@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -52,7 +53,7 @@ func (c *CommandClient) TagExists(ctx context.Context, repoPath, tag string) (bo
 	}
 
 	var execErr *ExecError
-	if isExecError(err, &execErr) {
+	if errors.As(err, &execErr) {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}

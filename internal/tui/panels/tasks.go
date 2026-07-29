@@ -922,12 +922,3 @@ func panelBorderStyle(focused bool) lipgloss.Style {
 	}
 	return uitheme.GlassBorder(uitheme.GlassHighlight)
 }
-
-func truncatePath(p string) string {
-	p = strings.TrimRight(p, "/")
-	parts := strings.Split(p, "/")
-	if len(parts) <= 2 {
-		return p
-	}
-	return strings.Join(parts[len(parts)-2:], "/")
-}

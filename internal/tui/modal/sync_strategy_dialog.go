@@ -11,10 +11,8 @@ import (
 
 type SyncStrategyDialog struct {
 	taskID        string
+	serviceName   string
 	selectedIndex int
-
-	terminalWidth  int
-	terminalHeight int
 }
 
 type strategyOption struct {
@@ -48,12 +46,13 @@ func NewSyncStrategyDialog(taskID string) *SyncStrategyDialog {
 	}
 }
 
+func NewSyncServiceStrategyDialog(taskID, serviceName string) *SyncStrategyDialog {
+	return &SyncStrategyDialog{taskID: taskID, serviceName: serviceName}
+}
+
 func (d *SyncStrategyDialog) Title() string { return "Sync Strategy" }
 
-func (d *SyncStrategyDialog) SetTerminalSize(width, height int) {
-	d.terminalWidth = width
-	d.terminalHeight = height
-}
+func (d *SyncStrategyDialog) SetTerminalSize(_, _ int) {}
 
 func (d *SyncStrategyDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -80,6 +79,16 @@ func (d *SyncStrategyDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 		case "enter":
 			selectedStrategy := strategyOptions[d.selectedIndex].strategy
 			taskID := d.taskID
+			if d.serviceName != "" {
+				serviceName := d.serviceName
+				return d, func() tea.Msg {
+					return SubmitSyncServiceStrategyMsg{
+						TaskID:      taskID,
+						ServiceName: serviceName,
+						Strategy:    selectedStrategy,
+					}
+				}
+			}
 			return d, func() tea.Msg {
 				return SubmitSyncStrategyMsg{
 					TaskID:   taskID,
@@ -105,7 +114,11 @@ func (d *SyncStrategyDialog) View() string {
 
 	var sb strings.Builder
 
-	sb.WriteString(titleStyle.Render("Sync task " + d.taskID))
+	title := "Sync task " + d.taskID
+	if d.serviceName != "" {
+		title = "Sync service " + d.taskID + "/" + d.serviceName
+	}
+	sb.WriteString(titleStyle.Render(title))
 	sb.WriteString("\n\n")
 
 	for i, opt := range strategyOptions {

@@ -846,16 +846,6 @@ func newAddDialogWithRepos(names ...string) *AddDialog {
 	return d
 }
 
-func getRepoNames(d *InitDialog) []string {
-	items := d.repoList.Items()
-	names := make([]string, len(items))
-	for i, item := range items {
-		ri := item.(repoPickerItem)
-		names[i] = ri.name
-	}
-	return names
-}
-
 func isInitRepoChecked(d *InitDialog, name string) bool {
 	for _, it := range d.repoList.Items() {
 		if ri, ok := it.(repoPickerItem); ok && ri.name == name {

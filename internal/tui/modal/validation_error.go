@@ -13,25 +13,18 @@ import (
 var _ Modal = (*ValidationErrorModal)(nil)
 
 type ValidationErrorModal struct {
-	validation     domain.TaskValidation
-	terminalWidth  int
-	terminalHeight int
+	validation domain.TaskValidation
 }
 
 func NewValidationErrorModal(validation domain.TaskValidation, width, height int) *ValidationErrorModal {
 	return &ValidationErrorModal{
-		validation:     validation,
-		terminalWidth:  width,
-		terminalHeight: height,
+		validation: validation,
 	}
 }
 
 func (m *ValidationErrorModal) Title() string { return "Validation Errors" }
 
-func (m *ValidationErrorModal) SetTerminalSize(width, height int) {
-	m.terminalWidth = width
-	m.terminalHeight = height
-}
+func (m *ValidationErrorModal) SetTerminalSize(_, _ int) {}
 
 func (m *ValidationErrorModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)

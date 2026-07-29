@@ -14,9 +14,7 @@ import (
 var _ Modal = (*TagBrowserModal)(nil)
 
 type TagBrowserModal struct {
-	tags           []domain.TagInfo
-	terminalWidth  int
-	terminalHeight int
+	tags []domain.TagInfo
 }
 
 func NewTagBrowserModal(tags []domain.TagInfo, width, height int) *TagBrowserModal {
@@ -38,18 +36,13 @@ func NewTagBrowserModal(tags []domain.TagInfo, width, height int) *TagBrowserMod
 	})
 
 	return &TagBrowserModal{
-		tags:           sorted,
-		terminalWidth:  width,
-		terminalHeight: height,
+		tags: sorted,
 	}
 }
 
 func (m *TagBrowserModal) Title() string { return "Tags" }
 
-func (m *TagBrowserModal) SetTerminalSize(width, height int) {
-	m.terminalWidth = width
-	m.terminalHeight = height
-}
+func (m *TagBrowserModal) SetTerminalSize(_, _ int) {}
 
 func (m *TagBrowserModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)

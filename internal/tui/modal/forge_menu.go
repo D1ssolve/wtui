@@ -12,14 +12,12 @@ import (
 var _ Modal = (*ForgeMenuModal)(nil)
 
 type ForgeMenuModal struct {
-	taskID         string
-	serviceName    string
-	provider       forge.ForgeProvider
-	actions        []forgeAction
-	selectedIndex  int
-	available      bool
-	terminalWidth  int
-	terminalHeight int
+	taskID        string
+	serviceName   string
+	provider      forge.ForgeProvider
+	actions       []forgeAction
+	selectedIndex int
+	available     bool
 }
 
 type forgeAction int
@@ -34,13 +32,11 @@ const (
 func NewForgeMenuModal(serviceName string, provider forge.ForgeProvider, width, height int) *ForgeMenuModal {
 	available := provider != forge.ForgeProviderUnknown
 	return &ForgeMenuModal{
-		serviceName:    serviceName,
-		provider:       provider,
-		actions:        []forgeAction{forgeActionCreateMR, forgeActionMergeMR, forgeActionPipelineStatus, forgeActionListIssues},
-		available:      available,
-		selectedIndex:  0,
-		terminalWidth:  width,
-		terminalHeight: height,
+		serviceName:   serviceName,
+		provider:      provider,
+		actions:       []forgeAction{forgeActionCreateMR, forgeActionMergeMR, forgeActionPipelineStatus, forgeActionListIssues},
+		available:     available,
+		selectedIndex: 0,
 	}
 }
 
@@ -50,10 +46,7 @@ func (m *ForgeMenuModal) SetTaskID(taskID string) {
 	m.taskID = taskID
 }
 
-func (m *ForgeMenuModal) SetTerminalSize(width, height int) {
-	m.terminalWidth = width
-	m.terminalHeight = height
-}
+func (m *ForgeMenuModal) SetTerminalSize(_, _ int) {}
 
 func (m *ForgeMenuModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)

@@ -393,10 +393,6 @@ func TestUpdate_WindowSizeMsg_SetsReady(t *testing.T) {
 		t.Errorf("height: expected 40, got %d", m.height)
 	}
 
-	tasksWidth, rightWidth := twoPanelWidths(m.width)
-	if tasksWidth != 40 || rightWidth != 80 {
-		t.Fatalf("panel widths = %d/%d, want 40/80", tasksWidth, rightWidth)
-	}
 }
 
 func TestView_AfterWindowSize_NotLoading(t *testing.T) {
@@ -451,23 +447,6 @@ func TestView_AfterWindowSize_RendersOnlyActiveRightPane(t *testing.T) {
 	view = stripANSIForModel(m.View())
 	if !strings.Contains(view, "No releases yet") {
 		t.Fatalf("release right pane should render, got %q", view)
-	}
-}
-
-func TestTwoPanelWidths_UsesOneThirdForTasksWithMinimum(t *testing.T) {
-	cases := []struct {
-		total, wantTasks, wantRight int
-	}{
-		{120, 40, 80},
-		{80, 26, 54},
-		{60, 25, 35},
-	}
-
-	for _, tc := range cases {
-		tasks, right := twoPanelWidths(tc.total)
-		if tasks != tc.wantTasks || right != tc.wantRight {
-			t.Errorf("twoPanelWidths(%d) = %d/%d, want %d/%d", tc.total, tasks, right, tc.wantTasks, tc.wantRight)
-		}
 	}
 }
 
@@ -2133,7 +2112,7 @@ func TestUpdate_TagListMsg_OpensTagBrowserModal(t *testing.T) {
 }
 
 func TestUpdate_OpenForgeMenuMsg_OpensForgeMenuModal(t *testing.T) {
-	m := newTestModelWithOptions(t, &mockManager{}, Options{ForgeClients: map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitLab: nil}})
+	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
 
 	updated, _ := m.Update(panels.OpenForgeMenuMsg{TaskID: "IN-1", ServiceName: "svc-a", Provider: forge.ForgeProviderGitLab})

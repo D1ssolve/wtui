@@ -14,16 +14,13 @@ type StashDialog struct {
 	pop         bool
 
 	selectedIndex int
-
-	terminalWidth  int
-	terminalHeight int
 }
 
 type stashOption struct {
-	name            string
-	description     string
+	name             string
+	description      string
 	includeUntracked bool
-	pop             bool
+	pop              bool
 }
 
 func stashOptions(pop bool) []stashOption {
@@ -33,41 +30,38 @@ func stashOptions(pop bool) []stashOption {
 	}
 	return []stashOption{
 		{
-			name:            op + " (tracked only)",
-			description:     "Stash tracked files only, leave untracked files untouched",
+			name:             op + " (tracked only)",
+			description:      "Stash tracked files only, leave untracked files untouched",
 			includeUntracked: false,
-			pop:             pop,
+			pop:              pop,
 		},
 		{
-			name:            op + " (include untracked)",
-			description:     "Stash both tracked and untracked files",
+			name:             op + " (include untracked)",
+			description:      "Stash both tracked and untracked files",
 			includeUntracked: true,
-			pop:             pop,
+			pop:              pop,
 		},
 		{
-			name:        "Cancel",
-			description: "Close without stashing",
+			name:             "Cancel",
+			description:      "Close without stashing",
 			includeUntracked: false,
-			pop:             pop,
+			pop:              pop,
 		},
 	}
 }
 
 func NewStashDialog(taskID, serviceName string, pop bool) *StashDialog {
 	return &StashDialog{
-		taskID:         taskID,
-		serviceName:    serviceName,
-		pop:            pop,
-		selectedIndex:  0,
+		taskID:        taskID,
+		serviceName:   serviceName,
+		pop:           pop,
+		selectedIndex: 0,
 	}
 }
 
 func (d *StashDialog) Title() string { return "Stash" }
 
-func (d *StashDialog) SetTerminalSize(width, height int) {
-	d.terminalWidth = width
-	d.terminalHeight = height
-}
+func (d *StashDialog) SetTerminalSize(_, _ int) {}
 
 func (d *StashDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	options := stashOptions(d.pop)

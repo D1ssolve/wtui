@@ -16,22 +16,13 @@ import (
 	"github.com/D1ssolve/wtui/internal/validation"
 )
 
-type FeatureFlags struct {
+type Dependencies struct {
+	Manager          task.Manager
+	ResolvedFlow     *gitflow.ResolvedGitFlow
 	LazygitAvailable bool
 	GlabAvailable    bool
 	GhAvailable      bool
 }
-
-type Dependencies struct {
-	Manager       task.Manager
-	Features      FeatureFlags
-	ForgeClients  map[forge.ForgeProvider]forge.ForgeClient
-	ResolvedFlow  *gitflow.ResolvedGitFlow
-	GlabAvailable bool
-	GhAvailable   bool
-}
-
-type lookPathFunc func(string) (string, error)
 
 func BuildDependencies(cfg *config.Config, logger *slog.Logger) Dependencies {
 	resolvedFlow, err := gitflow.EffectiveConfig(cfg.GitFlow)
@@ -44,17 +35,14 @@ func BuildDependencies(cfg *config.Config, logger *slog.Logger) Dependencies {
 	glabAvailable := forge.IsGlabAvailable(forgeCtx)
 	ghAvailable := forge.IsGhAvailable(forgeCtx)
 	forgeClients := buildForgeClients(cfg, glabAvailable, ghAvailable)
-	features := detectFeatures(exec.LookPath)
-	features.GlabAvailable = glabAvailable
-	features.GhAvailable = ghAvailable
+	_, lazygitErr := exec.LookPath("lazygit")
 
 	return Dependencies{
-		Manager:      buildManager(cfg, logger, resolvedFlow, forgeClients),
-		Features:     features,
-		ForgeClients: forgeClients,
-		ResolvedFlow: resolvedFlow,
-		GlabAvailable: glabAvailable,
-		GhAvailable:   ghAvailable,
+		Manager:          buildManager(cfg, logger, resolvedFlow, forgeClients),
+		ResolvedFlow:     resolvedFlow,
+		LazygitAvailable: lazygitErr == nil,
+		GlabAvailable:    glabAvailable,
+		GhAvailable:      ghAvailable,
 	}
 }
 
@@ -82,9 +70,4 @@ func buildForgeClients(cfg *config.Config, glabAvailable bool, ghAvailable bool)
 		forgeClients[forge.ForgeProviderGitHub] = forge.NewGhClient(cfg.RootDir)
 	}
 	return forgeClients
-}
-
-func detectFeatures(lookPath lookPathFunc) FeatureFlags {
-	_, err := lookPath("lazygit")
-	return FeatureFlags{LazygitAvailable: err == nil}
 }

@@ -14,19 +14,16 @@ var _ Modal = (*SystemInfoModal)(nil)
 type ToolInfo struct {
 	Name      string
 	Available bool
-	Version   string
 	Purpose   string
 }
 
 // SystemInfoModal shows which external tools are connected/configured.
 type SystemInfoModal struct {
-	Tools          []ToolInfo
-	ForgeProvider  string
-	GitLabHost     string
-	GitHubHost     string
-	Preset         string
-	terminalWidth  int
-	terminalHeight int
+	Tools         []ToolInfo
+	ForgeProvider string
+	GitLabHost    string
+	GitHubHost    string
+	Preset        string
 }
 
 // NewSystemInfoModal creates a modal that lists external tool status.
@@ -48,10 +45,7 @@ func NewSystemInfoModal(lazygit, glab, gh bool, forgeProvider, gitlabHost, githu
 
 func (m *SystemInfoModal) Title() string { return "System Status" }
 
-func (m *SystemInfoModal) SetTerminalSize(width, height int) {
-	m.terminalWidth = width
-	m.terminalHeight = height
-}
+func (m *SystemInfoModal) SetTerminalSize(_, _ int) {}
 
 func (m *SystemInfoModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
@@ -116,6 +110,3 @@ func (m *SystemInfoModal) View() string {
 
 	return sb.String()
 }
-
-// OpenSystemInfoMsg is emitted to open the system status modal.
-type OpenSystemInfoMsg struct{}

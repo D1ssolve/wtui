@@ -456,19 +456,6 @@ func TestRemoteBranchConflictDialog_View_ShowsSelectionIndicator(t *testing.T) {
 	}
 }
 
-func TestRemoteBranchConflictDialog_SetTerminalSize(t *testing.T) {
-	d := NewRemoteBranchConflictDialog("IN-1234", "api-gateway", "feature/IN-1234", "/path/to/repo")
-
-	d.SetTerminalSize(120, 40)
-
-	if d.terminalWidth != 120 {
-		t.Errorf("terminalWidth: expected 120, got %d", d.terminalWidth)
-	}
-	if d.terminalHeight != 40 {
-		t.Errorf("terminalHeight: expected 40, got %d", d.terminalHeight)
-	}
-}
-
 func TestRemoteBranchConflictDialog_UnknownKey_DoesNothing(t *testing.T) {
 	d := NewRemoteBranchConflictDialog("IN-1234", "api-gateway", "feature/IN-1234", "/path/to/repo")
 

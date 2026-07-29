@@ -97,14 +97,3 @@ func compactFooterHints(parts []string) []string {
 	}
 	return result
 }
-
-func joinFooterHints(parts []string) string {
-	var b strings.Builder
-	for i, p := range parts {
-		if i > 0 {
-			b.WriteString("  ")
-		}
-		b.WriteString(p)
-	}
-	return b.String()
-}

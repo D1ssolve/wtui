@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -171,7 +172,7 @@ func (c *CommandClient) BranchExists(ctx context.Context, repoPath, branch strin
 	}
 
 	var execErr *ExecError
-	if ok := isExecError(err, &execErr); ok {
+	if ok := errors.As(err, &execErr); ok {
 		return false, nil
 	}
 	return false, err
@@ -209,7 +210,7 @@ func (c *CommandClient) RemoteBranchExists(ctx context.Context, repoPath, branch
 	}
 
 	var execErr *ExecError
-	if ok := isExecError(err, &execErr); ok {
+	if ok := errors.As(err, &execErr); ok {
 
 		if execErr.ExitCode == 2 {
 			return false, nil
@@ -321,7 +322,7 @@ func (c *CommandClient) RevListCount(ctx context.Context, worktreePath, tip, bas
 	if err != nil {
 
 		var execErr *ExecError
-		if isExecError(err, &execErr) {
+		if errors.As(err, &execErr) {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("rev-list count %s...%s: %w", tip, base, err)
@@ -352,7 +353,7 @@ func (c *CommandClient) RevListAheadBehind(ctx context.Context, worktreePath, or
 		"HEAD..."+originBranch)
 	if runErr != nil {
 		var execErr *ExecError
-		if isExecError(runErr, &execErr) {
+		if errors.As(runErr, &execErr) {
 			if execErr.ExitCode == 128 {
 				stderrLower := strings.ToLower(execErr.Stderr)
 				if strings.Contains(stderrLower, "no upstream") ||
@@ -510,24 +511,4 @@ func (c *CommandClient) Stash(ctx context.Context, worktreePath string, pop bool
 func (c *CommandClient) DeleteBranch(ctx context.Context, repoPath, branch string) error {
 	_, err := c.execGit(ctx, "-C", repoPath, "branch", "-d", branch)
 	return err
-}
-
-func isExecError(err error, target **ExecError) bool {
-	if err == nil {
-		return false
-	}
-
-	for e := err; e != nil; {
-		if execErr, ok := e.(*ExecError); ok {
-			*target = execErr
-			return true
-		}
-		type unwrapper interface{ Unwrap() error }
-		u, ok := e.(unwrapper)
-		if !ok {
-			break
-		}
-		e = u.Unwrap()
-	}
-	return false
 }

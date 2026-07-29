@@ -2,7 +2,6 @@ package task
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -95,9 +94,5 @@ func (m *manager) RemoveService(
 		)
 	}
 
-	if branchDeleteErr != nil {
-		return errors.Join(branchDeleteErr)
-	}
-
-	return nil
+	return branchDeleteErr
 }

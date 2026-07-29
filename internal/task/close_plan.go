@@ -24,19 +24,18 @@ type ServiceClosePlan struct {
 }
 
 type TagPlan struct {
-	TagName  string
-	Version  string
+	TagName   string
+	Version   string
 	SourceRef string
 	Annotated bool
-	Message  string
-	Push     bool
+	Message   string
+	Push      bool
 }
 
 type ReviewRequestPlan struct {
 	TargetBranch string
 	Title        string
 	Description  string
-	Draft        bool
 	RemoveSource bool
 }
 

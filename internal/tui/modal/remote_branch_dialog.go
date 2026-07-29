@@ -25,9 +25,6 @@ type RemoteBranchConflictDialog struct {
 	suffixInput textinput.Model
 
 	suffixError string
-
-	terminalWidth  int
-	terminalHeight int
 }
 
 type remoteBranchOption struct {
@@ -76,10 +73,7 @@ func (d *RemoteBranchConflictDialog) Title() string {
 	return "Remote Branch Conflict"
 }
 
-func (d *RemoteBranchConflictDialog) SetTerminalSize(width, height int) {
-	d.terminalWidth = width
-	d.terminalHeight = height
-}
+func (d *RemoteBranchConflictDialog) SetTerminalSize(_, _ int) {}
 
 func (d *RemoteBranchConflictDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 

@@ -86,7 +86,7 @@ func (d *Discoverer) Resolve(ctx context.Context, token string) (string, error) 
 	directPath := filepath.Join(d.cfg.RootDir, token)
 	gitDir := filepath.Join(directPath, ".git")
 
-	if info, statErr := statDir(gitDir); statErr == nil && info {
+	if info, statErr := os.Stat(gitDir); statErr == nil && info.IsDir() {
 		d.logger.DebugContext(ctx, "discovery: found direct .git, validating", slog.String("path", directPath))
 		if err := d.git.IsValidRepo(ctx, directPath); err != nil {
 			return "", fmt.Errorf("discovery: direct repo at %s failed validation: %w", directPath, err)
@@ -148,15 +148,4 @@ func (d *Discoverer) FindAll(ctx context.Context) ([]domain.Repo, error) {
 	})
 
 	return repos, nil
-}
-
-func statDir(path string) (isDir bool, err error) {
-	info, statErr := os.Stat(path)
-	if statErr != nil {
-		if os.IsNotExist(statErr) {
-			return false, nil
-		}
-		return false, statErr
-	}
-	return info.IsDir(), nil
 }

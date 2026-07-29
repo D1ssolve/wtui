@@ -38,9 +38,8 @@ type Model struct {
 	glabAvailable    bool
 	ghAvailable      bool
 
-	focus         FocusPanel
-	previousFocus FocusPanel
-	rightPane     FocusPanel
+	focus     FocusPanel
+	rightPane FocusPanel
 
 	width   int
 	height  int
@@ -98,7 +97,6 @@ type Options struct {
 	LazygitAvailable bool
 	GlabAvailable    bool
 	GhAvailable      bool
-	ForgeClients     map[forge.ForgeProvider]forge.ForgeClient
 	ResolvedFlow     *gitflow.ResolvedGitFlow
 	Version          string
 }
@@ -149,37 +147,9 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 	m.setFocus(FocusTasks)
 	m.tasksPanel.SetFlow(opts.ResolvedFlow)
 	m.servicesPanel.SetLazygitAvailable(opts.LazygitAvailable)
-	m.servicesPanel.SetForgeClients(opts.ForgeClients, cfg.Forge)
-
-	flow := opts.ResolvedFlow
-	preset := ""
-	if cfg.GitFlow != nil {
-		preset = cfg.GitFlow.Preset
-	}
-	m.servicesPanel.SetGitFlow(flow, preset, shouldShowGitFlowBadges(cfg.GitFlow))
+	m.servicesPanel.SetForgeConfig(cfg.Forge)
 
 	return m, nil
-}
-
-func shouldShowGitFlowBadges(cfg *config.GitFlowConfig) bool {
-	if cfg == nil {
-		return false
-	}
-
-	if len(cfg.BranchTypes) != 1 {
-		return true
-	}
-
-	featureRule, ok := cfg.BranchTypes["feature"]
-	if !ok {
-		return true
-	}
-
-	legacyOnly := cfg.Preset == "git-flow" && cfg.DefaultBranchType == "feature"
-	legacyOnly = legacyOnly && len(featureRule.Prefixes) > 0
-	legacyOnly = legacyOnly && featureRule.CloseStrategy == "direct_merge" && featureRule.MergeStrategy == "merge_commit"
-
-	return !legacyOnly
 }
 
 func (m Model) Init() tea.Cmd {
@@ -1358,14 +1328,6 @@ func (m *Model) setFocus(focus FocusPanel) {
 	m.servicesPanel.SetFocused(focus == FocusServices)
 	m.outputPanel.SetFocused(focus == FocusOutput)
 	m.releasesPanel.SetFocused(focus == FocusReleases)
-}
-
-func twoPanelWidths(total int) (tasks, right int) {
-	if total <= 0 {
-		return 0, 0
-	}
-	tasks = min(max(total/3, 25), max(total-1, 0))
-	return tasks, total - tasks
 }
 
 func (m Model) maybeLoadServicesCmd() tea.Cmd {

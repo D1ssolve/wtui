@@ -14,27 +14,22 @@ import (
 var _ Modal = (*CloseTaskSummaryModal)(nil)
 
 type CloseTaskSummaryModal struct {
-	task           domain.Task
-	result         task.CloseTaskResult
-	terminalWidth  int
-	terminalHeight int
+	task   domain.Task
+	result task.CloseTaskResult
 }
 
 func NewCloseTaskSummaryModal(taskInfo domain.Task, result task.CloseTaskResult, width, height int) *CloseTaskSummaryModal {
 	if strings.TrimSpace(taskInfo.ID) == "" {
 		taskInfo.ID = result.TaskID
 	}
-	return &CloseTaskSummaryModal{task: taskInfo, result: result, terminalWidth: width, terminalHeight: height}
+	return &CloseTaskSummaryModal{task: taskInfo, result: result}
 }
 
 func (m *CloseTaskSummaryModal) Title() string {
 	return closeTaskModalTitle(m.task, m.result.TaskID)
 }
 
-func (m *CloseTaskSummaryModal) SetTerminalSize(width, height int) {
-	m.terminalWidth = width
-	m.terminalHeight = height
-}
+func (m *CloseTaskSummaryModal) SetTerminalSize(_, _ int) {}
 
 func (m *CloseTaskSummaryModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)

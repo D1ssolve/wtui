@@ -164,13 +164,6 @@ func (m *manager) retryPrepareRelease(ctx context.Context, release domain.Releas
 }
 
 func (m *manager) retryFinishRelease(ctx context.Context, release domain.Release) (domain.Release, error) {
-	for _, svc := range release.Services {
-		if safetyErr := m.validateFinishSafety(ctx, svc); safetyErr != nil {
-			_ = m.failRelease(&release, safetyErr)
-			return release, fmt.Errorf("%w: %s", ErrReleaseRetryUnsafe, safetyErr.Message)
-		}
-	}
-
 	release.CompletedAt = nil
 	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusPrepared, "prepared", nil); err != nil {
 		return domain.Release{}, err

@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -49,7 +50,7 @@ func (c *CachedDiscoverer) FindAll(ctx context.Context) ([]domain.Repo, error) {
 		return nil, err
 	}
 	if c.loaded {
-		return cloneRepos(c.repos), nil
+		return slices.Clone(c.repos), nil
 	}
 
 	return c.scanAndStoreLocked(ctx)
@@ -76,10 +77,6 @@ func (c *CachedDiscoverer) scanAndStoreLocked(ctx context.Context) ([]domain.Rep
 		return nil, err
 	}
 	c.loaded = true
-	c.repos = cloneRepos(repos)
-	return cloneRepos(repos), nil
-}
-
-func cloneRepos(repos []domain.Repo) []domain.Repo {
-	return append([]domain.Repo(nil), repos...)
+	c.repos = slices.Clone(repos)
+	return slices.Clone(repos), nil
 }
