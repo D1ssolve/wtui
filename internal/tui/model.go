@@ -331,7 +331,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keymap.MergeMRs):
 			return m.startMergeInspection()
 
-		case key.Matches(msg, m.keymap.ReleaseAction):
+		case m.focus == FocusReleases && key.Matches(msg, m.keymap.ReleaseAction):
 			return m.startReleaseAction()
 
 		case key.Matches(msg, m.keymap.RetryRelease):

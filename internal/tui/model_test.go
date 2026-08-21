@@ -19,6 +19,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
@@ -1496,6 +1497,24 @@ func TestUpdate_OpenConvertHotfixDialogMsg_OpensModal(t *testing.T) {
 	}
 	if _, ok := m.modal.(*modal.ConvertHotfixDialog); !ok {
 		t.Fatalf("modal = %T, want *modal.ConvertHotfixDialog", m.modal)
+	}
+}
+
+func TestUpdate_KeyFOnHotfixTask_OpensConvertDialog(t *testing.T) {
+	flow := &gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+		gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
+		gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
+	}}
+	m := newTestModelWithOptions(t, &mockManager{}, Options{ResolvedFlow: flow})
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "IN-001-hotfix", Phase: "hotfix"}})
+
+	_, cmd := m.Update(sendKey("F"))
+	if cmd == nil {
+		t.Fatal("F on hotfix task must open conversion dialog")
+	}
+	msg := cmd()
+	if _, ok := msg.(panels.OpenConvertHotfixDialogMsg); !ok {
+		t.Fatalf("message = %T, want panels.OpenConvertHotfixDialogMsg", msg)
 	}
 }
 
