@@ -154,6 +154,82 @@ func TestReleaseMerge_AlreadyMergedServiceIsSkipped(t *testing.T) {
 	}
 }
 
+func TestReleaseMerge_AlreadyMergedRecoversAcceptedSHA(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		readiness forge.MRReadiness
+		targetSHA string
+		wantSHA   string
+	}{
+		{name: "fast-forward", readiness: forge.MRReadiness{Number: 1, State: "merged", HeadSHA: "api-source"}, targetSHA: "api-source", wantSHA: "api-source"},
+		{name: "squash", readiness: forge.MRReadiness{Number: 1, State: "merged", HeadSHA: "api-source", MergedSHA: "squash-sha"}, targetSHA: "later-master", wantSHA: "squash-sha"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, gitMock, client := newReleaseMergeTestManager(t)
+			client.readiness = map[int]forge.MRReadiness{1: tc.readiness}
+			gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+				if ref == "origin/master" {
+					return tc.targetSHA, nil
+				}
+				return ref + "-sha", nil
+			}
+			svc := releaseMergeService("api", 1)
+			svc.Status = domain.ReleaseStatusFailed
+			svc.Error = &domain.ReleaseError{Code: "ERR_RELEASE_MERGE_FAILED", Message: "old merge error"}
+			release := writePromoteRelease(t, m, domain.ReleaseStatusAwaitingMasterMerge, svc)
+
+			got, result, err := m.MergeReleaseMRs(t.Context(), release.ID, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != domain.ReleaseStatusMasterMerged || got.Services[0].AcceptedMergeSHA != tc.wantSHA || got.Services[0].Error != nil || !slices.Equal(result.Skipped, []string{"api"}) {
+				t.Fatalf("release = %#v, result = %#v", got, result)
+			}
+		})
+	}
+}
+
+func TestReleaseMerge_AlreadyMergedFFTargetMovedFailsClosed(t *testing.T) {
+	m, gitMock, client := newReleaseMergeTestManager(t)
+	client.readiness = map[int]forge.MRReadiness{1: {Number: 1, State: "merged", HeadSHA: "api-source", TargetBranch: "master"}}
+	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+		if ref == "origin/master" {
+			return "later-master", nil
+		}
+		return ref + "-sha", nil
+	}
+	release := writePromoteRelease(t, m, domain.ReleaseStatusAwaitingMasterMerge, releaseMergeService("api", 1))
+
+	got, result, err := m.MergeReleaseMRs(t.Context(), release.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(result.Failed, []string{"api"}) || got.Services[0].AcceptedMergeSHA != "" || got.Status != domain.ReleaseStatusAwaitingMasterMerge {
+		t.Fatalf("release = %#v, result = %#v", got, result)
+	}
+}
+
+func TestReleaseMerge_RecoveryFailureDoesNotFailFollowingMergedService(t *testing.T) {
+	m, _, client := newReleaseMergeTestManager(t)
+	client.readiness = map[int]forge.MRReadiness{
+		1: {Number: 1, State: "merged"},
+		2: {Number: 2, State: "merged"},
+	}
+	api := releaseMergeService("api", 1)
+	worker := releaseMergeService("worker", 2)
+	worker.ProductionMR.State = "merged"
+	worker.AcceptedMergeSHA = "worker-merge"
+	release := writePromoteRelease(t, m, domain.ReleaseStatusAwaitingMasterMerge, api, worker)
+
+	got, result, err := m.MergeReleaseMRs(t.Context(), release.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(result.Failed, []string{"api"}) || !slices.Equal(result.Skipped, []string{"worker"}) || got.Services[1].Status != domain.ReleaseStatusMasterMerged {
+		t.Fatalf("release = %#v, result = %#v", got, result)
+	}
+}
+
 func TestReleaseMerge_EmptyMergeSHAFailsWithoutGuessingProductionTip(t *testing.T) {
 	m, gitMock, client := newReleaseMergeTestManager(t)
 	client.readiness = map[int]forge.MRReadiness{7: {Number: 7, State: "open", HeadSHA: "api-source", Ready: true, SupportsSHAPin: true}}

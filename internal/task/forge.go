@@ -29,6 +29,9 @@ func (m *manager) ForgeCreateMR(ctx context.Context, taskID, serviceName string,
 	if strings.TrimSpace(params.TargetBranch) == "" {
 		params.TargetBranch = svc.BaseBranch
 	}
+	if strings.TrimSpace(params.Title) == "" {
+		params.Title = taskID
+	}
 	if strings.TrimSpace(params.Repo) == "" {
 		params.Repo = forge.ExtractRepoPath(svc.RemoteURL)
 		if params.Repo == "" {

@@ -22,6 +22,11 @@ type SubmitRemoveTaskMsg struct {
 	DeleteBranches bool
 }
 
+type SubmitConvertHotfixMsg struct {
+	SourceTaskID string
+	TargetTaskID string
+}
+
 type CloseModalMsg struct{}
 
 type SubmitRemoveServiceMsg struct {

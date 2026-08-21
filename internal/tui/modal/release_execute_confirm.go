@@ -112,7 +112,7 @@ func (d *ReleaseExecuteConfirmDialog) View() string {
 	b.WriteString("\n")
 
 	b.WriteString("\n")
-	b.WriteString(warnStyle.Bold(true).Render("⚠ Stage 1: This will merge feature branches, create release branches, and push release branches if enabled."))
+	b.WriteString(warnStyle.Bold(true).Render("⚠ Stage 1: This will verify feature branches are merged into the integration branch, create release branches, and push release branches if enabled."))
 	b.WriteString("\n")
 	b.WriteString(warnStyle.Bold(true).Render("Tags are NOT created yet. Use \"Finish Release\" after regression testing."))
 	b.WriteString("\n")

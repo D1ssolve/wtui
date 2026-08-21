@@ -56,6 +56,12 @@ type AddParams struct {
 	BranchSuffixes map[string]string
 }
 
+type ConvertHotfixParams struct {
+	SourceTaskID string
+	TargetTaskID string
+	StatusCh     chan<- string
+}
+
 type CreateReleaseParams struct {
 	TaskIDs          []string
 	ServiceVersions  map[string]string
@@ -79,6 +85,7 @@ type Manager interface {
 	Init(ctx context.Context, params InitParams) (PartialFailureResult, error)
 
 	Add(ctx context.Context, params AddParams) (PartialFailureResult, error)
+	ConvertHotfixToFeature(ctx context.Context, params ConvertHotfixParams) error
 
 	List(ctx context.Context) ([]domain.Task, error)
 
@@ -137,6 +144,8 @@ type Manager interface {
 	RejectRelease(ctx context.Context, releaseID string) (domain.Release, error)
 
 	RemoveRelease(ctx context.Context, releaseID string) error
+	PlanReleaseCleanup(ctx context.Context, releaseID string, selection ReleaseCleanupSelection) (ReleaseCleanupPlan, error)
+	ExecuteReleaseCleanup(ctx context.Context, plan ReleaseCleanupPlan, statusCh chan<- string) (ReleaseCleanupResult, error)
 
 	ScanPrunableTasks(ctx context.Context) ([]domain.PruneCandidate, error)
 

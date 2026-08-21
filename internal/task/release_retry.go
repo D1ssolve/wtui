@@ -245,7 +245,11 @@ func (m *manager) validateRetryServiceRefs(ctx context.Context, svc domain.Relea
 			return fmt.Errorf("%w: service=%s missing integration branch %s", ErrReleaseRetryUnsafe, svc.Name, svc.IntegrationBranch)
 		}
 		if svc.PostIntegrationSHA != "" {
-			currentSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, svc.IntegrationBranch)
+			ref := svc.PostIntegrationRef
+			if ref == "" {
+				ref = svc.IntegrationBranch
+			}
+			currentSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, ref)
 			if resolveErr != nil {
 				return fmt.Errorf("%w: service=%s integration sha resolve: %v", ErrReleaseRetryUnsafe, svc.Name, resolveErr)
 			}
@@ -335,7 +339,7 @@ func (m *manager) retryPrepareService(ctx context.Context, release *domain.Relea
 		if err := os.MkdirAll(filepath.Dir(integrationPath), 0o755); err != nil {
 			return fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
 		}
-		if err := m.git.AddWorktree(ctx, svc.RepoPath, integrationPath, svc.IntegrationBranch, false, ""); err != nil {
+		if err := m.git.AddDetachedWorktree(ctx, svc.RepoPath, integrationPath, "origin/"+svc.IntegrationBranch); err != nil {
 			return err
 		}
 		svc.IntegrationWorktreePath = integrationPath
@@ -382,10 +386,10 @@ func (m *manager) retryPrepareService(ctx context.Context, release *domain.Relea
 	}
 
 	if svc.PreIntegrationRef == "" {
-		svc.PreIntegrationRef = svc.IntegrationBranch
+		svc.PreIntegrationRef = "origin/" + svc.IntegrationBranch
 	}
 	if svc.PostIntegrationRef == "" {
-		svc.PostIntegrationRef = svc.IntegrationBranch
+		svc.PostIntegrationRef = "origin/" + svc.IntegrationBranch
 	}
 	if svc.PostIntegrationSHA == "" {
 		postIntegrationSHA, resolveErr := m.resolveReleaseRefSHA(ctx, integrationPath, "HEAD")
@@ -396,7 +400,7 @@ func (m *manager) retryPrepareService(ctx context.Context, release *domain.Relea
 	}
 
 	if m.cfg.Release != nil && m.cfg.Release.PushIntegration != nil && *m.cfg.Release.PushIntegration && !svc.PushedIntegration {
-		if err := m.git.PushBranchExplicit(ctx, integrationPath, svc.IntegrationBranch); err != nil {
+		if err := m.git.PushRef(ctx, integrationPath, "HEAD", svc.IntegrationBranch); err != nil {
 			return fmt.Errorf("%w: service=%s integration=%s: %v", ErrReleaseOperationInProgress, svc.Name, svc.IntegrationBranch, err)
 		}
 		svc.PushedIntegration = true
@@ -413,7 +417,7 @@ func (m *manager) retryPrepareService(ctx context.Context, release *domain.Relea
 		return err
 	}
 	if !branchExists {
-		if err := m.git.CreateBranchFromBranch(ctx, svc.RepoPath, svc.ReleaseBranch, svc.IntegrationBranch); err != nil {
+		if err := m.git.CreateBranchFromBranch(ctx, svc.RepoPath, svc.ReleaseBranch, svc.PostIntegrationSHA); err != nil {
 			return err
 		}
 		svc.ReleaseRef = svc.ReleaseBranch

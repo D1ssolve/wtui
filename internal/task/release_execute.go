@@ -112,7 +112,8 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 		return fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
 	}
 	sendStatus(statusCh, fmt.Sprintf("[%s][worktree] preparing integration worktree", svc.Name))
-	if err := m.git.AddWorktree(ctx, svc.RepoPath, integrationPath, svc.IntegrationBranch, false, ""); err != nil {
+	remoteIntegration := "origin/" + svc.IntegrationBranch
+	if err := m.git.AddDetachedWorktree(ctx, svc.RepoPath, integrationPath, remoteIntegration); err != nil {
 		return err
 	}
 	svc.IntegrationWorktreePath = integrationPath
@@ -131,8 +132,8 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 		}
 	}()
 
-	svc.PreIntegrationRef = svc.IntegrationBranch
-	preIntegrationSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, svc.IntegrationBranch)
+	svc.PreIntegrationRef = remoteIntegration
+	preIntegrationSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, remoteIntegration)
 	if err != nil {
 		return err
 	}
@@ -142,7 +143,7 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 	}
 
 	sendStatus(statusCh, fmt.Sprintf("[%s][sync] fast-forwarding %s", svc.Name, svc.IntegrationBranch))
-	if err := m.git.MergeFFOnly(ctx, integrationPath, "origin/"+svc.IntegrationBranch); err != nil {
+	if err := m.git.MergeFFOnly(ctx, integrationPath, remoteIntegration); err != nil {
 		return fmt.Errorf("release prepare: fast-forward service=%s integration=%s: %w", svc.Name, svc.IntegrationBranch, err)
 	}
 
@@ -163,7 +164,7 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 		fb.MergeRef = mergeSHA
 	}
 
-	svc.PostIntegrationRef = svc.IntegrationBranch
+	svc.PostIntegrationRef = remoteIntegration
 	postIntegrationSHA, err := m.resolveReleaseRefSHA(ctx, integrationPath, "HEAD")
 	if err != nil {
 		return err
@@ -172,7 +173,7 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 
 	if m.cfg.Release != nil && m.cfg.Release.PushIntegration != nil && *m.cfg.Release.PushIntegration {
 		sendStatus(statusCh, fmt.Sprintf("[%s][push] pushing integration branch %s", svc.Name, svc.IntegrationBranch))
-		if err := m.git.PushBranchExplicit(ctx, integrationPath, svc.IntegrationBranch); err != nil {
+		if err := m.git.PushRef(ctx, integrationPath, "HEAD", svc.IntegrationBranch); err != nil {
 			return fmt.Errorf("%w: service=%s integration=%s: %v", ErrReleaseOperationInProgress, svc.Name, svc.IntegrationBranch, err)
 		}
 		svc.PushedIntegration = true
@@ -191,7 +192,7 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 	}
 
 	sendStatus(statusCh, fmt.Sprintf("[%s][branch] creating %s", svc.Name, svc.ReleaseBranch))
-	if err := m.git.CreateBranchFromBranch(ctx, svc.RepoPath, svc.ReleaseBranch, svc.IntegrationBranch); err != nil {
+	if err := m.git.CreateBranchFromBranch(ctx, svc.RepoPath, svc.ReleaseBranch, postIntegrationSHA); err != nil {
 		return err
 	}
 	svc.ReleaseRef = svc.ReleaseBranch

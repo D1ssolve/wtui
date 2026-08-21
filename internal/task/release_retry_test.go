@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/forge"
 )
 
 func TestRetryRelease_InvalidStatuses_ReturnInvalidTransition(t *testing.T) {
@@ -97,6 +98,28 @@ func TestRetryRelease_UnsafeRefMismatch_LeavesManifestUnchanged(t *testing.T) {
 	}
 	if persisted.Error == nil || persisted.Error.Code != "ERR_RELEASE_PUSH_FAILED" {
 		t.Fatalf("persisted.Error = %#v, want ERR_RELEASE_PUSH_FAILED", persisted.Error)
+	}
+}
+
+func TestValidateRetryServiceRefs_UsesRecordedIntegrationRef(t *testing.T) {
+	gitMock := &mockGitClient{branchExistsRes: true}
+	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+		if ref != "origin/develop" {
+			t.Fatalf("resolved ref = %q, want origin/develop", ref)
+		}
+		return "remote-sha", nil
+	}
+	m, _ := newReleasePlanTestManager(t, gitMock)
+
+	err := m.validateRetryServiceRefs(t.Context(), domain.ReleaseService{
+		Name:               "svc-api",
+		RepoPath:           "/repo-api",
+		IntegrationBranch:  "develop",
+		PostIntegrationRef: "origin/develop",
+		PostIntegrationSHA: "remote-sha",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -425,6 +448,37 @@ func TestRetryRelease_V2PartialPromoteResumesWithoutDuplicateMR(t *testing.T) {
 	}
 	if got.Status != domain.ReleaseStatusAwaitingMasterMerge || len(client.creates) != 1 || got.Services[0].ProductionMR.Number != 41 || got.Services[1].ProductionMR.Number == 0 {
 		t.Fatalf("release = %#v, creates = %#v", got, client.creates)
+	}
+}
+
+func TestRetryRelease_V2LostCreateResponseAdoptsRemoteMR(t *testing.T) {
+	m, _, client := newPromoteTestManager(t)
+	client.mrStatuses = []forge.MRInfo{{
+		Number:       30,
+		State:        "opened",
+		URL:          "https://gitlab.example/mr/30",
+		SourceBranch: "release/1.2.3",
+		TargetBranch: "master",
+	}}
+	client.createErr = errors.New("open merge request already exists")
+	preparedAt := time.Now().UTC()
+	release := writePromoteRelease(t, m, domain.ReleaseStatusFailed, promoteService("api", "/repos/api", "release/1.2.3"))
+	release.PreparedAt = &preparedAt
+	release.Error = &domain.ReleaseError{Recoverable: true, Stage: "promote"}
+	if _, err := m.writeReleaseManifest(release); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := m.RetryRelease(t.Context(), release.ID)
+	if err != nil {
+		t.Fatalf("RetryRelease() error = %v", err)
+	}
+	if len(client.creates) != 0 || client.mrStatusSource != "release/1.2.3" || client.mrStatusRepo != "gitlab.com/group/repo" {
+		t.Fatalf("creates = %d, MRStatus source=%q repo=%q", len(client.creates), client.mrStatusSource, client.mrStatusRepo)
+	}
+	mr := got.Services[0].ProductionMR
+	if got.Status != domain.ReleaseStatusAwaitingMasterMerge || mr == nil || mr.Number != 30 || mr.SourceSHA != "release/1.2.3-sha" {
+		t.Fatalf("release = %#v", got)
 	}
 }
 

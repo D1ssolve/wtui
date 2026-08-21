@@ -3,6 +3,7 @@ package panels
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,6 +25,9 @@ type serviceItem struct {
 	service       domain.Service
 	forgeProvider forge.ForgeProvider
 	wfStatus      string
+	wfDetail      string
+	opActive      bool
+	progress      ServiceProgress
 }
 
 func (s serviceItem) FilterValue() string { return s.service.Name }
@@ -71,6 +75,9 @@ func renderServiceCard(si serviceItem, selected bool, width int) string {
 	if si.wfStatus != "" {
 		line += "   " + workflowBadge(si.wfStatus)
 	}
+	if si.wfDetail != "" && (si.wfStatus == "blocked" || si.wfStatus == "failed") {
+		line += "   " + lipgloss.NewStyle().Foreground(uitheme.Danger).Render(si.wfDetail)
+	}
 	if svc.Branch != "" {
 		line += "   " + lipgloss.NewStyle().Foreground(uitheme.Primary).Render("⎇ "+svc.Branch)
 	}
@@ -80,11 +87,28 @@ func renderServiceCard(si serviceItem, selected bool, width int) string {
 			lipgloss.NewStyle().Foreground(uitheme.Danger).Render(fmt.Sprintf("↓%d", svc.Behind)))
 	}
 	line = ansi.Truncate(line, contentWidth, "…")
+	line2 := "     "
+	if si.opActive && si.progress.State != ProgressPending {
+		marker, markerColor := "●", uitheme.Primary
+		switch si.progress.State {
+		case ProgressDone:
+			marker, markerColor = "✓", uitheme.Success
+		case ProgressFailed:
+			marker, markerColor = "✗", uitheme.Danger
+		case ProgressSkipped:
+			marker, markerColor = "–", uitheme.TextMuted
+		}
+		phase := si.progress.Phase
+		if phase == "" {
+			phase = "running"
+		}
+		line2 += lipgloss.NewStyle().Foreground(markerColor).Render(marker+" "+phase) + "   "
+	}
 	path := svc.RepoPath
 	if path == "" {
 		path = svc.WorktreePath
 	}
-	line2 := ansi.Truncate("     Path: "+path, contentWidth, "…")
+	line2 = ansi.Truncate(line2+"Path: "+path, contentWidth, "…")
 	style := uitheme.GlassBorder(uitheme.GlassHighlight).
 		Width(contentWidth).
 		Foreground(svcColorDim)
@@ -117,6 +141,7 @@ type ServicesPanel struct {
 
 	services []domain.Service
 	workflow *domain.WorkflowSummary
+	progress *OperationProgress
 }
 
 func NewServicesPanel(width, height int) ServicesPanel {
@@ -153,6 +178,27 @@ func (p *ServicesPanel) SetForgeConfig(cfg *config.ForgeConfig) {
 	p.refreshItems()
 }
 
+// SetOperationProgress updates the live operation snapshot in place,
+// preserving the current cursor position.
+func (p *ServicesPanel) SetOperationProgress(op *OperationProgress) {
+	p.progress = op
+	items := p.list.Items()
+	for i, it := range items {
+		si, ok := it.(serviceItem)
+		if !ok {
+			continue
+		}
+		si.opActive = op != nil && op.TaskID == p.taskID
+		if si.opActive {
+			si.progress = op.Services[si.service.Name]
+		} else {
+			si.progress = ServiceProgress{}
+		}
+		items[i] = si
+	}
+	p.list.SetItems(items)
+}
+
 func (p *ServicesPanel) refreshItems() {
 	wfByName := make(map[string]domain.ServiceWorkflow)
 	if p.workflow != nil {
@@ -169,6 +215,11 @@ func (p *ServicesPanel) refreshItems() {
 		}
 		if sw, ok := wfByName[s.Name]; ok {
 			item.wfStatus = sw.Status
+			item.wfDetail = sw.Detail
+		}
+		if p.progress != nil && p.progress.TaskID == p.taskID {
+			item.opActive = true
+			item.progress = p.progress.Services[s.Name]
 		}
 		items[i] = item
 	}
@@ -265,18 +316,6 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			}
 			return p, func() tea.Msg { return OpenAddServiceMsg{TaskID: tid, ExistingServices: existing} }
 
-		case "P":
-			if p.lazygitAvailable {
-				return p, nil
-			}
-			svc := p.SelectedService()
-			if svc == nil {
-				return p, nil
-			}
-			tid := p.taskID
-			name := svc.Name
-			return p, func() tea.Msg { return PushServiceMsg{TaskID: tid, ServiceName: name} }
-
 		case "g":
 			if !p.lazygitAvailable {
 				return p, nil
@@ -296,20 +335,6 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 				}
 			}
 
-		case "s":
-			if p.lazygitAvailable {
-				return p, nil
-			}
-			svc := p.SelectedService()
-			if svc == nil {
-				return p, nil
-			}
-			tid := p.taskID
-			name := svc.Name
-			return p, func() tea.Msg {
-				return OpenSyncServiceStrategyDialogMsg{TaskID: tid, ServiceName: name}
-			}
-
 		case "v":
 			if p.taskID == "" {
 				return p, nil
@@ -325,34 +350,6 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			item, _ := p.list.SelectedItem().(serviceItem)
 			return p, func() tea.Msg {
 				return OpenForgeMenuMsg{TaskID: p.taskID, ServiceName: svc.Name, Provider: item.forgeProvider}
-			}
-
-		case "ctrl+s":
-			if p.lazygitAvailable {
-				return p, nil
-			}
-			svc := p.SelectedService()
-			if svc == nil {
-				return p, nil
-			}
-			tid := p.taskID
-			name := svc.Name
-			return p, func() tea.Msg {
-				return OpenStashDialogMsg{TaskID: tid, ServiceName: name, Pop: false}
-			}
-
-		case "ctrl+u":
-			if p.lazygitAvailable {
-				return p, nil
-			}
-			svc := p.SelectedService()
-			if svc == nil {
-				return p, nil
-			}
-			tid := p.taskID
-			name := svc.Name
-			return p, func() tea.Msg {
-				return OpenStashDialogMsg{TaskID: tid, ServiceName: name, Pop: true}
 			}
 
 		case "esc":
@@ -424,9 +421,13 @@ func (p ServicesPanel) View() string {
 	title := renderPaneTitle(titleText, "RELEASES  ›", inner.w)
 
 	workflow := renderWorkflow(p.workflow, inner.w)
+	progressRow := p.renderOperationProgress(inner.w)
 	bodyHeight := max(0, inner.h-1)
 	if workflow != "" {
 		bodyHeight = max(0, bodyHeight-lipgloss.Height(workflow)-1)
+	}
+	if progressRow != "" {
+		bodyHeight = max(0, bodyHeight-2)
 	}
 
 	var body string
@@ -447,8 +448,15 @@ func (p ServicesPanel) View() string {
 		listCopy.SetSize(inner.w, bodyHeight)
 		body = listCopy.View()
 	}
+	var head []string
 	if workflow != "" {
-		body = lipgloss.JoinVertical(lipgloss.Left, workflow, "", body)
+		head = append(head, workflow, "")
+	}
+	if progressRow != "" {
+		head = append(head, progressRow, "")
+	}
+	if len(head) > 0 {
+		body = lipgloss.JoinVertical(lipgloss.Left, append(head, body)...)
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
@@ -461,4 +469,48 @@ func (p ServicesPanel) View() string {
 		Width(inner.w).
 		Height(inner.h).
 		Render(content)
+}
+
+// renderOperationProgress renders the overall operation row:
+// one bar cell per service plus counters.
+func (p ServicesPanel) renderOperationProgress(width int) string {
+	op := p.progress
+	if op == nil || op.TaskID != p.taskID || len(p.services) == 0 || width <= 0 {
+		return ""
+	}
+	names := make([]string, len(p.services))
+	var bar strings.Builder
+	bar.WriteString("[")
+	for i, s := range p.services {
+		names[i] = s.Name
+		cell, color := "□", uitheme.TextMuted
+		switch op.Services[s.Name].State {
+		case ProgressDone:
+			cell, color = "■", uitheme.Success
+		case ProgressFailed:
+			cell, color = "■", uitheme.Danger
+		case ProgressRunning:
+			cell, color = "■", uitheme.Primary
+		case ProgressSkipped:
+			cell, color = "■", uitheme.TextMuted
+		}
+		bar.WriteString(lipgloss.NewStyle().Foreground(color).Render(cell))
+	}
+	bar.WriteString("]")
+
+	done, failed, running, skipped, _ := op.Counts(names)
+	line := fmt.Sprintf("%s  %s  %d/%d",
+		lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary).Render(op.Op),
+		bar.String(), done+skipped, len(p.services))
+	var extra []string
+	if running > 0 {
+		extra = append(extra, fmt.Sprintf("%d running", running))
+	}
+	if failed > 0 {
+		extra = append(extra, lipgloss.NewStyle().Foreground(uitheme.Danger).Render(fmt.Sprintf("%d failed", failed)))
+	}
+	if len(extra) > 0 {
+		line += "  " + strings.Join(extra, "  ")
+	}
+	return ansi.Truncate(line, width, "…")
 }

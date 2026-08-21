@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,6 +18,7 @@ import (
 
 type workflowForgeClient struct {
 	readiness map[string]forge.MRReadiness
+	readErrs  map[string]error
 	reads     atomic.Int32
 }
 
@@ -30,7 +32,7 @@ func (f *workflowForgeClient) MRStatus(context.Context, string, string) ([]forge
 }
 func (f *workflowForgeClient) MRReadiness(_ context.Context, branch, _, _ string) (forge.MRReadiness, error) {
 	f.reads.Add(1)
-	return f.readiness[branch], nil
+	return f.readiness[branch], f.readErrs[branch]
 }
 func (f *workflowForgeClient) MRReadinessByNumber(context.Context, int, string, string) (forge.MRReadiness, error) {
 	return forge.MRReadiness{}, nil
@@ -141,6 +143,90 @@ func TestTaskWorkflow_IncludesPerServiceInspectionRows(t *testing.T) {
 	}
 	if !reflect.DeepEqual(summary.Services, want) {
 		t.Fatalf("Services = %#v, want %#v", summary.Services, want)
+	}
+}
+
+func TestTaskWorkflow_ForgeFailureDoesNotReportMissingMR(t *testing.T) {
+	mgr, client := newWorkflowTestManager(t, nil, false, true)
+	client.readErrs = map[string]error{"feature/a": errors.New("forge unknown: ERROR")}
+
+	summary, err := mgr.TaskWorkflow(t.Context(), "TASK-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "fix blockers, then M" {
+		t.Fatalf("summary = %#v, want blocked review workflow", summary)
+	}
+	if !strings.Contains(summary.Blocker, "a: forge unknown: ERROR") {
+		t.Fatalf("Blocker = %q, want forge error", summary.Blocker)
+	}
+	if strings.Contains(summary.NextAction, "create MRs") {
+		t.Fatalf("NextAction = %q, must not report missing MR", summary.NextAction)
+	}
+}
+
+func TestTaskWorkflow_FetchesBeforeCheckingOriginIntegrationBranch(t *testing.T) {
+	mgr, _ := newWorkflowTestManager(t, nil, false, true)
+	gitMock := mgr.(*manager).git.(*mockGitClient)
+	var fetched atomic.Bool
+	gitMock.fetchFn = func(string) error {
+		fetched.Store(true)
+		return nil
+	}
+	gitMock.isAncestorFn = func(_, _, _ string) (bool, error) {
+		return fetched.Load(), nil
+	}
+
+	summary, err := mgr.TaskWorkflow(t.Context(), "TASK-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Current != domain.TaskWorkflowReleaseEligible {
+		t.Fatalf("Current = %q, want %q after fresh origin/develop check", summary.Current, domain.TaskWorkflowReleaseEligible)
+	}
+	gitMock.mu.Lock()
+	fetchCount := len(gitMock.fetchCalls)
+	gitMock.mu.Unlock()
+	if fetchCount != 2 {
+		t.Fatalf("Fetch calls = %d, want one per service", fetchCount)
+	}
+}
+
+func TestTaskWorkflow_BlockedService_ShowsBlockerDetail(t *testing.T) {
+	mgr, _ := newWorkflowTestManager(t, map[string]forge.MRReadiness{
+		"feature/a": {Number: 1, State: "open", Blockers: []string{"merge blocked: need rebase"}},
+		"feature/b": {Number: 2, State: "open", Blockers: []string{"checks pending"}},
+	}, false, true)
+
+	summary, err := mgr.TaskWorkflow(t.Context(), "TASK-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Current != domain.TaskWorkflowReviewCI {
+		t.Fatalf("Current = %q, want %q", summary.Current, domain.TaskWorkflowReviewCI)
+	}
+	if summary.NextAction != "fix blockers, then M" {
+		t.Fatalf("NextAction = %q, want %q", summary.NextAction, "fix blockers, then M")
+	}
+	wantBlocker := "a: merge blocked: need rebase"
+	if summary.Blocker != wantBlocker {
+		t.Fatalf("Blocker = %q, want %q", summary.Blocker, wantBlocker)
+	}
+	for _, step := range summary.Steps {
+		switch step.Phase {
+		case domain.TaskWorkflowReviewCI:
+			if step.State != "blocked" {
+				t.Fatalf("review_ci state = %q, want blocked", step.State)
+			}
+		case domain.TaskWorkflowCode, domain.TaskWorkflowMR:
+			if step.State != "done" {
+				t.Fatalf("%s state = %q, want done", step.Phase, step.State)
+			}
+		default:
+			if step.State != "next" {
+				t.Fatalf("%s state = %q, want next", step.Phase, step.State)
+			}
+		}
 	}
 }
 

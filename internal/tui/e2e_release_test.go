@@ -77,3 +77,38 @@ func TestE2E_ReleaseActionsAreStatusAware(t *testing.T) {
 		t.Fatal("F on released release must emit hint only")
 	}
 }
+
+func TestE2E_ReleaseRetryRequiresRecoverableFailure(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 140, 40)
+	m.setFocus(FocusReleases)
+	m.releasesPanel.SetReleases([]domain.Release{{
+		ID:     "rel-1",
+		Status: domain.ReleaseStatusFailed,
+		Error:  &domain.ReleaseError{Recoverable: true},
+	}})
+
+	updated, cmd := m.Update(sendKey("R"))
+	m = updated.(Model)
+	if cmd == nil || !m.opRunning || !strings.Contains(m.outputPanel.View(), "Retrying release rel-1") {
+		t.Fatal("R on recoverable failed release must start retry")
+	}
+
+	m.opRunning = false
+	m.releasesPanel.SetReleases([]domain.Release{{
+		ID:     "rel-2",
+		Status: domain.ReleaseStatusFailed,
+		Error:  &domain.ReleaseError{Recoverable: false},
+	}})
+	updated, cmd = m.Update(sendKey("R"))
+	m = updated.(Model)
+	if cmd != nil || m.opRunning || !strings.Contains(m.outputPanel.View(), "release must be failed and recoverable") {
+		t.Fatal("R on non-recoverable failed release must emit hint only")
+	}
+
+	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-3", Status: domain.ReleaseStatusPrepared}})
+	updated, cmd = m.Update(sendKey("R"))
+	m = updated.(Model)
+	if cmd != nil || m.opRunning {
+		t.Fatal("R on non-failed release must not start retry")
+	}
+}

@@ -75,17 +75,27 @@ func detectTaskPhase(services []domain.Service, flow *gitflow.ResolvedGitFlow) (
 
 // detectTaskRelationship returns parentID by suffix-matching taskID against known child branch types.
 // Returns "" for root tasks or orphan children (parent missing).
-func detectTaskRelationship(taskID string, allTaskIDs map[string]struct{}, tasksRoot string, flow *gitflow.ResolvedGitFlow) string {
+func detectTaskRelationship(taskID, phase string, allTaskIDs map[string]struct{}, tasksRoot string, flow *gitflow.ResolvedGitFlow) string {
 	if flow == nil {
+		return ""
+	}
+	if gitflow.BranchType(phase) == flow.DefaultBranchType {
 		return ""
 	}
 
 	suffixes := make([]string, 0, len(flow.BranchTypes))
-	for branchType := range flow.BranchTypes {
-		if branchType == flow.DefaultBranchType {
-			continue
+	if phase != "" {
+		branchType := gitflow.BranchType(phase)
+		if _, ok := flow.BranchTypes[branchType]; !ok {
+			return ""
 		}
-		suffixes = append(suffixes, string(branchType))
+		suffixes = append(suffixes, phase)
+	} else {
+		for branchType := range flow.BranchTypes {
+			if branchType != flow.DefaultBranchType {
+				suffixes = append(suffixes, string(branchType))
+			}
+		}
 	}
 
 	sort.Slice(suffixes, func(i, j int) bool {

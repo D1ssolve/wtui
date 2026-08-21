@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -44,6 +45,10 @@ type mockManager struct {
 	syncTaskCalls    int
 	syncTaskTaskID   string
 	syncTaskStrategy task.SyncStrategy
+	convertParams    task.ConvertHotfixParams
+	convertCalls     int
+	convertErr       error
+	convertStatuses  []string
 
 	listReleasesResult []domain.Release
 	listReleasesErr    error
@@ -60,15 +65,29 @@ type mockManager struct {
 	finishReleaseCalls  int
 	finishReleaseDone   chan struct{}
 
-	pushTaskCalls    int
-	pushTaskID       string
-	pushServiceCalls int
-	pushServiceTask  string
-	pushServiceName  string
-	mergeServiceTask string
-	mergeServiceName string
+	pushTaskCalls     int
+	pushTaskID        string
+	pushServiceCalls  int
+	pushServiceTask   string
+	pushServiceName   string
+	mergeServiceTask  string
+	mergeServiceName  string
+	updateServiceTask string
+	updateServiceName string
+	updateTarget      string
+	forgeCreateMRArgs forge.CreateMRParams
 
 	isProtectedBranchResult map[string]bool
+
+	cleanupPlanCalls       int
+	cleanupPlanReleaseID   string
+	cleanupPlanSelection   task.ReleaseCleanupSelection
+	cleanupPlanResult      task.ReleaseCleanupPlan
+	cleanupPlanErr         error
+	cleanupExecuteCalls    int
+	cleanupExecuteResult   task.ReleaseCleanupResult
+	cleanupExecuteErr      error
+	cleanupExecuteStatuses []string
 }
 
 var _ task.Manager = (*mockManager)(nil)
@@ -78,6 +97,14 @@ func (m *mockManager) Init(_ context.Context, _ task.InitParams) (task.PartialFa
 }
 func (m *mockManager) Add(_ context.Context, _ task.AddParams) (task.PartialFailureResult, error) {
 	return task.PartialFailureResult{}, nil
+}
+func (m *mockManager) ConvertHotfixToFeature(_ context.Context, params task.ConvertHotfixParams) error {
+	m.convertParams = params
+	m.convertCalls++
+	for _, line := range m.convertStatuses {
+		params.StatusCh <- line
+	}
+	return m.convertErr
 }
 func (m *mockManager) Remove(_ context.Context, _ string, _, _ bool) error { return nil }
 
@@ -149,7 +176,8 @@ func (m *mockManager) ListTags(_ context.Context, _ string) ([]domain.TagInfo, e
 	return nil, nil
 }
 
-func (m *mockManager) ForgeCreateMR(_ context.Context, _, _ string, _ forge.CreateMRParams) (forge.MRInfo, error) {
+func (m *mockManager) ForgeCreateMR(_ context.Context, _, _ string, params forge.CreateMRParams) (forge.MRInfo, error) {
+	m.forgeCreateMRArgs = params
 	return forge.MRInfo{}, nil
 }
 
@@ -242,6 +270,19 @@ func (m *mockManager) RejectRelease(_ context.Context, _ string) (domain.Release
 }
 
 func (m *mockManager) RemoveRelease(_ context.Context, _ string) error { return nil }
+func (m *mockManager) PlanReleaseCleanup(_ context.Context, releaseID string, selection task.ReleaseCleanupSelection) (task.ReleaseCleanupPlan, error) {
+	m.cleanupPlanCalls++
+	m.cleanupPlanReleaseID = releaseID
+	m.cleanupPlanSelection = selection
+	return m.cleanupPlanResult, m.cleanupPlanErr
+}
+func (m *mockManager) ExecuteReleaseCleanup(_ context.Context, _ task.ReleaseCleanupPlan, statusCh chan<- string) (task.ReleaseCleanupResult, error) {
+	m.cleanupExecuteCalls++
+	for _, line := range m.cleanupExecuteStatuses {
+		statusCh <- line
+	}
+	return m.cleanupExecuteResult, m.cleanupExecuteErr
+}
 
 func newTestConfig() *config.Config {
 	cfg := &config.Config{
@@ -1444,6 +1485,92 @@ func TestUpdate_SubmitRemoveMsg_StartsOperation(t *testing.T) {
 	}
 }
 
+func TestUpdate_OpenConvertHotfixDialogMsg_OpensModal(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+
+	updated, cmd := m.Update(panels.OpenConvertHotfixDialogMsg{TaskID: "IN-4444", TargetTaskID: "IN-9000"})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("OpenConvertHotfixDialogMsg must not return a cmd")
+	}
+	if _, ok := m.modal.(*modal.ConvertHotfixDialog); !ok {
+		t.Fatalf("modal = %T, want *modal.ConvertHotfixDialog", m.modal)
+	}
+}
+
+func TestUpdate_SubmitConvertHotfixMsg_StartsOperation(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.modal = modal.NewConvertHotfixDialog("IN-4444", "IN-4444")
+
+	updated, cmd := m.Update(modal.SubmitConvertHotfixMsg{SourceTaskID: "IN-4444", TargetTaskID: "IN-9000"})
+	m = updated.(Model)
+
+	if !m.opRunning {
+		t.Fatal("opRunning = false, want true")
+	}
+	if !m.conversionRunning {
+		t.Fatal("conversionRunning = false, want true")
+	}
+	if m.modal != nil {
+		t.Fatalf("modal = %T, want nil", m.modal)
+	}
+	if cmd == nil {
+		t.Fatal("SubmitConvertHotfixMsg must return a cmd")
+	}
+}
+
+func TestUpdate_ConversionRunningBlocksTaskMutation(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.conversionRunning = true
+
+	updated, cmd := m.Update(panels.OpenRemoveDialogMsg{TaskID: "IN-4444"})
+	m = updated.(Model)
+
+	if cmd != nil || m.modal != nil {
+		t.Fatalf("mutation was not blocked: cmd=%v modal=%T", cmd, m.modal)
+	}
+}
+
+func TestUpdate_PendingConversionBlocksMutationButAllowsRetry(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.tasks = []domain.Task{{ID: "IN-4444", PendingConversionTargetID: "IN-9000"}}
+
+	updated, cmd := m.Update(panels.OpenRemoveDialogMsg{TaskID: "IN-4444"})
+	m = updated.(Model)
+	if cmd != nil || m.modal != nil {
+		t.Fatalf("pending mutation was not blocked: cmd=%v modal=%T", cmd, m.modal)
+	}
+
+	updated, cmd = m.Update(panels.OpenConvertHotfixDialogMsg{TaskID: "IN-4444", TargetTaskID: "IN-9000"})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Fatal("retry dialog must not start command")
+	}
+	if _, ok := m.modal.(*modal.ConvertHotfixDialog); !ok {
+		t.Fatalf("retry modal = %T", m.modal)
+	}
+}
+
+func TestUpdate_ConvertHotfixDoneMsg_ReleasesConversionLock(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.opRunning = true
+	m.conversionRunning = true
+
+	updated, cmd := m.Update(ConvertHotfixDoneMsg{SourceTaskID: "IN-1", TargetTaskID: "IN-2"})
+	m = updated.(Model)
+
+	if m.opRunning || m.conversionRunning {
+		t.Fatalf("locks remain: op=%v conversion=%v", m.opRunning, m.conversionRunning)
+	}
+	if cmd == nil {
+		t.Fatal("completion must refresh tasks")
+	}
+	if !strings.Contains(m.outputPanel.View(), "Convert hotfix IN-1 to feature task IN-2 done") {
+		t.Fatalf("output = %q", m.outputPanel.View())
+	}
+}
+
 func TestFocusPanel_String(t *testing.T) {
 	tests := []struct {
 		panel FocusPanel
@@ -1498,22 +1625,65 @@ type mockError struct{ msg string }
 
 func (e *mockError) Error() string { return e.msg }
 
-func TestUpdate_PushServiceMsg_OpensConfirmModal(t *testing.T) {
+func TestUpdate_ShellExecMsgOpensInput(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
-	m = sendWindowSize(m, 120, 40)
-	m.servicesPanel.SetServices("IN-001", []domain.Service{{Name: "svc-a", Branch: "feature/IN-001", RemoteURL: "git@host/repo.git"}})
-
-	updated, cmd := m.Update(panels.PushServiceMsg{TaskID: "IN-001", ServiceName: "svc-a"})
+	updated, cmd := m.Update(panels.ShellExecMsg{TaskDir: "/tmp/.tasks/IN-001"})
 	m = updated.(Model)
 
-	if m.opRunning {
-		t.Error("opRunning must stay false before push confirm")
+	if cmd != nil || m.shellInput == nil || m.shellInput.taskDir != "/tmp/.tasks/IN-001" {
+		t.Fatalf("shell input = %+v, cmd = %v", m.shellInput, cmd)
 	}
-	if cmd != nil {
-		t.Fatal("PushServiceMsg should not return command before confirm")
+}
+
+func TestUpdate_ShellInputEnterRunsCommand(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.shellInput = &shellInputState{taskDir: "/tmp/.tasks/IN-001", input: "git status", cursor: len("git status")}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+
+	if m.shellInput != nil || cmd == nil {
+		t.Fatalf("shell input = %+v, cmd nil = %v", m.shellInput, cmd == nil)
 	}
-	if _, ok := m.modal.(*modal.PushConfirmDialog); !ok {
-		t.Fatalf("expected PushConfirmDialog, got %T", m.modal)
+	if got := m.outputPanel.View(); !strings.Contains(got, "Running shell command in /tmp/.tasks/IN-001: git status") {
+		t.Fatalf("output missing command: %q", got)
+	}
+}
+
+func TestUpdate_ShellInputEditsRunes(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.shellInput = &shellInputState{taskDir: "/tmp/.tasks/IN-001"}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("åβ")})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = updated.(Model)
+
+	if m.shellInput.input != "å" || m.shellInput.cursor != 1 {
+		t.Fatalf("shell input = %+v, want input å at cursor 1", m.shellInput)
+	}
+}
+
+func TestUpdate_ShellInputCloseWithoutCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		key  tea.KeyType
+	}{
+		{name: "empty enter", key: tea.KeyEnter},
+		{name: "escape", key: tea.KeyEsc},
+		{name: "control c", key: tea.KeyCtrlC},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestModel(t, &mockManager{})
+			m.shellInput = &shellInputState{taskDir: "/tmp/.tasks/IN-001"}
+
+			updated, cmd := m.Update(tea.KeyMsg{Type: tt.key})
+			m = updated.(Model)
+			if m.shellInput != nil || cmd != nil {
+				t.Fatalf("shell input = %+v, cmd = %v", m.shellInput, cmd)
+			}
+		})
 	}
 }
 
@@ -2122,6 +2292,26 @@ func TestUpdate_OpenForgeMenuMsg_OpensForgeMenuModal(t *testing.T) {
 	}
 }
 
+func TestUpdate_ForgeCreateMRMsg_ForwardsCustomTitle(t *testing.T) {
+	mgr := &mockManager{}
+	m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+	m.servicesPanel.SetServices("IN-1", []domain.Service{{Name: "svc-a"}})
+
+	_, cmd := m.Update(modal.ForgeCreateMRMsg{TaskID: "IN-1", ServiceName: "svc-a", Title: "Custom MR title"})
+	if cmd == nil {
+		t.Fatal("create MR command is nil")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("create MR command = %T, want non-empty tea.BatchMsg", msg)
+	}
+	batch[0]()
+	if mgr.forgeCreateMRArgs.Title != "Custom MR title" {
+		t.Fatalf("title = %q, want custom title", mgr.forgeCreateMRArgs.Title)
+	}
+}
+
 func TestUpdate_GitLabPipelineResultOpensFullscreenViewAndEscCloses(t *testing.T) {
 	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
 	result := []forge.PipelineStatus{{
@@ -2248,5 +2438,88 @@ func TestUpdate_RiderTaskMsg_StartsOperationWithSolutionName(t *testing.T) {
 	view := m.outputPanel.View()
 	if !strings.Contains(view, "Opening IN-222.sln in Rider from /tmp/IN-222...") {
 		t.Errorf("output panel should contain Rider task solution message, got:\n%s", view)
+	}
+}
+
+func TestModel_SyncService_OpProgressLifecycle(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	updated, _ := m.Update(ServicesLoadedMsg{TaskID: "IN-001", Services: []domain.Service{{Name: "a"}, {Name: "b"}}})
+	m = updated.(Model)
+
+	updated, _ = m.Update(modal.SubmitSyncServiceStrategyMsg{TaskID: "IN-001", ServiceName: "a", Strategy: task.SyncStrategyMerge})
+	m = updated.(Model)
+	if m.opProgress == nil || m.opProgress.Op != "SYNC" || m.opProgress.TaskID != "IN-001" {
+		t.Fatalf("opProgress = %+v, want SYNC snapshot for IN-001", m.opProgress)
+	}
+
+	updated, _ = m.Update(OutputLineMsg{Line: "[a] fetching..."})
+	m = updated.(Model)
+	if got := m.opProgress.Services["a"].State; got != panels.ProgressRunning {
+		t.Fatalf("a state = %d, want running", got)
+	}
+
+	updated, _ = m.Update(OutputLineMsg{Line: "[a] done."})
+	m = updated.(Model)
+	if got := m.opProgress.Services["a"].State; got != panels.ProgressDone {
+		t.Fatalf("a state = %d, want done", got)
+	}
+
+	updated, _ = m.Update(CommandDoneMsg{Op: "Sync service a"})
+	m = updated.(Model)
+	if m.opProgress == nil {
+		t.Fatal("opProgress must be retained after command completion")
+	}
+
+	updated, _ = m.Update(modal.SubmitSyncServiceStrategyMsg{TaskID: "IN-001", ServiceName: "b", Strategy: task.SyncStrategyMerge})
+	m = updated.(Model)
+	if len(m.opProgress.Services) != 0 {
+		t.Fatalf("new operation must replace snapshot, got %+v", m.opProgress.Services)
+	}
+}
+
+func TestModel_CloseTask_OpProgressUsesTypedSteps(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	updated, _ := m.Update(ServicesLoadedMsg{TaskID: "IN-001", Services: []domain.Service{{Name: "a"}, {Name: "b"}}})
+	m = updated.(Model)
+
+	updated, _ = m.Update(modal.SubmitCloseTaskMsg{TaskID: "IN-001"})
+	m = updated.(Model)
+	if m.opProgress == nil || m.opProgress.Op != "CLOSE" {
+		t.Fatalf("opProgress = %+v, want CLOSE snapshot", m.opProgress)
+	}
+
+	updated, _ = m.Update(OutputLineMsg{Line: "[a:fetch] fetched origin"})
+	m = updated.(Model)
+	updated, _ = m.Update(OutputLineMsg{Line: "[b:fetch] fetched origin"})
+	m = updated.(Model)
+
+	updated, _ = m.Update(CloseTaskFinishedMsg{Result: task.CloseTaskResult{
+		TaskID: "IN-001",
+		Steps: []task.CloseTaskStep{
+			{Name: "a:fetch", Status: task.StepStatusOK},
+			{Name: "b:merge:develop", Status: task.StepStatusFailed},
+		},
+	}})
+	m = updated.(Model)
+	if got := m.opProgress.Services["a"].State; got != panels.ProgressDone {
+		t.Fatalf("a state = %d, want done", got)
+	}
+	if got := m.opProgress.Services["b"].State; got != panels.ProgressFailed {
+		t.Fatalf("b state = %d, want failed", got)
+	}
+}
+
+func TestModel_PushTask_OpProgressFailureFinish(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	updated, _ := m.Update(ServicesLoadedMsg{TaskID: "IN-001", Services: []domain.Service{{Name: "a"}}})
+	m = updated.(Model)
+	m.beginOpProgress("IN-001", "PUSH")
+
+	updated, _ = m.Update(OutputLineMsg{Line: "[a] pushing..."})
+	m = updated.(Model)
+	updated, _ = m.Update(CommandDoneMsg{Err: errors.New("push failed"), Op: "Push task IN-001"})
+	m = updated.(Model)
+	if got := m.opProgress.Services["a"].State; got != panels.ProgressFailed {
+		t.Fatalf("a state = %d, want failed after errored finish", got)
 	}
 }

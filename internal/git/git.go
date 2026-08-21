@@ -30,10 +30,13 @@ type Client interface {
 	ListBranches(ctx context.Context, repoPath string, pattern string) ([]string, error)
 
 	RemoteBranchExists(ctx context.Context, repoPath, branch string) (bool, error)
+	RemoteRefSHA(ctx context.Context, repoPath, ref string) (string, error)
 
 	ListWorktrees(ctx context.Context, repoPath string) ([]WorktreeEntry, error)
 
 	AddWorktree(ctx context.Context, repoPath, dest, branch string, newBranch bool, base string) error
+
+	AddDetachedWorktree(ctx context.Context, repoPath, dest, ref string) error
 
 	AddWorktreeWithTracking(ctx context.Context, repoPath, dest, localBranch, remoteBranch string) error
 
@@ -46,6 +49,8 @@ type Client interface {
 	GetWorktreeBranch(ctx context.Context, worktreePath string) (string, error)
 
 	RemoveWorktree(ctx context.Context, commonDir, worktreePath string, force bool) error
+	MoveWorktree(ctx context.Context, repoPath, worktreePath, destination string) error
+	RepairWorktree(ctx context.Context, repoPath, worktreePath string) error
 
 	IsDirty(ctx context.Context, worktreePath string) (bool, error)
 
@@ -71,6 +76,7 @@ type Client interface {
 	Checkout(ctx context.Context, worktreePath, branch string) error
 
 	Merge(ctx context.Context, worktreePath, branch string) error
+	MergeNoFF(ctx context.Context, worktreePath, ref string) error
 	MergeFFOnly(ctx context.Context, worktreePath, ref string) error
 
 	MergeAbort(ctx context.Context, worktreePath string) error
@@ -82,6 +88,8 @@ type Client interface {
 	// PushBranchExplicit pushes a specific branch to origin with upstream tracking.
 	// Command: git -C <worktreePath> push -u origin <branch>
 	PushBranchExplicit(ctx context.Context, worktreePath, branch string) error
+
+	PushRef(ctx context.Context, worktreePath, source, target string) error
 
 	Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error
 
@@ -98,6 +106,9 @@ type Client interface {
 	LatestSemverTag(ctx context.Context, repoPath, branch string) (string, error)
 
 	DeleteBranch(ctx context.Context, repoPath, branch string) error
+	DeleteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error
+	DeleteRemoteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error
+	MoveRemoteBranchIfUnchanged(ctx context.Context, repoPath, sourceBranch, targetBranch, sourceSHA, targetSHA string) error
 }
 
 type CommandClient struct {
@@ -219,6 +230,32 @@ func (c *CommandClient) RemoteBranchExists(ctx context.Context, repoPath, branch
 	return false, err
 }
 
+func (c *CommandClient) RemoteRefSHA(ctx context.Context, repoPath, ref string) (string, error) {
+	if !validRemoteRef(ref) {
+		return "", fmt.Errorf("invalid full remote ref %q", ref)
+	}
+	out, err := c.execGit(ctx, "-C", repoPath, "ls-remote", "origin", ref)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(out) == "" {
+		return "", nil
+	}
+	for line := range strings.SplitSeq(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == ref {
+			return fields[0], nil
+		}
+	}
+	return "", fmt.Errorf("ls-remote returned no exact match for %s", ref)
+}
+
+func validRemoteRef(ref string) bool {
+	base := strings.TrimSuffix(ref, "^{}")
+	return (strings.HasPrefix(base, "refs/heads/") || strings.HasPrefix(base, "refs/tags/")) &&
+		len(base) > len("refs/tags/") && !strings.ContainsAny(base, " ~^:?*[\\") && !strings.Contains(base, "..")
+}
+
 func (c *CommandClient) ListWorktrees(ctx context.Context, repoPath string) ([]WorktreeEntry, error) {
 	out, err := c.execGit(ctx, "-C", repoPath, "worktree", "list", "--porcelain")
 	if err != nil {
@@ -235,6 +272,11 @@ func (c *CommandClient) AddWorktree(ctx context.Context, repoPath, dest, branch 
 		args = []string{"-C", repoPath, "worktree", "add", dest, branch}
 	}
 	_, err := c.execGit(ctx, args...)
+	return err
+}
+
+func (c *CommandClient) AddDetachedWorktree(ctx context.Context, repoPath, dest, ref string) error {
+	_, err := c.execGit(ctx, "-C", repoPath, "worktree", "add", "--detach", dest, ref)
 	return err
 }
 
@@ -276,6 +318,16 @@ func (c *CommandClient) RemoveWorktree(ctx context.Context, commonDir, worktreeP
 	}
 	args = append(args, worktreePath)
 	_, err := c.execGit(ctx, args...)
+	return err
+}
+
+func (c *CommandClient) MoveWorktree(ctx context.Context, repoPath, worktreePath, destination string) error {
+	_, err := c.execGit(ctx, "-C", repoPath, "worktree", "move", worktreePath, destination)
+	return err
+}
+
+func (c *CommandClient) RepairWorktree(ctx context.Context, repoPath, worktreePath string) error {
+	_, err := c.execGit(ctx, "-C", repoPath, "worktree", "repair", worktreePath)
 	return err
 }
 
@@ -408,6 +460,11 @@ func (c *CommandClient) Merge(ctx context.Context, worktreePath, branch string) 
 	return err
 }
 
+func (c *CommandClient) MergeNoFF(ctx context.Context, worktreePath, ref string) error {
+	_, err := c.execGit(ctx, "-C", worktreePath, "merge", "--no-ff", ref)
+	return err
+}
+
 func (c *CommandClient) MergeFFOnly(ctx context.Context, worktreePath, ref string) error {
 	_, err := c.execGit(ctx, "-C", worktreePath, "merge", "--ff-only", ref)
 	return err
@@ -495,6 +552,11 @@ func (c *CommandClient) PushBranchExplicit(ctx context.Context, worktreePath, br
 	return err
 }
 
+func (c *CommandClient) PushRef(ctx context.Context, worktreePath, source, target string) error {
+	_, err := c.execGit(ctx, "-C", worktreePath, "push", "origin", source+":"+target)
+	return err
+}
+
 func (c *CommandClient) Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error {
 	args := []string{"-C", worktreePath, "stash"}
 	if pop {
@@ -511,4 +573,75 @@ func (c *CommandClient) Stash(ctx context.Context, worktreePath string, pop bool
 func (c *CommandClient) DeleteBranch(ctx context.Context, repoPath, branch string) error {
 	_, err := c.execGit(ctx, "-C", repoPath, "branch", "-d", branch)
 	return err
+}
+
+func (c *CommandClient) DeleteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error {
+	ref, err := branchRef(branch)
+	if err != nil {
+		return err
+	}
+	if !validObjectID(expectedSHA) {
+		return fmt.Errorf("invalid expected SHA %q", expectedSHA)
+	}
+	_, err = c.execGit(ctx, "-C", repoPath, "update-ref", "-d", ref, expectedSHA)
+	return err
+}
+
+func (c *CommandClient) DeleteRemoteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error {
+	ref, err := branchRef(branch)
+	if err != nil {
+		return err
+	}
+	if !validObjectID(expectedSHA) {
+		return fmt.Errorf("invalid expected SHA %q", expectedSHA)
+	}
+	_, err = c.execGit(ctx, "-C", repoPath, "push", "--force-with-lease="+ref+":"+expectedSHA, "origin", ":"+ref)
+	return err
+}
+
+func (c *CommandClient) MoveRemoteBranchIfUnchanged(ctx context.Context, repoPath, sourceBranch, targetBranch, sourceSHA, targetSHA string) error {
+	sourceRef, err := branchRef(sourceBranch)
+	if err != nil {
+		return err
+	}
+	targetRef, err := branchRef(targetBranch)
+	if err != nil {
+		return err
+	}
+	if !validObjectID(sourceSHA) {
+		return fmt.Errorf("invalid source SHA %q", sourceSHA)
+	}
+	if !validObjectID(targetSHA) {
+		return fmt.Errorf("invalid target SHA %q", targetSHA)
+	}
+	_, err = c.execGit(ctx,
+		"-C", repoPath,
+		"push", "--atomic",
+		"--force-with-lease="+sourceRef+":"+sourceSHA,
+		"--force-with-lease="+targetRef+":"+targetSHA,
+		"origin",
+		targetSHA+":"+targetRef,
+		":"+sourceRef,
+	)
+	return err
+}
+
+func branchRef(branch string) (string, error) {
+	ref := "refs/heads/" + branch
+	if branch == "" || strings.HasPrefix(branch, "refs/") || !validRemoteRef(ref) {
+		return "", fmt.Errorf("invalid branch %q", branch)
+	}
+	return ref, nil
+}
+
+func validObjectID(sha string) bool {
+	if len(sha) != 40 && len(sha) != 64 {
+		return false
+	}
+	for _, ch := range sha {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", ch) {
+			return false
+		}
+	}
+	return true
 }

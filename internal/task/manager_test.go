@@ -96,11 +96,14 @@ type mockGitClient struct {
 	commonDirFn          func(path string) (string, error)
 	removeWorktreeFn     func(commonDir, worktreePath string, force bool) error
 	removeWorktreeErr    error
+	moveWorktreeFn       func(repoPath, worktreePath, destination string) error
+	repairWorktreeFn     func(repoPath, worktreePath string) error
 	isDirtyRes           bool
 	isDirtyErr           error
 	fetchErr             error
 	rebaseErr            error
 	mergeErr             error
+	mergeNoFFErr         error
 	mergeFFOnlyErr       error
 	mergeAbortErr        error
 	pushErr              error
@@ -109,6 +112,7 @@ type mockGitClient struct {
 	fetchFn              func(path string) error
 	rebaseFn             func(path, upstream string) error
 	mergeFn              func(path, branch string) error
+	mergeNoFFFn          func(path, ref string) error
 	mergeFFOnlyFn        func(path, ref string) error
 	pushFn               func(path string, lineCh chan<- string) error
 	getWorktreeBranchFn  func(path string) (string, error)
@@ -120,6 +124,7 @@ type mockGitClient struct {
 	resolveRefErr        error
 	isDirtyFn            func(path string) (bool, error)
 	resolveRefFn         func(repoPath, ref string) (string, error)
+	remoteRefSHAFn       func(repoPath, ref string) (string, error)
 	revListAheadBehindFn func(path, originBranch string) (int, int, error)
 	repoStatusFn         func(path string) (git.RawStatus, error)
 	listLocalFilesRes    []string
@@ -129,48 +134,53 @@ type mockGitClient struct {
 
 	addWorktreeWithTrackingErr error
 	createBranchFromBranchErr  error
+	createBranchFromBranchFn   func(repoPath, newBranch, fromBranch string) error
 	pushBranchExplicitErr      error
 	pushBranchExplicitFn       func(worktreePath, branch string) error
 	deleteTagErr               error
 
-	addWorktreeCalls             []addWorktreeCall
-	addWorktreeWithTrackingCalls []addWorktreeWithTrackingCall
-	createBranchFromBranchCalls  []createBranchFromBranchCall
-	removeWorktreeCalls          []removeWorktreeCall
-	fetchCalls                   []string
-	rebaseCalls                  []rebaseCall
-	mergeCalls                   []mergeCall
-	mergeFFOnlyCalls             []mergeFFOnlyCall
-	mergeAbortCalls              []string
-	pushCalls                    []string
-	pushBranchExplicitCalls      []pushBranchExplicitCall
-	stashCalls                   []stashCall
-	isAncestorCalls              []isAncestorCall
-	createTagCalls               int
-	createTagCallList            []createTagCall
-	pushTagCalls                 int
-	pushTagCallList              []pushTagCall
-	deleteBranchCalls            int
-	deleteBranchErr              error
-	deleteTagCalls               int
-	createTagErr                 error
-	pushTagErr                   error
-	createTagFn                  func(repoPath, tag, target, message string) error
-	pushTagFn                    func(repoPath, tag string) error
-	checkoutCalls                []checkoutCall
-	listTagsRes                  []domain.TagInfo
-	listTagsErr                  error
-	latestSemverTagRes           string
-	latestSemverTagErr           error
-	remoteURLRes                 string
-	remoteURLErr                 error
-	checkoutErr                  error
-	checkoutFn                   func(worktreePath, branch string) error
-	tagExistsRes                 bool
-	tagExistsErr                 error
-	tagExistsCalls               []tagExistsCall
-	branchExistsCalls            []branchExistsCall
-	resolveRefCalls              []resolveRefCall
+	addWorktreeCalls                []addWorktreeCall
+	addWorktreeWithTrackingCalls    []addWorktreeWithTrackingCall
+	createBranchFromBranchCalls     []createBranchFromBranchCall
+	removeWorktreeCalls             []removeWorktreeCall
+	fetchCalls                      []string
+	rebaseCalls                     []rebaseCall
+	mergeCalls                      []mergeCall
+	mergeNoFFCalls                  []mergeCall
+	mergeFFOnlyCalls                []mergeFFOnlyCall
+	mergeAbortCalls                 []string
+	pushCalls                       []string
+	pushBranchExplicitCalls         []pushBranchExplicitCall
+	stashCalls                      []stashCall
+	isAncestorCalls                 []isAncestorCall
+	createTagCalls                  int
+	createTagCallList               []createTagCall
+	pushTagCalls                    int
+	pushTagCallList                 []pushTagCall
+	deleteBranchCalls               int
+	deleteBranchErr                 error
+	deleteBranchFn                  func(repoPath, branch string) error
+	deleteBranchIfUnchangedFn       func(repoPath, branch, expectedSHA string) error
+	deleteRemoteBranchIfUnchangedFn func(repoPath, branch, expectedSHA string) error
+	deleteTagCalls                  int
+	createTagErr                    error
+	pushTagErr                      error
+	createTagFn                     func(repoPath, tag, target, message string) error
+	pushTagFn                       func(repoPath, tag string) error
+	checkoutCalls                   []checkoutCall
+	listTagsRes                     []domain.TagInfo
+	listTagsErr                     error
+	latestSemverTagRes              string
+	latestSemverTagErr              error
+	remoteURLRes                    string
+	remoteURLErr                    error
+	checkoutErr                     error
+	checkoutFn                      func(worktreePath, branch string) error
+	tagExistsRes                    bool
+	tagExistsErr                    error
+	tagExistsCalls                  []tagExistsCall
+	branchExistsCalls               []branchExistsCall
+	resolveRefCalls                 []resolveRefCall
 }
 
 type addWorktreeCall struct {
@@ -312,6 +322,10 @@ func (m *mockGitClient) AddWorktree(_ context.Context, repoPath, dest, branch st
 	return m.addWorktreeErr
 }
 
+func (m *mockGitClient) AddDetachedWorktree(ctx context.Context, repoPath, dest, ref string) error {
+	return m.AddWorktree(ctx, repoPath, dest, ref, false, "")
+}
+
 func (m *mockGitClient) CommonDir(_ context.Context, path string) (string, error) {
 	if m.commonDirFn != nil {
 		return m.commonDirFn(path)
@@ -331,6 +345,20 @@ func (m *mockGitClient) RemoveWorktree(_ context.Context, commonDir, worktreePat
 		return m.removeWorktreeFn(commonDir, worktreePath, force)
 	}
 	return m.removeWorktreeErr
+}
+
+func (m *mockGitClient) MoveWorktree(_ context.Context, repoPath, worktreePath, destination string) error {
+	if m.moveWorktreeFn != nil {
+		return m.moveWorktreeFn(repoPath, worktreePath, destination)
+	}
+	return nil
+}
+
+func (m *mockGitClient) RepairWorktree(_ context.Context, repoPath, worktreePath string) error {
+	if m.repairWorktreeFn != nil {
+		return m.repairWorktreeFn(repoPath, worktreePath)
+	}
+	return nil
 }
 
 func (m *mockGitClient) IsDirty(_ context.Context, path string) (bool, error) {
@@ -440,6 +468,18 @@ func (m *mockGitClient) Merge(_ context.Context, path, branch string) error {
 	return m.mergeErr
 }
 
+func (m *mockGitClient) MergeNoFF(_ context.Context, path, ref string) error {
+	m.mu.Lock()
+	m.mergeNoFFCalls = append(m.mergeNoFFCalls, mergeCall{WorktreePath: path, Branch: ref})
+	m.mu.Unlock()
+
+	if m.mergeNoFFFn != nil {
+		return m.mergeNoFFFn(path, ref)
+	}
+
+	return m.mergeNoFFErr
+}
+
 func (m *mockGitClient) MergeFFOnly(_ context.Context, path, ref string) error {
 	m.mu.Lock()
 	m.mergeFFOnlyCalls = append(m.mergeFFOnlyCalls, mergeFFOnlyCall{WorktreePath: path, Ref: ref})
@@ -534,11 +574,42 @@ func (m *mockGitClient) GetWorktreeBranch(_ context.Context, path string) (strin
 	return m.worktreeBranchResult, m.worktreeBranchErr
 }
 
-func (m *mockGitClient) DeleteBranch(_ context.Context, _, _ string) error {
+func (m *mockGitClient) DeleteBranch(_ context.Context, repoPath, branch string) error {
 	m.mu.Lock()
 	m.deleteBranchCalls++
 	m.mu.Unlock()
+	if m.deleteBranchFn != nil {
+		return m.deleteBranchFn(repoPath, branch)
+	}
 	return m.deleteBranchErr
+}
+
+func (m *mockGitClient) RemoteRefSHA(_ context.Context, repoPath, ref string) (string, error) {
+	if m.remoteRefSHAFn != nil {
+		return m.remoteRefSHAFn(repoPath, ref)
+	}
+	return "", nil
+}
+
+func (m *mockGitClient) DeleteBranchIfUnchanged(_ context.Context, repoPath, branch, expectedSHA string) error {
+	if m.deleteBranchIfUnchangedFn != nil {
+		return m.deleteBranchIfUnchangedFn(repoPath, branch, expectedSHA)
+	}
+	return nil
+}
+
+func (m *mockGitClient) DeleteRemoteBranchIfUnchanged(_ context.Context, repoPath, branch, expectedSHA string) error {
+	if m.deleteRemoteBranchIfUnchangedFn != nil {
+		return m.deleteRemoteBranchIfUnchangedFn(repoPath, branch, expectedSHA)
+	}
+	return nil
+}
+
+func (m *mockGitClient) MoveRemoteBranchIfUnchanged(_ context.Context, repoPath, sourceBranch, _ string, sourceSHA, _ string) error {
+	if m.deleteRemoteBranchIfUnchangedFn != nil {
+		return m.deleteRemoteBranchIfUnchangedFn(repoPath, sourceBranch, sourceSHA)
+	}
+	return nil
 }
 
 func (m *mockGitClient) RemoteURL(_ context.Context, _, _ string) (string, error) {
@@ -584,12 +655,15 @@ func (m *mockGitClient) AddWorktreeWithTracking(_ context.Context, repoPath, des
 
 func (m *mockGitClient) CreateBranchFromBranch(_ context.Context, repoPath, newBranch, fromBranch string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.createBranchFromBranchCalls = append(m.createBranchFromBranchCalls, createBranchFromBranchCall{
 		RepoPath:   repoPath,
 		NewBranch:  newBranch,
 		FromBranch: fromBranch,
 	})
+	m.mu.Unlock()
+	if m.createBranchFromBranchFn != nil {
+		return m.createBranchFromBranchFn(repoPath, newBranch, fromBranch)
+	}
 	return m.createBranchFromBranchErr
 }
 
@@ -604,6 +678,10 @@ func (m *mockGitClient) PushBranchExplicit(_ context.Context, worktreePath, bran
 		return m.pushBranchExplicitFn(worktreePath, branch)
 	}
 	return m.pushBranchExplicitErr
+}
+
+func (m *mockGitClient) PushRef(ctx context.Context, worktreePath, source, target string) error {
+	return m.PushBranchExplicit(ctx, worktreePath, source+":"+target)
 }
 
 type mockDotnetClient struct{}

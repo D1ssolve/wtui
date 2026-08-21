@@ -47,6 +47,10 @@ func (m *closeTaskE2EManager) Add(_ context.Context, _ task.AddParams) (task.Par
 	return task.PartialFailureResult{}, nil
 }
 
+func (m *closeTaskE2EManager) ConvertHotfixToFeature(_ context.Context, _ task.ConvertHotfixParams) error {
+	return nil
+}
+
 func (m *closeTaskE2EManager) List(_ context.Context) ([]domain.Task, error) { return m.tasks, nil }
 
 func (m *closeTaskE2EManager) ListServices(_ context.Context, taskID string) ([]domain.Service, error) {
@@ -161,6 +165,7 @@ func (m *closeTaskE2EManager) MergeTaskMRs(_ context.Context, taskID string) (ta
 func (m *closeTaskE2EManager) MergeServiceMR(_ context.Context, taskID, serviceName string) (task.TaskMergeResult, error) {
 	return task.TaskMergeResult{TaskID: taskID, Merged: []string{serviceName}}, nil
 }
+
 func (m *closeTaskE2EManager) TaskWorkflow(_ context.Context, _ string) (domain.WorkflowSummary, error) {
 	return domain.WorkflowSummary{}, nil
 }
@@ -189,6 +194,12 @@ func (m *closeTaskE2EManager) RejectRelease(_ context.Context, _ string) (domain
 }
 
 func (m *closeTaskE2EManager) RemoveRelease(_ context.Context, _ string) error { return nil }
+func (m *closeTaskE2EManager) PlanReleaseCleanup(context.Context, string, task.ReleaseCleanupSelection) (task.ReleaseCleanupPlan, error) {
+	return task.ReleaseCleanupPlan{}, nil
+}
+func (m *closeTaskE2EManager) ExecuteReleaseCleanup(context.Context, task.ReleaseCleanupPlan, chan<- string) (task.ReleaseCleanupResult, error) {
+	return task.ReleaseCleanupResult{}, nil
+}
 
 func TestE2E_CloseTask_DirtyTask_ShowsValidationModalAndDoesNotExecuteClose(t *testing.T) {
 	mgr := &closeTaskE2EManager{

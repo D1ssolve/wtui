@@ -133,15 +133,16 @@ func TestDetectTaskRelationship(t *testing.T) {
 	flow := &gitflow.ResolvedGitFlow{
 		DefaultBranchType: gitflow.BranchTypeFeature,
 		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
-		gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
-		gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}},
-		gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
+			gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
 		},
 	}
 
 	tests := []struct {
 		name       string
 		taskID     string
+		phase      string
 		allTaskIDs map[string]struct{}
 		setupFS    func(t *testing.T, tasksRoot string)
 		flow       *gitflow.ResolvedGitFlow
@@ -150,6 +151,7 @@ func TestDetectTaskRelationship(t *testing.T) {
 		{
 			name:   "parent detection with release suffix",
 			taskID: "ZA-553-release",
+			phase:  "release",
 			allTaskIDs: map[string]struct{}{
 				"ZA-553": {},
 			},
@@ -159,6 +161,7 @@ func TestDetectTaskRelationship(t *testing.T) {
 		{
 			name:       "orphan release child without parent",
 			taskID:     "ZA-553-release",
+			phase:      "release",
 			allTaskIDs: map[string]struct{}{},
 			flow:       flow,
 			wantParent: "",
@@ -166,6 +169,7 @@ func TestDetectTaskRelationship(t *testing.T) {
 		{
 			name:       "parent found by directory existence",
 			taskID:     "ZA-553-release",
+			phase:      "release",
 			allTaskIDs: map[string]struct{}{},
 			setupFS: func(t *testing.T, tasksRoot string) {
 				t.Helper()
@@ -179,6 +183,7 @@ func TestDetectTaskRelationship(t *testing.T) {
 		{
 			name:       "custom suffix ordering longest wins",
 			taskID:     "ZA-553-long-release",
+			phase:      "long-release",
 			allTaskIDs: map[string]struct{}{},
 			setupFS: func(t *testing.T, tasksRoot string) {
 				t.Helper()
@@ -192,16 +197,25 @@ func TestDetectTaskRelationship(t *testing.T) {
 			flow: &gitflow.ResolvedGitFlow{
 				DefaultBranchType: gitflow.BranchTypeFeature,
 				BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
-				gitflow.BranchTypeFeature:               {Prefixes: []string{"feature/"}},
-				gitflow.BranchType("release"):         {Prefixes: []string{"release/"}},
-				gitflow.BranchType("long-release"):    {Prefixes: []string{"long-release/"}},
+					gitflow.BranchTypeFeature:          {Prefixes: []string{"feature/"}},
+					gitflow.BranchType("release"):      {Prefixes: []string{"release/"}},
+					gitflow.BranchType("long-release"): {Prefixes: []string{"long-release/"}},
 				},
 			},
 			wantParent: "ZA-553",
 		},
 		{
+			name:       "converted feature with hotfix suffix is root",
+			taskID:     "ZA-553-hotfix",
+			phase:      "feature",
+			allTaskIDs: map[string]struct{}{"ZA-553": {}},
+			flow:       flow,
+			wantParent: "",
+		},
+		{
 			name:       "nil flow",
 			taskID:     "ZA-553-release",
+			phase:      "release",
 			allTaskIDs: map[string]struct{}{"ZA-553": {}},
 			flow:       nil,
 			wantParent: "",
@@ -217,7 +231,7 @@ func TestDetectTaskRelationship(t *testing.T) {
 				tt.setupFS(t, tasksRoot)
 			}
 
-			got := detectTaskRelationship(tt.taskID, tt.allTaskIDs, tasksRoot, tt.flow)
+			got := detectTaskRelationship(tt.taskID, tt.phase, tt.allTaskIDs, tasksRoot, tt.flow)
 			if got != tt.wantParent {
 				t.Fatalf("detectTaskRelationship() = %q, want %q", got, tt.wantParent)
 			}

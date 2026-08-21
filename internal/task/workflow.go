@@ -43,6 +43,9 @@ func (m *manager) TaskWorkflow(ctx context.Context, taskID string) (domain.Workf
 	mergeErrs := make([]error, len(services))
 	m.runWorkflowChecks(len(services), func(i int) {
 		svc := services[i]
+		if mergeErrs[i] = m.git.Fetch(ctx, svc.RepoPath); mergeErrs[i] != nil {
+			return
+		}
 		mergedResults[i], mergeErrs[i] = m.git.IsAncestor(ctx, svc.RepoPath, svc.Branch, remoteIntegrationBranch)
 	})
 	allMerged := len(services) > 0
@@ -66,18 +69,24 @@ func (m *manager) TaskWorkflow(ctx context.Context, taskID string) (domain.Workf
 	}
 
 	missingMR, ready, waiting := false, false, 0
+	var blockedDetails []string
 	servicesByName := make(map[string]domain.Service, len(services))
 	for _, svc := range services {
 		servicesByName[svc.Name] = svc
 	}
 	for _, item := range inspection.Services {
-		if item.MR.Number == 0 {
+		switch item.Status {
+		case "no_mr":
 			missingMR = true
-			continue
-		}
-		if item.Status == "ready" {
+		case "ready":
 			ready = true
-		} else {
+		case "blocked", "failed":
+			detail := strings.Join(item.Blockers, "; ")
+			if detail == "" {
+				detail = item.Status
+			}
+			blockedDetails = append(blockedDetails, item.ServiceName+": "+detail)
+		default:
 			waiting++
 		}
 	}
@@ -86,6 +95,10 @@ func (m *manager) TaskWorkflow(ctx context.Context, taskID string) (domain.Workf
 		rows[i] = domain.ServiceWorkflow{ServiceName: item.ServiceName, Status: item.Status, Detail: strings.Join(item.Blockers, "; ")}
 	}
 
+	if len(blockedDetails) > 0 {
+		return workflowSummaryWithServices(taskWorkflowSteps, domain.TaskWorkflowReviewCI,
+			"fix blockers, then M", strings.Join(blockedDetails, "; "), false, true, rows), nil
+	}
 	if ready {
 		return workflowSummaryWithServices(taskWorkflowSteps, domain.TaskWorkflowMerge, "press M to merge ready MRs", "", false, false, rows), nil
 	}

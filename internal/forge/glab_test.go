@@ -192,6 +192,35 @@ exit 1
 	}
 }
 
+func TestGlabCommandFailure_ReportsCustomHostAuthHint(t *testing.T) {
+	binDir := t.TempDir()
+	fake := filepath.Join(binDir, "glab")
+	script := `#!/bin/sh
+if [ "$1 $2" = "auth status" ]; then
+  echo 'gitlab.example.com has not been authenticated with glab; run glab auth login --hostname gitlab.example.com' 1>&2
+  exit 1
+fi
+echo '404 Not Found' 1>&2
+exit 1
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake glab: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	_, err := NewGlabClient(t.TempDir()).MRStatus(t.Context(), "feature/a", "gitlab.example.com/group/project")
+	var ferr *ForgeError
+	if !errors.As(err, &ferr) {
+		t.Fatalf("MRStatus() err = %v, want *ForgeError", err)
+	}
+	if ferr.Category != ErrCategoryAuthError {
+		t.Fatalf("ForgeError.Category = %q, want %q", ferr.Category, ErrCategoryAuthError)
+	}
+	if !strings.Contains(err.Error(), "glab auth login --hostname gitlab.example.com") {
+		t.Fatalf("MRStatus() err = %q, want login hint", err)
+	}
+}
+
 func TestGlabMRStatus_ParsesJSON(t *testing.T) {
 	binDir := t.TempDir()
 	fake := filepath.Join(binDir, "glab")
@@ -288,6 +317,80 @@ fi
 	}
 }
 
+func TestGlabMRReadiness_MapsExternalStatusCheckDetails(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args")
+	fake := filepath.Join(binDir, "glab")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$ARGS_FILE"
+if [ "$1 $2 $3" = "mr merge --help" ]; then
+  printf '%s' '--sha'
+elif [ "$1 $2" = "mr list" ]; then
+  printf '[{"iid":8,"state":"opened"}]'
+elif [ "$1" = "api" ]; then
+  printf '[{"id":1,"name":"Architecture","status":"failed"},{"id":2,"name":"Security","status":"pending"},{"id":3,"name":"Lint","status":"passed"}]'
+else
+  printf '{"iid":8,"state":"opened","sha":"def456","blocking_discussions_resolved":true,"detailed_merge_status":"status_checks_must_pass","head_pipeline":{"status":"success"}}'
+fi
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake glab: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("ARGS_FILE", argsFile)
+
+	got, err := NewGlabClient(t.TempDir()).MRReadiness(t.Context(), "feature/b", "group/proj", "")
+	if err != nil {
+		t.Fatalf("MRReadiness() err = %v", err)
+	}
+	if !got.StatusChecksBlocking || got.Ready {
+		t.Fatalf("MRReadiness() = %#v, want status-check blocker", got)
+	}
+	blockers := strings.Join(got.Blockers, "; ")
+	for _, want := range []string{"1 status check failed: Architecture", "1 status check pending: Security"} {
+		if !strings.Contains(blockers, want) {
+			t.Fatalf("blockers = %q, want %q", blockers, want)
+		}
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "api projects/group%2Fproj/merge_requests/8/status_checks") {
+		t.Fatalf("argv = %q, want encoded status-check endpoint", strings.TrimSpace(string(args)))
+	}
+}
+
+func TestGlabMRReadiness_StatusCheckDetailsFailureKeepsGenericBlocker(t *testing.T) {
+	binDir := t.TempDir()
+	fake := filepath.Join(binDir, "glab")
+	script := `#!/bin/sh
+if [ "$1 $2 $3" = "mr merge --help" ]; then
+  printf '%s' '--sha'
+elif [ "$1 $2" = "mr list" ]; then
+  printf '[{"iid":8,"state":"opened"}]'
+elif [ "$1" = "api" ]; then
+  printf 'status checks unavailable' >&2
+  exit 1
+else
+  printf '{"iid":8,"state":"opened","sha":"def456","blocking_discussions_resolved":true,"detailed_merge_status":"status_checks_must_pass","head_pipeline":{"status":"success"}}'
+fi
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake glab: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	got, err := NewGlabClient(t.TempDir()).MRReadiness(t.Context(), "feature/b", "group/proj", "")
+	if err != nil {
+		t.Fatalf("MRReadiness() err = %v, want blocked readiness", err)
+	}
+	blockers := strings.Join(got.Blockers, "; ")
+	if !got.StatusChecksBlocking || got.Ready || !strings.Contains(blockers, "status checks must pass") || !strings.Contains(blockers, "details unavailable") {
+		t.Fatalf("MRReadiness() = %#v, want generic status-check blocker", got)
+	}
+}
+
 func TestGlabMRReadiness_ReportsUnsupportedSHAPin(t *testing.T) {
 	binDir := t.TempDir()
 	fake := filepath.Join(binDir, "glab")
@@ -344,6 +447,30 @@ fi
 	want := "mr merge --help\nmr view 9 --output json --repo group/proj"
 	if strings.TrimSpace(string(args)) != want {
 		t.Fatalf("argv = %q, want %q", strings.TrimSpace(string(args)), want)
+	}
+}
+
+func TestGlabMRReadinessByNumber_MapsSquashCommitSHA(t *testing.T) {
+	binDir := t.TempDir()
+	fake := filepath.Join(binDir, "glab")
+	script := `#!/bin/sh
+if [ "$1 $2 $3" = "mr merge --help" ]; then
+  printf '%s' '--sha'
+else
+  printf '{"iid":83,"state":"merged","sha":"source123","merge_commit_sha":null,"squash_commit_sha":"squash456","blocking_discussions_resolved":true,"detailed_merge_status":"not_open"}'
+fi
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	got, err := NewGlabClient(t.TempDir()).MRReadinessByNumber(t.Context(), 83, "group/proj", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "merged" || got.HeadSHA != "source123" || got.MergedSHA != "squash456" {
+		t.Fatalf("MRReadinessByNumber() = %#v", got)
 	}
 }
 

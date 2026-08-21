@@ -52,6 +52,42 @@ func TestCommandClient_ListLocalFiles_Integration(t *testing.T) {
 	}
 }
 
+func TestReleaseCleanupPrimitives_Integration(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(root, "origin.git")
+	repo := filepath.Join(root, "repo")
+	mustGit(t, root, "init", "--bare", remote)
+	mustGit(t, root, "clone", remote, repo)
+	mustGit(t, repo, "config", "user.email", "test@example.com")
+	mustGit(t, repo, "config", "user.name", "Test User")
+	writeFile(t, filepath.Join(repo, "file"), "one")
+	mustGit(t, repo, "add", "file")
+	mustGit(t, repo, "commit", "-m", "one")
+	mustGit(t, repo, "branch", "feature/delete")
+	mustGit(t, repo, "push", "origin", "feature/delete")
+	client := NewCommandClient(slog.Default())
+	sha, err := client.RemoteRefSHA(t.Context(), repo, "refs/heads/feature/delete")
+	if err != nil || sha == "" {
+		t.Fatalf("RemoteRefSHA() = %q, %v", sha, err)
+	}
+	if err := client.DeleteBranchIfUnchanged(t.Context(), repo, "feature/delete", strings.Repeat("f", 40)); err == nil {
+		t.Fatal("changed local tip deleted")
+	}
+	if err := client.DeleteRemoteBranchIfUnchanged(t.Context(), repo, "feature/delete", strings.Repeat("f", 40)); err == nil {
+		t.Fatal("changed remote tip deleted")
+	}
+	if err := client.DeleteBranchIfUnchanged(t.Context(), repo, "feature/delete", sha); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeleteRemoteBranchIfUnchanged(t.Context(), repo, "feature/delete", sha); err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.RemoteRefSHA(t.Context(), repo, "refs/heads/feature/delete")
+	if err != nil || got != "" {
+		t.Fatalf("remote ref after delete = %q, %v", got, err)
+	}
+}
+
 func TestCommandClient_Integration(t *testing.T) {
 
 	if _, err := exec.LookPath("git"); err != nil {

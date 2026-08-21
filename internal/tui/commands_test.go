@@ -44,6 +44,20 @@ func TestExecTeaProcessReturnsOriginalErrorAndOp(t *testing.T) {
 	}
 }
 
+func TestShellExecCommandUsesShAndTaskDir(t *testing.T) {
+	cmd := shellExecCommand("git status", "/tmp/.tasks/IN-001")
+
+	if filepath.Base(cmd.Path) != "sh" {
+		t.Fatalf("Path = %q, want sh", cmd.Path)
+	}
+	if strings.Join(cmd.Args, "\x00") != strings.Join([]string{"sh", "-c", "git status"}, "\x00") {
+		t.Fatalf("Args = %v, want [sh -c git status]", cmd.Args)
+	}
+	if cmd.Dir != "/tmp/.tasks/IN-001" {
+		t.Fatalf("Dir = %q, want /tmp/.tasks/IN-001", cmd.Dir)
+	}
+}
+
 func TestLazygitServiceExecCmdUsesWorktreeDir(t *testing.T) {
 	cmd := lazygitServiceExecCmd("/tmp/service")
 
@@ -106,14 +120,22 @@ type cmdManager struct {
 	finishReleaseResult domain.Release
 	finishReleaseErr    error
 
-	inspectTaskID     string
-	inspectTaskResult task.TaskMergeInspection
-	mergeTaskID       string
-	mergeTaskResult   task.TaskMergeResult
-	mergeServiceTask  string
-	mergeServiceName  string
-	promoteReleaseID  string
-	promoteResult     domain.Release
+	inspectTaskID      string
+	inspectTaskResult  task.TaskMergeInspection
+	mergeTaskID        string
+	mergeTaskResult    task.TaskMergeResult
+	mergeServiceTask   string
+	mergeServiceName   string
+	updateServiceTask  string
+	updateServiceName  string
+	updateTarget       string
+	updateErr          error
+	promoteReleaseID   string
+	promoteResult      domain.Release
+	retryReleaseCtx    context.Context
+	retryReleaseID     string
+	retryReleaseResult domain.Release
+	retryReleaseErr    error
 
 	forgeCreateMRArgs      forge.CreateMRParams
 	forgePipelineStatusArg forgePipelineStatusParams
@@ -122,6 +144,39 @@ type cmdManager struct {
 	forgePipelineResult    []forge.PipelineStatus
 	forgeIssuesResult      []forge.IssueInfo
 	forgeErr               error
+
+	cleanupPlanCtx       context.Context
+	cleanupPlanReleaseID string
+	cleanupPlanSelection task.ReleaseCleanupSelection
+	cleanupPlanResult    task.ReleaseCleanupPlan
+	cleanupPlanErr       error
+	cleanupExecuteCtx    context.Context
+	cleanupExecuteCalls  int
+	cleanupExecuteResult task.ReleaseCleanupResult
+	cleanupExecuteErr    error
+}
+
+func TestConvertHotfixCmd_CallsManager(t *testing.T) {
+	mgr := &cmdManager{}
+	params := task.ConvertHotfixParams{SourceTaskID: "IN-1", TargetTaskID: "IN-2"}
+	msg := convertHotfixCmd(mgr, params)()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want tea.BatchMsg", msg)
+	}
+
+	var done ConvertHotfixDoneMsg
+	for _, cmd := range batch {
+		if value, ok := cmd().(ConvertHotfixDoneMsg); ok {
+			done = value
+		}
+	}
+	if mgr.convertCalls != 1 || mgr.convertParams.SourceTaskID != "IN-1" || mgr.convertParams.TargetTaskID != "IN-2" {
+		t.Fatalf("convert call = %d/%+v", mgr.convertCalls, mgr.convertParams)
+	}
+	if done.SourceTaskID != "IN-1" || done.TargetTaskID != "IN-2" || done.Err != nil {
+		t.Fatalf("ConvertHotfixDoneMsg = %#v", done)
+	}
 }
 
 func (m *cmdManager) ValidateTask(_ context.Context, taskID string) (domain.TaskValidation, error) {
@@ -235,8 +290,10 @@ func (m *cmdManager) PromoteRelease(_ context.Context, releaseID string, statusC
 	return m.promoteResult, nil
 }
 
-func (m *cmdManager) RetryRelease(_ context.Context, _ string) (domain.Release, error) {
-	return domain.Release{}, nil
+func (m *cmdManager) RetryRelease(ctx context.Context, releaseID string) (domain.Release, error) {
+	m.retryReleaseCtx = ctx
+	m.retryReleaseID = releaseID
+	return m.retryReleaseResult, m.retryReleaseErr
 }
 
 func (m *cmdManager) RejectRelease(_ context.Context, _ string) (domain.Release, error) {
@@ -244,6 +301,19 @@ func (m *cmdManager) RejectRelease(_ context.Context, _ string) (domain.Release,
 }
 
 func (m *cmdManager) RemoveRelease(_ context.Context, _ string) error { return nil }
+func (m *cmdManager) PlanReleaseCleanup(ctx context.Context, releaseID string, selection task.ReleaseCleanupSelection) (task.ReleaseCleanupPlan, error) {
+	m.cleanupPlanCtx = ctx
+	m.cleanupPlanReleaseID = releaseID
+	m.cleanupPlanSelection = selection
+	return m.cleanupPlanResult, m.cleanupPlanErr
+}
+func (m *cmdManager) ExecuteReleaseCleanup(ctx context.Context, _ task.ReleaseCleanupPlan, statusCh chan<- string) (task.ReleaseCleanupResult, error) {
+	m.cleanupExecuteCtx = ctx
+	m.cleanupExecuteCalls++
+	statusCh <- "remove release worktree"
+	statusCh <- "remove task worktree"
+	return m.cleanupExecuteResult, m.cleanupExecuteErr
+}
 
 func TestCmdManager_ImplementsTaskManager(t *testing.T) {
 	var _ task.Manager = (*cmdManager)(nil)
@@ -485,6 +555,48 @@ func TestLoadReleasesCmdReturnsErrorInMessage(t *testing.T) {
 	}
 }
 
+func TestPlanReleaseCleanupCmdCarriesSelectionAndGeneration(t *testing.T) {
+	selection := task.DefaultReleaseCleanupSelection()
+	mgr := &cmdManager{}
+	msg := planReleaseCleanupCmd(mgr, "rel-1", selection, 9)()
+	ready, ok := msg.(ReleaseCleanupPlanReadyMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want ReleaseCleanupPlanReadyMsg", msg)
+	}
+	if ready.Generation != 9 || mgr.cleanupPlanReleaseID != "rel-1" || mgr.cleanupPlanSelection != selection {
+		t.Fatalf("ready = %+v, manager ID=%q selection=%+v", ready, mgr.cleanupPlanReleaseID, mgr.cleanupPlanSelection)
+	}
+	deadline, ok := mgr.cleanupPlanCtx.Deadline()
+	if !ok || time.Until(deadline) > 2*time.Minute || time.Until(deadline) < 119*time.Second {
+		t.Fatalf("planning deadline = %v, ok=%v", deadline, ok)
+	}
+}
+
+func TestExecuteReleaseCleanupCmdStreamsAndReturnsGeneration(t *testing.T) {
+	mgr := &cmdManager{cleanupExecuteResult: task.ReleaseCleanupResult{ReleaseID: "rel-1"}}
+	cmd := executeReleaseCleanupCmd(mgr, task.ReleaseCleanupPlan{}, 12)
+
+	first, ok := cmd().(OutputLineMsg)
+	if !ok || first.Line != "remove release worktree" {
+		t.Fatalf("first = %#v", first)
+	}
+	second, ok := first.Next().(OutputLineMsg)
+	if !ok || second.Line != "remove task worktree" {
+		t.Fatalf("second = %#v", second)
+	}
+	done, ok := second.Next().(ReleaseCleanupDoneMsg)
+	if !ok || done.Generation != 12 || done.Result.ReleaseID != "rel-1" || done.Err != nil {
+		t.Fatalf("done = %#v", done)
+	}
+	if mgr.cleanupExecuteCalls != 1 {
+		t.Fatalf("execute calls = %d", mgr.cleanupExecuteCalls)
+	}
+	deadline, ok := mgr.cleanupExecuteCtx.Deadline()
+	if !ok || time.Until(deadline) > 10*time.Minute || time.Until(deadline) < 9*time.Minute+59*time.Second {
+		t.Fatalf("execution deadline = %v, ok=%v", deadline, ok)
+	}
+}
+
 func TestCreateReleaseCmdStreamsStatusAndReturnsDone(t *testing.T) {
 	expected := domain.Release{ID: "rel-1", Status: domain.ReleaseStatusReleased}
 	mgr := &cmdManager{createReleaseResult: expected}
@@ -591,6 +703,30 @@ func TestFinalizeReleaseCmdReturnsDoneMsg(t *testing.T) {
 	remaining := time.Until(deadline)
 	if remaining > 10*time.Minute || remaining < 9*time.Minute+59*time.Second {
 		t.Fatalf("FinishRelease timeout ~10m, got remaining=%s", remaining)
+	}
+}
+
+func TestRetryReleaseCmdReturnsDoneMsg(t *testing.T) {
+	expected := domain.Release{ID: "rel-1", Status: domain.ReleaseStatusPrepared}
+	mgr := &cmdManager{retryReleaseResult: expected}
+
+	done, ok := retryReleaseCmd(mgr, "rel-1")().(ReleaseActionDoneMsg)
+	if !ok {
+		t.Fatalf("message type = %T, want ReleaseActionDoneMsg", done)
+	}
+	if done.Action != "retry" || done.Release.ID != "rel-1" || done.Err != nil {
+		t.Fatalf("done = %#v", done)
+	}
+	if mgr.retryReleaseID != "rel-1" || mgr.retryReleaseCtx == nil {
+		t.Fatalf("RetryRelease called with id=%q ctx=%v", mgr.retryReleaseID, mgr.retryReleaseCtx)
+	}
+	deadline, ok := mgr.retryReleaseCtx.Deadline()
+	if !ok {
+		t.Fatal("RetryRelease ctx has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining > 10*time.Minute || remaining < 9*time.Minute+59*time.Second {
+		t.Fatalf("RetryRelease timeout ~10m, got remaining=%s", remaining)
 	}
 }
 

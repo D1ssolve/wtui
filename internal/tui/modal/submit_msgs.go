@@ -1,6 +1,9 @@
 package modal
 
-import "github.com/D1ssolve/wtui/internal/forge"
+import (
+	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/task"
+)
 
 type SubmitPruneMsg struct {
 	SelectedTaskIDs []string
@@ -9,6 +12,7 @@ type SubmitPruneMsg struct {
 type ForgeCreateMRMsg struct {
 	TaskID      string
 	ServiceName string
+	Title       string
 }
 
 type ForgePipelineStatusMsg struct {
@@ -45,4 +49,19 @@ type ConfirmMergeMsg struct {
 	TaskID      string
 	ReleaseID   string
 	ServiceName string
+}
+
+type SubmitReleaseCleanupMsg struct {
+	ReleaseID string
+	Selection task.ReleaseCleanupSelection
+}
+
+type ConfirmReleaseCleanupMsg struct {
+	ReleaseID  string
+	Generation uint64
+}
+
+type ConfirmRemoteReleaseCleanupMsg struct {
+	ReleaseID  string
+	Generation uint64
 }

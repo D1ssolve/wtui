@@ -32,6 +32,9 @@ func (m *mockValidationGitClient) ListWorktrees(context.Context, string) ([]git.
 func (m *mockValidationGitClient) AddWorktree(context.Context, string, string, string, bool, string) error {
 	return nil
 }
+func (m *mockValidationGitClient) AddDetachedWorktree(context.Context, string, string, string) error {
+	return nil
+}
 func (m *mockValidationGitClient) AddWorktreeWithTracking(context.Context, string, string, string, string) error {
 	return nil
 }
@@ -40,6 +43,12 @@ func (m *mockValidationGitClient) GetWorktreeBranch(context.Context, string) (st
 	return "", nil
 }
 func (m *mockValidationGitClient) RemoveWorktree(context.Context, string, string, bool) error {
+	return nil
+}
+func (m *mockValidationGitClient) MoveWorktree(context.Context, string, string, string) error {
+	return nil
+}
+func (m *mockValidationGitClient) RepairWorktree(context.Context, string, string) error {
 	return nil
 }
 func (m *mockValidationGitClient) IsDirty(context.Context, string) (bool, error) { return false, nil }
@@ -77,6 +86,7 @@ func (m *mockValidationGitClient) RemoteURL(context.Context, string, string) (st
 }
 func (m *mockValidationGitClient) Checkout(context.Context, string, string) error    { return nil }
 func (m *mockValidationGitClient) Merge(context.Context, string, string) error       { return nil }
+func (m *mockValidationGitClient) MergeNoFF(context.Context, string, string) error   { return nil }
 func (m *mockValidationGitClient) MergeFFOnly(context.Context, string, string) error { return nil }
 func (m *mockValidationGitClient) MergeAbort(context.Context, string) error          { return nil }
 func (m *mockValidationGitClient) Rebase(context.Context, string, string) error      { return nil }
@@ -100,10 +110,26 @@ func (m *mockValidationGitClient) ListBranches(context.Context, string, string) 
 	return nil, nil
 }
 func (m *mockValidationGitClient) DeleteBranch(context.Context, string, string) error { return nil }
+func (m *mockValidationGitClient) RemoteRefSHA(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (m *mockValidationGitClient) DeleteBranchIfUnchanged(context.Context, string, string, string) error {
+	return nil
+}
+func (m *mockValidationGitClient) DeleteRemoteBranchIfUnchanged(context.Context, string, string, string) error {
+	return nil
+}
+
+func (m *mockValidationGitClient) MoveRemoteBranchIfUnchanged(context.Context, string, string, string, string, string) error {
+	return nil
+}
 func (m *mockValidationGitClient) CreateBranchFromBranch(context.Context, string, string, string) error {
 	return nil
 }
 func (m *mockValidationGitClient) PushBranchExplicit(context.Context, string, string) error {
+	return nil
+}
+func (m *mockValidationGitClient) PushRef(context.Context, string, string, string) error {
 	return nil
 }
 

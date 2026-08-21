@@ -12,8 +12,12 @@ import (
 )
 
 type promoteForgeClient struct {
-	creates   []forge.CreateMRParams
-	createErr error
+	creates        []forge.CreateMRParams
+	createErr      error
+	mrStatuses     []forge.MRInfo
+	mrStatusErr    error
+	mrStatusSource string
+	mrStatusRepo   string
 }
 
 func (f *promoteForgeClient) Provider() forge.ForgeProvider    { return forge.ForgeProviderGitLab }
@@ -25,8 +29,10 @@ func (f *promoteForgeClient) CreateMR(_ context.Context, params forge.CreateMRPa
 	}
 	return forge.MRInfo{Number: len(f.creates), URL: "https://gitlab.com/mr/" + params.SourceBranch, State: "open"}, nil
 }
-func (*promoteForgeClient) MRStatus(context.Context, string, string) ([]forge.MRInfo, error) {
-	return nil, nil
+func (f *promoteForgeClient) MRStatus(_ context.Context, sourceBranch, repo string) ([]forge.MRInfo, error) {
+	f.mrStatusSource = sourceBranch
+	f.mrStatusRepo = repo
+	return f.mrStatuses, f.mrStatusErr
 }
 func (*promoteForgeClient) MRReadiness(context.Context, string, string, string) (forge.MRReadiness, error) {
 	return forge.MRReadiness{}, nil

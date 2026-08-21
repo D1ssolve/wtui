@@ -130,6 +130,45 @@ func TestFinalizeRelease_DevelopAlreadyContainsRelease_SkipsMerge(t *testing.T) 
 	}
 }
 
+func TestFinalizeRelease_PushIntegrationDisabledKeepsDetachedMerge(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	*m.cfg.Release.PushIntegration = false
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
+
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Services[0].IntegrationWorktreePath == "" {
+		t.Fatal("IntegrationWorktreePath empty, detached merge would become unreachable")
+	}
+	if got.Services[0].PostIntegrationRef == "" || got.Services[0].PostIntegrationRef != got.Services[0].PostIntegrationSHA {
+		t.Fatalf("PostIntegrationRef = %q, PostIntegrationSHA = %q; want retained detached SHA", got.Services[0].PostIntegrationRef, got.Services[0].PostIntegrationSHA)
+	}
+	if len(gitMock.removeWorktreeCalls) != 0 || len(gitMock.pushBranchExplicitCalls) != 0 {
+		t.Fatalf("remove calls = %#v, push calls = %#v", gitMock.removeWorktreeCalls, gitMock.pushBranchExplicitCalls)
+	}
+}
+
+func TestFinalizeRelease_RetainedWorktreeRemovalFailureStops(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	removeErr := errors.New("remove retained worktree")
+	gitMock.removeWorktreeErr = removeErr
+	svc := finalizeService(m)
+	svc.IntegrationWorktreePath = "/old/integration-worktree"
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if !errors.Is(err, removeErr) {
+		t.Fatalf("FinalizeRelease() error = %v, want removal error", err)
+	}
+	if got.Status != domain.ReleaseStatusFailed || len(gitMock.addWorktreeCalls) != 0 {
+		t.Fatalf("release status = %q, add worktree calls = %#v", got.Status, gitMock.addWorktreeCalls)
+	}
+}
+
 func TestFinalizeRelease_ExistingTagAtAcceptedSHA_IsIdempotent(t *testing.T) {
 	m, gitMock := newFinishTestManager(t)
 	matchingMaster(gitMock)

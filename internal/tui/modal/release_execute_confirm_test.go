@@ -58,7 +58,7 @@ func TestReleaseExecuteConfirmDialog_ViewShowsDetails(t *testing.T) {
 		"push integration: true",
 		"push release branches: false",
 		"push tags: true",
-		"Stage 1: This will merge feature branches, create release branches, and push release branches if enabled.",
+		"Stage 1: This will verify feature branches are merged into the integration branch, create release branches, and push release branches if enabled.",
 		"Tags are NOT created yet. Use \"Finish Release\" after regression testing.",
 		"[Enter/y] execute [Esc/n] cancel",
 	} {

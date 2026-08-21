@@ -77,6 +77,27 @@ func TestBuildReleasePlan_TaskSelectionValidation(t *testing.T) {
 			t.Fatalf("buildReleasePlan() error = %v, want ErrReleaseInvalidTasks", err)
 		}
 	})
+
+	t.Run("converted hotfix ID is accepted as root feature", func(t *testing.T) {
+		m, gitMock := newReleasePlanTestManager(t, &mockGitClient{})
+		if err := os.MkdirAll(filepath.Join(m.cfg.TasksRoot, "APP-1"), 0o755); err != nil {
+			t.Fatalf("mkdir parent task: %v", err)
+		}
+		seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
+			releasePlanTaskService{TaskID: "APP-1-hotfix", ServiceName: "svc", Branch: "feature/APP-1-hotfix", RepoPath: filepath.Join(m.cfg.RootDir, "repo-a")},
+		)
+
+		plan, err := m.buildReleasePlan(ctx, CreateReleaseParams{
+			TaskIDs:         []string{"APP-1-hotfix"},
+			ServiceVersions: map[string]string{"svc": "1.2.3"},
+		})
+		if err != nil {
+			t.Fatalf("buildReleasePlan() error = %v", err)
+		}
+		if len(plan.Tasks) != 1 || plan.Tasks[0].TaskID != "APP-1-hotfix" {
+			t.Fatalf("planned tasks = %#v", plan.Tasks)
+		}
+	})
 }
 
 func TestBuildReleasePlan_ActiveReleaseCollision(t *testing.T) {

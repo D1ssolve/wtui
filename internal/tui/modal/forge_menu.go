@@ -3,6 +3,7 @@ package modal
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -18,6 +19,9 @@ type ForgeMenuModal struct {
 	actions       []forgeAction
 	selectedIndex int
 	available     bool
+	inTitleMode   bool
+	titleInput    textinput.Model
+	titleError    string
 }
 
 type forgeAction int
@@ -31,12 +35,17 @@ const (
 
 func NewForgeMenuModal(serviceName string, provider forge.ForgeProvider, width, height int) *ForgeMenuModal {
 	available := provider != forge.ForgeProviderUnknown
+	titleInput := textinput.New()
+	titleInput.Prompt = ""
+	titleInput.Width = 45
+	titleInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(modalColorDim)
 	return &ForgeMenuModal{
 		serviceName:   serviceName,
 		provider:      provider,
 		actions:       []forgeAction{forgeActionCreateMR, forgeActionMergeMR, forgeActionPipelineStatus, forgeActionListIssues},
 		available:     available,
 		selectedIndex: 0,
+		titleInput:    titleInput,
 	}
 }
 
@@ -49,6 +58,10 @@ func (m *ForgeMenuModal) SetTaskID(taskID string) {
 func (m *ForgeMenuModal) SetTerminalSize(_, _ int) {}
 
 func (m *ForgeMenuModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
+	if m.inTitleMode {
+		return m.updateTitle(msg)
+	}
+
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -75,7 +88,11 @@ func (m *ForgeMenuModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 		serviceName := m.serviceName
 		switch m.actions[m.selectedIndex] {
 		case forgeActionCreateMR:
-			return m, func() tea.Msg { return ForgeCreateMRMsg{TaskID: taskID, ServiceName: serviceName} }
+			m.inTitleMode = true
+			m.titleInput.SetValue(taskID)
+			m.titleInput.SetCursor(len([]rune(taskID)))
+			m.titleInput.Focus()
+			return m, nil
 		case forgeActionMergeMR:
 			return m, func() tea.Msg { return ForgeMergeMRMsg{TaskID: taskID, ServiceName: serviceName} }
 		case forgeActionPipelineStatus:
@@ -93,6 +110,34 @@ func (m *ForgeMenuModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	}
 }
 
+func (m *ForgeMenuModal) updateTitle(msg tea.Msg) (Modal, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "esc":
+			m.inTitleMode = false
+			m.titleInput.Blur()
+			m.titleError = ""
+			return m, nil
+		case "enter":
+			title := strings.TrimSpace(m.titleInput.Value())
+			if title == "" {
+				m.titleError = "Title cannot be blank"
+				return m, nil
+			}
+			taskID := m.taskID
+			serviceName := m.serviceName
+			return m, func() tea.Msg {
+				return ForgeCreateMRMsg{TaskID: taskID, ServiceName: serviceName, Title: title}
+			}
+		}
+	}
+
+	var cmd tea.Cmd
+	m.titleInput, cmd = m.titleInput.Update(msg)
+	m.titleError = ""
+	return m, cmd
+}
+
 func (m *ForgeMenuModal) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
@@ -101,6 +146,18 @@ func (m *ForgeMenuModal) View() string {
 	var sb strings.Builder
 	sb.WriteString(titleStyle.Render("Forge menu: " + m.serviceName))
 	sb.WriteString("\n\n")
+	if m.inTitleMode {
+		sb.WriteString(normalStyle.Render("MR/PR title"))
+		sb.WriteString("\n")
+		sb.WriteString(m.titleInput.View())
+		if m.titleError != "" {
+			sb.WriteString("\n")
+			sb.WriteString(lipgloss.NewStyle().Foreground(modalColorDanger).Render(m.titleError))
+		}
+		sb.WriteString("\n\n")
+		sb.WriteString(dimStyle.Render("[Enter] create  [Esc] back"))
+		return sb.String()
+	}
 
 	if !m.available {
 		sb.WriteString(dimStyle.Render("No forge CLI available"))

@@ -26,6 +26,7 @@ type KeyMap struct {
 	NewRelease      key.Binding
 	MergeMRs        key.Binding
 	ReleaseAction   key.Binding
+	RetryRelease    key.Binding
 	ServiceValidate key.Binding
 }
 
@@ -106,6 +107,10 @@ func DefaultKeyMap() KeyMap {
 		ReleaseAction: key.NewBinding(
 			key.WithKeys("F"),
 			key.WithHelp("F", "promote/finalize release"),
+		),
+		RetryRelease: key.NewBinding(
+			key.WithKeys("R"),
+			key.WithHelp("R", "retry release"),
 		),
 		ServiceValidate: key.NewBinding(
 			key.WithKeys("v"),

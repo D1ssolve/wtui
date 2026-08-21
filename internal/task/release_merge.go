@@ -104,15 +104,20 @@ func (m *manager) MergeReleaseMRs(ctx context.Context, releaseID string, statusC
 		svc := &release.Services[i]
 		switch item.Status {
 		case "merged":
-			if err := m.persistMergedReleaseService(&release, svc, svc.AcceptedMergeSHA); err != nil {
-				if recoverErr := m.recoverMissingReleaseMergeSHA(ctx, svc); recoverErr != nil {
-					err = recoverErr
-				}
-				if persistErr := m.markReleaseMergeServiceFailed(&release, svc, err); persistErr != nil {
+			var serviceErr error
+			mergeSHA := strings.TrimSpace(svc.AcceptedMergeSHA)
+			if mergeSHA == "" {
+				mergeSHA, serviceErr = m.recoverMissingReleaseMergeSHA(ctx, svc)
+			}
+			if serviceErr == nil {
+				serviceErr = m.persistMergedReleaseService(&release, svc, mergeSHA)
+			}
+			if serviceErr != nil {
+				if persistErr := m.markReleaseMergeServiceFailed(&release, svc, serviceErr); persistErr != nil {
 					return release, result, persistErr
 				}
 				result.Failed = append(result.Failed, svc.Name)
-				sendStatus(statusCh, fmt.Sprintf("[%s][merge] failed: %v", svc.Name, err))
+				sendStatus(statusCh, fmt.Sprintf("[%s][merge] failed: %v", svc.Name, serviceErr))
 				continue
 			}
 			result.Skipped = append(result.Skipped, svc.Name)
@@ -191,7 +196,10 @@ func (m *manager) mergeReleaseServiceMR(ctx context.Context, release *domain.Rel
 	}
 	mergeSHA := merged.MergeCommitSHA
 	if strings.TrimSpace(mergeSHA) == "" {
-		return m.recoverMissingReleaseMergeSHAWithClient(ctx, svc, client, repo, worktreePath)
+		mergeSHA, err = m.recoverMissingReleaseMergeSHAWithClient(ctx, svc, client, repo, worktreePath)
+		if err != nil {
+			return err
+		}
 	}
 	if err := m.persistMergedReleaseService(release, svc, mergeSHA); err != nil {
 		return err
@@ -200,23 +208,44 @@ func (m *manager) mergeReleaseServiceMR(ctx context.Context, release *domain.Rel
 	return nil
 }
 
-func (m *manager) recoverMissingReleaseMergeSHA(ctx context.Context, svc *domain.ReleaseService) error {
+func (m *manager) recoverMissingReleaseMergeSHA(ctx context.Context, svc *domain.ReleaseService) (string, error) {
 	client, repo, worktreePath, err := m.releaseForgeDetails(ctx, *svc)
 	if err != nil {
-		return err
+		return "", err
 	}
 	return m.recoverMissingReleaseMergeSHAWithClient(ctx, svc, client, repo, worktreePath)
 }
 
-func (m *manager) recoverMissingReleaseMergeSHAWithClient(ctx context.Context, svc *domain.ReleaseService, client forge.ForgeClient, repo, worktreePath string) error {
+func (m *manager) recoverMissingReleaseMergeSHAWithClient(ctx context.Context, svc *domain.ReleaseService, client forge.ForgeClient, repo, worktreePath string) (string, error) {
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
-		return fmt.Errorf("release merge: fetch service %s: %w", svc.Name, err)
+		return "", fmt.Errorf("release merge: fetch service %s: %w", svc.Name, err)
 	}
 	fresh, err := client.MRReadinessByNumber(ctx, svc.ProductionMR.Number, repo, worktreePath)
 	if err != nil {
-		return fmt.Errorf("release merge: inspect merged MR %d: %w", svc.ProductionMR.Number, err)
+		return "", fmt.Errorf("release merge: inspect merged MR %d: %w", svc.ProductionMR.Number, err)
 	}
-	return fmt.Errorf("release merge: merge commit SHA unavailable for MR %d (state=%s)", svc.ProductionMR.Number, fresh.State)
+	if !strings.EqualFold(fresh.State, "merged") {
+		return "", fmt.Errorf("release merge: merge commit SHA unavailable for MR %d (state=%s)", svc.ProductionMR.Number, fresh.State)
+	}
+	if strings.TrimSpace(fresh.MergedSHA) != "" {
+		return fresh.MergedSHA, nil
+	}
+	if strings.TrimSpace(fresh.HeadSHA) != "" {
+		targetBranch := fresh.TargetBranch
+		if targetBranch == "" && m.flow != nil {
+			targetBranch = m.flow.ProductionBranch
+		}
+		if targetBranch != "" {
+			targetSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+targetBranch)
+			if resolveErr != nil {
+				return "", fmt.Errorf("release merge: resolve target branch for MR %d: %w", svc.ProductionMR.Number, resolveErr)
+			}
+			if targetSHA == fresh.HeadSHA {
+				return fresh.HeadSHA, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("release merge: merge commit SHA unavailable for MR %d (state=%s)", svc.ProductionMR.Number, fresh.State)
 }
 
 func (m *manager) persistMergedReleaseService(release *domain.Release, svc *domain.ReleaseService, mergeSHA string) error {
@@ -227,6 +256,7 @@ func (m *manager) persistMergedReleaseService(release *domain.Release, svc *doma
 	svc.ProductionMR.State = "merged"
 	svc.AcceptedMergeSHA = mergeSHA
 	svc.Status = domain.ReleaseStatusMasterMerged
+	svc.Error = nil
 	return m.persistCheckpoint(release, "production_mr_merge", nil)
 }
 

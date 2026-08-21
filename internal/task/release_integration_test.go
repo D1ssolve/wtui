@@ -97,6 +97,72 @@ func TestIntegration_TwoStageRelease_FullCycle(t *testing.T) {
 	}
 }
 
+func TestCreateRelease_Integration_DevelopCheckedOutInMainWorktree(t *testing.T) {
+	env := newReleaseIntegrationEnv(t)
+	env.addFeatureTask(t, "APP-3", func(worktreePath string) {
+		writeFile(t, filepath.Join(worktreePath, "feature-three.txt"), "feature three\n")
+		mustGit(t, worktreePath, "add", "feature-three.txt")
+		mustGit(t, worktreePath, "commit", "-m", "feat(APP-3): add feature three")
+	})
+	mustGit(t, env.repoPath, "checkout", "develop")
+
+	release, err := env.manager.CreateRelease(context.Background(), CreateReleaseParams{
+		TaskIDs:          []string{"APP-3"},
+		ServiceVersions:  map[string]string{"svc-api": "1.2.3"},
+		StartImmediately: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateRelease() with develop checked out: %v", err)
+	}
+	if release.Status != domain.ReleaseStatusPrepared {
+		t.Fatalf("release status = %q, want %q", release.Status, domain.ReleaseStatusPrepared)
+	}
+}
+
+func TestConvertHotfixToFeature_Integration_StagedTaskSwap(t *testing.T) {
+	for _, targetID := range []string{"APP-1", "APP-2"} {
+		t.Run(targetID, func(t *testing.T) {
+			env := newReleaseIntegrationEnv(t)
+			const sourceID = "APP-1"
+			sourcePath := filepath.Join(env.tasksRoot, sourceID, "svc-api")
+			if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mustGit(t, env.repoPath, "worktree", "add", "-b", "hotfix/"+sourceID, sourcePath, "master")
+			writeFile(t, filepath.Join(sourcePath, "fix.txt"), "fix\n")
+			mustGit(t, sourcePath, "add", "fix.txt")
+			mustGit(t, sourcePath, "commit", "-m", "fix: staged conversion")
+			mustGit(t, sourcePath, "push", "-u", "origin", "hotfix/"+sourceID)
+
+			if err := env.manager.ConvertHotfixToFeature(context.Background(), ConvertHotfixParams{
+				SourceTaskID: sourceID,
+				TargetTaskID: targetID,
+			}); err != nil {
+				t.Fatalf("ConvertHotfixToFeature() error: %v", err)
+			}
+
+			targetPath := filepath.Join(env.tasksRoot, targetID, "svc-api")
+			if got := gitOutput(t, targetPath, "branch", "--show-current"); got != "feature/"+targetID {
+				t.Fatalf("target branch = %q", got)
+			}
+			if _, err := os.Stat(filepath.Join(targetPath, "fix.txt")); err != nil {
+				t.Fatalf("converted file missing: %v", err)
+			}
+			if targetID != sourceID {
+				if _, err := os.Stat(filepath.Join(env.tasksRoot, sourceID)); !os.IsNotExist(err) {
+					t.Fatalf("source task still exists: %v", err)
+				}
+			}
+			if got := gitOutput(t, env.repoPath, "ls-remote", "--heads", "origin", "hotfix/"+sourceID); got != "" {
+				t.Fatalf("remote hotfix still exists: %q", got)
+			}
+			if got := gitOutput(t, env.repoPath, "ls-remote", "--heads", "origin", "feature/"+targetID); got == "" {
+				t.Fatal("remote feature branch missing")
+			}
+		})
+	}
+}
+
 func TestCreateRelease_Integration_ExistingBranchAndTag(t *testing.T) {
 	t.Run("existing release branch", func(t *testing.T) {
 		env := newReleaseIntegrationEnv(t)
@@ -197,6 +263,7 @@ func newReleaseIntegrationEnvWithGitClient(t *testing.T, client git.Client) rele
 		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
 			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
 			gitflow.BranchTypeRelease: {Prefixes: []string{"release/"}},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
 		},
 	}
 
@@ -386,6 +453,19 @@ type failingCreateTagClient struct {
 	git.Client
 	failCount int
 	onFail    func(repoPath, tag, target, message string) error
+}
+
+type failingCleanupBranchClient struct {
+	git.Client
+	failCount int
+}
+
+func (c *failingCleanupBranchClient) DeleteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error {
+	if c.failCount > 0 && strings.HasPrefix(branch, "feature/") {
+		c.failCount--
+		return errors.New("simulated cleanup branch failure")
+	}
+	return c.Client.DeleteBranchIfUnchanged(ctx, repoPath, branch, expectedSHA)
 }
 
 func (c *failingCreateTagClient) CreateTag(ctx context.Context, repoPath, tag, target, message string) error {
@@ -656,5 +736,54 @@ func TestIntegration_FinalizeRelease_TagPushFailure_ReachedPushingCheckpoint(t *
 	}
 	if result.Error == nil || result.Error.Stage != "push_tag" {
 		t.Fatalf("release error stage = %q, want push_tag", result.Error.Stage)
+	}
+}
+
+func TestReleaseCleanup_Integration_DevelopCheckedOutAndRetryAfterPartialFailure(t *testing.T) {
+	env := newReleaseIntegrationEnv(t)
+	env.addFeatureTask(t, "APP-60", func(worktreePath string) {
+		writeFile(t, filepath.Join(worktreePath, "cleanup.txt"), "cleanup\n")
+		mustGit(t, worktreePath, "add", "cleanup.txt")
+		mustGit(t, worktreePath, "commit", "-m", "feat: cleanup")
+	})
+	release, err := env.manager.CreateRelease(context.Background(), CreateReleaseParams{TaskIDs: []string{"APP-60"}, ServiceVersions: map[string]string{"svc-api": "1.2.3"}, StartImmediately: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release = env.markReleaseMasterMerged(t, release)
+	if _, err = env.manager.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID}); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, env.repoPath, "checkout", "develop")
+
+	failing := &failingCleanupBranchClient{Client: env.manager.git, failCount: 1}
+	mgr := *env.manager
+	mgr.git = failing
+	plan, err := mgr.PlanReleaseCleanup(context.Background(), release.ID, DefaultReleaseCleanupSelection())
+	if err != nil || len(plan.Preview().Blockers) != 0 {
+		t.Fatalf("plan = %+v, %v", plan.Preview(), err)
+	}
+	if _, err = mgr.ExecuteReleaseCleanup(context.Background(), plan, nil); err == nil {
+		t.Fatal("expected injected failure")
+	}
+	if _, err := os.Stat(filepath.Join(env.tasksRoot, "APP-60")); !os.IsNotExist(err) {
+		t.Fatalf("task directory remains: %v", err)
+	}
+	if _, err := os.Stat(mgr.releaseManifestPath(release.ID)); err != nil {
+		t.Fatalf("manifest removed after failure: %v", err)
+	}
+
+	retryPlan, err := mgr.PlanReleaseCleanup(context.Background(), release.ID, DefaultReleaseCleanupSelection())
+	if err != nil || len(retryPlan.Preview().Blockers) != 0 {
+		t.Fatalf("retry plan = %+v, %v", retryPlan.Preview(), err)
+	}
+	if _, err = mgr.ExecuteReleaseCleanup(context.Background(), retryPlan, nil); err != nil {
+		t.Fatal(err)
+	}
+	if branch := gitOutput(t, env.repoPath, "branch", "--show-current"); branch != "develop" {
+		t.Fatalf("current branch = %q", branch)
+	}
+	if _, err := os.Stat(mgr.releaseManifestPath(release.ID)); !os.IsNotExist(err) {
+		t.Fatalf("release manifest remains: %v", err)
 	}
 }

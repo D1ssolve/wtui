@@ -99,12 +99,27 @@ func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Relea
 	if err := os.MkdirAll(filepath.Dir(integrationPath), 0o755); err != nil {
 		return fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
 	}
-	if err := m.git.AddWorktree(ctx, svc.RepoPath, integrationPath, svc.IntegrationBranch, false, ""); err != nil {
+	if svc.IntegrationWorktreePath != "" {
+		commonDir, commonErr := m.git.CommonDir(ctx, svc.RepoPath)
+		if commonErr != nil {
+			return fmt.Errorf("release finalize: resolve retained worktree common dir: %w", commonErr)
+		}
+		if err := m.git.RemoveWorktree(ctx, commonDir, svc.IntegrationWorktreePath, true); err != nil {
+			return fmt.Errorf("release finalize: remove retained worktree: %w", err)
+		}
+		if err := os.RemoveAll(svc.IntegrationWorktreePath); err != nil {
+			return fmt.Errorf("release finalize: clean retained worktree: %w", err)
+		}
+		svc.IntegrationWorktreePath = ""
+	}
+	remoteIntegration := "origin/" + svc.IntegrationBranch
+	if err := m.git.AddDetachedWorktree(ctx, svc.RepoPath, integrationPath, remoteIntegration); err != nil {
 		return err
 	}
 	svc.IntegrationWorktreePath = integrationPath
 	svc.Status = domain.ReleaseStatusSyncingDevelop
-	keep := m.cfg.Release != nil && m.cfg.Release.KeepIntegrationWorktrees != nil && *m.cfg.Release.KeepIntegrationWorktrees
+	pushIntegration := m.cfg.Release != nil && m.cfg.Release.PushIntegration != nil && *m.cfg.Release.PushIntegration
+	keep := !pushIntegration || m.cfg.Release.KeepIntegrationWorktrees != nil && *m.cfg.Release.KeepIntegrationWorktrees
 	defer func() {
 		if keep {
 			return
@@ -120,10 +135,10 @@ func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Relea
 		return err
 	}
 
-	if err := m.git.MergeFFOnly(ctx, integrationPath, "origin/"+svc.IntegrationBranch); err != nil {
+	if err := m.git.MergeFFOnly(ctx, integrationPath, remoteIntegration); err != nil {
 		return fmt.Errorf("release finalize: fast-forward service=%s integration=%s: %w", svc.Name, svc.IntegrationBranch, err)
 	}
-	alreadyMerged, err := m.git.IsAncestor(ctx, svc.RepoPath, svc.ReleaseBranch, svc.IntegrationBranch)
+	alreadyMerged, err := m.git.IsAncestor(ctx, integrationPath, svc.ReleaseBranch, "HEAD")
 	if err != nil {
 		return err
 	}
@@ -141,18 +156,22 @@ func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Relea
 		}
 	}
 
-	if m.cfg.Release != nil && m.cfg.Release.PushIntegration != nil && *m.cfg.Release.PushIntegration {
-		if err := m.git.PushBranchExplicit(ctx, integrationPath, svc.IntegrationBranch); err != nil {
+	if pushIntegration {
+		if err := m.git.PushRef(ctx, integrationPath, "HEAD", svc.IntegrationBranch); err != nil {
 			return fmt.Errorf("release finalize: push service=%s integration=%s: %w", svc.Name, svc.IntegrationBranch, err)
 		}
 		svc.PushedIntegration = true
 	}
-	svc.PostIntegrationRef = svc.IntegrationBranch
 	sha, err := m.resolveReleaseRefSHA(ctx, integrationPath, "HEAD")
 	if err != nil {
 		return err
 	}
 	svc.PostIntegrationSHA = sha
+	if pushIntegration {
+		svc.PostIntegrationRef = remoteIntegration
+	} else {
+		svc.PostIntegrationRef = sha
+	}
 	return m.persistCheckpoint(release, "sync_develop", nil)
 }
 

@@ -20,6 +20,12 @@ type CloseTaskFinishedMsg struct {
 	Err    error
 }
 
+type ConvertHotfixDoneMsg struct {
+	SourceTaskID string
+	TargetTaskID string
+	Err          error
+}
+
 type PrunePlanReadyMsg struct {
 	Candidates []domain.PruneCandidate
 	Err        error
@@ -89,5 +95,18 @@ type TaskWorkflowLoadedMsg struct {
 	TaskID     string
 	Generation uint64
 	Workflow   domain.WorkflowSummary
+	Err        error
+}
+
+type ReleaseCleanupPlanReadyMsg struct {
+	Generation uint64
+	Plan       task.ReleaseCleanupPlan
+	Preview    task.ReleaseCleanupPreview
+	Err        error
+}
+
+type ReleaseCleanupDoneMsg struct {
+	Generation uint64
+	Result     task.ReleaseCleanupResult
 	Err        error
 }

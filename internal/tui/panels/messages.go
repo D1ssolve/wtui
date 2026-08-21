@@ -14,9 +14,16 @@ type OpenCloneDialogMsg struct{ TaskID string }
 
 type OpenRemoveDialogMsg struct{ TaskID string }
 
+type OpenConvertHotfixDialogMsg struct {
+	TaskID       string
+	TargetTaskID string
+}
+
 type OpenConfigModalMsg struct{}
 
 type TaskSelectionChangedMsg struct{ TaskID string }
+
+type ShellExecMsg struct{ TaskDir string }
 
 type OpenAddServiceMsg struct {
 	TaskID           string
@@ -87,6 +94,8 @@ type OpenForgeMenuMsg struct {
 }
 
 type OpenCreateReleaseDialogMsg struct{}
+
+type PlanReleaseCleanupMsg struct{ ReleaseID string }
 
 type ReleaseVersionsLoadedMsg struct {
 	Versions map[string]string // serviceName → proposed version

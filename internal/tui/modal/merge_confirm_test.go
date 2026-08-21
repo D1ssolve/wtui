@@ -43,3 +43,23 @@ func TestMergeConfirmDialog_ConfirmIncludesServiceName(t *testing.T) {
 		t.Fatalf("confirm = %#v, want task TASK-1 service api", execCmd(cmd))
 	}
 }
+
+func TestMergeConfirmDialog_StatusCheckBlockerDoesNotOfferServiceUpdate(t *testing.T) {
+	d := NewMergeConfirmDialog("TASK-1", "", "api", []MergeServiceStatus{{
+		ServiceName: "api",
+		Status:      "blocked",
+		Blockers:    []string{"1 status check failed: Architecture"},
+	}})
+
+	view := stripAnsi(d.View())
+	for _, forbidden := range []string{"git fetch", "update from", "[u]"} {
+		if strings.Contains(view, forbidden) {
+			t.Fatalf("view advertises automatic recovery %q: %s", forbidden, view)
+		}
+	}
+
+	_, cmd := d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	if cmd != nil {
+		t.Fatalf("u started automatic recovery: %T", execCmd(cmd))
+	}
+}

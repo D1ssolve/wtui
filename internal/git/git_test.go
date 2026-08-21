@@ -22,6 +22,18 @@ func TestParseWorktreeListPorcelain(t *testing.T) {
 		want  []WorktreeEntry
 	}{
 		{
+			name: "locked worktree",
+			input: `worktree /path/to/locked
+HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+branch refs/heads/release/1.2.3
+locked reason with spaces
+
+`,
+			want: []WorktreeEntry{
+				{Path: "/path/to/locked", HEAD: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Branch: "refs/heads/release/1.2.3", Locked: true},
+			},
+		},
+		{
 			name:  "empty input returns empty slice",
 			input: "",
 			want:  nil,
@@ -113,6 +125,86 @@ branch refs/heads/main`,
 				t.Errorf("parseWorktreeListPorcelain() =\n  %+v\nwant\n  %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRemoteRefSHA_ParsesExactRef(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf '%s\n' "$*" > "$GIT_ARGS_FILE"
+printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/v1.2.3^{}\n'
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	got, err := NewCommandClient(slog.Default()).RemoteRefSHA(t.Context(), "/repo", "refs/tags/v1.2.3^{}")
+	if err != nil || got != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("RemoteRefSHA() = %q, %v", got, err)
+	}
+	args, _ := os.ReadFile(argsFile)
+	if want := "-C /repo ls-remote origin refs/tags/v1.2.3^{}\n"; string(args) != want {
+		t.Fatalf("args = %q, want %q", args, want)
+	}
+}
+
+func TestDeleteBranchIfUnchanged_UsesExpectedSHA(t *testing.T) {
+	assertGitArgs(t, func(client *CommandClient) error {
+		return client.DeleteBranchIfUnchanged(t.Context(), "/repo", "feature/ABC-1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	}, "-C /repo update-ref -d refs/heads/feature/ABC-1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
+}
+
+func TestDeleteRemoteBranchIfUnchanged_UsesExactLease(t *testing.T) {
+	assertGitArgs(t, func(client *CommandClient) error {
+		return client.DeleteRemoteBranchIfUnchanged(t.Context(), "/repo", "feature/ABC-1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	}, "-C /repo push --force-with-lease=refs/heads/feature/ABC-1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa origin :refs/heads/feature/ABC-1\n")
+}
+
+func TestMoveRemoteBranchIfUnchanged_UsesAtomicLeases(t *testing.T) {
+	assertGitArgs(t, func(client *CommandClient) error {
+		return client.MoveRemoteBranchIfUnchanged(
+			t.Context(),
+			"/repo",
+			"hotfix/ABC-1",
+			"feature/ABC-1",
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		)
+	}, "-C /repo push --atomic --force-with-lease=refs/heads/hotfix/ABC-1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --force-with-lease=refs/heads/feature/ABC-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb origin bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/feature/ABC-1 :refs/heads/hotfix/ABC-1\n")
+}
+
+func TestMoveWorktree_UsesExpectedArgv(t *testing.T) {
+	assertGitArgs(t, func(client *CommandClient) error {
+		return client.MoveWorktree(t.Context(), "/repo", "/staging/svc", "/tasks/APP-1/svc")
+	}, "-C /repo worktree move /staging/svc /tasks/APP-1/svc\n")
+}
+
+func TestRepairWorktree_UsesExpectedArgv(t *testing.T) {
+	assertGitArgs(t, func(client *CommandClient) error {
+		return client.RepairWorktree(t.Context(), "/repo", "/tasks/APP-1/svc")
+	}, "-C /repo worktree repair /tasks/APP-1/svc\n")
+}
+
+func assertGitArgs(t *testing.T, invoke func(*CommandClient) error, want string) {
+	t.Helper()
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	if err := os.WriteFile(fakeGit, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$GIT_ARGS_FILE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+	if err := invoke(NewCommandClient(slog.Default())); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := os.ReadFile(argsFile)
+	if string(args) != want {
+		t.Fatalf("args = %q, want %q", args, want)
 	}
 }
 
@@ -327,10 +419,10 @@ func TestCommandClient_RepoStatusContextCancelled(t *testing.T) {
 func TestCommandClient_OperationStateDetectsInterruptedOps(t *testing.T) {
 	binDir := t.TempDir()
 	fakeGit := filepath.Join(binDir, "git")
-	commonDir := t.TempDir()
+	worktreeGitDir := t.TempDir()
 	script := `#!/bin/sh
-if [ "$4" = "--git-common-dir" ]; then
-  printf '%s' "$COMMON_DIR"
+if [ "$3" = "rev-parse" ] && [ "$4" = "--git-path" ]; then
+  printf '%s/%s' "$WORKTREE_GIT_DIR" "$5"
   exit 0
 fi
 exit 1
@@ -339,17 +431,17 @@ exit 1
 		t.Fatalf("write fake git: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("COMMON_DIR", commonDir)
+	t.Setenv("WORKTREE_GIT_DIR", worktreeGitDir)
 
 	for _, name := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG"} {
-		if err := os.WriteFile(filepath.Join(commonDir, name), []byte("x"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(worktreeGitDir, name), []byte("x"), 0o600); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	if err := os.Mkdir(filepath.Join(commonDir, "rebase-merge"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(worktreeGitDir, "rebase-merge"), 0o755); err != nil {
 		t.Fatalf("mkdir rebase-merge: %v", err)
 	}
-	if err := os.Mkdir(filepath.Join(commonDir, "rebase-apply"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(worktreeGitDir, "rebase-apply"), 0o755); err != nil {
 		t.Fatalf("mkdir rebase-apply: %v", err)
 	}
 
@@ -654,6 +746,33 @@ exit 0
 		t.Fatalf("read args file: %v", err)
 	}
 	want := "-C /worktree merge --abort\n"
+	if string(args) != want {
+		t.Fatalf("git args = %q, want %q", string(args), want)
+	}
+}
+
+func TestCommandClient_MergeNoFFUsesExpectedArgv(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err := client.MergeNoFF(t.Context(), "/repo", "origin/develop"); err != nil {
+		t.Fatalf("MergeNoFF returned error: %v", err)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read args file: %v", err)
+	}
+	want := "-C /repo merge --no-ff origin/develop\n"
 	if string(args) != want {
 		t.Fatalf("git args = %q, want %q", string(args), want)
 	}

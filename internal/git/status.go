@@ -39,14 +39,6 @@ func (c *CommandClient) RepoStatus(ctx context.Context, worktreePath string) (Ra
 }
 
 func (c *CommandClient) OperationState(ctx context.Context, worktreePath string) ([]domain.RepoState, error) {
-	commonDir, err := c.CommonDir(ctx, worktreePath)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, err
-	}
-
 	checks := []struct {
 		name  string
 		state domain.RepoState
@@ -63,7 +55,16 @@ func (c *CommandClient) OperationState(ctx context.Context, worktreePath string)
 	states := make([]domain.RepoState, 0, len(checks))
 	seen := map[domain.RepoState]struct{}{}
 	for _, check := range checks {
-		path := filepath.Join(commonDir, check.name)
+		path, err := c.execGit(ctx, "-C", worktreePath, "rev-parse", "--git-path", check.name)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("operation state path for %s: %w", check.name, err)
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(worktreePath, path)
+		}
 		ok, statErr := pathExists(path, check.dir)
 		if statErr != nil {
 			return nil, fmt.Errorf("operation state check for %s: %w", check.name, statErr)

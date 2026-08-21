@@ -8,6 +8,8 @@ type WorktreeEntry struct {
 	HEAD string
 
 	Branch string
+
+	Locked bool
 }
 
 func parseWorktreeListPorcelain(output string) []WorktreeEntry {
@@ -33,6 +35,8 @@ func parseWorktreeListPorcelain(output string) []WorktreeEntry {
 				entry.Branch = "(detached)"
 			case strings.HasPrefix(line, "branch "):
 				entry.Branch = strings.TrimPrefix(line, "branch ")
+			case line == "locked" || strings.HasPrefix(line, "locked "):
+				entry.Locked = true
 			}
 		}
 

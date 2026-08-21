@@ -247,6 +247,28 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
+			if p.list.FilterState() == list.Filtering {
+				switch msg.String() {
+				case "esc":
+					p.list.ResetFilter()
+					p.rebuildRows()
+					return p, nil
+				case "enter":
+					if strings.TrimSpace(p.list.FilterValue()) == "" || len(p.rows) == 0 {
+						p.list.ResetFilter()
+					} else {
+						p.list.SetFilterState(list.FilterApplied)
+					}
+					p.rebuildRows()
+					return p, nil
+				}
+
+				var cmd tea.Cmd
+				p.list, cmd = p.list.Update(msg)
+				p.rebuildRows()
+				return p, cmd
+			}
+
 			switch msg.String() {
 			case "j", "down":
 				if p.moveSelection(1) {
@@ -325,6 +347,14 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 				}
 				return p, func() tea.Msg { return ScanPrunableTasksMsg{} }
 
+			case ";":
+				task := p.SelectedTask()
+				if task == nil {
+					return p, nil
+				}
+				dir := task.Dir
+				return p, func() tea.Msg { return ShellExecMsg{TaskDir: dir} }
+
 			case "R":
 				task := p.SelectedTask()
 				if task == nil {
@@ -340,6 +370,17 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 					return p, nil
 				}
 				return p, func() tea.Msg { return PlanCloseTaskMsg{TaskID: task.ID} }
+
+			case "F":
+				task := p.SelectedTask()
+				if !CanConvertHotfixTask(task, p.flow) {
+					return p, nil
+				}
+				targetID := task.PendingConversionTargetID
+				if targetID == "" {
+					targetID = task.ID
+				}
+				return p, func() tea.Msg { return OpenConvertHotfixDialogMsg{TaskID: task.ID, TargetTaskID: targetID} }
 
 			case "O":
 				task := p.SelectedTask()
@@ -366,6 +407,18 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 
 			case ",":
 				return p, func() tea.Msg { return OpenConfigModalMsg{} }
+
+			case "f", "/":
+				p.list.SetFilterState(list.Filtering)
+				p.rebuildRows()
+				return p, nil
+
+			case "esc":
+				if p.list.FilterState() == list.FilterApplied {
+					p.list.ResetFilter()
+					p.rebuildRows()
+				}
+				return p, nil
 			}
 		}
 
@@ -454,6 +507,14 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 			}
 			return p, func() tea.Msg { return ScanPrunableTasksMsg{} }
 
+		case ";":
+			task := p.SelectedTask()
+			if task == nil {
+				return p, nil
+			}
+			dir := task.Dir
+			return p, func() tea.Msg { return ShellExecMsg{TaskDir: dir} }
+
 		case "h":
 			listMovePage(&p.list, -1)
 			return p, p.selectionChangedCmd()
@@ -477,6 +538,17 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 				return p, nil
 			}
 			return p, func() tea.Msg { return PlanCloseTaskMsg{TaskID: task.ID} }
+
+		case "F":
+			task := p.SelectedTask()
+			if !CanConvertHotfixTask(task, p.flow) {
+				return p, nil
+			}
+			targetID := task.PendingConversionTargetID
+			if targetID == "" {
+				targetID = task.ID
+			}
+			return p, func() tea.Msg { return OpenConvertHotfixDialogMsg{TaskID: task.ID, TargetTaskID: targetID} }
 
 		case "O":
 			task := p.SelectedTask()
@@ -583,6 +655,10 @@ func (p TasksPanel) treeView() string {
 	inner := innerDimensions(p.width, p.height)
 	listHeight := max(0, inner.h-1)
 	rowsHeight := max(0, listHeight-1)
+	filtering := p.list.FilterState() == list.Filtering
+	if filtering {
+		rowsHeight = max(0, rowsHeight-1)
+	}
 
 	lines, page, totalPages := p.renderTreeRows(rowsHeight)
 	for len(lines) < rowsHeight {
@@ -596,7 +672,12 @@ func (p TasksPanel) treeView() string {
 	treePager.TotalPages = max(1, totalPages)
 	pagination := lipgloss.NewStyle().Foreground(tasksColorDim).Render(treePager.View())
 
-	content := lipgloss.JoinVertical(lipgloss.Left, titleStyle.Render(title), body, pagination)
+	parts := []string{titleStyle.Render(title)}
+	if filtering {
+		parts = append(parts, p.list.FilterInput.View())
+	}
+	parts = append(parts, body, pagination)
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
 	borderStyle := panelBorderStyle(p.focused)
 	return borderStyle.
@@ -621,6 +702,18 @@ func (p *TasksPanel) rebuildRows() {
 		return
 	}
 
+	var matches map[string]bool
+	if filter := strings.TrimSpace(p.list.FilterValue()); filter != "" {
+		targets := make([]string, len(p.tasks))
+		for i := range p.tasks {
+			targets[i] = p.tasks[i].ID
+		}
+		matches = make(map[string]bool)
+		for _, rank := range p.list.Filter(filter, targets) {
+			matches[p.tasks[rank.Index].ID] = true
+		}
+	}
+
 	roots := make([]*domain.Task, 0, len(p.tasks))
 	childrenByParent := make(map[string][]*domain.Task)
 
@@ -638,8 +731,6 @@ func (p *TasksPanel) rebuildRows() {
 	})
 
 	for _, root := range roots {
-		p.rows = append(p.rows, treeRow{kind: treeRowKindGroup, task: root, indent: 0})
-
 		groupTasks := append([]*domain.Task{root}, childrenByParent[root.ID]...)
 		sort.SliceStable(groupTasks, func(i, j int) bool {
 			pi := phaseOrder(groupTasks[i].Phase)
@@ -652,6 +743,20 @@ func (p *TasksPanel) rebuildRows() {
 			}
 			return groupTasks[i].ID < groupTasks[j].ID
 		})
+		if matches != nil {
+			filtered := groupTasks[:0]
+			for _, task := range groupTasks {
+				if matches[task.ID] {
+					filtered = append(filtered, task)
+				}
+			}
+			groupTasks = filtered
+		}
+		if len(groupTasks) == 0 {
+			continue
+		}
+
+		p.rows = append(p.rows, treeRow{kind: treeRowKindGroup, task: root, indent: 0})
 
 		for _, t := range groupTasks {
 			p.rows = append(p.rows, treeRow{kind: treeRowKindTask, task: t, indent: 1})
@@ -698,6 +803,45 @@ func phaseOrder(phase string) int {
 	default:
 		return 3
 	}
+}
+
+func CanConvertHotfixTask(task *domain.Task, flow *gitflow.ResolvedGitFlow) bool {
+	if task == nil {
+		return false
+	}
+	if task.PendingConversionTargetID != "" {
+		return true
+	}
+	if flow == nil {
+		return false
+	}
+	featureRule, hasFeature := flow.BranchTypes[gitflow.BranchTypeFeature]
+	hotfixRule, hasHotfix := flow.BranchTypes[gitflow.BranchTypeHotfix]
+	if !hasFeature || !hasHotfix || !hasCanonicalPrefix(featureRule.Prefixes) || !hasCanonicalPrefix(hotfixRule.Prefixes) {
+		return false
+	}
+	if task.Phase == string(gitflow.BranchTypeHotfix) {
+		return true
+	}
+	if task.Phase != "" || len(task.Services) == 0 {
+		return false
+	}
+
+	sawHotfix := false
+	for _, svc := range task.Services {
+		switch gitflow.DetectBranchType(svc.Branch, flow) {
+		case gitflow.BranchTypeHotfix:
+			sawHotfix = true
+		case gitflow.BranchTypeFeature:
+		default:
+			return false
+		}
+	}
+	return sawHotfix
+}
+
+func hasCanonicalPrefix(prefixes []string) bool {
+	return len(prefixes) > 0 && strings.TrimSpace(prefixes[0]) != ""
 }
 
 func (p *TasksPanel) selectableRows() []int {

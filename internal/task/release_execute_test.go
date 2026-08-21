@@ -88,8 +88,8 @@ func TestCreateRelease_StopsAtPrepared(t *testing.T) {
 	if len(ffCalls) != 1 || ffCalls[0].Ref != "origin/develop" {
 		t.Fatalf("MergeFFOnly calls = %#v, want one origin/develop call", ffCalls)
 	}
-	if len(branchCalls) != 1 || branchCalls[0].RepoPath != svc.RepoPath || branchCalls[0].FromBranch != "develop" {
-		t.Fatalf("CreateBranchFromBranch calls = %#v, want release from ff-synced develop worktree", branchCalls)
+	if len(branchCalls) != 1 || branchCalls[0].RepoPath != svc.RepoPath || branchCalls[0].FromBranch != "synced-develop-sha" {
+		t.Fatalf("CreateBranchFromBranch calls = %#v, want release from detached integration HEAD", branchCalls)
 	}
 	if svc.PostIntegrationSHA != "synced-develop-sha" {
 		t.Fatalf("PostIntegrationSHA = %q, want synced-develop-sha", svc.PostIntegrationSHA)

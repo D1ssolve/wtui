@@ -73,6 +73,24 @@ func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Rel
 	if worktreePath == "" {
 		worktreePath = svc.RepoPath
 	}
+	mrs, err := client.MRStatus(ctx, svc.ReleaseBranch, repo)
+	if err != nil {
+		return fmt.Errorf("release promote: inspect production MR for service %s: %w", svc.Name, err)
+	}
+	for _, mr := range mrs {
+		open := strings.EqualFold(mr.State, "open") || strings.EqualFold(mr.State, "opened")
+		wrongTarget := mr.TargetBranch != "" && !strings.EqualFold(mr.TargetBranch, m.flow.ProductionBranch)
+		if !open || wrongTarget || mr.Number == 0 {
+			continue
+		}
+		svc.ProductionMR = &domain.ProductionMRRef{Number: mr.Number, URL: mr.URL, SourceSHA: sourceSHA, State: "open"}
+		svc.Status = domain.ReleaseStatusAwaitingMasterMerge
+		if err := m.persistCheckpoint(release, "production_mr", nil); err != nil {
+			return err
+		}
+		sendStatus(statusCh, fmt.Sprintf("[%s][promote] production MR already open: %s", svc.Name, mr.URL))
+		return nil
+	}
 	sendStatus(statusCh, fmt.Sprintf("[%s][promote] creating %s -> %s MR", svc.Name, svc.ReleaseBranch, m.flow.ProductionBranch))
 	mr, err := client.CreateMR(ctx, forge.CreateMRParams{
 		WorktreePath: worktreePath,

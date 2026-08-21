@@ -110,6 +110,11 @@ func (p ReleasesPanel) Update(msg tea.Msg) (ReleasesPanel, tea.Cmd) {
 			return p, nil
 		case "N":
 			return p, func() tea.Msg { return OpenCreateReleaseDialogMsg{} }
+		case "D":
+			selected := p.SelectedRelease()
+			if selected != nil && selected.Status == domain.ReleaseStatusReleased {
+				return p, func() tea.Msg { return PlanReleaseCleanupMsg{ReleaseID: selected.ID} }
+			}
 		}
 	}
 

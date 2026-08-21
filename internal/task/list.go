@@ -33,9 +33,23 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 		}
 		taskID := entry.Name()
 		taskDir := filepath.Join(m.cfg.TasksRoot, taskID)
+		manifest, pending, manifestErr := readConversionManifest(filepath.Join(taskDir, conversionMarkerName))
+		if manifestErr != nil {
+			m.logger.WarnContext(ctx, "could not read conversion marker",
+				slog.String("task_id", taskID),
+				slog.String("error", manifestErr.Error()),
+			)
+		}
+		if pending && manifest.SourceTaskID != taskID {
+			continue
+		}
 		task := domain.Task{
-			ID:  taskID,
-			Dir: taskDir,
+			ID:                        taskID,
+			Dir:                       taskDir,
+			PendingConversionTargetID: manifest.TargetTaskID,
+		}
+		if manifestErr != nil {
+			task.ConversionError = manifestErr.Error()
 		}
 
 		if _, err := os.Stat(taskDir); os.IsNotExist(err) {
@@ -85,7 +99,7 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 	wg.Wait()
 
 	for i := range tasks {
-		tasks[i].ParentID = detectTaskRelationship(tasks[i].ID, allTaskIDs, m.cfg.TasksRoot, m.flow)
+		tasks[i].ParentID = detectTaskRelationship(tasks[i].ID, tasks[i].Phase, allTaskIDs, m.cfg.TasksRoot, m.flow)
 	}
 
 	hasChildren := make(map[string]struct{}, len(tasks))
@@ -108,7 +122,7 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 }
 
 func (m *manager) shouldIgnoreTaskDir(name string) bool {
-	if name == ".releases" {
+	if name == ".releases" || name == conversionRootName {
 		return true
 	}
 

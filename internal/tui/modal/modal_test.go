@@ -218,6 +218,24 @@ func TestRemoveDialog_Y_Submits(t *testing.T) {
 	}
 }
 
+func TestConvertHotfixDialog_EnterSubmitsEditableTargetID(t *testing.T) {
+	d := NewConvertHotfixDialog("IN-6748", "IN-6748")
+	d.targetInput.SetValue("IN-9000")
+
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("enter must return a cmd")
+	}
+	msg := execCmd(cmd)
+	sub, ok := msg.(SubmitConvertHotfixMsg)
+	if !ok {
+		t.Fatalf("expected SubmitConvertHotfixMsg, got %T", msg)
+	}
+	if sub.SourceTaskID != "IN-6748" || sub.TargetTaskID != "IN-9000" {
+		t.Fatalf("conversion IDs = %q -> %q", sub.SourceTaskID, sub.TargetTaskID)
+	}
+}
+
 func TestRemoveDialog_FThenY_ForceRemoves(t *testing.T) {
 	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
 
@@ -344,6 +362,7 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		"Keyboard Shortcuts",
 		"Tasks Panel",
 		"Services Panel",
+		"Releases Panel",
 		"Output Panel",
 		"Global",
 		"Init new task group",
@@ -361,14 +380,18 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		"Refresh tasks and repository cache",
 		"Open forge action menu",
 		"Validate current task",
-		"Push service",
-		"Stash service changes",
-		"Unstash service changes",
 		"Remove service from task",
+		"Create release",
+		"Retry failed recoverable release",
 		"Scroll up/down",
 		"Toggle this help",
 		"System status",
 		"Quit",
+	}
+	for _, forbidden := range []string{"Push service", "Sync service", "Stash service changes", "Unstash service changes"} {
+		if strings.Contains(view, forbidden) {
+			t.Errorf("HelpOverlay.View() advertises removed action %q", forbidden)
+		}
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(view, want) {
@@ -383,6 +406,17 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		if strings.Contains(view, forbidden+"  ") || strings.Contains(view, forbidden+"\t") {
 			t.Errorf("HelpOverlay.View() should not advertise fast navigation key %q", forbidden)
 		}
+	}
+}
+
+func TestHelpOverlay_CleanupHintRequiresReleasedSelection(t *testing.T) {
+	h := NewHelpOverlayWithOptions(false)
+	if strings.Contains(stripAnsi(h.View()), "Cleanup selected released release") {
+		t.Fatal("cleanup help shown without released selection")
+	}
+	h.SetReleaseCleanupAvailable(true)
+	if !strings.Contains(stripAnsi(h.View()), "Cleanup selected released release") {
+		t.Fatal("cleanup help missing for released selection")
 	}
 }
 

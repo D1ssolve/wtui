@@ -5,11 +5,16 @@ import (
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/tui/panels"
 	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"github.com/charmbracelet/lipgloss"
 )
 
 func renderFooter(m Model) string {
+	if m.shellInput != nil {
+		return m.styles.Footer.Render("; " + m.shellInput.input + "█")
+	}
+
 	var hints string
 
 	switch m.focus {
@@ -17,19 +22,32 @@ func renderFooter(m Model) string {
 		parts := []string{
 			"[Enter] services",
 			"[i] init",
+			"[d] remove",
+			"[S] sync",
 			"[C] close",
 			"[M] merge MRs",
+			"[O] VS Code",
+			"[;] shell",
+			"[/] filter",
+		}
+		if selected := m.tasksPanel.SelectedTask(); panels.CanConvertHotfixTask(selected, m.flow) {
+			parts = append(parts, "[F] to feature")
 		}
 		parts = append(parts, "[.] status", "[?] help", "[q] quit")
 		hints = renderFooterHints(parts, m.width)
 	case FocusServices:
 		parts := []string{
 			"[a] add",
+			"[d] remove",
 			"[m] forge",
 			"[v] validate",
+			"[/] filter",
 			"[Esc] back",
 			"[.] status",
 			"[?] help",
+		}
+		if m.lazygitAvailable {
+			parts = append(parts[:2], append([]string{"[g] lazygit"}, parts[2:]...)...)
 		}
 		hints = renderFooterHints(parts, m.width)
 	case FocusOutput:
@@ -47,6 +65,12 @@ func renderFooter(m Model) string {
 				parts = append(parts, "[M] merge MRs")
 			case domain.ReleaseStatusMasterMerged:
 				parts = append(parts, "[F] finalize")
+			case domain.ReleaseStatusFailed:
+				if rel.Error != nil && rel.Error.Recoverable {
+					parts = append(parts, "[R] retry")
+				}
+			case domain.ReleaseStatusReleased:
+				parts = append(parts, "[D] cleanup")
 			}
 		}
 		parts = append(parts, "[?] help", "[q] quit")

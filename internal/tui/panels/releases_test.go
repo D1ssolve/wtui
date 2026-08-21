@@ -106,6 +106,40 @@ func TestReleasesPanel_KeyN_Unfocused_Noop(t *testing.T) {
 	}
 }
 
+func TestReleasesPanel_KeyD_EmitsCleanupOnlyForReleasedSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status domain.ReleaseStatus
+		want   bool
+	}{
+		{name: "released", status: domain.ReleaseStatusReleased, want: true},
+		{name: "draft", status: domain.ReleaseStatusDraft},
+		{name: "failed", status: domain.ReleaseStatusFailed},
+		{name: "prepared", status: domain.ReleaseStatusPrepared},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewReleasesPanel(60, 20)
+			p.SetFocused(true)
+			p.SetReleases([]domain.Release{{ID: "rel-1", Status: tc.status}})
+
+			_, cmd := p.Update(sendKey("D"))
+			if !tc.want {
+				if cmd != nil {
+					t.Fatalf("D on %s returned command", tc.status)
+				}
+				return
+			}
+			if cmd == nil {
+				t.Fatal("D on released selection returned nil command")
+			}
+			msg, ok := cmd().(PlanReleaseCleanupMsg)
+			if !ok || msg.ReleaseID != "rel-1" {
+				t.Fatalf("cleanup message = %#v", cmd())
+			}
+		})
+	}
+}
+
 func TestReleasesPanel_View_EmptyPlaceholder(t *testing.T) {
 	p := NewReleasesPanel(70, 12)
 	view := stripAnsi(p.View())

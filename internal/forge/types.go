@@ -41,18 +41,20 @@ type MRInfo struct {
 }
 
 type MRReadiness struct {
-	Number         int
-	State          string
-	URL            string
-	SourceBranch   string
-	TargetBranch   string
-	HeadSHA        string
-	Approved       bool
-	CIState        string
-	Mergeable      bool
-	Ready          bool
-	Blockers       []string
-	SupportsSHAPin bool
+	Number               int
+	State                string
+	URL                  string
+	SourceBranch         string
+	TargetBranch         string
+	HeadSHA              string
+	MergedSHA            string
+	Approved             bool
+	CIState              string
+	Mergeable            bool
+	Ready                bool
+	Blockers             []string
+	SupportsSHAPin       bool
+	StatusChecksBlocking bool
 }
 
 type MergeMRParams struct {

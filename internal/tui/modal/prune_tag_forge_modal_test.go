@@ -155,16 +155,28 @@ func TestForgeMenuModal_AvailableShowsActionsAndEnterTriggersMessages(t *testing
 		}
 	}
 
-	_, cmd := m.Update(sendSpecialKey(tea.KeyEnter))
-	if cmd == nil {
-		t.Fatal("enter should emit create MR msg on first option")
+	updated, cmd := m.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd != nil {
+		t.Fatal("first enter should open title input")
 	}
+	m = updated.(*ForgeMenuModal)
+	if m.titleInput.Value() != "IN-4242" {
+		t.Fatalf("default title = %q, want task ID", m.titleInput.Value())
+	}
+	m.titleInput.SetValue("   ")
+	_, cmd = m.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd != nil || m.titleError == "" {
+		t.Fatal("blank title should remain in input mode with error")
+	}
+	m.titleInput.SetValue("Custom MR title")
+	_, cmd = m.Update(sendSpecialKey(tea.KeyEnter))
 	if msg, ok := execCmd(cmd).(ForgeCreateMRMsg); !ok {
 		t.Fatalf("expected ForgeCreateMRMsg, got %T", execCmd(cmd))
-	} else if msg.TaskID != "IN-4242" || msg.ServiceName != "api" {
+	} else if msg.TaskID != "IN-4242" || msg.ServiceName != "api" || msg.Title != "Custom MR title" {
 		t.Fatalf("unexpected create msg payload: %+v", msg)
 	}
 
+	m.inTitleMode = false
 	modal, _ := m.Update(sendKey("j"))
 	m = modal.(*ForgeMenuModal)
 	_, cmd = m.Update(sendSpecialKey(tea.KeyEnter))

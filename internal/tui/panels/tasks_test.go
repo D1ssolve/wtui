@@ -335,6 +335,107 @@ func TestTasksPanel_KeyCUpper_EmitsPlanCloseTaskMsg(t *testing.T) {
 	}
 }
 
+func TestTasksPanel_KeyF_EmitsOpenConvertHotfixDialogMsg(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetFlow(&gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+		gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
+		gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
+	}})
+	p.SetTasks([]domain.Task{{ID: "IN-001-hotfix", Phase: "hotfix"}})
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("F"))
+	if cmd == nil {
+		t.Fatal("F key should return a cmd")
+	}
+	msg := cmd()
+	got, ok := msg.(OpenConvertHotfixDialogMsg)
+	if !ok {
+		t.Fatalf("expected OpenConvertHotfixDialogMsg, got %T", msg)
+	}
+	if got.TaskID != "IN-001-hotfix" {
+		t.Fatalf("TaskID = %q, want IN-001-hotfix", got.TaskID)
+	}
+	if got.TargetTaskID != "IN-001-hotfix" {
+		t.Fatalf("TargetTaskID = %q, want same ID default", got.TargetTaskID)
+	}
+}
+
+func TestTasksPanel_KeyF_NoFeatureRule_NoOp(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetFlow(&gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+		gitflow.BranchTypeHotfix: {Prefixes: []string{"hotfix/"}},
+	}})
+	p.SetTasks([]domain.Task{{ID: "IN-001-hotfix", Phase: "hotfix"}})
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("F"))
+	if cmd != nil {
+		t.Fatal("F key must be disabled without feature rule")
+	}
+}
+
+func TestTasksPanel_KeyF_BlankCanonicalFeaturePrefix_NoOp(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetFlow(&gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+		gitflow.BranchTypeFeature: {Prefixes: []string{"", "feature/"}},
+		gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
+	}})
+	p.SetTasks([]domain.Task{{ID: "IN-001-hotfix", Phase: "hotfix"}})
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("F"))
+	if cmd != nil {
+		t.Fatal("F key must be disabled with blank canonical feature prefix")
+	}
+}
+
+func TestTasksPanel_KeyF_AllowsRetryForMixedHotfixFeatureBranches(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetFlow(&gitflow.ResolvedGitFlow{
+		DefaultBranchType: gitflow.BranchTypeFeature,
+		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
+		},
+	})
+	p.SetTasks([]domain.Task{{
+		ID: "IN-001-hotfix",
+		Services: []domain.Service{
+			{Name: "a", Branch: "feature/IN-001-hotfix"},
+			{Name: "b", Branch: "hotfix/IN-001-hotfix"},
+		},
+	}})
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("F"))
+	if cmd == nil {
+		t.Fatal("F key should allow retry for mixed conversion branches")
+	}
+	if _, ok := cmd().(OpenConvertHotfixDialogMsg); !ok {
+		t.Fatalf("expected OpenConvertHotfixDialogMsg, got %T", cmd())
+	}
+}
+
+func TestTasksPanel_KeyF_PendingConversionUsesManifestTarget(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetFlow(&gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
+		gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
+		gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
+	}})
+	p.SetTasks([]domain.Task{{ID: "IN-001", Phase: "feature", PendingConversionTargetID: "IN-9000"}})
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("F"))
+	if cmd == nil {
+		t.Fatal("F key should retry pending conversion")
+	}
+	msg := cmd().(OpenConvertHotfixDialogMsg)
+	if msg.TargetTaskID != "IN-9000" {
+		t.Fatalf("TargetTaskID = %q, want IN-9000", msg.TargetTaskID)
+	}
+}
+
 func TestTasksPanel_KeyC_EmptyList_NoOp(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetFocused(true)
@@ -426,6 +527,42 @@ func TestTasksPanel_KeyR_EmitsRiderTaskMsg(t *testing.T) {
 	}
 	if got.TaskID != "IN-001" {
 		t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
+	}
+}
+
+func TestTasksPanel_KeySemicolon_EmitsShellExecMsg(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*TasksPanel)
+	}{
+		{name: "flat", setup: func(p *TasksPanel) {
+			p.SetTasks(makeTasks("IN-001"))
+		}},
+		{name: "tree", setup: func(p *TasksPanel) {
+			p.SetFlow(makeFlow(gitflow.BranchTypeRelease))
+			p.SetTasks([]domain.Task{makeTaskWithMeta("IN-001", "", "feature", "", 1)})
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewTasksPanel(40, 20)
+			tt.setup(&p)
+			p.SetFocused(true)
+
+			_, cmd := p.Update(sendKey(";"))
+			if cmd == nil {
+				t.Fatal("; key should return a cmd")
+			}
+			raw := cmd()
+			msg, ok := raw.(ShellExecMsg)
+			if !ok {
+				t.Fatalf("expected ShellExecMsg, got %T", raw)
+			}
+			if msg.TaskDir != "/tmp/.tasks/IN-001" {
+				t.Fatalf("TaskDir = %q, want /tmp/.tasks/IN-001", msg.TaskDir)
+			}
+		})
 	}
 }
 
@@ -610,6 +747,49 @@ func TestTasksPanel_FilterMode_FKeyEntersFilterMode(t *testing.T) {
 
 	if !p.FilterActive() {
 		t.Error("Panel should be in filter mode after pressing 'f'")
+	}
+}
+
+func TestTasksPanel_TreeMode_FilterLifecycle(t *testing.T) {
+	p := NewTasksPanel(80, 20)
+	p.SetFlow(makeFlow(gitflow.BranchTypeRelease))
+	p.SetFocused(true)
+	p.SetTasks([]domain.Task{
+		makeTaskWithMeta("ZA-553", "", "feature", "", 1),
+		makeTaskWithMeta("ZA-554", "", "feature", "", 1),
+	})
+
+	p, _ = p.Update(sendKey("/"))
+	for _, r := range "554" {
+		p, _ = p.Update(sendKey(string(r)))
+	}
+	p, _ = p.Update(sendSpecialKey(tea.KeyEnter))
+
+	view := stripAnsi(p.View())
+	if !strings.Contains(view, "▼ ZA-554") || strings.Contains(view, "ZA-553") {
+		t.Fatalf("tree filter rendered wrong rows: %q", view)
+	}
+
+	p, _ = p.Update(sendSpecialKey(tea.KeyEsc))
+	if p.list.FilterState() != list.Unfiltered {
+		t.Fatalf("filter state = %v, want unfiltered", p.list.FilterState())
+	}
+	view = stripAnsi(p.View())
+	if !strings.Contains(view, "ZA-553") || !strings.Contains(view, "ZA-554") {
+		t.Fatalf("cleared filter did not restore rows: %q", view)
+	}
+}
+
+func TestTasksPanel_TreeMode_FilterFKeyEntersFilterMode(t *testing.T) {
+	p := NewTasksPanel(80, 20)
+	p.SetFlow(makeFlow(gitflow.BranchTypeRelease))
+	p.SetTasks([]domain.Task{makeTaskWithMeta("ZA-553", "", "feature", "", 1)})
+	p.SetFocused(true)
+
+	p, _ = p.Update(sendKey("f"))
+
+	if !p.FilterActive() {
+		t.Fatal("f must enter tree filter mode")
 	}
 }
 

@@ -8,9 +8,14 @@ import (
 )
 
 type HelpOverlay struct {
-	lazygitAvailable bool
-	scrollOffset     int
-	terminalHeight   int
+	lazygitAvailable        bool
+	releaseCleanupAvailable bool
+	scrollOffset            int
+	terminalHeight          int
+}
+
+func (h *HelpOverlay) SetReleaseCleanupAvailable(available bool) {
+	h.releaseCleanupAvailable = available
 }
 
 func NewHelpOverlayWithOptions(lazygitAvailable bool) *HelpOverlay {
@@ -90,6 +95,8 @@ func (h *HelpOverlay) contentLines() []string {
 	sb.WriteString("\n")
 	sb.WriteString(row("c", "Clone selected task group"))
 	sb.WriteString("\n")
+	sb.WriteString(row("F", "Convert hotfix to feature"))
+	sb.WriteString("\n")
 	sb.WriteString(row("d/Del", "Remove task group"))
 	sb.WriteString("\n")
 	sb.WriteString(row("S", "Open sync strategy selection"))
@@ -126,25 +133,27 @@ func (h *HelpOverlay) contentLines() []string {
 	if h.lazygitAvailable {
 		sb.WriteString(row("g", "Open lazygit for selected service"))
 		sb.WriteString("\n")
-		sb.WriteString(row("m", "Open forge action menu"))
-		sb.WriteString("\n")
-		sb.WriteString(row("v", "Validate current task"))
-		sb.WriteString("\n")
-	} else {
-		sb.WriteString(row("P", "Push service (git push -u)"))
-		sb.WriteString("\n")
-		sb.WriteString(row("s", "Sync service (fetch + merge/rebase)"))
-		sb.WriteString("\n")
-		sb.WriteString(row("m", "Open forge action menu"))
-		sb.WriteString("\n")
-		sb.WriteString(row("v", "Validate current task"))
-		sb.WriteString("\n")
-		sb.WriteString(row("Ctrl+s", "Stash service changes"))
-		sb.WriteString("\n")
-		sb.WriteString(row("Ctrl+u", "Unstash service changes"))
-		sb.WriteString("\n")
 	}
+	sb.WriteString(row("m", "Open forge action menu"))
+	sb.WriteString("\n")
+	sb.WriteString(row("v", "Validate current task"))
+	sb.WriteString("\n")
 	sb.WriteString(row("Esc", "Back to tasks"))
+	sb.WriteString("\n\n")
+
+	sb.WriteString(sectionStyle.Render("Releases Panel:"))
+	sb.WriteString("\n")
+	sb.WriteString(row("N", "Create release"))
+	sb.WriteString("\n")
+	sb.WriteString(row("F", "Promote or finalize selected release when available"))
+	sb.WriteString("\n")
+	sb.WriteString(row("R", "Retry failed recoverable release"))
+	sb.WriteString("\n")
+	sb.WriteString(row("M", "Merge selected release MRs when available"))
+	if h.releaseCleanupAvailable {
+		sb.WriteString("\n")
+		sb.WriteString(row("D", "Cleanup selected released release"))
+	}
 	sb.WriteString("\n\n")
 
 	sb.WriteString(sectionStyle.Render("Output Panel:"))

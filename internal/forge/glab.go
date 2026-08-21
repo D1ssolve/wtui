@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -193,16 +194,18 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 		Status string `json:"status"`
 	}
 	var detail struct {
-		IID          int    `json:"iid"`
-		ID           int    `json:"id"`
-		Number       int    `json:"number"`
-		State        string `json:"state"`
-		WebURL       string `json:"web_url"`
-		URL          string `json:"url"`
-		SourceBranch string `json:"source_branch"`
-		TargetBranch string `json:"target_branch"`
-		SHA          string `json:"sha"`
-		DiffRefs     struct {
+		IID             int    `json:"iid"`
+		ID              int    `json:"id"`
+		Number          int    `json:"number"`
+		State           string `json:"state"`
+		WebURL          string `json:"web_url"`
+		URL             string `json:"url"`
+		SourceBranch    string `json:"source_branch"`
+		TargetBranch    string `json:"target_branch"`
+		SHA             string `json:"sha"`
+		MergeCommitSHA  string `json:"merge_commit_sha"`
+		SquashCommitSHA string `json:"squash_commit_sha"`
+		DiffRefs        struct {
 			HeadSHA string `json:"head_sha"`
 		} `json:"diff_refs"`
 		BlockingDiscussionsResolved *bool     `json:"blocking_discussions_resolved"`
@@ -237,6 +240,10 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 	}
 	if detail.SourceBranch == "" {
 		detail.SourceBranch = sourceBranch
+	}
+	mergedSHA := detail.MergeCommitSHA
+	if mergedSHA == "" {
+		mergedSHA = detail.SquashCommitSHA
 	}
 	mergeStatus := strings.ToLower(detail.DetailedMergeStatus)
 	if mergeStatus == "" {
@@ -280,6 +287,8 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 			blockers = append(blockers, "conflicts")
 		case "ci_must_pass", "ci_still_running", "checking", "unchecked", "blocked_status":
 			// ponytail: approval-only policy, CI statuses do not block merge readiness
+		case "status_checks_must_pass":
+			blockers = append(blockers, c.statusCheckBlockers(ctx, worktreePath, repo, number)...)
 		case "":
 			blockers = append(blockers, "mergeability unknown")
 		default:
@@ -293,19 +302,62 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 	}
 
 	return MRReadiness{
-		Number:         number,
-		State:          state,
-		URL:            url,
-		SourceBranch:   detail.SourceBranch,
-		TargetBranch:   detail.TargetBranch,
-		HeadSHA:        headSHA,
-		Approved:       approved,
-		CIState:        ciState,
-		Mergeable:      mergeable,
-		Ready:          len(blockers) == 0,
-		Blockers:       blockers,
-		SupportsSHAPin: supportsSHAPin,
+		Number:               number,
+		State:                state,
+		URL:                  url,
+		SourceBranch:         detail.SourceBranch,
+		TargetBranch:         detail.TargetBranch,
+		HeadSHA:              headSHA,
+		MergedSHA:            mergedSHA,
+		Approved:             approved,
+		CIState:              ciState,
+		Mergeable:            mergeable,
+		Ready:                len(blockers) == 0,
+		Blockers:             blockers,
+		SupportsSHAPin:       supportsSHAPin,
+		StatusChecksBlocking: mergeStatus == "status_checks_must_pass",
 	}, nil
+}
+
+func (c *GlabClient) statusCheckBlockers(ctx context.Context, worktreePath, repo string, number int) []string {
+	endpoint := "projects/" + url.PathEscape(repo) + "/merge_requests/" + strconv.Itoa(number) + "/status_checks"
+	stdout, _, err := c.run(ctx, worktreePath, "api", endpoint)
+	if err != nil {
+		return []string{"status checks must pass (details unavailable: " + err.Error() + ")"}
+	}
+
+	var checks []struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &checks); err != nil {
+		return []string{"status checks must pass (details unavailable: " + err.Error() + ")"}
+	}
+
+	byStatus := map[string][]string{"failed": {}, "pending": {}}
+	for _, check := range checks {
+		status := strings.ToLower(check.Status)
+		if _, ok := byStatus[status]; ok {
+			byStatus[status] = append(byStatus[status], check.Name)
+		}
+	}
+
+	blockers := make([]string, 0, 2)
+	for _, status := range []string{"failed", "pending"} {
+		names := byStatus[status]
+		if len(names) == 0 {
+			continue
+		}
+		label := "status check"
+		if len(names) != 1 {
+			label += "s"
+		}
+		blockers = append(blockers, fmt.Sprintf("%d %s %s: %s", len(names), label, status, strings.Join(names, ", ")))
+	}
+	if len(blockers) == 0 {
+		return []string{"status checks must pass"}
+	}
+	return blockers
 }
 
 func (c *GlabClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMergeResult, error) {
@@ -331,10 +383,14 @@ func (c *GlabClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMerge
 		return result, nil
 	}
 	var view struct {
-		MergeCommitSHA string `json:"merge_commit_sha"`
+		MergeCommitSHA  string `json:"merge_commit_sha"`
+		SquashCommitSHA string `json:"squash_commit_sha"`
 	}
 	if json.Unmarshal([]byte(stdout), &view) == nil {
 		result.MergeCommitSHA = view.MergeCommitSHA
+		if result.MergeCommitSHA == "" {
+			result.MergeCommitSHA = view.SquashCommitSHA
+		}
 	}
 	return result, nil
 }
@@ -486,10 +542,59 @@ func (c *GlabClient) run(ctx context.Context, worktreePath string, args ...strin
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return "", strings.TrimSpace(stderr.String()), classifyForgeExecError(err, strings.TrimSpace(stderr.String()))
+		stderrText := strings.TrimSpace(stderr.String())
+		classified := classifyForgeExecError(err, stderrText)
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			if authErr := glabAuthError(ctx, worktreePath, glabRepoHost(args), err); authErr != nil {
+				return "", stderrText, authErr
+			}
+		}
+		return "", stderrText, classified
 	}
 
 	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), nil
+}
+
+func glabRepoHost(args []string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] != "--repo" && args[i] != "-R" {
+			continue
+		}
+		repo := args[i+1]
+		if host := remoteHost(repo); host != "" {
+			return host
+		}
+		host, _, ok := strings.Cut(repo, "/")
+		if ok && strings.Contains(host, ".") {
+			return strings.ToLower(host)
+		}
+	}
+	return ""
+}
+
+func glabAuthError(ctx context.Context, worktreePath, host string, cause error) error {
+	if host == "" {
+		return nil
+	}
+
+	cmd := exec.CommandContext(ctx, "glab", "auth", "status", "--hostname", host)
+	cmd.Dir = worktreePath
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if cmd.Run() == nil {
+		return nil
+	}
+
+	message := strings.TrimSpace(output.String())
+	if !strings.Contains(strings.ToLower(message), "not been authenticated") {
+		return nil
+	}
+	hint := "glab auth login --hostname " + host
+	if !strings.Contains(message, hint) {
+		message += ": run " + hint
+	}
+	return &ForgeError{Category: ErrCategoryAuthError, Cause: cause, Stderr: message}
 }
 
 func classifyForgeExecError(err error, stderr string) error {

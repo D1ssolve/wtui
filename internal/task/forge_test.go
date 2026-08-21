@@ -12,6 +12,7 @@ import (
 )
 
 type mockForgeClient struct {
+	createMRFn       func(ctx context.Context, params forge.CreateMRParams) (forge.MRInfo, error)
 	pipelineStatusFn func(ctx context.Context, branch, repo string) ([]forge.PipelineStatus, error)
 }
 
@@ -19,7 +20,11 @@ func (m *mockForgeClient) Provider() forge.ForgeProvider { return forge.ForgePro
 func (m *mockForgeClient) IsAvailable(_ context.Context) bool {
 	return true
 }
-func (m *mockForgeClient) CreateMR(_ context.Context, _ forge.CreateMRParams) (forge.MRInfo, error) {
+
+func (m *mockForgeClient) CreateMR(ctx context.Context, params forge.CreateMRParams) (forge.MRInfo, error) {
+	if m.createMRFn != nil {
+		return m.createMRFn(ctx, params)
+	}
 	return forge.MRInfo{}, nil
 }
 func (m *mockForgeClient) MRStatus(_ context.Context, _, _ string) ([]forge.MRInfo, error) {
@@ -86,6 +91,46 @@ func TestForgePipelineStatus_UsesRepoExtractedFromServiceRemote(t *testing.T) {
 	}
 }
 
+func TestForgeCreateMR_BlankTitle_DefaultsToTaskID(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskID := "IN-FORGE-MR"
+	servicePath := filepath.Join(tasksRoot, taskID, "svc")
+	if err := os.MkdirAll(servicePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "repos", "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn:      func(path string) (string, error) { return fakeCommonDir, nil },
+		listWorktreesRes: []git.WorktreeEntry{{Path: servicePath, Branch: "refs/heads/feature/IN-FORGE-MR"}},
+		repoStatusFn:     func(string) (git.RawStatus, error) { return git.RawStatus{Branch: "feature/IN-FORGE-MR"}, nil },
+		remoteURLRes:     "git@gitlab.com:group/svc.git",
+	}
+
+	var gotTitle string
+	forgeClient := &mockForgeClient{
+		createMRFn: func(_ context.Context, params forge.CreateMRParams) (forge.MRInfo, error) {
+			gotTitle = params.Title
+			return forge.MRInfo{}, nil
+		},
+	}
+	mgr := newTestManagerWithDeps(t, newCloseTestConfig(rootDir, tasksRoot), gitMock, nil, map[forge.ForgeProvider]forge.ForgeClient{
+		forge.ForgeProviderGitLab: forgeClient,
+	})
+
+	if _, err := mgr.ForgeCreateMR(context.Background(), taskID, "svc", forge.CreateMRParams{}); err != nil {
+		t.Fatalf("ForgeCreateMR error: %v", err)
+	}
+	if gotTitle != taskID {
+		t.Fatalf("title = %q, want %q", gotTitle, taskID)
+	}
+}
+
 func TestForgePipelineStatus_ReturnsErrorWhenServiceRemoteUnparseable(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -103,8 +148,10 @@ func TestForgePipelineStatus_ReturnsErrorWhenServiceRemoteUnparseable(t *testing
 	gitMock := &mockGitClient{
 		commonDirFn:      func(path string) (string, error) { return fakeCommonDir, nil },
 		listWorktreesRes: []git.WorktreeEntry{{Path: servicePath, Branch: "refs/heads/feature/IN-FORGE-PIPELINE-ERR"}},
-		repoStatusFn:     func(string) (git.RawStatus, error) { return git.RawStatus{Branch: "feature/IN-FORGE-PIPELINE-ERR"}, nil },
-		remoteURLRes:     "git@gitlab.com:",
+		repoStatusFn: func(string) (git.RawStatus, error) {
+			return git.RawStatus{Branch: "feature/IN-FORGE-PIPELINE-ERR"}, nil
+		},
+		remoteURLRes: "git@gitlab.com:",
 	}
 
 	forgeClient := &mockForgeClient{}

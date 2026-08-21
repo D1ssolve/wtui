@@ -185,6 +185,21 @@ func removeTaskCmd(mgr task.Manager, taskID string, force, deleteBranches bool) 
 	}
 }
 
+func convertHotfixCmd(mgr task.Manager, params task.ConvertHotfixParams) tea.Cmd {
+	statusCh := make(chan string, 32)
+	params.StatusCh = statusCh
+	return tea.Batch(
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), params.SourceTaskID), 10*time.Minute)
+			defer cancel()
+			err := mgr.ConvertHotfixToFeature(ctx, params)
+			close(statusCh)
+			return ConvertHotfixDoneMsg{SourceTaskID: params.SourceTaskID, TargetTaskID: params.TargetTaskID, Err: err}
+		},
+		readNextLine(statusCh),
+	)
+}
+
 func syncTaskCmd(mgr task.Manager, taskID string, strategy task.SyncStrategy) tea.Cmd {
 	statusCh := make(chan string, 32)
 	return tea.Batch(
@@ -386,6 +401,29 @@ func loadReleasesCmd(mgr task.Manager) tea.Cmd {
 	}
 }
 
+func planReleaseCleanupCmd(mgr task.Manager, releaseID string, selection task.ReleaseCleanupSelection, generation uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		plan, err := mgr.PlanReleaseCleanup(ctx, releaseID, selection)
+		return ReleaseCleanupPlanReadyMsg{Generation: generation, Plan: plan, Preview: plan.Preview(), Err: err}
+	}
+}
+
+func executeReleaseCleanupCmd(mgr task.Manager, plan task.ReleaseCleanupPlan, generation uint64) tea.Cmd {
+	statusCh := make(chan string, 32)
+	doneCh := make(chan ReleaseCleanupDoneMsg, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		result, err := mgr.ExecuteReleaseCleanup(ctx, plan, statusCh)
+		close(statusCh)
+		doneCh <- ReleaseCleanupDoneMsg{Generation: generation, Result: result, Err: err}
+		close(doneCh)
+	}()
+	return readStatusOrDone(statusCh, doneCh)
+}
+
 func createReleaseCmd(mgr task.Manager, params task.CreateReleaseParams) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan CreateReleaseDoneMsg, 1)
@@ -462,6 +500,15 @@ func promoteReleaseCmd(mgr task.Manager, releaseID string) tea.Cmd {
 
 func finalizeReleaseCmd(mgr task.Manager, releaseID string) tea.Cmd {
 	return releaseActionCmd(mgr, "finalize", releaseID)
+}
+
+func retryReleaseCmd(mgr task.Manager, releaseID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		release, err := mgr.RetryRelease(ctx, releaseID)
+		return ReleaseActionDoneMsg{Action: "retry", Release: release, Err: err}
+	}
 }
 
 func releaseActionCmd(mgr task.Manager, action, releaseID string) tea.Cmd {
@@ -665,6 +712,16 @@ func readNextLine(ch <-chan string) tea.Cmd {
 		}
 		return OutputLineMsg{Line: line, Next: readNextLine(ch)}
 	}
+}
+
+func shellExecCommand(command, dir string) *exec.Cmd {
+	c := exec.Command("sh", "-c", command)
+	c.Dir = dir
+	return c
+}
+
+func execShellCmd(command, dir string) tea.Cmd {
+	return execTeaProcess(shellExecCommand(command, dir), "Run shell command")
 }
 
 func execProcessCmd(name string, args []string, dir string, op string) tea.Cmd {

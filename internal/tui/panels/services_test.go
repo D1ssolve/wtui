@@ -163,24 +163,17 @@ func TestServicesPanel_KeyP_DoesNothing(t *testing.T) {
 	}
 }
 
-func TestServicesPanel_KeyShiftP_EmitsPushServiceMsgWhenNoLazygit(t *testing.T) {
+func TestServicesPanel_DirectGitKeysDoNothing(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection")
 	p.SetServices(tid, svcs)
 	p.SetFocused(true)
-	p.SetLazygitAvailable(false)
 
-	_, cmd := p.Update(sendKey("P"))
-	if cmd == nil {
-		t.Fatal("P key should return push command")
-	}
-	msg := cmd()
-	got, ok := msg.(PushServiceMsg)
-	if !ok {
-		t.Fatalf("expected PushServiceMsg, got %T", msg)
-	}
-	if got.TaskID != "IN-001" || got.ServiceName != "collection" {
-		t.Fatalf("unexpected payload: %+v", got)
+	for _, key := range []string{"P", "s", "ctrl+s", "ctrl+u"} {
+		_, cmd := p.Update(sendKey(key))
+		if cmd != nil {
+			t.Fatalf("%s emitted direct Git command: %T", key, cmd())
+		}
 	}
 }
 
@@ -395,6 +388,25 @@ func TestServicesPanel_View_ItemCount(t *testing.T) {
 	}
 }
 
+func TestServicesPanel_View_BlockedServiceShowsDetail(t *testing.T) {
+	p := NewServicesPanel(120, 20)
+	p.SetServices("IN-001", []domain.Service{{Name: "collection"}})
+	p.SetWorkflow(&domain.WorkflowSummary{
+		Steps: []domain.WorkflowStep{{Label: "code", State: "done"}, {Label: "MR", State: "done"}, {Label: "review + CI", State: "blocked"}},
+		Services: []domain.ServiceWorkflow{
+			{ServiceName: "collection", Status: "blocked", Detail: "merge blocked: need rebase"},
+		},
+	})
+
+	view := stripAnsi(p.View())
+	if !strings.Contains(view, "blocked") {
+		t.Fatalf("view missing blocked badge: %q", view)
+	}
+	if !strings.Contains(view, "merge blocked: need rebase") {
+		t.Fatalf("view missing blocker detail: %q", view)
+	}
+}
+
 func TestServicesPanel_View_DirtyService_ShowsWarningIcon(t *testing.T) {
 	p := NewServicesPanel(80, 20)
 	p.SetFocused(false)
@@ -535,58 +547,6 @@ func TestServicesPanel_SelectedService_ReturnsSecondAfterMove(t *testing.T) {
 	}
 }
 
-func TestServicesPanel_CtrlS_EmitsOpenStashDialogMsg(t *testing.T) {
-	p := NewServicesPanel(60, 20)
-	tid, svcs := makeServices("IN-001", "collection")
-	p.SetServices(tid, svcs)
-	p.SetFocused(true)
-
-	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
-	if cmd == nil {
-		t.Fatal("ctrl+s should return a cmd")
-	}
-	msg := cmd()
-	got, ok := msg.(OpenStashDialogMsg)
-	if !ok {
-		t.Fatalf("expected OpenStashDialogMsg, got %T", msg)
-	}
-	if got.TaskID != "IN-001" {
-		t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
-	}
-	if got.ServiceName != "collection" {
-		t.Errorf("expected ServiceName=collection, got %s", got.ServiceName)
-	}
-	if got.Pop {
-		t.Error("expected Pop=false for ctrl+s (stash)")
-	}
-}
-
-func TestServicesPanel_CtrlU_EmitsOpenStashDialogMsgPop(t *testing.T) {
-	p := NewServicesPanel(60, 20)
-	tid, svcs := makeServices("IN-001", "collection")
-	p.SetServices(tid, svcs)
-	p.SetFocused(true)
-
-	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
-	if cmd == nil {
-		t.Fatal("ctrl+u should return a cmd")
-	}
-	msg := cmd()
-	got, ok := msg.(OpenStashDialogMsg)
-	if !ok {
-		t.Fatalf("expected OpenStashDialogMsg, got %T", msg)
-	}
-	if got.TaskID != "IN-001" {
-		t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
-	}
-	if got.ServiceName != "collection" {
-		t.Errorf("expected ServiceName=collection, got %s", got.ServiceName)
-	}
-	if !got.Pop {
-		t.Error("expected Pop=true for ctrl+u (unstash)")
-	}
-}
-
 func TestServicesPanel_CtrlS_NoServiceSelected_ReturnsNil(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	p.SetFocused(true)
@@ -684,6 +644,79 @@ func TestServicesPanel_FilterMode_EnterExitsFilterMode(t *testing.T) {
 
 	if p.list.FilterState() != list.FilterApplied {
 		t.Error("Filter should still be applied after ENTER")
+	}
+}
+
+func TestServicesPanel_View_OperationProgressRow(t *testing.T) {
+	p := NewServicesPanel(80, 40)
+	p.SetServices("IN-001", []domain.Service{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}})
+	op := NewOperationProgress("IN-001", "SYNC")
+	op.ApplyLine("[a] done.")
+	op.ApplyLine("[b] fetching...")
+	op.ApplyLine("[c] fetch error: boom")
+	op.ApplyLine("[d] worktree missing, skipping.")
+	p.SetOperationProgress(op)
+
+	view := stripAnsi(p.View())
+	if !strings.Contains(view, "SYNC") {
+		t.Fatalf("view missing op label: %q", view)
+	}
+	if !strings.Contains(view, "2/4") {
+		t.Fatalf("view missing finished count: %q", view)
+	}
+	if !strings.Contains(view, "1 running") {
+		t.Fatalf("view missing running count: %q", view)
+	}
+	if !strings.Contains(view, "1 failed") {
+		t.Fatalf("view missing failed count: %q", view)
+	}
+	if !strings.Contains(view, "● fetching") {
+		t.Fatalf("view missing per-service phase: %q", view)
+	}
+	if !strings.Contains(view, "✗ fetch error") {
+		t.Fatalf("view missing per-service error: %q", view)
+	}
+	if !strings.Contains(view, "Path:") {
+		t.Fatalf("view should keep path line: %q", view)
+	}
+}
+
+func TestServicesPanel_View_OperationProgressHiddenForOtherTask(t *testing.T) {
+	p := NewServicesPanel(80, 20)
+	p.SetServices("IN-001", []domain.Service{{Name: "a"}})
+	p.SetOperationProgress(NewOperationProgress("IN-999", "SYNC"))
+
+	view := stripAnsi(p.View())
+	if strings.Contains(view, "SYNC") {
+		t.Fatalf("progress of another task should be hidden: %q", view)
+	}
+}
+
+func TestServicesPanel_SetOperationProgress_PreservesCursor(t *testing.T) {
+	p := NewServicesPanel(60, 20)
+	p.SetServices("IN-001", []domain.Service{{Name: "a"}, {Name: "b"}})
+	p.SetFocused(true)
+	p, _ = p.Update(sendKey("j"))
+
+	p.SetOperationProgress(NewOperationProgress("IN-001", "PUSH"))
+	if p.list.Index() != 1 {
+		t.Fatalf("cursor = %d, want 1 after progress update", p.list.Index())
+	}
+}
+
+func TestServicesPanel_View_OperationProgressNarrowWidth(t *testing.T) {
+	const width = 30
+	p := NewServicesPanel(width, 12)
+	p.SetServices("IN-001", []domain.Service{{Name: "very-long-service-name"}, {Name: "another-long-service-name"}})
+	op := NewOperationProgress("IN-001", "SYNC")
+	op.ApplyLine("[very-long-service-name] fetching...")
+	p.SetOperationProgress(op)
+
+	view := p.View()
+	for i, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > width {
+			t.Errorf("line %d width = %d, want <= %d: %q", i, got, width, stripAnsi(line))
+		}
 	}
 }
 

@@ -16,6 +16,10 @@ type Task struct {
 	Version string
 	// IsGroup indicates at least one loaded task references this task as parent.
 	IsGroup bool
+	// PendingConversionTargetID marks a staged hotfix-to-feature conversion.
+	PendingConversionTargetID string
+	// ConversionError blocks mutations when a conversion marker is unreadable.
+	ConversionError string
 }
 
 type Service struct {

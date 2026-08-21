@@ -39,6 +39,7 @@ var (
 	ErrReleaseTaskNotMerged           = errors.New("release: task not merged")
 	ErrReleaseLegacyManifest          = errors.New("release: legacy manifest")
 	ErrReleaseMasterMoved             = errors.New("release: master moved")
+	ErrReleaseCleanupBlocked          = errors.New("release: cleanup blocked")
 
 	ErrPushProtectedBranch = errors.New("refusing to push protected branch")
 )
