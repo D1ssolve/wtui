@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultReleaseIDFormat   = "rel-{{.Version}}-{{.Timestamp}}"
+	defaultReleaseIDFormat   = "rel-{{.Timestamp}}"
 	defaultReleaseBranchPref = "release/"
 	maxReleaseIDLen          = 80
 )

@@ -102,7 +102,7 @@ tag:
 
 release:
   root_dir: /Users/you/dev/.tasks/.releases
-  id_format: "rel-{{.Version}}-{{.Timestamp}}"
+  id_format: "rel-{{.Timestamp}}"
   push_integration: true
   push_release_branches: true
   push_tags: true
@@ -264,7 +264,7 @@ All release booleans are pointer values. Omitted keys use defaults even when `re
 | Key | Type | Effective default | Description |
 |---|---|---|---|
 | `release.root_dir` | string | `<tasks_root>/.releases` | Storage for release manifests and worktrees. |
-| `release.id_format` | string | `rel-{{.Version}}-{{.Timestamp}}` | Go template used to create release IDs. |
+| `release.id_format` | string | `rel-{{.Timestamp}}` | Go template used to create release IDs. |
 | `release.push_integration` | bool | `true` | Push integration updates during release preparation and finalization. |
 | `release.push_release_branches` | bool | `true` | Push generated release branches. |
 | `release.push_tags` | bool | `tag.push`, otherwise `true` | Push final release tags. |
@@ -285,6 +285,8 @@ All release booleans are pointer values. Omitted keys use defaults even when `re
 | `{{.ReleaseID}}` | Prebuilt `rel-<Version>-<Timestamp>` value. |
 
 Rendered IDs are trimmed, limited to 80 characters, and reject absolute paths, `..`, and `\/<>:"|?*`.
+
+Release version proposals are calculated independently from each service repository's local semver tags. The create-release dialog also accepts an optional one-line tag description per service; when provided, it becomes that service's annotated Git tag message.
 
 ## Validation
 

@@ -125,9 +125,8 @@ func (m *ForgeMenuModal) updateTitle(msg tea.Msg) (Modal, tea.Cmd) {
 				return m, nil
 			}
 			taskID := m.taskID
-			serviceName := m.serviceName
 			return m, func() tea.Msg {
-				return ForgeCreateMRMsg{TaskID: taskID, ServiceName: serviceName, Title: title}
+				return ForgeCreateMRMsg{TaskID: taskID, Title: title}
 			}
 		}
 	}
@@ -166,7 +165,7 @@ func (m *ForgeMenuModal) View() string {
 		return sb.String()
 	}
 
-	names := []string{"Create MR/PR", "Merge MR", "View Pipeline Status", "List Issues"}
+	names := []string{"Create missing MR/PRs", "Merge MR", "View Pipeline Status", "List Issues"}
 	for i, name := range names {
 		prefix := "○ "
 		style := dimStyle

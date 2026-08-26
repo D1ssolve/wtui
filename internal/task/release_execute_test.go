@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 )
@@ -51,6 +52,9 @@ func TestCreateRelease_StopsAtPrepared(t *testing.T) {
 	}
 	if len(rel.Services) != 1 {
 		t.Fatalf("len(services) = %d, want 1", len(rel.Services))
+	}
+	if rel.Version != "1.2.3" {
+		t.Fatalf("release version = %q, want shared service version", rel.Version)
 	}
 
 	svc := rel.Services[0]
@@ -280,6 +284,7 @@ func TestCreateRelease_StopsAtPrepared_TwoServices(t *testing.T) {
 	ctx := context.Background()
 	gitMock := &mockGitClient{}
 	m, _ := newReleasePlanTestManager(t, gitMock)
+	m.cfg.Release.IDFormat = "rel-{{.Version}}-{{.Timestamp}}"
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "svc-api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "svc-worker", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-worker")},
@@ -305,6 +310,15 @@ func TestCreateRelease_StopsAtPrepared_TwoServices(t *testing.T) {
 	if len(rel.Services) != 2 {
 		t.Fatalf("len(services) = %d, want 2", len(rel.Services))
 	}
+	if rel.Version != "" {
+		t.Fatalf("release version = %q, want empty for mixed service versions", rel.Version)
+	}
+	if strings.Contains(rel.ID, "1.2.3") || strings.Contains(rel.ID, "2.3.4") {
+		t.Fatalf("release ID %q must not use a service version", rel.ID)
+	}
+	if !strings.HasPrefix(rel.ID, "rel-mixed-") {
+		t.Fatalf("release ID = %q, want mixed custom version token", rel.ID)
+	}
 	for _, svc := range rel.Services {
 		if svc.Status != domain.ReleaseStatusPrepared {
 			t.Fatalf("service %s status = %q, want %q", svc.Name, svc.Status, domain.ReleaseStatusPrepared)
@@ -329,6 +343,31 @@ func TestCreateRelease_StopsAtPrepared_TwoServices(t *testing.T) {
 	}
 	if pushTagCalls != 0 {
 		t.Fatalf("push tag calls = %d, want 0", pushTagCalls)
+	}
+}
+
+func TestCreateRelease_SameSecondIDCollisionUsesNumericSuffix(t *testing.T) {
+	gitMock := &mockGitClient{}
+	m, _ := newReleasePlanTestManager(t, gitMock)
+	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
+		releasePlanTaskService{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
+	)
+	fixed := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	oldNow := defaultReleaseNow
+	defaultReleaseNow = func() time.Time { return fixed }
+	t.Cleanup(func() { defaultReleaseNow = oldNow })
+
+	if _, err := m.ensureReleaseDir("rel-20260826T120000", true); err != nil {
+		t.Fatalf("seed release directory: %v", err)
+	}
+	release, err := m.CreateRelease(t.Context(), CreateReleaseParams{
+		TaskIDs: []string{"APP-1"}, ServiceVersions: map[string]string{"api": "1.2.3"},
+	})
+	if err != nil {
+		t.Fatalf("CreateRelease() error = %v", err)
+	}
+	if release.ID != "rel-20260826T120000-2" {
+		t.Fatalf("release ID = %q, want collision suffix", release.ID)
 	}
 }
 

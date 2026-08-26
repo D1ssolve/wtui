@@ -197,6 +197,25 @@ func TestReleasesPanel_View_RendersCompactListAndSelectedDetail(t *testing.T) {
 	}
 }
 
+func TestReleasesPanel_View_RendersMixedVersions(t *testing.T) {
+	p := NewReleasesPanel(100, 20)
+	p.SetReleases([]domain.Release{{
+		ID: "rel-20260826T120000", Status: domain.ReleaseStatusPrepared,
+		Services: []domain.ReleaseService{
+			{Name: "api", Version: "1.4.3", Tag: "v1.4.3"},
+			{Name: "worker", Version: "2.0.2", Tag: "v2.0.2"},
+		},
+	}})
+
+	view := stripAnsi(p.View())
+	if !containsAll(view, "rel-20260826T120000", "mixed", "Versions: mixed", "version: 1.4.3", "version: 2.0.2") {
+		t.Fatalf("mixed release view incomplete: %q", view)
+	}
+	if strings.Contains(view, "v-") {
+		t.Fatalf("mixed release must not render synthetic version: %q", view)
+	}
+}
+
 func TestReleasesPanel_ViewRendersReferenceCard(t *testing.T) {
 	p := NewReleasesPanel(100, 18)
 	p.SetReleases([]domain.Release{{

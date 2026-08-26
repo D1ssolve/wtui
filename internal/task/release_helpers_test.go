@@ -69,7 +69,7 @@ func TestGenerateReleaseID_UsesDefaultFormat(t *testing.T) {
 		t.Fatalf("generateReleaseID error = %v", err)
 	}
 
-	if want := "rel-1.2.3-20260616T123045"; id != want {
+	if want := "rel-20260616T123045"; id != want {
 		t.Fatalf("release id = %q, want %q", id, want)
 	}
 }

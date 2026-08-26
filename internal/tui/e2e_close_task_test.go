@@ -128,8 +128,12 @@ func (m *closeTaskE2EManager) ListTags(_ context.Context, _ string) ([]domain.Ta
 	return nil, nil
 }
 
-func (m *closeTaskE2EManager) ForgeCreateMR(_ context.Context, _, _ string, _ forge.CreateMRParams) (forge.MRInfo, error) {
-	return forge.MRInfo{}, nil
+func (m *closeTaskE2EManager) ProposeReleaseVersions(_ context.Context, _ []string) (map[string]string, error) {
+	return nil, nil
+}
+
+func (m *closeTaskE2EManager) ForgeCreateMissingMRs(_ context.Context, taskID, _ string) (task.TaskMRCreateResult, error) {
+	return task.TaskMRCreateResult{TaskID: taskID}, nil
 }
 
 func (m *closeTaskE2EManager) ForgePipelineStatus(_ context.Context, _, _ string, _ string) ([]forge.PipelineStatus, error) {

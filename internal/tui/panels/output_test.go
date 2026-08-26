@@ -191,3 +191,18 @@ func TestOutputPanel_View_ContainsAppendedLine(t *testing.T) {
 		t.Errorf("View should contain appended line text, got: %q", view)
 	}
 }
+
+func TestOutputSymbol_MRSummaryUsesFailedCount(t *testing.T) {
+	for _, tc := range []struct {
+		line   string
+		symbol string
+	}{
+		{"Create missing MR/PRs done: created=1, existing=0, failed=0", "✓"},
+		{"Create missing MR/PRs done: created=0, existing=0, failed=1", "✗"},
+	} {
+		symbol, _ := outputSymbol(tc.line)
+		if symbol != tc.symbol {
+			t.Errorf("outputSymbol(%q) = %q, want %q", tc.line, symbol, tc.symbol)
+		}
+	}
+}

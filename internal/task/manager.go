@@ -63,11 +63,11 @@ type ConvertHotfixParams struct {
 }
 
 type CreateReleaseParams struct {
-	TaskIDs          []string
-	ServiceVersions  map[string]string
-	SharedVersion    string
-	StartImmediately bool
-	StatusCh         chan<- string
+	TaskIDs                []string
+	ServiceVersions        map[string]string
+	ServiceTagDescriptions map[string]string
+	StartImmediately       bool
+	StatusCh               chan<- string
 }
 
 // FinishReleaseParams carries release finalization inputs.
@@ -150,8 +150,9 @@ type Manager interface {
 	ScanPrunableTasks(ctx context.Context) ([]domain.PruneCandidate, error)
 
 	ListTags(ctx context.Context, taskID string) ([]domain.TagInfo, error)
+	ProposeReleaseVersions(ctx context.Context, taskIDs []string) (map[string]string, error)
 
-	ForgeCreateMR(ctx context.Context, taskID, serviceName string, params forge.CreateMRParams) (forge.MRInfo, error)
+	ForgeCreateMissingMRs(ctx context.Context, taskID, title string) (TaskMRCreateResult, error)
 
 	ForgePipelineStatus(ctx context.Context, taskID, serviceName string, branch string) ([]forge.PipelineStatus, error)
 

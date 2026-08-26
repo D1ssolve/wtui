@@ -255,7 +255,7 @@ func (c *Config) effectiveRelease() {
 	}
 
 	if r.IDFormat == "" {
-		r.IDFormat = "rel-{{.Version}}-{{.Timestamp}}"
+		r.IDFormat = "rel-{{.Timestamp}}"
 	}
 
 	if r.PushIntegration == nil {

@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -137,10 +137,10 @@ type cmdManager struct {
 	retryReleaseResult domain.Release
 	retryReleaseErr    error
 
-	forgeCreateMRArgs      forge.CreateMRParams
+	forgeCreateMRTitle     string
 	forgePipelineStatusArg forgePipelineStatusParams
 	forgeListIssuesArgs    forge.ListIssuesParams
-	forgeMRResult          forge.MRInfo
+	forgeMRResult          task.TaskMRCreateResult
 	forgePipelineResult    []forge.PipelineStatus
 	forgeIssuesResult      []forge.IssueInfo
 	forgeErr               error
@@ -227,8 +227,8 @@ func (m *cmdManager) ListTags(_ context.Context, taskID string) ([]domain.TagInf
 	return m.tagResult, m.tagErr
 }
 
-func (m *cmdManager) ForgeCreateMR(_ context.Context, _, _ string, params forge.CreateMRParams) (forge.MRInfo, error) {
-	m.forgeCreateMRArgs = params
+func (m *cmdManager) ForgeCreateMissingMRs(_ context.Context, _ string, title string) (task.TaskMRCreateResult, error) {
+	m.forgeCreateMRTitle = title
 	return m.forgeMRResult, m.forgeErr
 }
 
@@ -443,24 +443,23 @@ func TestListTagsCmdReturnsTagListMsg(t *testing.T) {
 	}
 }
 
-func TestForgeOpCmdDelegatesCreateMR(t *testing.T) {
-	mgr := &cmdManager{forgeMRResult: forge.MRInfo{URL: "https://mr"}}
-	params := forge.CreateMRParams{SourceBranch: "feature/T14", TargetBranch: "develop"}
+func TestForgeOpCmdDelegatesCreateMissingMRs(t *testing.T) {
+	mgr := &cmdManager{forgeMRResult: task.TaskMRCreateResult{TaskID: "T14"}}
 
-	msg := forgeOpCmd(mgr, "create_mr", "T14", "svc", params)()
+	msg := forgeOpCmd(mgr, "create_missing_mrs", "T14", "", "Shared title")()
 	got, ok := msg.(ForgeResultMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want ForgeResultMsg", msg)
 	}
-	data, ok := got.Data.(forge.MRInfo)
+	data, ok := got.Data.(task.TaskMRCreateResult)
 	if !ok {
-		t.Fatalf("data = %T, want forge.MRInfo", got.Data)
+		t.Fatalf("data = %T, want task.TaskMRCreateResult", got.Data)
 	}
-	if data.URL != "https://mr" {
-		t.Fatalf("mr url = %q, want https://mr", data.URL)
+	if data.TaskID != "T14" {
+		t.Fatalf("TaskID = %q, want T14", data.TaskID)
 	}
-	if mgr.forgeCreateMRArgs.SourceBranch != "feature/T14" {
-		t.Fatalf("source branch = %q, want feature/T14", mgr.forgeCreateMRArgs.SourceBranch)
+	if mgr.forgeCreateMRTitle != "Shared title" {
+		t.Fatalf("title = %q, want Shared title", mgr.forgeCreateMRTitle)
 	}
 }
 
@@ -509,7 +508,7 @@ func TestForgeOpCmdUnsupportedOperation(t *testing.T) {
 
 func TestForgeOpCmdManagerWithoutForgeSupport(t *testing.T) {
 	mgr := &cmdManager{forgeErr: errors.New("forge unavailable")}
-	msg := forgeOpCmd(mgr, "create_mr", "T14", "svc", forge.CreateMRParams{})()
+	msg := forgeOpCmd(mgr, "create_missing_mrs", "T14", "", "title")()
 	got := msg.(ForgeResultMsg)
 	if got.Err == nil {
 		t.Fatal("Err = nil, want error")
@@ -771,12 +770,11 @@ func TestPromoteReleaseCmdStreamsStatusAndReturnsDone(t *testing.T) {
 	}
 }
 
-func TestLoadReleaseVersionsCmdBuildsVersionMapWithSemverBumpAndFallback(t *testing.T) {
+func TestLoadReleaseVersionsCmdUsesManagerProposals(t *testing.T) {
 	mgr := &cmdManager{}
-	mgr.listServicesResult = []domain.Service{{Name: "api"}, {Name: "worker"}}
-	mgr.tagResult = []domain.TagInfo{{Name: "v1.2.3", IsSemver: true, Version: mustSemver(t, "1.2.3")}}
+	mgr.proposedVersions = map[string]string{"api": "1.2.4", "worker": "2.0.1"}
 
-	msg := loadReleaseVersionsCmd(mgr, []string{"T-1"})()
+	msg := loadReleaseVersionsCmd(mgr, []string{"T-1", "T-2"})()
 	loaded, ok := msg.(panels.ReleaseVersionsLoadedMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want panels.ReleaseVersionsLoadedMsg", msg)
@@ -784,51 +782,18 @@ func TestLoadReleaseVersionsCmdBuildsVersionMapWithSemverBumpAndFallback(t *test
 	if got := loaded.Versions["api"]; got != "1.2.4" {
 		t.Fatalf("api version = %q, want 1.2.4", got)
 	}
-	if got := loaded.Versions["worker"]; got != "1.2.4" {
-		t.Fatalf("worker version = %q, want 1.2.4", got)
+	if got := loaded.Versions["worker"]; got != "2.0.1" {
+		t.Fatalf("worker version = %q, want 2.0.1", got)
 	}
-	if len(mgr.tagCalls) != 1 || mgr.tagCalls[0] != "T-1" {
-		t.Fatalf("ListTags calls = %+v, want [T-1]", mgr.tagCalls)
-	}
-}
-
-func TestLoadReleaseVersionsCmd_DeduplicatesTaskIDs(t *testing.T) {
-	mgr := &cmdManager{}
-	mgr.listServicesResult = []domain.Service{{Name: "api", RepoPath: "/repos/api"}}
-	mgr.tagResult = []domain.TagInfo{{Name: "v1.0.0", IsSemver: true, Version: mustSemver(t, "1.0.0")}}
-
-	msg := loadReleaseVersionsCmd(mgr, []string{"T-1", "T-1", " ", "T-1"})()
-	loaded, ok := msg.(panels.ReleaseVersionsLoadedMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want panels.ReleaseVersionsLoadedMsg", msg)
-	}
-	if got := loaded.Versions["api"]; got != "1.0.1" {
-		t.Fatalf("api version = %q, want 1.0.1", got)
-	}
-	if mgr.listServicesCalls != 1 {
-		t.Fatalf("ListServices calls = %d, want 1", mgr.listServicesCalls)
-	}
-	if len(mgr.tagCalls) != 1 || mgr.tagCalls[0] != "T-1" {
-		t.Fatalf("ListTags calls = %+v, want [T-1]", mgr.tagCalls)
-	}
-}
-
-func TestLoadReleaseVersionsCmdUsesFallbackWhenNoSemverTags(t *testing.T) {
-	mgr := &cmdManager{}
-	mgr.listServicesResult = []domain.Service{{Name: "api"}}
-	mgr.tagResult = []domain.TagInfo{{Name: "not-semver", IsSemver: false}}
-
-	msg := loadReleaseVersionsCmd(mgr, []string{"T-1"})()
-	loaded := msg.(panels.ReleaseVersionsLoadedMsg)
-	if got := loaded.Versions["api"]; got != "0.1.0" {
-		t.Fatalf("api version = %q, want 0.1.0", got)
+	if !slices.Equal(mgr.proposedVersionIDs, []string{"T-1", "T-2"}) {
+		t.Fatalf("ProposeReleaseVersions task IDs = %+v", mgr.proposedVersionIDs)
 	}
 }
 
 func TestLoadReleaseVersionsCmdReturnsCommandDoneOnManagerError(t *testing.T) {
-	expectedErr := errors.New("services failed")
+	expectedErr := errors.New("versions failed")
 	mgr := &cmdManager{}
-	mgr.listServicesErr = expectedErr
+	mgr.proposedVersionErr = expectedErr
 
 	msg := loadReleaseVersionsCmd(mgr, []string{"T-1"})()
 	done, ok := msg.(CommandDoneMsg)
@@ -838,8 +803,8 @@ func TestLoadReleaseVersionsCmdReturnsCommandDoneOnManagerError(t *testing.T) {
 	if !errors.Is(done.Err, expectedErr) {
 		t.Fatalf("Err = %v, want %v", done.Err, expectedErr)
 	}
-	if done.Op != "Load release versions for task T-1" {
-		t.Fatalf("Op = %q, want task-specific op", done.Op)
+	if done.Op != "Load release versions" {
+		t.Fatalf("Op = %q, want release versions op", done.Op)
 	}
 }
 
@@ -927,13 +892,4 @@ func TestAddServiceCmd_PartialFailureEmitsPartialAddDoneMsg(t *testing.T) {
 	if partial.Result.TaskID != "T-2" || partial.Op != "Add services to T-2" {
 		t.Fatalf("partial msg = %+v, want task/op set", partial)
 	}
-}
-
-func mustSemver(t *testing.T, raw string) *semver.Version {
-	t.Helper()
-	v, err := semver.NewVersion(raw)
-	if err != nil {
-		t.Fatalf("semver.NewVersion(%q): %v", raw, err)
-	}
-	return v
 }

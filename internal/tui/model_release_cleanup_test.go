@@ -411,7 +411,7 @@ func TestUpdate_ExecutingReleaseCleanupBlocksServiceMutations(t *testing.T) {
 		panels.PushServiceMsg{TaskID: "TASK-1", ServiceName: "api"},
 		panels.StashServiceMsg{TaskID: "TASK-1", ServiceName: "api"},
 		panels.OpenLazygitServiceMsg{TaskID: "TASK-1", ServiceName: "api", WorktreePath: "/tasks/TASK-1/api"},
-		modal.ForgeCreateMRMsg{TaskID: "TASK-1", ServiceName: "api", Title: "MR"},
+		modal.ForgeCreateMRMsg{TaskID: "TASK-1", Title: "MR"},
 		modal.ForgeMergeMRMsg{TaskID: "TASK-1", ServiceName: "api"},
 	} {
 		updated, cmd := m.Update(msg)

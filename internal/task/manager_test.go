@@ -170,6 +170,8 @@ type mockGitClient struct {
 	checkoutCalls                   []checkoutCall
 	listTagsRes                     []domain.TagInfo
 	listTagsErr                     error
+	listTagsFn                      func(repoPath string) ([]domain.TagInfo, error)
+	listTagsCalls                   []string
 	latestSemverTagRes              string
 	latestSemverTagErr              error
 	remoteURLRes                    string
@@ -546,7 +548,14 @@ func (m *mockGitClient) PushTag(_ context.Context, repoPath, tag string) error {
 	return m.pushTagErr
 }
 
-func (m *mockGitClient) ListTags(_ context.Context, _ string) ([]domain.TagInfo, error) {
+func (m *mockGitClient) ListTags(_ context.Context, repoPath string) ([]domain.TagInfo, error) {
+	m.mu.Lock()
+	m.listTagsCalls = append(m.listTagsCalls, repoPath)
+	fn := m.listTagsFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(repoPath)
+	}
 	if m.listTagsRes == nil {
 		return nil, m.listTagsErr
 	}
@@ -2317,8 +2326,9 @@ func TestManagerForgeMethods_WithoutClients_ReturnUnavailable(t *testing.T) {
 	}
 	mgr := newTestManagerWithCfg(t, effective, gitMock)
 
-	if _, err := mgr.ForgeCreateMR(context.Background(), taskID, "svc", forge.CreateMRParams{}); !errors.Is(err, forge.ErrForgeUnavailable) {
-		t.Fatalf("ForgeCreateMR error = %v, want ErrForgeUnavailable", err)
+	result, err := mgr.ForgeCreateMissingMRs(context.Background(), taskID, "")
+	if err != nil || len(result.Services) != 1 || !errors.Is(result.Services[0].Err, forge.ErrForgeUnavailable) {
+		t.Fatalf("ForgeCreateMissingMRs result = %#v, err = %v", result, err)
 	}
 }
 

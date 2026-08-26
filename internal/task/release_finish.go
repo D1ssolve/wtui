@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 )
@@ -197,7 +198,7 @@ func (m *manager) tagFinalizeService(ctx context.Context, release *domain.Releas
 	}
 	if !exists {
 		sendStatus(statusCh, fmt.Sprintf("[%s][tag] creating %s", svc.Name, svc.Tag))
-		if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA, "wtui release "+release.ID); err != nil {
+		if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA, releaseTagMessage(release.ID, svc.TagDescription)); err != nil {
 			return fmt.Errorf("%w: service=%s tag=%s: %v", ErrReleaseTagCreateFailed, svc.Name, svc.Tag, err)
 		}
 	}
@@ -221,7 +222,7 @@ func (m *manager) runFinishService(ctx context.Context, release *domain.Release,
 	if svc.AcceptedMergeSHA == "" {
 		return fmt.Errorf("%w: service=%s accepted merge SHA missing", ErrReleaseLegacyManifest, svc.Name)
 	}
-	if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA, "wtui release "+release.ID); err != nil {
+	if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA, releaseTagMessage(release.ID, svc.TagDescription)); err != nil {
 		return fmt.Errorf("%w: %v", ErrReleaseTagCreateFailed, err)
 	}
 	svc.TagRef, svc.TagSHA = svc.Tag, svc.AcceptedMergeSHA
@@ -233,4 +234,11 @@ func (m *manager) runFinishService(ctx context.Context, release *domain.Release,
 	}
 	svc.Status = domain.ReleaseStatusReleased
 	return nil
+}
+
+func releaseTagMessage(releaseID, description string) string {
+	if description = strings.TrimSpace(description); description != "" {
+		return description
+	}
+	return "wtui release " + releaseID
 }

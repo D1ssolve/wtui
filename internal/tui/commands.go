@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"strings"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -545,81 +543,9 @@ func loadReleaseVersionsCmd(mgr task.Manager, taskIDs []string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		versions := make(map[string]string)
-		repoMax := make(map[string]*semver.Version)
-		seenTasks := make(map[string]struct{})
-
-		for _, taskID := range taskIDs {
-			taskID = strings.TrimSpace(taskID)
-			if taskID == "" {
-				continue
-			}
-			if _, seen := seenTasks[taskID]; seen {
-				continue
-			}
-			seenTasks[taskID] = struct{}{}
-
-			services, err := mgr.ListServices(ctx, taskID)
-			if err != nil {
-				return CommandDoneMsg{Err: err, Op: "Load release versions for task " + taskID}
-			}
-
-			newRepos := make(map[string]struct{})
-			needsTaskFallback := false
-			for _, svc := range services {
-				repoPath := strings.TrimSpace(svc.RepoPath)
-				if repoPath == "" {
-					needsTaskFallback = true
-					continue
-				}
-				if _, known := repoMax[repoPath]; !known {
-					newRepos[repoPath] = struct{}{}
-				}
-			}
-
-			var taskLatest *semver.Version
-			if len(newRepos) > 0 || needsTaskFallback {
-				tags, err := mgr.ListTags(ctx, taskID)
-				if err != nil {
-					return CommandDoneMsg{Err: err, Op: "Load release versions for task " + taskID}
-				}
-
-				for _, tag := range tags {
-					if !tag.IsSemver || tag.Version == nil {
-						continue
-					}
-					if taskLatest == nil || taskLatest.LessThan(tag.Version) {
-						taskLatest = tag.Version
-					}
-				}
-
-				for repoPath := range newRepos {
-					repoMax[repoPath] = taskLatest
-				}
-			}
-
-			for _, svc := range services {
-				name := strings.TrimSpace(svc.Name)
-				if name == "" {
-					continue
-				}
-				repoPath := strings.TrimSpace(svc.RepoPath)
-				if repoPath == "" {
-					if taskLatest == nil {
-						versions[name] = "0.1.0"
-					} else {
-						versions[name] = taskLatest.IncPatch().String()
-					}
-					continue
-				}
-
-				latest := repoMax[repoPath]
-				if latest == nil {
-					versions[name] = "0.1.0"
-					continue
-				}
-				versions[name] = latest.IncPatch().String()
-			}
+		versions, err := mgr.ProposeReleaseVersions(ctx, taskIDs)
+		if err != nil {
+			return CommandDoneMsg{Err: err, Op: "Load release versions"}
 		}
 
 		return panels.ReleaseVersionsLoadedMsg{Versions: versions}
@@ -641,13 +567,13 @@ func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, 
 		defer cancel()
 
 		switch op {
-		case "create_mr":
-			p, ok := params.(forge.CreateMRParams)
+		case "create_missing_mrs":
+			title, ok := params.(string)
 			if !ok {
-				return ForgeResultMsg{ServiceName: serviceName, Op: op, Err: errors.New("invalid params for create_mr")}
+				return ForgeResultMsg{TaskID: taskID, Op: op, Err: errors.New("invalid params for create_missing_mrs")}
 			}
-			result, err := mgr.ForgeCreateMR(ctx, taskID, serviceName, p)
-			return ForgeResultMsg{ServiceName: serviceName, Op: op, Data: result, Err: err}
+			result, err := mgr.ForgeCreateMissingMRs(ctx, taskID, title)
+			return ForgeResultMsg{TaskID: taskID, Op: op, Data: result, Err: err}
 
 		case "pipeline_status":
 			p, ok := params.(forgePipelineStatusParams)

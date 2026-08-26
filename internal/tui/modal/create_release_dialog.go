@@ -32,8 +32,16 @@ type createReleaseServiceInput struct {
 	serviceName string
 	value       string
 	proposed    string
+	description string
 	err         string
 }
+
+type createReleaseInputField int
+
+const (
+	inputReleaseVersion createReleaseInputField = iota
+	inputTagDescription
+)
 
 type CreateReleaseDialog struct {
 	phase createReleasePhase
@@ -42,6 +50,7 @@ type CreateReleaseDialog struct {
 	taskCursor  int
 	inputRows   []createReleaseServiceInput
 	inputCursor int
+	inputField  createReleaseInputField
 
 	loadingVersions bool
 	pendingVersions map[string]string
@@ -147,11 +156,17 @@ func (d *CreateReleaseDialog) updateTaskSelect(keyMsg tea.KeyMsg) (Modal, tea.Cm
 
 func (d *CreateReleaseDialog) updateVersionInput(keyMsg tea.KeyMsg) (Modal, tea.Cmd) {
 	switch keyMsg.String() {
-	case "up", "k", "shift+tab":
+	case "up", "k":
 		d.moveInputCursor(-1)
 		return d, nil
-	case "down", "j", "tab":
+	case "down", "j":
 		d.moveInputCursor(1)
+		return d, nil
+	case "shift+tab":
+		d.moveInputFocus(-1)
+		return d, nil
+	case "tab":
+		d.moveInputFocus(1)
 		return d, nil
 	case "esc":
 		d.phase = phaseTaskSelect
@@ -254,23 +269,34 @@ func (d *CreateReleaseDialog) View() string {
 		b.WriteString(dimStyle.Render("Edit versions for each service and submit."))
 	}
 	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("Service                Proposed        Release"))
+	b.WriteString(dimStyle.Render("Service                Proposed        Release        Tag description"))
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render(strings.Repeat("─", 60)))
+	b.WriteString(dimStyle.Render(strings.Repeat("─", 80)))
 	b.WriteString("\n")
 
 	for i, row := range d.inputRows {
 		marker := " "
-		inputStyle := normalStyle
+		versionStyle := normalStyle
+		descriptionStyle := normalStyle
 		if i == d.inputCursor {
 			marker = "▶"
-			inputStyle = normalStyle.Bold(true).Underline(true)
+			if d.inputField == inputReleaseVersion {
+				versionStyle = normalStyle.Bold(true).Underline(true)
+			} else {
+				descriptionStyle = normalStyle.Bold(true).Underline(true)
+			}
 		}
 
 		serviceCol := padRight(row.serviceName, 20)
 		proposedCol := padRight(row.proposed, 14)
-		releaseCol := inputStyle.Render(row.value)
-		b.WriteString(normalStyle.Render(marker + " " + serviceCol + " " + proposedCol + " " + releaseCol))
+		releaseCol := versionStyle.Render(padRight(row.value, 14))
+		description := row.description
+		if description == "" {
+			description = "<optional>"
+		}
+		descriptionCol := descriptionStyle.Render(description)
+		b.WriteString(normalStyle.Render(marker + " " + serviceCol + " " + proposedCol + " "))
+		b.WriteString(releaseCol + " " + descriptionCol)
 		b.WriteString("\n")
 		if row.err != "" {
 			b.WriteString(errorStyle.Render("    ✖ " + row.err))
@@ -381,11 +407,26 @@ func (d *CreateReleaseDialog) moveInputCursor(step int) {
 	d.inputCursor = (d.inputCursor + step + len(d.inputRows)) % len(d.inputRows)
 }
 
+func (d *CreateReleaseDialog) moveInputFocus(step int) {
+	if len(d.inputRows) == 0 {
+		return
+	}
+	index := d.inputCursor*2 + int(d.inputField)
+	index = (index + step + len(d.inputRows)*2) % (len(d.inputRows) * 2)
+	d.inputCursor = index / 2
+	d.inputField = createReleaseInputField(index % 2)
+}
+
 func (d *CreateReleaseDialog) appendRunes(s string) {
 	if len(d.inputRows) == 0 {
 		return
 	}
 	field := &d.inputRows[d.inputCursor]
+	if d.inputField == inputTagDescription {
+		field.description += s
+		d.err = ""
+		return
+	}
 	if field.value == "…" {
 		field.value = ""
 	}
@@ -399,6 +440,14 @@ func (d *CreateReleaseDialog) deleteLastRune() {
 		return
 	}
 	field := &d.inputRows[d.inputCursor]
+	if d.inputField == inputTagDescription {
+		runes := []rune(field.description)
+		if len(runes) > 0 {
+			field.description = string(runes[:len(runes)-1])
+		}
+		d.err = ""
+		return
+	}
 	if field.value == "…" {
 		field.value = ""
 		return
@@ -417,6 +466,11 @@ func (d *CreateReleaseDialog) clearFocusedInput() {
 		return
 	}
 	field := &d.inputRows[d.inputCursor]
+	if d.inputField == inputTagDescription {
+		field.description = ""
+		d.err = ""
+		return
+	}
 	field.value = ""
 	field.err = ""
 	d.err = ""
@@ -430,6 +484,7 @@ func (d *CreateReleaseDialog) submitIfValid() tea.Cmd {
 
 	allValid := true
 	versions := make(map[string]string, len(d.inputRows))
+	tagDescriptions := make(map[string]string)
 	for i := range d.inputRows {
 		value := strings.TrimSpace(d.inputRows[i].value)
 		switch {
@@ -443,6 +498,13 @@ func (d *CreateReleaseDialog) submitIfValid() tea.Cmd {
 			d.inputRows[i].err = ""
 			versions[d.inputRows[i].serviceName] = value
 		}
+		description := strings.TrimSpace(d.inputRows[i].description)
+		if strings.ContainsAny(description, "\r\n") {
+			d.inputRows[i].err = "Tag description must be one line"
+			allValid = false
+		} else if description != "" {
+			tagDescriptions[d.inputRows[i].serviceName] = description
+		}
 	}
 
 	if !allValid {
@@ -452,7 +514,7 @@ func (d *CreateReleaseDialog) submitIfValid() tea.Cmd {
 
 	taskIDs := d.selectedTaskIDs()
 	return func() tea.Msg {
-		return SubmitCreateReleaseMsg{TaskIDs: append([]string(nil), taskIDs...), Versions: versions}
+		return SubmitCreateReleaseMsg{TaskIDs: append([]string(nil), taskIDs...), Versions: versions, TagDescriptions: tagDescriptions}
 	}
 }
 

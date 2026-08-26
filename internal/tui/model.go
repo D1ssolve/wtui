@@ -759,13 +759,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modal.SubmitCreateReleaseMsg:
 		pending := modal.SubmitCreateReleaseMsg{
-			TaskIDs:  append([]string(nil), msg.TaskIDs...),
-			Versions: copyVersionMap(msg.Versions),
+			TaskIDs:         append([]string(nil), msg.TaskIDs...),
+			Versions:        copyVersionMap(msg.Versions),
+			TagDescriptions: copyVersionMap(msg.TagDescriptions),
 		}
 		m.pendingReleaseSubmit = &pending
 		preview, err := m.mgr.BuildReleasePreview(context.Background(), pending.Versions)
 		if err != nil {
 			preview.Err = err
+		}
+		for i := range preview.Rows {
+			preview.Rows[i].TagDescription = pending.TagDescriptions[preview.Rows[i].ServiceName]
 		}
 		m.modal = modal.NewReleaseExecuteConfirmDialog(pending.TaskIDs, pending.Versions, preview)
 		m.modal.SetTerminalSize(m.width, m.height)
@@ -820,15 +824,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: versions do not match pending submit")
 			return m, nil
 		}
+		if !maps.Equal(msg.TagDescriptions, submit.TagDescriptions) {
+			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: tag descriptions do not match pending submit")
+			return m, nil
+		}
 
 		m.modal = nil
 		m.pendingReleaseSubmit = nil
 		m.opRunning = true
 		m.outputPanel.AppendLine("Creating release from selected tasks...")
 		return m, tea.Batch(createReleaseCmd(m.mgr, task.CreateReleaseParams{
-			TaskIDs:          append([]string(nil), submit.TaskIDs...),
-			ServiceVersions:  copyVersionMap(submit.Versions),
-			StartImmediately: true,
+			TaskIDs:                append([]string(nil), submit.TaskIDs...),
+			ServiceVersions:        copyVersionMap(submit.Versions),
+			ServiceTagDescriptions: copyVersionMap(submit.TagDescriptions),
+			StartImmediately:       true,
 		}), m.spinner.Tick)
 
 	case modal.ConfirmMergeMsg:
@@ -870,20 +879,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modal.ForgeCreateMRMsg:
 		m.modal = nil
-		svc := m.servicesPanel.SelectedService()
-		if svc == nil || svc.Name != msg.ServiceName {
-			m.outputPanel.AppendLine("Create MR failed: selected service not found.")
-			return m, nil
-		}
 		m.opRunning = true
-		m.outputPanel.AppendLine("Creating review request for " + msg.ServiceName + "...")
+		m.outputPanel.AppendLine("Creating missing review requests for " + msg.TaskID + "...")
 		return m, tea.Batch(
-			forgeOpCmd(m.mgr, "create_mr", msg.TaskID, msg.ServiceName, forge.CreateMRParams{
-				WorktreePath: svc.WorktreePath,
-				SourceBranch: svc.Branch,
-				TargetBranch: svc.BaseBranch,
-				Title:        msg.Title,
-			}),
+			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", msg.Title),
 			m.spinner.Tick,
 		)
 
@@ -1252,6 +1251,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ForgeResultMsg:
 		m.opRunning = false
+		if msg.Op == "create_missing_mrs" {
+			if msg.Err != nil {
+				m.outputPanel.AppendLine("Create missing MR/PRs failed for " + msg.TaskID + ": " + msg.Err.Error())
+				return m, nil
+			}
+			result, ok := msg.Data.(task.TaskMRCreateResult)
+			if !ok {
+				m.outputPanel.AppendLine("Create missing MR/PRs failed: invalid result")
+				return m, nil
+			}
+			var created, existing, failed int
+			for _, service := range result.Services {
+				line := service.ServiceName + ": " + service.Status
+				switch service.Status {
+				case "created":
+					created++
+				case "existing":
+					existing++
+				case "failed":
+					failed++
+				}
+				if service.Err != nil {
+					line += ": " + service.Err.Error()
+				} else if service.MR.URL != "" {
+					line += " " + service.MR.URL
+				}
+				m.outputPanel.AppendLine(line)
+			}
+			m.outputPanel.AppendLine(fmt.Sprintf("Create missing MR/PRs done: created=%d, existing=%d, failed=%d", created, existing, failed))
+			return m, nil
+		}
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Forge " + msg.Op + " failed for " + msg.ServiceName + ": " + msg.Err.Error())
 			return m, nil

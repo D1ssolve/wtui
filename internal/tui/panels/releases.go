@@ -186,7 +186,10 @@ func (p ReleasesPanel) renderList(width, height int) string {
 			created = rel.CreatedAt.In(time.UTC).Format("2006-01-02")
 		}
 
-		version := valueOrDash(rel.Version)
+		version := "mixed"
+		if rel.Version != "" {
+			version = "v" + rel.Version
+		}
 		serviceLabel := "services"
 		if len(rel.Services) == 1 {
 			serviceLabel = "service"
@@ -195,7 +198,7 @@ func (p ReleasesPanel) renderList(width, height int) string {
 		if i == p.cursor {
 			rail = "▌"
 		}
-		line := fmt.Sprintf("%s %s  v%s  %s  %s  %d %s", rail, id, version, statusStyled, created, len(rel.Services), serviceLabel)
+		line := fmt.Sprintf("%s %s  %s  %s  %s  %d %s", rail, id, version, statusStyled, created, len(rel.Services), serviceLabel)
 		line = ansi.Truncate(line, max(0, width-2), "…")
 		style := uitheme.GlassBorder(uitheme.GlassHighlight).
 			Foreground(colorNormal).
@@ -214,11 +217,11 @@ func (p ReleasesPanel) renderDetail(width int) string {
 		return ""
 	}
 
-	version := rel.Version
-	if version == "" {
-		version = "-"
+	versionLabel := "Version: " + rel.Version
+	if rel.Version == "" {
+		versionLabel = "Versions: mixed"
 	}
-	lines := []string{lipgloss.NewStyle().Bold(true).Foreground(colorBold).Render("Version: " + version)}
+	lines := []string{lipgloss.NewStyle().Bold(true).Foreground(colorBold).Render(versionLabel)}
 	if workflow := renderWorkflow(p.workflow, width); workflow != "" {
 		lines = append(lines, workflow)
 	}

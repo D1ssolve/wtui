@@ -10,9 +10,8 @@ type SubmitPruneMsg struct {
 }
 
 type ForgeCreateMRMsg struct {
-	TaskID      string
-	ServiceName string
-	Title       string
+	TaskID string
+	Title  string
 }
 
 type ForgePipelineStatusMsg struct {
@@ -32,8 +31,9 @@ type ForgeListIssuesMsg struct {
 }
 
 type SubmitCreateReleaseMsg struct {
-	TaskIDs  []string
-	Versions map[string]string
+	TaskIDs         []string
+	Versions        map[string]string
+	TagDescriptions map[string]string
 }
 
 type RequestReleaseVersionsMsg struct {
@@ -41,8 +41,9 @@ type RequestReleaseVersionsMsg struct {
 }
 
 type ConfirmReleaseExecuteMsg struct {
-	TaskIDs  []string
-	Versions map[string]string
+	TaskIDs         []string
+	Versions        map[string]string
+	TagDescriptions map[string]string
 }
 
 type ConfirmMergeMsg struct {

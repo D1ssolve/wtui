@@ -176,3 +176,19 @@ func TestReleaseExecuteConfirmDialog_WithPreviewRows_RendersProvidedRows(t *test
 		}
 	}
 }
+
+func TestReleaseExecuteConfirmDialog_ConfirmsTagDescriptions(t *testing.T) {
+	preview := task.ReleasePreview{Rows: []task.ReleasePreviewRow{{
+		ServiceName: "api", Version: "1.2.3", Tag: "v1.2.3", TagDescription: "Fix retry after timeout",
+	}}}
+	d := NewReleaseExecuteConfirmDialog([]string{"FEAT-1"}, map[string]string{"api": "1.2.3"}, preview)
+
+	if view := stripAnsi(d.View()); !strings.Contains(view, "Fix retry after timeout") {
+		t.Fatalf("view missing tag description: %s", view)
+	}
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	confirm := execCmd(cmd).(ConfirmReleaseExecuteMsg)
+	if confirm.TagDescriptions["api"] != "Fix retry after timeout" {
+		t.Fatalf("tag descriptions = %#v", confirm.TagDescriptions)
+	}
+}

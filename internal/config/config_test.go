@@ -689,7 +689,7 @@ func TestEffective_ReleaseDefaults(t *testing.T) {
 	if cfg.Release.RootDir != "/workspace/.tasks/.releases" {
 		t.Errorf("Release.RootDir default: got %q, want %q", cfg.Release.RootDir, "/workspace/.tasks/.releases")
 	}
-	if cfg.Release.IDFormat != "rel-{{.Version}}-{{.Timestamp}}" {
+	if cfg.Release.IDFormat != "rel-{{.Timestamp}}" {
 		t.Errorf("Release.IDFormat default: got %q", cfg.Release.IDFormat)
 	}
 	if cfg.Release.PushIntegration == nil || !*cfg.Release.PushIntegration {

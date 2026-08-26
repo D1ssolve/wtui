@@ -44,11 +44,12 @@ func (m *manager) ensureReleaseDir(releaseID string, allowExisting bool) (string
 
 	dir := filepath.Join(m.releasesRootDir(), releaseID)
 	if !allowExisting {
-		if _, err := os.Stat(dir); err == nil {
+		if err := os.Mkdir(dir, 0o755); errors.Is(err, os.ErrExist) {
 			return "", fmt.Errorf("%w: %s", ErrReleaseTargetExists, releaseID)
-		} else if !errors.Is(err, os.ErrNotExist) {
+		} else if err != nil {
 			return "", fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
 		}
+		return dir, nil
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {

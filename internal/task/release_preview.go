@@ -14,6 +14,7 @@ type ReleasePreviewRow struct {
 	Version           string
 	ReleaseBranch     string
 	Tag               string
+	TagDescription    string
 	PushIntegration   bool
 	PushReleaseBranch bool
 	PushTag           bool

@@ -120,6 +120,8 @@ func (p OutputPanel) View() string {
 func outputSymbol(line string) (string, lipgloss.Color) {
 	lower := strings.ToLower(line)
 	switch {
+	case strings.Contains(lower, "failed=0"):
+		return "✓", uitheme.Success
 	case strings.Contains(lower, "failed"), strings.Contains(lower, "error"), strings.Contains(lower, "cancelled"):
 		return "✗", uitheme.Danger
 	case strings.Contains(lower, "warning"), strings.Contains(lower, "dirty"), strings.Contains(lower, "modified"):

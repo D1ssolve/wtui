@@ -56,6 +56,7 @@ type ReleaseService struct {
 	ReleaseBranch           string                 `json:"release_branch"`
 	Version                 string                 `json:"version"`
 	Tag                     string                 `json:"tag"`
+	TagDescription          string                 `json:"tag_description,omitempty"`
 	FeatureBranches         []ReleaseFeatureBranch `json:"feature_branches,omitempty"`
 	Status                  ReleaseStatus          `json:"status"`
 	PreIntegrationRef       string                 `json:"pre_integration_ref,omitempty"`

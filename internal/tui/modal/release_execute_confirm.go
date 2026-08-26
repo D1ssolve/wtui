@@ -61,7 +61,13 @@ func (d *ReleaseExecuteConfirmDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 			for k, v := range d.versions {
 				versions[k] = v
 			}
-			return ConfirmReleaseExecuteMsg{TaskIDs: append([]string(nil), d.taskIDs...), Versions: versions}
+			descriptions := make(map[string]string)
+			for _, row := range d.preview.Rows {
+				if row.TagDescription != "" {
+					descriptions[row.ServiceName] = row.TagDescription
+				}
+			}
+			return ConfirmReleaseExecuteMsg{TaskIDs: append([]string(nil), d.taskIDs...), Versions: versions, TagDescriptions: descriptions}
 		}
 	case "esc", "n":
 		return d, func() tea.Msg { return CloseModalMsg{} }
@@ -97,6 +103,10 @@ func (d *ReleaseExecuteConfirmDialog) View() string {
 	for _, row := range d.preview.Rows {
 		b.WriteString(normalStyle.Render(fmt.Sprintf("%s | %s | %s | %s", row.ServiceName, row.Version, row.ReleaseBranch, row.Tag)))
 		b.WriteString("\n")
+		if row.TagDescription != "" {
+			b.WriteString(dimStyle.Render("  Tag description: " + row.TagDescription))
+			b.WriteString("\n")
+		}
 	}
 
 	b.WriteString("\n")

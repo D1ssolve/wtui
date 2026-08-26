@@ -196,3 +196,47 @@ func TestCreateReleaseDialog_Submit_EmitsSubmitCreateReleaseMsg(t *testing.T) {
 		t.Fatalf("unexpected versions payload: %+v", sub.Versions)
 	}
 }
+
+func TestCreateReleaseDialog_Submit_EmitsOptionalTagDescription(t *testing.T) {
+	d := NewCreateReleaseDialog([]domain.Task{
+		{ID: "FEAT-1", Phase: "feature", Services: []domain.Service{{Name: "api"}}},
+	}, 100, 30)
+
+	_, _ = d.Update(sendKey(" "))
+	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
+	_, _ = d.Update(panels.ReleaseVersionsLoadedMsg{Versions: map[string]string{"api": "1.2.3"}})
+	_, _ = d.Update(sendSpecialKey(tea.KeyTab))
+	_, _ = d.Update(sendKey("Fix retry after timeout"))
+
+	view := stripAnsi(d.View())
+	if !strings.Contains(view, "Fix retry after timeout") {
+		t.Fatalf("view missing tag description: %s", view)
+	}
+
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("valid submit must emit cmd")
+	}
+	sub := execCmd(cmd).(SubmitCreateReleaseMsg)
+	if sub.TagDescriptions["api"] != "Fix retry after timeout" {
+		t.Fatalf("tag descriptions = %#v", sub.TagDescriptions)
+	}
+}
+
+func TestCreateReleaseDialog_Submit_RejectsMultilineTagDescription(t *testing.T) {
+	d := NewCreateReleaseDialog([]domain.Task{
+		{ID: "FEAT-1", Phase: "feature", Services: []domain.Service{{Name: "api"}}},
+	}, 100, 30)
+	_, _ = d.Update(sendKey(" "))
+	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
+	_, _ = d.Update(panels.ReleaseVersionsLoadedMsg{Versions: map[string]string{"api": "1.2.3"}})
+	d.inputRows[0].description = "first line\nsecond line"
+
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd != nil {
+		t.Fatal("multiline tag description must block submit")
+	}
+	if !strings.Contains(d.inputRows[0].err, "one line") {
+		t.Fatalf("description error = %q", d.inputRows[0].err)
+	}
+}

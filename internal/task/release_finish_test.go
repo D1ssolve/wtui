@@ -104,6 +104,38 @@ func TestFinalizeRelease_HappyPath_MergesDevelopAndTagsAcceptedMasterSHA(t *test
 	}
 }
 
+func TestFinalizeRelease_UsesServiceTagDescription(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	svc := finalizeService(m)
+	svc.TagDescription = "Fix retry after timeout"
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+
+	if _, err := m.FinalizeRelease(t.Context(), FinishReleaseParams{ReleaseID: release.ID}); err != nil {
+		t.Fatalf("FinalizeRelease() error = %v", err)
+	}
+	if got := gitMock.createTagCallList[0].Message; got != svc.TagDescription {
+		t.Fatalf("tag message = %q, want %q", got, svc.TagDescription)
+	}
+}
+
+func TestRunFinishService_UsesPersistedTagDescription(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	release := domain.Release{ID: "rel-20260826T120000"}
+	svc := domain.ReleaseService{
+		Tag:              "v1.2.3",
+		TagDescription:   "Fix retry after timeout",
+		AcceptedMergeSHA: "accepted-sha",
+	}
+
+	if err := m.runFinishService(t.Context(), &release, &svc, nil); err != nil {
+		t.Fatalf("runFinishService() error = %v", err)
+	}
+	if got := gitMock.createTagCallList[0].Message; got != svc.TagDescription {
+		t.Fatalf("tag message = %q, want %q", got, svc.TagDescription)
+	}
+}
+
 func TestFinalizeRelease_MasterMoved_FailsWithoutTag(t *testing.T) {
 	m, gitMock := newFinishTestManager(t)
 	gitMock.resolveRefRes = "new-master-sha"

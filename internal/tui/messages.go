@@ -43,6 +43,7 @@ type TagListMsg struct {
 }
 
 type ForgeResultMsg struct {
+	TaskID      string
 	ServiceName string
 	Op          string
 	Provider    forge.ForgeProvider

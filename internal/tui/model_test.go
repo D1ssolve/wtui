@@ -35,6 +35,9 @@ type mockManager struct {
 	listServicesErr    error
 	listServicesTaskID string
 	listServicesCalls  int
+	proposedVersions   map[string]string
+	proposedVersionIDs []string
+	proposedVersionErr error
 	reposResult        []domain.Repo
 	reposErr           error
 	repoRefreshArgs    []bool
@@ -60,23 +63,25 @@ type mockManager struct {
 	createReleaseErr    error
 	createReleaseCalls  int
 	createReleaseDone   chan struct{}
+	releasePreview      task.ReleasePreview
 	finishReleaseResult domain.Release
 	finishReleaseErr    error
 	finishReleaseID     string
 	finishReleaseCalls  int
 	finishReleaseDone   chan struct{}
 
-	pushTaskCalls     int
-	pushTaskID        string
-	pushServiceCalls  int
-	pushServiceTask   string
-	pushServiceName   string
-	mergeServiceTask  string
-	mergeServiceName  string
-	updateServiceTask string
-	updateServiceName string
-	updateTarget      string
-	forgeCreateMRArgs forge.CreateMRParams
+	pushTaskCalls       int
+	pushTaskID          string
+	pushServiceCalls    int
+	pushServiceTask     string
+	pushServiceName     string
+	mergeServiceTask    string
+	mergeServiceName    string
+	updateServiceTask   string
+	updateServiceName   string
+	updateTarget        string
+	forgeCreateMRTitle  string
+	forgeCreateMRResult task.TaskMRCreateResult
 
 	isProtectedBranchResult map[string]bool
 
@@ -177,9 +182,14 @@ func (m *mockManager) ListTags(_ context.Context, _ string) ([]domain.TagInfo, e
 	return nil, nil
 }
 
-func (m *mockManager) ForgeCreateMR(_ context.Context, _, _ string, params forge.CreateMRParams) (forge.MRInfo, error) {
-	m.forgeCreateMRArgs = params
-	return forge.MRInfo{}, nil
+func (m *mockManager) ProposeReleaseVersions(_ context.Context, taskIDs []string) (map[string]string, error) {
+	m.proposedVersionIDs = append([]string(nil), taskIDs...)
+	return m.proposedVersions, m.proposedVersionErr
+}
+
+func (m *mockManager) ForgeCreateMissingMRs(_ context.Context, _ string, title string) (task.TaskMRCreateResult, error) {
+	m.forgeCreateMRTitle = title
+	return m.forgeCreateMRResult, nil
 }
 
 func (m *mockManager) ForgePipelineStatus(_ context.Context, _, _ string, _ string) ([]forge.PipelineStatus, error) {
@@ -259,7 +269,7 @@ func (m *mockManager) IsProtectedBranch(_ context.Context, branch string) bool {
 }
 
 func (m *mockManager) BuildReleasePreview(_ context.Context, _ map[string]string) (task.ReleasePreview, error) {
-	return task.ReleasePreview{}, nil
+	return m.releasePreview, nil
 }
 
 func (m *mockManager) RetryRelease(_ context.Context, _ string) (domain.Release, error) {
@@ -1057,13 +1067,19 @@ func TestUpdate_FocusReleasesAndNewRelease_OpensCreateReleaseDialog(t *testing.T
 }
 
 func TestUpdate_SubmitCreateRelease_OpensExecuteConfirmModal(t *testing.T) {
-	mgr := &mockManager{createReleaseResult: domain.Release{ID: "rel-1", CreatedAt: time.Now().UTC()}}
+	mgr := &mockManager{
+		createReleaseResult: domain.Release{ID: "rel-1", CreatedAt: time.Now().UTC()},
+		releasePreview: task.ReleasePreview{Rows: []task.ReleasePreviewRow{{
+			ServiceName: "api", Version: "1.2.3", Tag: "v1.2.3",
+		}}},
+	}
 	m := newTestModel(t, mgr)
 	m = sendWindowSize(m, 120, 40)
 
 	updated, cmd := m.Update(modal.SubmitCreateReleaseMsg{
-		TaskIDs:  []string{"ZA-1"},
-		Versions: map[string]string{"api": "1.2.3"},
+		TaskIDs:         []string{"ZA-1"},
+		Versions:        map[string]string{"api": "1.2.3"},
+		TagDescriptions: map[string]string{"api": "Fix retry after timeout"},
 	})
 	m = updated.(Model)
 
@@ -1079,6 +1095,9 @@ func TestUpdate_SubmitCreateRelease_OpensExecuteConfirmModal(t *testing.T) {
 	if m.pendingReleaseSubmit == nil {
 		t.Fatal("pending release submit should be stored")
 	}
+	if view := m.modal.View(); !strings.Contains(view, "Fix retry after timeout") {
+		t.Fatalf("confirm modal missing tag description: %s", view)
+	}
 }
 func TestUpdate_ConfirmReleaseExecute_StartsOperation(t *testing.T) {
 	mgr := &mockManager{
@@ -1087,10 +1106,16 @@ func TestUpdate_ConfirmReleaseExecute_StartsOperation(t *testing.T) {
 	}
 	m := newTestModel(t, mgr)
 	m = sendWindowSize(m, 120, 40)
-	m.pendingReleaseSubmit = &modal.SubmitCreateReleaseMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}}
+	m.pendingReleaseSubmit = &modal.SubmitCreateReleaseMsg{
+		TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"},
+		TagDescriptions: map[string]string{"api": "Fix retry after timeout"},
+	}
 	m.modal = modal.NewReleaseExecuteConfirmDialog([]string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
 
-	updated, cmd := m.Update(modal.ConfirmReleaseExecuteMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}})
+	updated, cmd := m.Update(modal.ConfirmReleaseExecuteMsg{
+		TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"},
+		TagDescriptions: map[string]string{"api": "Fix retry after timeout"},
+	})
 	m = updated.(Model)
 
 	if !m.opRunning {
@@ -1122,6 +1147,9 @@ func TestUpdate_ConfirmReleaseExecute_StartsOperation(t *testing.T) {
 	}
 	if !params.StartImmediately {
 		t.Fatal("CreateRelease StartImmediately should be true after confirm")
+	}
+	if params.ServiceTagDescriptions["api"] != "Fix retry after timeout" {
+		t.Fatalf("ServiceTagDescriptions = %#v", params.ServiceTagDescriptions)
 	}
 }
 
@@ -2311,12 +2339,11 @@ func TestUpdate_OpenForgeMenuMsg_OpensForgeMenuModal(t *testing.T) {
 	}
 }
 
-func TestUpdate_ForgeCreateMRMsg_ForwardsCustomTitle(t *testing.T) {
+func TestUpdate_ForgeCreateMRMsg_ForwardsCustomTitleTaskScoped(t *testing.T) {
 	mgr := &mockManager{}
 	m := sendWindowSize(newTestModel(t, mgr), 120, 40)
-	m.servicesPanel.SetServices("IN-1", []domain.Service{{Name: "svc-a"}})
 
-	_, cmd := m.Update(modal.ForgeCreateMRMsg{TaskID: "IN-1", ServiceName: "svc-a", Title: "Custom MR title"})
+	_, cmd := m.Update(modal.ForgeCreateMRMsg{TaskID: "IN-1", Title: "Custom MR title"})
 	if cmd == nil {
 		t.Fatal("create MR command is nil")
 	}
@@ -2326,8 +2353,30 @@ func TestUpdate_ForgeCreateMRMsg_ForwardsCustomTitle(t *testing.T) {
 		t.Fatalf("create MR command = %T, want non-empty tea.BatchMsg", msg)
 	}
 	batch[0]()
-	if mgr.forgeCreateMRArgs.Title != "Custom MR title" {
-		t.Fatalf("title = %q, want custom title", mgr.forgeCreateMRArgs.Title)
+	if mgr.forgeCreateMRTitle != "Custom MR title" {
+		t.Fatalf("title = %q, want custom title", mgr.forgeCreateMRTitle)
+	}
+}
+
+func TestUpdate_CreateMissingMRsResultRendersPerServiceSummary(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	result := task.TaskMRCreateResult{TaskID: "IN-1", Services: []task.ServiceMRCreateResult{
+		{ServiceName: "api", Status: "existing", MR: forge.MRInfo{URL: "https://gitlab/api/1"}},
+		{ServiceName: "worker", Status: "created", MR: forge.MRInfo{URL: "https://gitlab/worker/2"}},
+		{ServiceName: "broken", Status: "failed", Err: errors.New("forge unavailable")},
+	}}
+
+	updated, _ := m.Update(ForgeResultMsg{Op: "create_missing_mrs", Data: result})
+	output := updated.(Model).outputPanel.View()
+	for _, want := range []string{
+		"api: existing https://gitlab/api/1",
+		"worker: created https://gitlab/worker/2",
+		"broken: failed: forge unavailable",
+		"Create missing MR/PRs done: created=1, existing=1, failed=1",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q: %s", want, output)
+		}
 	}
 }
 

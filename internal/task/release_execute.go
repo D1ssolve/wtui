@@ -17,12 +17,13 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 		return domain.Release{}, err
 	}
 
-	releaseVersion := params.SharedVersion
-	if strings.TrimSpace(releaseVersion) == "" && len(plan.Services) > 0 {
-		releaseVersion = plan.Services[0].Version
+	releaseVersion := sharedVersionOrEmpty(plan.Services)
+	releaseIDVersion := releaseVersion
+	if releaseIDVersion == "" {
+		releaseIDVersion = "mixed"
 	}
 
-	releaseID, err := generateReleaseID(m.cfg.Release.IDFormat, releaseVersion, nil)
+	releaseID, err := generateReleaseID(m.cfg.Release.IDFormat, releaseIDVersion, nil)
 	if err != nil {
 		return domain.Release{}, fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
 	}
@@ -42,8 +43,17 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 
 	release.Tag = sharedTagOrEmpty(release.Services)
 
-	if _, err := m.ensureReleaseDir(release.ID, false); err != nil {
-		return domain.Release{}, err
+	baseReleaseID := release.ID
+	for suffix := 1; ; suffix++ {
+		if suffix > 1 {
+			release.ID = fmt.Sprintf("%s-%d", baseReleaseID, suffix)
+		}
+		if _, err := m.ensureReleaseDir(release.ID, false); errors.Is(err, ErrReleaseTargetExists) {
+			continue
+		} else if err != nil {
+			return domain.Release{}, err
+		}
+		break
 	}
 
 	release, err = m.writeReleaseManifest(release)
@@ -443,6 +453,19 @@ func sharedTagOrEmpty(services []domain.ReleaseService) string {
 	shared := services[0].Tag
 	for i := 1; i < len(services); i++ {
 		if services[i].Tag != shared {
+			return ""
+		}
+	}
+	return shared
+}
+
+func sharedVersionOrEmpty(services []domain.ReleaseService) string {
+	if len(services) == 0 {
+		return ""
+	}
+	shared := services[0].Version
+	for i := 1; i < len(services); i++ {
+		if services[i].Version != shared {
 			return ""
 		}
 	}

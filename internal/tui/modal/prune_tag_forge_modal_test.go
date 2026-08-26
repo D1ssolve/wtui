@@ -149,7 +149,7 @@ func TestForgeMenuModal_AvailableShowsActionsAndEnterTriggersMessages(t *testing
 	m.SetTaskID("IN-4242")
 
 	view := stripAnsi(m.View())
-	for _, want := range []string{"Create MR/PR", "Merge MR", "View Pipeline Status", "List Issues"} {
+	for _, want := range []string{"Create missing MR/PRs", "Merge MR", "View Pipeline Status", "List Issues"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("forge menu missing %q in view: %s", want, view)
 		}
@@ -172,7 +172,7 @@ func TestForgeMenuModal_AvailableShowsActionsAndEnterTriggersMessages(t *testing
 	_, cmd = m.Update(sendSpecialKey(tea.KeyEnter))
 	if msg, ok := execCmd(cmd).(ForgeCreateMRMsg); !ok {
 		t.Fatalf("expected ForgeCreateMRMsg, got %T", execCmd(cmd))
-	} else if msg.TaskID != "IN-4242" || msg.ServiceName != "api" || msg.Title != "Custom MR title" {
+	} else if msg.TaskID != "IN-4242" || msg.Title != "Custom MR title" {
 		t.Fatalf("unexpected create msg payload: %+v", msg)
 	}
 
