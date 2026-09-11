@@ -671,6 +671,20 @@ func TestUpdate_HelpKey_OpensHelpModal(t *testing.T) {
 	}
 }
 
+func TestUpdate_KeyR_OnTasksOpensRider(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "IN-222", Dir: "/tmp/IN-222"}})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	if cmd == nil {
+		t.Fatal("R on Tasks must return RiderTaskMsg command")
+	}
+	msg := cmd()
+	if _, ok := msg.(panels.RiderTaskMsg); !ok {
+		t.Fatalf("R on Tasks must emit RiderTaskMsg, got %T", msg)
+	}
+}
+
 func TestUpdate_HelpKey_AfterResize_AllowsScrollToBottom(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 80, 10)
@@ -1077,6 +1091,7 @@ func TestUpdate_SubmitCreateRelease_OpensExecuteConfirmModal(t *testing.T) {
 	m = sendWindowSize(m, 120, 40)
 
 	updated, cmd := m.Update(modal.SubmitCreateReleaseMsg{
+		Title:           "August release",
 		TaskIDs:         []string{"ZA-1"},
 		Versions:        map[string]string{"api": "1.2.3"},
 		TagDescriptions: map[string]string{"api": "Fix retry after timeout"},
@@ -1095,8 +1110,8 @@ func TestUpdate_SubmitCreateRelease_OpensExecuteConfirmModal(t *testing.T) {
 	if m.pendingReleaseSubmit == nil {
 		t.Fatal("pending release submit should be stored")
 	}
-	if view := m.modal.View(); !strings.Contains(view, "Fix retry after timeout") {
-		t.Fatalf("confirm modal missing tag description: %s", view)
+	if view := m.modal.View(); !strings.Contains(view, "August release") || !strings.Contains(view, "Fix retry after timeout") {
+		t.Fatalf("confirm modal missing release metadata: %s", view)
 	}
 }
 func TestUpdate_ConfirmReleaseExecute_StartsOperation(t *testing.T) {
@@ -1107,13 +1122,13 @@ func TestUpdate_ConfirmReleaseExecute_StartsOperation(t *testing.T) {
 	m := newTestModel(t, mgr)
 	m = sendWindowSize(m, 120, 40)
 	m.pendingReleaseSubmit = &modal.SubmitCreateReleaseMsg{
-		TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"},
+		Title: "August release", TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"},
 		TagDescriptions: map[string]string{"api": "Fix retry after timeout"},
 	}
-	m.modal = modal.NewReleaseExecuteConfirmDialog([]string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
+	m.modal = modal.NewReleaseExecuteConfirmDialog("August release", []string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
 
 	updated, cmd := m.Update(modal.ConfirmReleaseExecuteMsg{
-		TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"},
+		Title: "August release", TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"},
 		TagDescriptions: map[string]string{"api": "Fix retry after timeout"},
 	})
 	m = updated.(Model)
@@ -1148,6 +1163,9 @@ func TestUpdate_ConfirmReleaseExecute_StartsOperation(t *testing.T) {
 	if !params.StartImmediately {
 		t.Fatal("CreateRelease StartImmediately should be true after confirm")
 	}
+	if params.Title != "August release" {
+		t.Fatalf("Title = %q", params.Title)
+	}
 	if params.ServiceTagDescriptions["api"] != "Fix retry after timeout" {
 		t.Fatalf("ServiceTagDescriptions = %#v", params.ServiceTagDescriptions)
 	}
@@ -1157,7 +1175,7 @@ func TestUpdate_ConfirmReleaseExecute_WithoutPendingSubmit_DoesNotExecute(t *tes
 	mgr := &mockManager{createReleaseResult: domain.Release{ID: "rel-1", CreatedAt: time.Now().UTC()}}
 	m := newTestModel(t, mgr)
 	m = sendWindowSize(m, 120, 40)
-	m.modal = modal.NewReleaseExecuteConfirmDialog([]string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
+	m.modal = modal.NewReleaseExecuteConfirmDialog("", []string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
 
 	updated, cmd := m.Update(modal.ConfirmReleaseExecuteMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}})
 	m = updated.(Model)
@@ -1199,7 +1217,7 @@ func TestUpdate_ConfirmReleaseExecute_WithMismatchedTaskIDs_DoesNotExecute(t *te
 	m := newTestModel(t, mgr)
 	m = sendWindowSize(m, 120, 40)
 	m.pendingReleaseSubmit = &modal.SubmitCreateReleaseMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}}
-	m.modal = modal.NewReleaseExecuteConfirmDialog([]string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
+	m.modal = modal.NewReleaseExecuteConfirmDialog("", []string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
 
 	updated, cmd := m.Update(modal.ConfirmReleaseExecuteMsg{TaskIDs: []string{"ZA-2"}, Versions: map[string]string{"api": "1.2.3"}})
 	m = updated.(Model)
@@ -1220,7 +1238,7 @@ func TestUpdate_ConfirmReleaseExecute_WithMismatchedVersions_DoesNotExecute(t *t
 	m := newTestModel(t, mgr)
 	m = sendWindowSize(m, 120, 40)
 	m.pendingReleaseSubmit = &modal.SubmitCreateReleaseMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}}
-	m.modal = modal.NewReleaseExecuteConfirmDialog([]string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
+	m.modal = modal.NewReleaseExecuteConfirmDialog("", []string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
 
 	updated, cmd := m.Update(modal.ConfirmReleaseExecuteMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.4"}})
 	m = updated.(Model)
@@ -1868,7 +1886,7 @@ func TestUpdate_CloseModalMsg_ReleaseExecuteConfirm_ClearsPendingAndAppendsCance
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
 	m.pendingReleaseSubmit = &modal.SubmitCreateReleaseMsg{TaskIDs: []string{"ZA-1"}, Versions: map[string]string{"api": "1.2.3"}}
-	m.modal = modal.NewReleaseExecuteConfirmDialog([]string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
+	m.modal = modal.NewReleaseExecuteConfirmDialog("", []string{"ZA-1"}, map[string]string{"api": "1.2.3"}, task.ReleasePreview{})
 
 	updated, _ := m.Update(modal.CloseModalMsg{})
 	m = updated.(Model)

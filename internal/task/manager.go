@@ -63,6 +63,7 @@ type ConvertHotfixParams struct {
 }
 
 type CreateReleaseParams struct {
+	Title                  string
 	TaskIDs                []string
 	ServiceVersions        map[string]string
 	ServiceTagDescriptions map[string]string

@@ -18,16 +18,8 @@ type KeyMap struct {
 
 	ToggleLogs key.Binding
 
-	CloseTask       key.Binding
-	PruneTask       key.Binding
-	ValidateTask    key.Binding
-	TagBrowser      key.Binding
-	ForgeMenu       key.Binding
-	NewRelease      key.Binding
-	MergeMRs        key.Binding
-	ReleaseAction   key.Binding
-	RetryRelease    key.Binding
-	ServiceValidate key.Binding
+	MergeMRs      key.Binding
+	ReleaseAction key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -76,30 +68,6 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("L"),
 			key.WithHelp("L", "logs"),
 		),
-		CloseTask: key.NewBinding(
-			key.WithKeys("C"),
-			key.WithHelp("C", "close task"),
-		),
-		PruneTask: key.NewBinding(
-			key.WithKeys("P"),
-			key.WithHelp("P", "prune tasks"),
-		),
-		ValidateTask: key.NewBinding(
-			key.WithKeys("V"),
-			key.WithHelp("V", "validate task"),
-		),
-		TagBrowser: key.NewBinding(
-			key.WithKeys("T"),
-			key.WithHelp("T", "browse tags"),
-		),
-		ForgeMenu: key.NewBinding(
-			key.WithKeys("m"),
-			key.WithHelp("m", "forge menu"),
-		),
-		NewRelease: key.NewBinding(
-			key.WithKeys("N"),
-			key.WithHelp("N", "new release"),
-		),
 		MergeMRs: key.NewBinding(
 			key.WithKeys("M"),
 			key.WithHelp("M", "merge ready MRs"),
@@ -108,13 +76,12 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("F"),
 			key.WithHelp("F", "promote/finalize release"),
 		),
-		RetryRelease: key.NewBinding(
-			key.WithKeys("R"),
-			key.WithHelp("R", "retry release"),
-		),
-		ServiceValidate: key.NewBinding(
-			key.WithKeys("v"),
-			key.WithHelp("v", "validate task"),
-		),
+	}
+}
+
+func (k KeyMap) GlobalBindings() []key.Binding {
+	return []key.Binding{
+		k.Tab, k.PanelTasks, k.PanelServices, k.PanelOutput, k.PanelReleases,
+		k.Quit, k.ForceQuit, k.Refresh, k.Help, k.ToggleLogs,
 	}
 }

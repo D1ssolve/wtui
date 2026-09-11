@@ -175,19 +175,23 @@ func TestBuildReleasePlan_PersistsTagDescription(t *testing.T) {
 	}
 }
 
-func TestBuildReleasePlan_RejectsMultilineTagDescription(t *testing.T) {
+func TestBuildReleasePlan_PersistsMultilineTagDescription(t *testing.T) {
 	m, gitMock := newReleasePlanTestManager(t, &mockGitClient{})
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
 	)
 
-	_, err := m.buildReleasePlan(t.Context(), CreateReleaseParams{
+	description := "Summary\n\nDetailed change"
+	plan, err := m.buildReleasePlan(t.Context(), CreateReleaseParams{
 		TaskIDs:                []string{"APP-1"},
 		ServiceVersions:        map[string]string{"api": "1.2.3"},
-		ServiceTagDescriptions: map[string]string{"api": "first line\nsecond line"},
+		ServiceTagDescriptions: map[string]string{"api": description},
 	})
-	if !errors.Is(err, ErrReleaseTagDescriptionInvalid) {
-		t.Fatalf("buildReleasePlan() error = %v, want ErrReleaseTagDescriptionInvalid", err)
+	if err != nil {
+		t.Fatalf("buildReleasePlan() error = %v", err)
+	}
+	if plan.Services[0].TagDescription != description {
+		t.Fatalf("TagDescription = %q, want %q", plan.Services[0].TagDescription, description)
 	}
 }
 

@@ -88,7 +88,15 @@ func (m *manager) Remove(ctx context.Context, taskID string, force, deleteBranch
 		}
 	}
 
-	if len(removeErrors) > 0 && !force {
+	if force {
+		if err := os.RemoveAll(taskDir); err != nil {
+			return fmt.Errorf("remove: force delete task directory %s: %w", taskDir, err)
+		}
+		m.logger.InfoContext(ctx, "task removed")
+		return nil
+	}
+
+	if len(removeErrors) > 0 {
 		for _, serviceName := range removedServiceDirs {
 			subdirPath := filepath.Join(taskDir, serviceName)
 			if err := os.Remove(subdirPath); err != nil && !os.IsNotExist(err) {

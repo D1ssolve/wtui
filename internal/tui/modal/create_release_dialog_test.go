@@ -206,13 +206,17 @@ func TestCreateReleaseDialog_Submit_EmitsOptionalTagDescription(t *testing.T) {
 	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
 	_, _ = d.Update(panels.ReleaseVersionsLoadedMsg{Versions: map[string]string{"api": "1.2.3"}})
 	_, _ = d.Update(sendSpecialKey(tea.KeyTab))
+	_, _ = d.Update(sendSpecialKey(tea.KeyTab))
+	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
 	_, _ = d.Update(sendKey("Fix retry after timeout"))
+	_, _ = d.Update(sendSpecialKey(tea.KeyCtrlS))
 
 	view := stripAnsi(d.View())
 	if !strings.Contains(view, "Fix retry after timeout") {
 		t.Fatalf("view missing tag description: %s", view)
 	}
 
+	_, _ = d.Update(sendSpecialKey(tea.KeyShiftTab))
 	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
 	if cmd == nil {
 		t.Fatal("valid submit must emit cmd")
@@ -223,20 +227,58 @@ func TestCreateReleaseDialog_Submit_EmitsOptionalTagDescription(t *testing.T) {
 	}
 }
 
-func TestCreateReleaseDialog_Submit_RejectsMultilineTagDescription(t *testing.T) {
+func TestCreateReleaseDialog_Submit_EmitsOptionalTitle(t *testing.T) {
 	d := NewCreateReleaseDialog([]domain.Task{
 		{ID: "FEAT-1", Phase: "feature", Services: []domain.Service{{Name: "api"}}},
 	}, 100, 30)
 	_, _ = d.Update(sendKey(" "))
 	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
 	_, _ = d.Update(panels.ReleaseVersionsLoadedMsg{Versions: map[string]string{"api": "1.2.3"}})
-	d.inputRows[0].description = "first line\nsecond line"
+	_, _ = d.Update(sendKey("August release"))
+	_, _ = d.Update(sendSpecialKey(tea.KeyTab))
 
 	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
-	if cmd != nil {
-		t.Fatal("multiline tag description must block submit")
+	if cmd == nil {
+		t.Fatal("valid submit must emit cmd")
 	}
-	if !strings.Contains(d.inputRows[0].err, "one line") {
-		t.Fatalf("description error = %q", d.inputRows[0].err)
+	sub := execCmd(cmd).(SubmitCreateReleaseMsg)
+	if sub.Title != "August release" {
+		t.Fatalf("Title = %q", sub.Title)
+	}
+}
+
+func TestCreateReleaseDialog_TagDescriptionEditor_SavesMultilineAndCancelsEdits(t *testing.T) {
+	d := NewCreateReleaseDialog([]domain.Task{
+		{ID: "FEAT-1", Phase: "feature", Services: []domain.Service{{Name: "api"}}},
+	}, 100, 30)
+	_, _ = d.Update(sendKey(" "))
+	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
+	_, _ = d.Update(panels.ReleaseVersionsLoadedMsg{Versions: map[string]string{"api": "1.2.3"}})
+	_, _ = d.Update(sendSpecialKey(tea.KeyTab))
+	_, _ = d.Update(sendSpecialKey(tea.KeyTab))
+	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
+	if !d.editingDescription {
+		t.Fatal("Enter on description must open editor")
+	}
+
+	_, _ = d.Update(sendKey("Summary"))
+	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
+	_, _ = d.Update(sendKey("Details"))
+	_, _ = d.Update(sendSpecialKey(tea.KeyCtrlS))
+	if d.editingDescription {
+		t.Fatal("Ctrl+S must close editor")
+	}
+	if d.inputRows[0].description != "Summary\nDetails" {
+		t.Fatalf("description = %q", d.inputRows[0].description)
+	}
+
+	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
+	_, _ = d.Update(sendKey(" changed"))
+	_, _ = d.Update(sendSpecialKey(tea.KeyEsc))
+	if d.editingDescription {
+		t.Fatal("Esc must close editor")
+	}
+	if d.inputRows[0].description != "Summary\nDetails" {
+		t.Fatalf("cancel changed description to %q", d.inputRows[0].description)
 	}
 }

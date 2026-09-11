@@ -334,7 +334,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.focus == FocusReleases && key.Matches(msg, m.keymap.ReleaseAction):
 			return m.startReleaseAction()
 
-		case key.Matches(msg, m.keymap.RetryRelease):
+		case m.focus == FocusReleases && msg.String() == "R":
 			return m.startReleaseRetry()
 		}
 
@@ -759,6 +759,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modal.SubmitCreateReleaseMsg:
 		pending := modal.SubmitCreateReleaseMsg{
+			Title:           strings.TrimSpace(msg.Title),
 			TaskIDs:         append([]string(nil), msg.TaskIDs...),
 			Versions:        copyVersionMap(msg.Versions),
 			TagDescriptions: copyVersionMap(msg.TagDescriptions),
@@ -771,7 +772,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i := range preview.Rows {
 			preview.Rows[i].TagDescription = pending.TagDescriptions[preview.Rows[i].ServiceName]
 		}
-		m.modal = modal.NewReleaseExecuteConfirmDialog(pending.TaskIDs, pending.Versions, preview)
+		m.modal = modal.NewReleaseExecuteConfirmDialog(pending.Title, pending.TaskIDs, pending.Versions, preview)
 		m.modal.SetTerminalSize(m.width, m.height)
 		return m, nil
 
@@ -816,6 +817,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: active modal is not release execute confirm")
 			return m, nil
 		}
+		if strings.TrimSpace(msg.Title) != submit.Title {
+			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: title does not match pending submit")
+			return m, nil
+		}
 		if !slices.Equal(msg.TaskIDs, submit.TaskIDs) {
 			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: task IDs do not match pending submit")
 			return m, nil
@@ -834,6 +839,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = true
 		m.outputPanel.AppendLine("Creating release from selected tasks...")
 		return m, tea.Batch(createReleaseCmd(m.mgr, task.CreateReleaseParams{
+			Title:                  submit.Title,
 			TaskIDs:                append([]string(nil), submit.TaskIDs...),
 			ServiceVersions:        copyVersionMap(submit.Versions),
 			ServiceTagDescriptions: copyVersionMap(submit.TagDescriptions),

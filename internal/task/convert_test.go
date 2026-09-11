@@ -246,26 +246,85 @@ func TestConvertHotfixToFeature_DirtySourceBlocksBeforeManifest(t *testing.T) {
 	}
 }
 
-func TestConvertHotfixToFeature_DifferentIDRejectsUnexpectedTaskRootFile(t *testing.T) {
-	const sha = "1111111111111111111111111111111111111111"
-	m, gitMock := newReleasePlanTestManager(t, &mockGitClient{resolveRefRes: sha})
-	repoPath := filepath.Join(m.cfg.RootDir, "repo-a")
-	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock, releasePlanTaskService{
-		TaskID: "APP-1", ServiceName: "svc", Branch: "hotfix/APP-1", RepoPath: repoPath,
-	})
-	if err := os.WriteFile(filepath.Join(m.taskDir("APP-1"), "notes.txt"), []byte("keep"), 0o600); err != nil {
+func TestConversionSourceExtras_MovesTaskRootFile(t *testing.T) {
+	m, _ := newReleasePlanTestManager(t, &mockGitClient{})
+	sourceRoot := m.taskDir("APP-1")
+	targetRoot := m.taskDir("APP-2")
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "svc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(targetRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "cdc error.md"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := conversionManifest{
+		SourceTaskID: "APP-1",
+		TargetTaskID: "APP-2",
+		Services:     []conversionService{{Name: "svc"}},
+	}
+
+	if err := m.requireConvertibleSourceRoot(manifest); err != nil {
+		t.Fatalf("requireConvertibleSourceRoot() error = %v", err)
+	}
+	if err := m.moveConversionSourceExtras(manifest); err != nil {
+		t.Fatalf("moveConversionSourceExtras() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(targetRoot, "cdc error.md"))
+	if err != nil || string(data) != "keep" {
+		t.Fatalf("target file = %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(sourceRoot, "cdc error.md")); !os.IsNotExist(err) {
+		t.Fatalf("source file still exists: %v", err)
+	}
+}
+
+func TestConversionSourceExtras_RejectsTargetCollision(t *testing.T) {
+	m, _ := newReleasePlanTestManager(t, &mockGitClient{})
+	sourceRoot := m.taskDir("APP-1")
+	targetRoot := m.taskDir("APP-2")
+	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(targetRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		filepath.Join(sourceRoot, "notes.txt"): "source",
+		filepath.Join(targetRoot, "notes.txt"): "target",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := m.requireConvertibleSourceRoot(conversionManifest{SourceTaskID: "APP-1", TargetTaskID: "APP-2"})
+	if err == nil || !strings.Contains(err.Error(), "target task root already contains entry notes.txt") {
+		t.Fatalf("requireConvertibleSourceRoot() error = %v", err)
+	}
+	data, readErr := os.ReadFile(filepath.Join(targetRoot, "notes.txt"))
+	if readErr != nil || string(data) != "target" {
+		t.Fatalf("target file = %q, %v", data, readErr)
+	}
+}
+
+func TestRequireConvertibleSourceRoot_AllowsDSStore(t *testing.T) {
+	m, _ := newReleasePlanTestManager(t, &mockGitClient{})
+	root := m.taskDir("APP-1")
+	if err := os.MkdirAll(filepath.Join(root, "svc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".DS_Store"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	err := m.ConvertHotfixToFeature(context.Background(), ConvertHotfixParams{SourceTaskID: "APP-1", TargetTaskID: "APP-2"})
-	if err == nil || !strings.Contains(err.Error(), "unexpected entry notes.txt") {
-		t.Fatalf("ConvertHotfixToFeature() error = %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(m.taskDir("APP-1"), "notes.txt")); err != nil {
-		t.Fatalf("source file was removed: %v", err)
-	}
-	if len(gitMock.addWorktreeCalls) != 0 {
-		t.Fatalf("AddWorktree calls = %d, want 0", len(gitMock.addWorktreeCalls))
+	err := m.requireConvertibleSourceRoot(conversionManifest{
+		SourceTaskID: "APP-1",
+		Services:     []conversionService{{Name: "svc"}},
+	})
+	if err != nil {
+		t.Fatalf("requireConvertibleSourceRoot() error = %v", err)
 	}
 }
 
@@ -316,5 +375,38 @@ func TestValidateConversionManifest_RejectsDivergentRemoteSHA(t *testing.T) {
 	err := m.validateConversionManifest(context.Background(), manifest, "APP-1")
 	if err == nil || !strings.Contains(err.Error(), "remote source is not contained") {
 		t.Fatalf("validateConversionManifest() error = %v", err)
+	}
+}
+
+func TestRemoveConversionSourceRemote_ProtectedBranchDeletionContinues(t *testing.T) {
+	const sha = "1111111111111111111111111111111111111111"
+	m, _ := newReleasePlanTestManager(t, &mockGitClient{
+		remoteBranchExistsRes: true,
+		remoteRefSHAFn: func(_, _ string) (string, error) {
+			return sha, nil
+		},
+		deleteRemoteBranchIfUnchangedFn: func(_, _, _ string) error {
+			return &git.ExecError{
+				Argv:     []string{"git", "push"},
+				ExitCode: 1,
+				Stderr:   "GitLab: You can only delete protected branches using the web interface.",
+			}
+		},
+	})
+	statusCh := make(chan string, 2)
+
+	err := m.removeConversionSourceRemote(context.Background(), conversionService{
+		Name:            "svc",
+		RepoPath:        "/repo",
+		SourceBranch:    "hotfix/APP-1",
+		TargetBranch:    "feature/APP-2",
+		SourceSHA:       sha,
+		SourceRemoteSHA: sha,
+	}, statusCh)
+	if err != nil {
+		t.Fatalf("removeConversionSourceRemote() error = %v", err)
+	}
+	if first, second := <-statusCh, <-statusCh; !strings.Contains(first+second, "keeping protected remote") {
+		t.Fatalf("status = %q, %q", first, second)
 	}
 }

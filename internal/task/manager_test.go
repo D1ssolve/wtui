@@ -1270,7 +1270,7 @@ func TestRemove_WithoutForce_FailedWorktreePreservesTaskDir(t *testing.T) {
 	}
 }
 
-func TestRemove_WithForce_PartialFailureLeavesRemainingServices(t *testing.T) {
+func TestRemove_WithForce_DeletesTaskDirDespiteCleanupFailures(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 
@@ -1282,6 +1282,13 @@ func TestRemove_WithForce_PartialFailureLeavesRemainingServices(t *testing.T) {
 	}
 	if err := os.MkdirAll(successSvcDir, 0o755); err != nil {
 		t.Fatalf("setup: %v", err)
+	}
+	metadataDir := filepath.Join(taskDir, ".ai")
+	if err := os.MkdirAll(metadataDir, 0o755); err != nil {
+		t.Fatalf("setup metadata: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataDir, "notes.md"), []byte("keep only without force"), 0o644); err != nil {
+		t.Fatalf("setup metadata file: %v", err)
 	}
 
 	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
@@ -1300,24 +1307,11 @@ func TestRemove_WithForce_PartialFailureLeavesRemainingServices(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Remove(context.Background(), "IN-012", true, false)
-	if err == nil {
-		t.Fatal("Remove(force=true) returned nil, want error when services remain")
+	if err := mgr.Remove(context.Background(), "IN-012", true, false); err != nil {
+		t.Fatalf("Remove(force=true) returned unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "remaining services") {
-		t.Fatalf("Remove(force=true) error = %q, want remaining services message", err)
-	}
-
-	if _, statErr := os.Stat(taskDir); statErr != nil {
-		t.Fatalf("task directory removed unexpectedly: %v", statErr)
-	}
-
-	if _, statErr := os.Stat(failedSvcDir); statErr != nil {
-		t.Errorf("failed service directory removed unexpectedly: %v", statErr)
-	}
-
-	if _, statErr := os.Stat(successSvcDir); !os.IsNotExist(statErr) {
-		t.Errorf("successful service directory still exists, statErr=%v", statErr)
+	if _, err := os.Stat(taskDir); !os.IsNotExist(err) {
+		t.Fatalf("task directory still exists after force removal: %v", err)
 	}
 }
 

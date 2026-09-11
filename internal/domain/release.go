@@ -23,6 +23,7 @@ const (
 type Release struct {
 	ManifestVersion int              `json:"manifest_version"`
 	ID              string           `json:"id"`
+	Title           string           `json:"title,omitempty"`
 	Dir             string           `json:"dir"`
 	Status          ReleaseStatus    `json:"status"`
 	Checkpoint      string           `json:"checkpoint,omitempty"`

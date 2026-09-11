@@ -12,6 +12,11 @@ import (
 )
 
 func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams) (domain.Release, error) {
+	title := strings.TrimSpace(params.Title)
+	if strings.ContainsAny(title, "\r\n") {
+		return domain.Release{}, fmt.Errorf("%w: release title must be one line", ErrReleaseManifestInvalid)
+	}
+
 	plan, err := m.buildReleasePlan(ctx, params)
 	if err != nil {
 		return domain.Release{}, err
@@ -31,6 +36,7 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 	now := defaultReleaseNow().UTC()
 	release := domain.Release{
 		ID:         releaseID,
+		Title:      title,
 		Status:     domain.ReleaseStatusDraft,
 		Checkpoint: "draft",
 		Version:    strings.TrimSpace(releaseVersion),

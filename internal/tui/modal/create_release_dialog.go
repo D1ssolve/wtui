@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -46,11 +47,17 @@ const (
 type CreateReleaseDialog struct {
 	phase createReleasePhase
 
-	taskRows    []createReleaseTaskRow
-	taskCursor  int
-	inputRows   []createReleaseServiceInput
-	inputCursor int
-	inputField  createReleaseInputField
+	taskRows     []createReleaseTaskRow
+	taskCursor   int
+	inputRows    []createReleaseServiceInput
+	inputCursor  int
+	inputField   createReleaseInputField
+	title        string
+	titleFocused bool
+
+	descriptionEditor  textarea.Model
+	editingDescription bool
+	editingRow         int
 
 	loadingVersions bool
 	pendingVersions map[string]string
@@ -82,13 +89,21 @@ func NewCreateReleaseDialog(tasks []domain.Task, width, height int) *CreateRelea
 		rows = append(rows, row)
 	}
 
-	return &CreateReleaseDialog{
-		phase:           phaseTaskSelect,
-		taskRows:        rows,
-		pendingVersions: make(map[string]string),
-		width:           width,
-		height:          height,
+	editor := textarea.New()
+	editor.Placeholder = "Enter annotated tag description..."
+	editor.ShowLineNumbers = false
+	editor.Blur()
+
+	dialog := &CreateReleaseDialog{
+		phase:             phaseTaskSelect,
+		taskRows:          rows,
+		pendingVersions:   make(map[string]string),
+		width:             width,
+		height:            height,
+		descriptionEditor: editor,
 	}
+	dialog.sizeDescriptionEditor()
+	return dialog
 }
 
 func (d *CreateReleaseDialog) Title() string {
@@ -101,6 +116,7 @@ func (d *CreateReleaseDialog) Title() string {
 func (d *CreateReleaseDialog) SetTerminalSize(width, height int) {
 	d.width = width
 	d.height = height
+	d.sizeDescriptionEditor()
 }
 
 func (d *CreateReleaseDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
@@ -108,6 +124,9 @@ func (d *CreateReleaseDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	case panels.ReleaseVersionsLoadedMsg:
 		d.applyVersions(m.Versions)
 		return d, nil
+	}
+	if d.editingDescription {
+		return d.updateDescriptionEditor(msg)
 	}
 
 	keyMsg, ok := msg.(tea.KeyMsg)
@@ -141,6 +160,7 @@ func (d *CreateReleaseDialog) updateTaskSelect(keyMsg tea.KeyMsg) (Modal, tea.Cm
 		d.phase = phaseVersionInput
 		d.rebuildServiceInputs()
 		d.inputCursor = 0
+		d.titleFocused = true
 		d.loadingVersions = true
 		d.err = ""
 		d.applyVersions(d.pendingVersions)
@@ -173,6 +193,9 @@ func (d *CreateReleaseDialog) updateVersionInput(keyMsg tea.KeyMsg) (Modal, tea.
 		d.err = ""
 		return d, nil
 	case "enter":
+		if !d.titleFocused && d.inputField == inputTagDescription {
+			return d, d.openDescriptionEditor()
+		}
 		return d, d.submitIfValid()
 	case "backspace":
 		d.deleteLastRune()
@@ -190,6 +213,10 @@ func (d *CreateReleaseDialog) updateVersionInput(keyMsg tea.KeyMsg) (Modal, tea.
 }
 
 func (d *CreateReleaseDialog) View() string {
+	if d.editingDescription {
+		return d.descriptionEditorView()
+	}
+
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
 	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
@@ -269,6 +296,17 @@ func (d *CreateReleaseDialog) View() string {
 		b.WriteString(dimStyle.Render("Edit versions for each service and submit."))
 	}
 	b.WriteString("\n\n")
+	title := d.title
+	if title == "" {
+		title = "<optional>"
+	}
+	titleValueStyle := normalStyle
+	if d.titleFocused {
+		titleValueStyle = titleValueStyle.Bold(true).Underline(true)
+	}
+	b.WriteString(normalStyle.Render("Title: "))
+	b.WriteString(titleValueStyle.Render(title))
+	b.WriteString("\n\n")
 	b.WriteString(dimStyle.Render("Service                Proposed        Release        Tag description"))
 	b.WriteString("\n")
 	b.WriteString(dimStyle.Render(strings.Repeat("─", 80)))
@@ -278,7 +316,7 @@ func (d *CreateReleaseDialog) View() string {
 		marker := " "
 		versionStyle := normalStyle
 		descriptionStyle := normalStyle
-		if i == d.inputCursor {
+		if !d.titleFocused && i == d.inputCursor {
 			marker = "▶"
 			if d.inputField == inputReleaseVersion {
 				versionStyle = normalStyle.Bold(true).Underline(true)
@@ -293,6 +331,8 @@ func (d *CreateReleaseDialog) View() string {
 		description := row.description
 		if description == "" {
 			description = "<optional>"
+		} else {
+			description = strings.ReplaceAll(description, "\n", " ↵ ")
 		}
 		descriptionCol := descriptionStyle.Render(description)
 		b.WriteString(normalStyle.Render(marker + " " + serviceCol + " " + proposedCol + " "))
@@ -310,8 +350,20 @@ func (d *CreateReleaseDialog) View() string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("[Tab/Shift+Tab] focus  [Type] edit  [Backspace] delete  [Enter] submit  [Esc] back"))
+	b.WriteString(dimStyle.Render("[Tab/Shift+Tab] focus  [Type] title/version  [Enter] edit description/submit  [Esc] back"))
 	return b.String()
+}
+
+func (d *CreateReleaseDialog) descriptionEditorView() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
+	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
+	serviceName := ""
+	if d.editingRow >= 0 && d.editingRow < len(d.inputRows) {
+		serviceName = d.inputRows[d.editingRow].serviceName
+	}
+	return titleStyle.Render("Tag description — "+serviceName) + "\n\n" +
+		d.descriptionEditor.View() + "\n\n" +
+		dimStyle.Render("[Ctrl+S] save  [Esc] cancel")
 }
 
 func (d *CreateReleaseDialog) applyVersions(versions map[string]string) {
@@ -404,6 +456,16 @@ func (d *CreateReleaseDialog) moveInputCursor(step int) {
 		d.inputCursor = 0
 		return
 	}
+	if d.titleFocused {
+		d.titleFocused = false
+		d.inputField = inputReleaseVersion
+		if step < 0 {
+			d.inputCursor = len(d.inputRows) - 1
+		} else {
+			d.inputCursor = 0
+		}
+		return
+	}
 	d.inputCursor = (d.inputCursor + step + len(d.inputRows)) % len(d.inputRows)
 }
 
@@ -411,20 +473,33 @@ func (d *CreateReleaseDialog) moveInputFocus(step int) {
 	if len(d.inputRows) == 0 {
 		return
 	}
-	index := d.inputCursor*2 + int(d.inputField)
-	index = (index + step + len(d.inputRows)*2) % (len(d.inputRows) * 2)
+	total := 1 + len(d.inputRows)*2
+	index := 0
+	if !d.titleFocused {
+		index = 1 + d.inputCursor*2 + int(d.inputField)
+	}
+	index = (index + step + total) % total
+	if index == 0 {
+		d.titleFocused = true
+		return
+	}
+	d.titleFocused = false
+	index--
 	d.inputCursor = index / 2
 	d.inputField = createReleaseInputField(index % 2)
 }
 
 func (d *CreateReleaseDialog) appendRunes(s string) {
+	if d.titleFocused {
+		d.title += s
+		d.err = ""
+		return
+	}
 	if len(d.inputRows) == 0 {
 		return
 	}
 	field := &d.inputRows[d.inputCursor]
 	if d.inputField == inputTagDescription {
-		field.description += s
-		d.err = ""
 		return
 	}
 	if field.value == "…" {
@@ -436,6 +511,14 @@ func (d *CreateReleaseDialog) appendRunes(s string) {
 }
 
 func (d *CreateReleaseDialog) deleteLastRune() {
+	if d.titleFocused {
+		runes := []rune(d.title)
+		if len(runes) > 0 {
+			d.title = string(runes[:len(runes)-1])
+		}
+		d.err = ""
+		return
+	}
 	if len(d.inputRows) == 0 {
 		return
 	}
@@ -462,6 +545,11 @@ func (d *CreateReleaseDialog) deleteLastRune() {
 }
 
 func (d *CreateReleaseDialog) clearFocusedInput() {
+	if d.titleFocused {
+		d.title = ""
+		d.err = ""
+		return
+	}
 	if len(d.inputRows) == 0 {
 		return
 	}
@@ -499,10 +587,7 @@ func (d *CreateReleaseDialog) submitIfValid() tea.Cmd {
 			versions[d.inputRows[i].serviceName] = value
 		}
 		description := strings.TrimSpace(d.inputRows[i].description)
-		if strings.ContainsAny(description, "\r\n") {
-			d.inputRows[i].err = "Tag description must be one line"
-			allValid = false
-		} else if description != "" {
+		if description != "" {
 			tagDescriptions[d.inputRows[i].serviceName] = description
 		}
 	}
@@ -514,8 +599,42 @@ func (d *CreateReleaseDialog) submitIfValid() tea.Cmd {
 
 	taskIDs := d.selectedTaskIDs()
 	return func() tea.Msg {
-		return SubmitCreateReleaseMsg{TaskIDs: append([]string(nil), taskIDs...), Versions: versions, TagDescriptions: tagDescriptions}
+		return SubmitCreateReleaseMsg{Title: strings.TrimSpace(d.title), TaskIDs: append([]string(nil), taskIDs...), Versions: versions, TagDescriptions: tagDescriptions}
 	}
+}
+
+func (d *CreateReleaseDialog) openDescriptionEditor() tea.Cmd {
+	if d.inputCursor < 0 || d.inputCursor >= len(d.inputRows) {
+		return nil
+	}
+	d.editingRow = d.inputCursor
+	d.descriptionEditor.SetValue(d.inputRows[d.inputCursor].description)
+	d.editingDescription = true
+	return d.descriptionEditor.Focus()
+}
+
+func (d *CreateReleaseDialog) updateDescriptionEditor(msg tea.Msg) (Modal, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "ctrl+s":
+			d.inputRows[d.editingRow].description = d.descriptionEditor.Value()
+			d.descriptionEditor.Blur()
+			d.editingDescription = false
+			return d, nil
+		case "esc":
+			d.descriptionEditor.Blur()
+			d.editingDescription = false
+			return d, nil
+		}
+	}
+	var cmd tea.Cmd
+	d.descriptionEditor, cmd = d.descriptionEditor.Update(msg)
+	return d, cmd
+}
+
+func (d *CreateReleaseDialog) sizeDescriptionEditor() {
+	d.descriptionEditor.SetWidth(max(1, d.width-8))
+	d.descriptionEditor.SetHeight(max(1, min(10, d.height-8)))
 }
 
 func isSemver(v string) bool {

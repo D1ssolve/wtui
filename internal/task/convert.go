@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -441,9 +442,23 @@ func (m *manager) removeConversionSourceRemote(ctx context.Context, svc conversi
 	}
 	sendStatus(statusCh, fmt.Sprintf("[%s] deleting remote %s...", svc.Name, svc.SourceBranch))
 	if err := m.git.MoveRemoteBranchIfUnchanged(ctx, svc.RepoPath, svc.SourceBranch, svc.TargetBranch, svc.SourceRemoteSHA, svc.SourceSHA); err != nil {
+		if isProtectedBranchDeletionError(err) {
+			sendStatus(statusCh, fmt.Sprintf("[%s] keeping protected remote %s", svc.Name, svc.SourceBranch))
+			return nil
+		}
 		return fmt.Errorf("conversion: delete remote source for %s: %w", svc.Name, err)
 	}
 	return nil
+}
+
+func isProtectedBranchDeletionError(err error) bool {
+	var execErr *git.ExecError
+	if !errors.As(err, &execErr) {
+		return false
+	}
+	stderr := strings.ToLower(execErr.Stderr)
+	return strings.Contains(stderr, "protected branch") &&
+		(strings.Contains(stderr, "delete") || strings.Contains(stderr, "deletion"))
 }
 
 func (m *manager) removeConversionSourceLocal(ctx context.Context, svc conversionService, statusCh chan<- string) error {
@@ -524,6 +539,11 @@ func (m *manager) promoteConversionTarget(ctx context.Context, manifest conversi
 			return fmt.Errorf("conversion: move target worktree for %s: %w", svc.Name, err)
 		}
 	}
+	if manifest.TargetTaskID != manifest.SourceTaskID {
+		if err := m.moveConversionSourceExtras(manifest); err != nil {
+			return err
+		}
+	}
 
 	if err := generateWorkspaceFile(manifest.TargetTaskID, finalDir); err != nil {
 		return fmt.Errorf("conversion: generate workspace: %w", err)
@@ -548,23 +568,65 @@ func (m *manager) promoteConversionTarget(ctx context.Context, manifest conversi
 }
 
 func (m *manager) requireConvertibleSourceRoot(manifest conversionManifest) error {
+	extras, err := m.conversionSourceExtras(manifest)
+	if err != nil {
+		return err
+	}
+	for _, entry := range extras {
+		if entry.Name() == manifest.TargetTaskID+".code-workspace" || entry.Name() == manifest.TargetTaskID+".sln" {
+			return fmt.Errorf("conversion: source task root entry %s conflicts with generated target file", entry.Name())
+		}
+		targetPath := filepath.Join(m.taskDir(manifest.TargetTaskID), entry.Name())
+		if _, err := os.Lstat(targetPath); err == nil {
+			return fmt.Errorf("conversion: target task root already contains entry %s", entry.Name())
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("conversion: inspect target task root entry %s: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
+
+func (m *manager) conversionSourceExtras(manifest conversionManifest) ([]os.DirEntry, error) {
 	entries, err := os.ReadDir(m.taskDir(manifest.SourceTaskID))
 	if err != nil {
-		return fmt.Errorf("conversion: read source task root: %w", err)
+		return nil, fmt.Errorf("conversion: read source task root: %w", err)
 	}
 	allowedServices := make(map[string]struct{}, len(manifest.Services))
 	for _, svc := range manifest.Services {
 		allowedServices[svc.Name] = struct{}{}
 	}
+	var extras []os.DirEntry
 	for _, entry := range entries {
 		if _, ok := allowedServices[entry.Name()]; ok && entry.IsDir() {
 			continue
 		}
 		switch entry.Name() {
-		case conversionMarkerName, manifest.SourceTaskID + ".code-workspace", manifest.SourceTaskID + ".sln":
+		case ".DS_Store", conversionMarkerName, manifest.SourceTaskID + ".code-workspace", manifest.SourceTaskID + ".sln":
 			continue
-		default:
-			return fmt.Errorf("conversion: source task root contains unexpected entry %s", entry.Name())
+		}
+		extras = append(extras, entry)
+	}
+	return extras, nil
+}
+
+func (m *manager) moveConversionSourceExtras(manifest conversionManifest) error {
+	if err := m.requireConvertibleSourceRoot(manifest); err != nil {
+		return err
+	}
+	extras, err := m.conversionSourceExtras(manifest)
+	if err != nil {
+		return err
+	}
+	for _, entry := range extras {
+		sourcePath := filepath.Join(m.taskDir(manifest.SourceTaskID), entry.Name())
+		targetPath := filepath.Join(m.taskDir(manifest.TargetTaskID), entry.Name())
+		if _, err := os.Lstat(targetPath); err == nil {
+			return fmt.Errorf("conversion: target task root already contains entry %s", entry.Name())
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("conversion: inspect target task root entry %s: %w", entry.Name(), err)
+		}
+		if err := os.Rename(sourcePath, targetPath); err != nil {
+			return fmt.Errorf("conversion: move source task root entry %s: %w", entry.Name(), err)
 		}
 	}
 	return nil

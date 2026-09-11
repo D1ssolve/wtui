@@ -361,13 +361,35 @@ func TestCreateRelease_SameSecondIDCollisionUsesNumericSuffix(t *testing.T) {
 		t.Fatalf("seed release directory: %v", err)
 	}
 	release, err := m.CreateRelease(t.Context(), CreateReleaseParams{
-		TaskIDs: []string{"APP-1"}, ServiceVersions: map[string]string{"api": "1.2.3"},
+		Title: "  August release  ", TaskIDs: []string{"APP-1"}, ServiceVersions: map[string]string{"api": "1.2.3"},
 	})
 	if err != nil {
 		t.Fatalf("CreateRelease() error = %v", err)
 	}
 	if release.ID != "rel-20260826T120000-2" {
 		t.Fatalf("release ID = %q, want collision suffix", release.ID)
+	}
+	if release.Title != "August release" {
+		t.Fatalf("release title = %q", release.Title)
+	}
+	loaded, err := m.loadReleaseManifest(release.ID)
+	if err != nil || loaded.Title != release.Title {
+		t.Fatalf("loaded release = %#v, error = %v", loaded, err)
+	}
+}
+
+func TestCreateRelease_RejectsMultilineTitle(t *testing.T) {
+	gitMock := &mockGitClient{}
+	m, _ := newReleasePlanTestManager(t, gitMock)
+	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
+		releasePlanTaskService{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
+	)
+
+	_, err := m.CreateRelease(t.Context(), CreateReleaseParams{
+		Title: "August\nrelease", TaskIDs: []string{"APP-1"}, ServiceVersions: map[string]string{"api": "1.2.3"},
+	})
+	if !errors.Is(err, ErrReleaseManifestInvalid) {
+		t.Fatalf("CreateRelease() error = %v, want ErrReleaseManifestInvalid", err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -14,12 +15,16 @@ import (
 var _ Modal = (*ReleaseExecuteConfirmDialog)(nil)
 
 type ReleaseExecuteConfirmDialog struct {
+	title    string
 	taskIDs  []string
 	versions map[string]string
 	preview  task.ReleasePreview
+	width    int
+	height   int
+	viewport viewport.Model
 }
 
-func NewReleaseExecuteConfirmDialog(taskIDs []string, versions map[string]string, preview task.ReleasePreview) *ReleaseExecuteConfirmDialog {
+func NewReleaseExecuteConfirmDialog(title string, taskIDs []string, versions map[string]string, preview task.ReleasePreview) *ReleaseExecuteConfirmDialog {
 	clonedVersions := make(map[string]string, len(versions))
 	for k, v := range versions {
 		clonedVersions[k] = v
@@ -28,16 +33,25 @@ func NewReleaseExecuteConfirmDialog(taskIDs []string, versions map[string]string
 	clonedTaskIDs := append([]string(nil), taskIDs...)
 	sort.Strings(clonedTaskIDs)
 
-	return &ReleaseExecuteConfirmDialog{
+	dialog := &ReleaseExecuteConfirmDialog{
+		title:    strings.TrimSpace(title),
 		taskIDs:  clonedTaskIDs,
 		versions: clonedVersions,
 		preview:  preview,
+		viewport: viewport.New(1, 1),
 	}
+	return dialog
 }
 
 func (d *ReleaseExecuteConfirmDialog) Title() string { return "Confirm Release Execution" }
 
-func (d *ReleaseExecuteConfirmDialog) SetTerminalSize(width, height int) {}
+func (d *ReleaseExecuteConfirmDialog) SetTerminalSize(width, height int) {
+	d.width = width
+	d.height = height
+	d.viewport.Width = max(1, width-8)
+	d.viewport.Height = max(1, height*70/100-1)
+	d.viewport.SetContent(d.content())
+}
 
 func (d *ReleaseExecuteConfirmDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)
@@ -67,16 +81,39 @@ func (d *ReleaseExecuteConfirmDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 					descriptions[row.ServiceName] = row.TagDescription
 				}
 			}
-			return ConfirmReleaseExecuteMsg{TaskIDs: append([]string(nil), d.taskIDs...), Versions: versions, TagDescriptions: descriptions}
+			return ConfirmReleaseExecuteMsg{Title: d.title, TaskIDs: append([]string(nil), d.taskIDs...), Versions: versions, TagDescriptions: descriptions}
 		}
 	case "esc", "n":
 		return d, func() tea.Msg { return CloseModalMsg{} }
-	default:
+	case "j", "down":
+		d.viewport.ScrollDown(1)
 		return d, nil
+	case "k", "up":
+		d.viewport.ScrollUp(1)
+		return d, nil
+	case "g", "home":
+		d.viewport.GotoTop()
+		return d, nil
+	case "G", "end":
+		d.viewport.GotoBottom()
+		return d, nil
+	default:
+		d.viewport.SetContent(d.content())
+		var cmd tea.Cmd
+		d.viewport, cmd = d.viewport.Update(msg)
+		return d, cmd
 	}
 }
 
 func (d *ReleaseExecuteConfirmDialog) View() string {
+	if d.width <= 0 || d.height <= 0 {
+		return d.content()
+	}
+	d.viewport.SetContent(d.content())
+	return d.viewport.View()
+}
+
+func (d *ReleaseExecuteConfirmDialog) content() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
 	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
@@ -85,6 +122,10 @@ func (d *ReleaseExecuteConfirmDialog) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Release Execute Confirmation"))
 	b.WriteString("\n\n")
+	if d.title != "" {
+		b.WriteString(normalStyle.Render("Title: " + d.title))
+		b.WriteString("\n")
+	}
 
 	b.WriteString(normalStyle.Render("Selected tasks: " + strings.Join(d.taskIDsOrFallback(), ", ")))
 	b.WriteString("\n\n")
@@ -104,7 +145,9 @@ func (d *ReleaseExecuteConfirmDialog) View() string {
 		b.WriteString(normalStyle.Render(fmt.Sprintf("%s | %s | %s | %s", row.ServiceName, row.Version, row.ReleaseBranch, row.Tag)))
 		b.WriteString("\n")
 		if row.TagDescription != "" {
-			b.WriteString(dimStyle.Render("  Tag description: " + row.TagDescription))
+			const prefix = "  Tag description: "
+			description := strings.ReplaceAll(row.TagDescription, "\n", "\n"+strings.Repeat(" ", len(prefix)))
+			b.WriteString(dimStyle.Render(prefix + description))
 			b.WriteString("\n")
 		}
 	}

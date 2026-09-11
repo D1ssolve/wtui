@@ -27,7 +27,6 @@ var (
 	ErrReleaseNoReleaseRule           = errors.New("release: release branch type not configured")
 	ErrReleaseServiceRepoConflict     = errors.New("release: same service name maps to different repositories")
 	ErrReleaseVersionInvalid          = errors.New("release: invalid version")
-	ErrReleaseTagDescriptionInvalid   = errors.New("release: invalid tag description")
 	ErrReleaseTargetExists            = errors.New("release: release directory already exists")
 	ErrReleaseBranchExists            = errors.New("release: release branch already exists")
 	ErrReleaseTagExists               = errors.New("release: tag already exists")

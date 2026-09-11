@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/task"
 )
 
 func TestReleaseExecuteConfirmDialog_ImplementsModal(t *testing.T) {
-	var _ Modal = NewReleaseExecuteConfirmDialog(nil, nil, task.ReleasePreview{})
+	var _ Modal = NewReleaseExecuteConfirmDialog("", nil, nil, task.ReleasePreview{})
 }
 
 func TestReleaseExecuteConfirmDialog_ViewShowsDetails(t *testing.T) {
@@ -41,6 +42,7 @@ func TestReleaseExecuteConfirmDialog_ViewShowsDetails(t *testing.T) {
 	}
 
 	d := NewReleaseExecuteConfirmDialog(
+		"",
 		[]string{"FEAT-2", "FEAT-1"},
 		map[string]string{"worker": "2.0.0", "api": "1.2.3"},
 		preview,
@@ -70,7 +72,7 @@ func TestReleaseExecuteConfirmDialog_ViewShowsDetails(t *testing.T) {
 
 func TestReleaseExecuteConfirmDialog_EnterAndYEmitConfirmMessage(t *testing.T) {
 	t.Run("enter", func(t *testing.T) {
-		d := NewReleaseExecuteConfirmDialog([]string{"FEAT-1"}, map[string]string{"api": "1.0.0"}, task.ReleasePreview{})
+		d := NewReleaseExecuteConfirmDialog("", []string{"FEAT-1"}, map[string]string{"api": "1.0.0"}, task.ReleasePreview{})
 		_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
 		if cmd == nil {
 			t.Fatal("enter must emit confirm cmd")
@@ -89,7 +91,7 @@ func TestReleaseExecuteConfirmDialog_EnterAndYEmitConfirmMessage(t *testing.T) {
 	})
 
 	t.Run("y", func(t *testing.T) {
-		d := NewReleaseExecuteConfirmDialog([]string{"FEAT-2"}, map[string]string{"worker": "2.0.0"}, task.ReleasePreview{})
+		d := NewReleaseExecuteConfirmDialog("", []string{"FEAT-2"}, map[string]string{"worker": "2.0.0"}, task.ReleasePreview{})
 		_, cmd := d.Update(sendKey("y"))
 		if cmd == nil {
 			t.Fatal("y must emit confirm cmd")
@@ -102,7 +104,7 @@ func TestReleaseExecuteConfirmDialog_EnterAndYEmitConfirmMessage(t *testing.T) {
 
 func TestReleaseExecuteConfirmDialog_EscAndNClose(t *testing.T) {
 	t.Run("esc", func(t *testing.T) {
-		d := NewReleaseExecuteConfirmDialog([]string{"FEAT-1"}, map[string]string{"api": "1.0.0"}, task.ReleasePreview{})
+		d := NewReleaseExecuteConfirmDialog("", []string{"FEAT-1"}, map[string]string{"api": "1.0.0"}, task.ReleasePreview{})
 		_, cmd := d.Update(sendSpecialKey(tea.KeyEsc))
 		if cmd == nil {
 			t.Fatal("esc must emit close cmd")
@@ -113,7 +115,7 @@ func TestReleaseExecuteConfirmDialog_EscAndNClose(t *testing.T) {
 	})
 
 	t.Run("n", func(t *testing.T) {
-		d := NewReleaseExecuteConfirmDialog([]string{"FEAT-1"}, map[string]string{"api": "1.0.0"}, task.ReleasePreview{})
+		d := NewReleaseExecuteConfirmDialog("", []string{"FEAT-1"}, map[string]string{"api": "1.0.0"}, task.ReleasePreview{})
 		_, cmd := d.Update(sendKey("n"))
 		if cmd == nil {
 			t.Fatal("n must emit close cmd")
@@ -126,7 +128,7 @@ func TestReleaseExecuteConfirmDialog_EscAndNClose(t *testing.T) {
 
 func TestReleaseExecuteConfirmDialog_WithPreviewError_DisablesConfirm(t *testing.T) {
 	preview := task.ReleasePreview{Err: errors.New("bad preview")}
-	d := NewReleaseExecuteConfirmDialog([]string{"FEAT-1"}, map[string]string{"api": "1.2.3"}, preview)
+	d := NewReleaseExecuteConfirmDialog("", []string{"FEAT-1"}, map[string]string{"api": "1.2.3"}, preview)
 
 	view := stripAnsi(d.View())
 	if !strings.Contains(view, "Cannot preview release") {
@@ -164,7 +166,7 @@ func TestReleaseExecuteConfirmDialog_WithPreviewRows_RendersProvidedRows(t *test
 		PushReleaseBranches: false,
 		PushTags:            true,
 	}
-	d := NewReleaseExecuteConfirmDialog([]string{"FEAT-1"}, map[string]string{"api": "1.2.3", "worker": "2.0.0"}, preview)
+	d := NewReleaseExecuteConfirmDialog("", []string{"FEAT-1"}, map[string]string{"api": "1.2.3", "worker": "2.0.0"}, preview)
 
 	view := stripAnsi(d.View())
 	for _, want := range []string{
@@ -177,18 +179,42 @@ func TestReleaseExecuteConfirmDialog_WithPreviewRows_RendersProvidedRows(t *test
 	}
 }
 
-func TestReleaseExecuteConfirmDialog_ConfirmsTagDescriptions(t *testing.T) {
+func TestReleaseExecuteConfirmDialog_ConfirmsTitleAndMultilineTagDescriptions(t *testing.T) {
 	preview := task.ReleasePreview{Rows: []task.ReleasePreviewRow{{
-		ServiceName: "api", Version: "1.2.3", Tag: "v1.2.3", TagDescription: "Fix retry after timeout",
+		ServiceName: "api", Version: "1.2.3", Tag: "v1.2.3", TagDescription: "Summary\nDetails",
 	}}}
-	d := NewReleaseExecuteConfirmDialog([]string{"FEAT-1"}, map[string]string{"api": "1.2.3"}, preview)
+	d := NewReleaseExecuteConfirmDialog("August release", []string{"FEAT-1"}, map[string]string{"api": "1.2.3"}, preview)
 
-	if view := stripAnsi(d.View()); !strings.Contains(view, "Fix retry after timeout") {
-		t.Fatalf("view missing tag description: %s", view)
+	view := stripAnsi(d.View())
+	for _, want := range []string{"August release", "Summary", "Details"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q: %s", want, view)
+		}
 	}
 	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
 	confirm := execCmd(cmd).(ConfirmReleaseExecuteMsg)
-	if confirm.TagDescriptions["api"] != "Fix retry after timeout" {
+	if confirm.Title != "August release" {
+		t.Fatalf("title = %q", confirm.Title)
+	}
+	if confirm.TagDescriptions["api"] != "Summary\nDetails" {
 		t.Fatalf("tag descriptions = %#v", confirm.TagDescriptions)
+	}
+}
+
+func TestReleaseExecuteConfirmDialog_ScrollsLongPreviewWithinTerminal(t *testing.T) {
+	rows := make([]task.ReleasePreviewRow, 20)
+	for i := range rows {
+		rows[i] = task.ReleasePreviewRow{ServiceName: "service", Version: "1.0.0", ReleaseBranch: "release/1.0.0", Tag: "v1.0.0"}
+	}
+	d := NewReleaseExecuteConfirmDialog("", []string{"FEAT-1"}, map[string]string{"service": "1.0.0"}, task.ReleasePreview{Rows: rows})
+	d.SetTerminalSize(80, 24)
+
+	if got := lipgloss.Height(d.View()); got > 15 {
+		t.Fatalf("view height = %d, want <= 15", got)
+	}
+
+	_, _ = d.Update(sendKey("G"))
+	if !strings.Contains(stripAnsi(d.View()), "[Enter/y] execute [Esc/n] cancel") {
+		t.Fatal("bottom hint must be visible after scrolling to end")
 	}
 }

@@ -31,6 +31,7 @@ type ForgeListIssuesMsg struct {
 }
 
 type SubmitCreateReleaseMsg struct {
+	Title           string
 	TaskIDs         []string
 	Versions        map[string]string
 	TagDescriptions map[string]string
@@ -41,6 +42,7 @@ type RequestReleaseVersionsMsg struct {
 }
 
 type ConfirmReleaseExecuteMsg struct {
+	Title           string
 	TaskIDs         []string
 	Versions        map[string]string
 	TagDescriptions map[string]string

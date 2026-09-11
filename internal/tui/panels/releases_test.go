@@ -197,6 +197,19 @@ func TestReleasesPanel_View_RendersCompactListAndSelectedDetail(t *testing.T) {
 	}
 }
 
+func TestReleasesPanel_View_RendersTitleWithTechnicalIDInDetail(t *testing.T) {
+	p := NewReleasesPanel(90, 24)
+	p.SetReleases([]domain.Release{{
+		ID: "rel-1", Title: "August release", Version: "1.2.3", Status: domain.ReleaseStatusPrepared,
+		Services: []domain.ReleaseService{{Name: "api", Version: "1.2.3"}},
+	}})
+
+	view := stripAnsi(p.View())
+	if !containsAll(view, "August release", "ID: rel-1") {
+		t.Fatalf("release title/detail incomplete: %q", view)
+	}
+}
+
 func TestReleasesPanel_View_RendersMixedVersions(t *testing.T) {
 	p := NewReleasesPanel(100, 20)
 	p.SetReleases([]domain.Release{{

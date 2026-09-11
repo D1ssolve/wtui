@@ -108,7 +108,7 @@ func TestFinalizeRelease_UsesServiceTagDescription(t *testing.T) {
 	m, gitMock := newFinishTestManager(t)
 	matchingMaster(gitMock)
 	svc := finalizeService(m)
-	svc.TagDescription = "Fix retry after timeout"
+	svc.TagDescription = "Summary\n\nDetailed change"
 	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
 
 	if _, err := m.FinalizeRelease(t.Context(), FinishReleaseParams{ReleaseID: release.ID}); err != nil {

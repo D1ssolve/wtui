@@ -171,9 +171,12 @@ func (p ReleasesPanel) renderList(width, height int) string {
 	cards := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
 		rel := p.releases[i]
-		id := rel.ID
-		if id == "" {
-			id = "-"
+		label := strings.TrimSpace(rel.Title)
+		if label == "" {
+			label = rel.ID
+		}
+		if label == "" {
+			label = "-"
 		}
 		status := string(rel.Status)
 		statusStyled := lipgloss.NewStyle().
@@ -198,7 +201,7 @@ func (p ReleasesPanel) renderList(width, height int) string {
 		if i == p.cursor {
 			rail = "▌"
 		}
-		line := fmt.Sprintf("%s %s  %s  %s  %s  %d %s", rail, id, version, statusStyled, created, len(rel.Services), serviceLabel)
+		line := fmt.Sprintf("%s %s  %s  %s  %s  %d %s", rail, label, version, statusStyled, created, len(rel.Services), serviceLabel)
 		line = ansi.Truncate(line, max(0, width-2), "…")
 		style := uitheme.GlassBorder(uitheme.GlassHighlight).
 			Foreground(colorNormal).
@@ -221,7 +224,11 @@ func (p ReleasesPanel) renderDetail(width int) string {
 	if rel.Version == "" {
 		versionLabel = "Versions: mixed"
 	}
-	lines := []string{lipgloss.NewStyle().Bold(true).Foreground(colorBold).Render(versionLabel)}
+	lines := make([]string, 0, len(rel.Services)+2)
+	if strings.TrimSpace(rel.Title) != "" {
+		lines = append(lines, lipgloss.NewStyle().Foreground(releasesColorDim).Render("ID: "+rel.ID))
+	}
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorBold).Render(versionLabel))
 	if workflow := renderWorkflow(p.workflow, width); workflow != "" {
 		lines = append(lines, workflow)
 	}

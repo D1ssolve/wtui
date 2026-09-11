@@ -77,9 +77,6 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 				return releasePlan{}, err
 			}
 			tagDescription := strings.TrimSpace(params.ServiceTagDescriptions[svc.Name])
-			if strings.ContainsAny(tagDescription, "\r\n") {
-				return releasePlan{}, fmt.Errorf("%w: service=%s", ErrReleaseTagDescriptionInvalid, svc.Name)
-			}
 
 			if err := m.validateSourceWorktreeState(ctx, svc); err != nil {
 				return releasePlan{}, err
