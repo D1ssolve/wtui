@@ -239,7 +239,7 @@ func (m *mockManager) MergeTaskMRs(_ context.Context, taskID string) (task.TaskM
 	return task.TaskMergeResult{TaskID: taskID}, nil
 }
 
-func (m *mockManager) MergeServiceMR(_ context.Context, taskID, serviceName string) (task.TaskMergeResult, error) {
+func (m *mockManager) MergeServiceMR(_ context.Context, taskID, serviceName string, _ ...task.MRSelection) (task.TaskMergeResult, error) {
 	m.mergeServiceTask = taskID
 	m.mergeServiceName = serviceName
 	return task.TaskMergeResult{TaskID: taskID, Merged: []string{serviceName}}, nil

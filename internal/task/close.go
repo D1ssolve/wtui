@@ -70,6 +70,17 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 		BranchType: firstBranchType,
 		Services:   make([]ServiceClosePlan, 0, len(services)),
 	}
+	for _, svc := range services {
+		if !m.isHotfixReview(svc.Branch) {
+			continue
+		}
+		for _, other := range services {
+			if !m.isHotfixReview(other.Branch) {
+				return ClosePlan{}, ErrMixedBranchTypes
+			}
+		}
+		return m.planHotfixClose(ctx, taskID, services, flow.BranchTypes[gitflow.BranchTypeHotfix])
+	}
 
 	for _, svc := range services {
 		svcBranchType := firstBranchType
@@ -188,6 +199,9 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 	}
 
 	result.BranchType = plan.BranchType
+	if plan.HotfixReview {
+		return m.executeHotfixClose(ctx, params, plan)
+	}
 
 	services := plan.Services
 	if params.ServiceName != "" {

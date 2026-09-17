@@ -47,8 +47,10 @@ type SubmitSyncServiceStrategyMsg struct {
 }
 
 type SubmitCloseTaskMsg struct {
-	TaskID     string
-	TagVersion string
+	Fingerprint string
+	TagVersions map[string]string
+	TaskID      string
+	TagVersion  string
 }
 
 type SubmitRemoteBranchStrategyMsg struct {

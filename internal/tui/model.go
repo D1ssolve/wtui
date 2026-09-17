@@ -57,9 +57,11 @@ type Model struct {
 
 	modal modal.Modal
 
-	logOverlay   *LogOverlay
-	logPath      string
-	pipelineView *PipelineView
+	logOverlay      *LogOverlay
+	logPath         string
+	logLevel        *slog.LevelVar
+	defaultLogLevel slog.Level
+	pipelineView    *PipelineView
 
 	spinner                   spinner.Model
 	opRunning                 bool
@@ -117,6 +119,7 @@ type shellInputState struct {
 }
 
 type Options struct {
+	LogLevel         *slog.LevelVar
 	LazygitAvailable bool
 	GlabAvailable    bool
 	GhAvailable      bool
@@ -160,6 +163,7 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 		ghAvailable:      opts.GhAvailable,
 		spinner:          sp,
 		logPath:          logPath,
+		logLevel:         opts.LogLevel,
 		version:          strings.TrimSpace(opts.Version),
 		tasksPanel:       panels.NewTasksPanel(25, 10),
 		servicesPanel:    panels.NewServicesPanel(55, 10),
@@ -167,6 +171,9 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 		outputPanel:      panels.NewOutputPanel(80, cfg.OutputPanelLines+2),
 	}
 
+	if opts.LogLevel != nil {
+		m.defaultLogLevel = opts.LogLevel.Level()
+	}
 	m.setFocus(FocusTasks)
 	m.tasksPanel.SetFlow(opts.ResolvedFlow)
 	m.servicesPanel.SetLazygitAvailable(opts.LazygitAvailable)
@@ -320,6 +327,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				filterTask = t.ID
 			}
 			m.logOverlay = NewLogOverlay(m.logPath, m.width, m.height, filterTask)
+			m.logOverlay.logLevel = m.logLevel
+			m.logOverlay.defaultLogLevel = m.defaultLogLevel
+			m.logOverlay.SetSize(m.width, m.height)
 			return m, logTickCmd()
 
 		case key.Matches(msg, m.keymap.Refresh):
@@ -753,7 +763,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.beginOpProgress(msg.TaskID, "CLOSE")
 		m.outputPanel.AppendLine("Closing task " + msg.TaskID + "...")
 		return m, tea.Batch(
-			closeTaskCmd(m.mgr, task.CloseTaskParams{TaskID: msg.TaskID, TagVersion: msg.TagVersion}),
+			closeTaskCmd(m.mgr, task.CloseTaskParams{TaskID: msg.TaskID, TagVersion: msg.TagVersion, Fingerprint: msg.Fingerprint, TagVersions: msg.TagVersions}),
 			m.spinner.Tick,
 		)
 
@@ -847,10 +857,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}), m.spinner.Tick)
 
 	case modal.ConfirmMergeMsg:
-		if m.pendingMerge == nil || *m.pendingMerge != msg {
+		if m.pendingMerge == nil || m.pendingMerge.TaskID != msg.TaskID || m.pendingMerge.ReleaseID != msg.ReleaseID || m.pendingMerge.ServiceName != msg.ServiceName {
 			return m, nil
 		}
-		if _, ok := m.modal.(*modal.MergeConfirmDialog); !ok {
+		if dialog, ok := m.modal.(*modal.MergeConfirmDialog); !ok || dialog.Confirmation() != msg {
 			return m, nil
 		}
 		m.modal = nil
@@ -858,6 +868,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = true
 		if msg.ServiceName != "" {
 			m.outputPanel.AppendLine("Merging ready MR for service " + msg.ServiceName + "...")
+			if msg.Number > 0 {
+				return m, tea.Batch(mergeServiceMRCmd(m.mgr, msg.TaskID, msg.ServiceName, task.MRSelection{Number: msg.Number, TargetBranch: msg.TargetBranch, HeadSHA: msg.HeadSHA}), m.spinner.Tick)
+			}
 			return m, tea.Batch(mergeServiceMRCmd(m.mgr, msg.TaskID, msg.ServiceName), m.spinner.Tick)
 		}
 		if msg.TaskID != "" {
@@ -999,6 +1012,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Err != nil {
 			m.setServicesWorkflow(nil)
+			m.logger.Error("Load task workflow failed", slog.String("task_id", msg.TaskID), slog.String("err", msg.Err.Error()))
 			m.outputPanel.AppendLine("Load task workflow failed: " + msg.Err.Error())
 			return m, nil
 		}
@@ -1022,7 +1036,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, service := range msg.Inspection.Services {
 				if service.ServiceName == request.serviceName {
 					inspected = append(inspected, service)
-					break
 				}
 			}
 			if len(inspected) == 0 {
@@ -1033,9 +1046,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		services := make([]modal.MergeServiceStatus, len(inspected))
 		for i, service := range inspected {
 			services[i] = modal.MergeServiceStatus{
-				ServiceName: service.ServiceName,
-				Status:      service.Status,
-				Blockers:    service.Blockers,
+				Number:       service.MR.Number,
+				TargetBranch: service.MR.TargetBranch,
+				HeadSHA:      service.MR.HeadSHA,
+				ServiceName:  service.ServiceName,
+				Status:       service.Status,
+				Blockers:     service.Blockers,
 			}
 		}
 		pending := modal.ConfirmMergeMsg{TaskID: msg.TaskID, ServiceName: request.serviceName}
@@ -1198,6 +1214,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		closeTask := m.resolveCloseTask(msg.Plan.TaskID)
 		m.modal = modal.NewCloseTaskConfirmModal(closeTask, msg.Plan, m.width, m.height)
+		if msg.Plan.HotfixReview {
+			m.modal = modal.NewHotfixCloseModal(msg.Plan)
+			m.modal.SetTerminalSize(m.width, m.height)
+		}
 		return m, nil
 
 	case CloseTaskFinishedMsg:

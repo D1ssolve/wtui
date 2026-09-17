@@ -115,7 +115,7 @@ type Manager interface {
 	CloseTask(ctx context.Context, params CloseTaskParams) (CloseTaskResult, error)
 	InspectTaskMerge(ctx context.Context, taskID string) (TaskMergeInspection, error)
 	MergeTaskMRs(ctx context.Context, taskID string) (TaskMergeResult, error)
-	MergeServiceMR(ctx context.Context, taskID, serviceName string) (TaskMergeResult, error)
+	MergeServiceMR(ctx context.Context, taskID, serviceName string, selection ...MRSelection) (TaskMergeResult, error)
 	TaskWorkflow(ctx context.Context, taskID string) (domain.WorkflowSummary, error)
 
 	ListReleases(ctx context.Context) ([]domain.Release, error)

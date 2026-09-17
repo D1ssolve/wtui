@@ -3,14 +3,18 @@ package tui
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
@@ -37,24 +41,30 @@ func logTickCmd() tea.Cmd {
 type logEntry struct {
 	Time   time.Time `json:"time"`
 	Msg    string    `json:"msg"`
+	Level  string    `json:"level"`
 	Argv   []string  `json:"argv"`
 	TaskID string    `json:"task_id"`
 }
 
 type parsedLogEntry struct {
-	rendered string
-	taskID   string
+	command     string
+	application string
+	taskID      string
 }
 
 type LogOverlay struct {
-	logPath       string
-	lastOffset    int64
-	entries       []parsedLogEntry
-	filter        string
-	defaultFilter string
-	viewport      viewport.Model
-	termW         int
-	termH         int
+	logPath         string
+	lastOffset      int64
+	entries         []parsedLogEntry
+	filter          string
+	defaultFilter   string
+	application     bool
+	logLevel        *slog.LevelVar
+	defaultLogLevel slog.Level
+	readErr         error
+	viewport        viewport.Model
+	termW           int
+	termH           int
 }
 
 func NewLogOverlay(logPath string, termW, termH int, filter string) *LogOverlay {
@@ -104,37 +114,52 @@ func logViewportDimensions(termW, termH int) (vpW, vpH int) {
 }
 
 func (o *LogOverlay) SetSize(termW, termH int) {
+	follow := o.viewport.AtBottom()
 	o.termW = termW
 	o.termH = termH
-	vpW, vpH := logViewportDimensions(termW, termH)
-	o.viewport.Width = vpW
-	o.viewport.Height = vpH
 	o.rebuildContent()
+	if follow {
+		o.viewport.GotoBottom()
+	}
 }
 
 func (o *LogOverlay) Refresh() {
+	follow := o.viewport.AtBottom()
+	o.readErr = o.readEntries()
+	o.rebuildContent()
+	if follow {
+		o.viewport.GotoBottom()
+	}
+}
+
+func (o *LogOverlay) readEntries() error {
 	f, err := os.Open(o.logPath)
 	if err != nil {
-		return
+		return err
 	}
 	defer f.Close()
 
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() < o.lastOffset {
+		o.lastOffset = 0
+		o.entries = nil
+	}
 	if _, err := f.Seek(o.lastOffset, io.SeekStart); err != nil {
-		return
+		return err
 	}
 
 	data, err := io.ReadAll(f)
-	if err != nil || len(data) == 0 {
-		return
+	if err != nil {
+		return err
 	}
-	o.lastOffset += int64(len(data))
+	// A writer may still be completing the last record. Read it next time.
+	end := bytes.LastIndexByte(data, '\n') + 1
+	o.lastOffset += int64(end)
 
-	timeStyle := lipgloss.NewStyle().Foreground(logColorTime)
-	prefixStyle := lipgloss.NewStyle().Foreground(logColorPrefix)
-	cmdStyle := lipgloss.NewStyle().Foreground(logColorCmd)
-
-	var added bool
-	for _, raw := range bytes.Split(data, []byte("\n")) {
+	for _, raw := range bytes.Split(data[:end], []byte("\n")) {
 		if len(raw) == 0 {
 			continue
 		}
@@ -142,51 +167,113 @@ func (o *LogOverlay) Refresh() {
 		if err := json.Unmarshal(raw, &entry); err != nil {
 			continue
 		}
-		if !strings.HasPrefix(entry.Msg, "exec ") || len(entry.Argv) == 0 {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 			continue
 		}
-		ts := entry.Time.Local().Format("15:04:05")
-		cmd := strings.Join(entry.Argv, " ")
-		rendered := timeStyle.Render(ts) + " " + prefixStyle.Render("$") + " " + cmdStyle.Render(cmd)
-		o.entries = append(o.entries, parsedLogEntry{
-			rendered: rendered,
-			taskID:   entry.TaskID,
-		})
-		added = true
+		o.entries = append(o.entries, renderLogEntry(entry, fields))
 	}
+	return nil
+}
 
-	if added {
-		o.rebuildContent()
-		o.viewport.GotoBottom()
+func renderLogEntry(entry logEntry, fields map[string]json.RawMessage) parsedLogEntry {
+	ts := "--:--:--"
+	if !entry.Time.IsZero() {
+		ts = entry.Time.Local().Format("15:04:05")
 	}
+	ts = lipgloss.NewStyle().Foreground(logColorTime).Render(ts)
+	parsed := parsedLogEntry{taskID: entry.TaskID}
+	if strings.HasPrefix(entry.Msg, "exec ") && len(entry.Argv) > 0 {
+		parsed.command = ts + " " + lipgloss.NewStyle().Foreground(logColorPrefix).Render("$") + " " +
+			lipgloss.NewStyle().Foreground(logColorCmd).Render(strings.Join(entry.Argv, " "))
+	}
+	color := logColorCmd
+	switch entry.Level {
+	case "ERROR":
+		color = theme.Danger
+	case "WARN":
+		color = theme.Warning
+	case "DEBUG":
+		color = logColorTime
+	}
+	parsed.application = ts + " " + lipgloss.NewStyle().Foreground(color).Render(entry.Level) + " " + entry.Msg
+	delete(fields, "time")
+	delete(fields, "level")
+	delete(fields, "msg")
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		var value string
+		var text *string
+		if err := json.Unmarshal(fields[key], &text); err == nil && text != nil {
+			value = *text
+		} else {
+			var compact bytes.Buffer
+			if err := json.Compact(&compact, fields[key]); err == nil {
+				value = compact.String()
+			}
+		}
+		parsed.application += "\n  " + key + "=" + strings.ReplaceAll(value, "\n", "\n    ")
+	}
+	return parsed
 }
 
 func (o *LogOverlay) rebuildContent() {
+	bw, bh := logBoxDimensions(o.termW, o.termH)
+	o.viewport.Width = max(1, bw-4)
+	title, hint := o.chrome()
+	o.viewport.Height = max(1, bh-2-lipgloss.Height(title)-lipgloss.Height(hint))
 	var visible []string
 	for _, e := range o.entries {
 		if o.filter != "" && e.taskID != o.filter {
 			continue
 		}
-		visible = append(visible, e.rendered)
+		if o.application {
+			visible = append(visible, e.application)
+		} else if e.command != "" {
+			visible = append(visible, e.command)
+		}
 	}
 
 	if len(visible) == 0 {
-		msg := "No commands logged yet."
-		if o.filter != "" {
-			msg = "No commands logged for task " + o.filter + "."
+		kind := "commands"
+		if o.application {
+			kind = "events"
 		}
-		o.viewport.SetContent(
-			lipgloss.NewStyle().Foreground(logColorEmpty).Render(msg),
-		)
-		return
+		msg := "No " + kind + " logged yet."
+		if o.filter != "" {
+			msg = "No " + kind + " logged for task " + o.filter + "."
+		}
+		visible = append(visible, lipgloss.NewStyle().Foreground(logColorEmpty).Render(msg))
 	}
-	o.viewport.SetContent(strings.Join(visible, "\n"))
+	if o.readErr != nil {
+		visible = append(visible, lipgloss.NewStyle().Foreground(theme.Danger).Render(fmt.Sprintf("Cannot read logs: %v", o.readErr)))
+	}
+	o.viewport.SetContent(ansi.Hardwrap(strings.Join(visible, "\n"), o.viewport.Width, true))
 }
 
 func (o *LogOverlay) Update(msg tea.Msg) (*LogOverlay, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "tab":
+			o.application = !o.application
+			o.rebuildContent()
+			o.viewport.GotoBottom()
+			return o, nil
+		case "d":
+			if o.logLevel != nil {
+				if o.logLevel.Level() == slog.LevelDebug {
+					o.logLevel.Set(o.defaultLogLevel)
+				} else {
+					o.logLevel.Set(slog.LevelDebug)
+				}
+				o.rebuildContent()
+			}
+			return o, nil
 		case "j", "down":
 			o.viewport.ScrollDown(1)
 			return o, nil
@@ -215,30 +302,59 @@ func (o *LogOverlay) Update(msg tea.Msg) (*LogOverlay, tea.Cmd) {
 	return o, cmd
 }
 
-func (o *LogOverlay) View() string {
-	bw, bh := logBoxDimensions(o.termW, o.termH)
-
+func (o *LogOverlay) chrome() (string, string) {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(logColorTitle)
 	hintStyle := lipgloss.NewStyle().Foreground(logColorHint)
 	filterStyle := lipgloss.NewStyle().Foreground(logColorFilter)
 
-	title := "Logs"
+	mode := "Commands"
+	if o.application {
+		mode = "Application"
+	}
+	title := "Logs / " + mode
+	if o.logLevel != nil {
+		title += "  [recording: " + o.logLevel.Level().String() + "]"
+	} else {
+		title += "  [level control unavailable]"
+	}
 	if o.filter != "" {
 		title += "  " + filterStyle.Render("[task: "+o.filter+"]")
+	} else {
+		title += "  [all]"
 	}
 
-	hint := "[j/k] scroll  [g/G] top/bottom  [f] "
-	if o.filter != "" {
-		hint += "clear filter  "
-	} else {
-		hint += "filter by task  "
+	hint := "[Tab] mode  [d] "
+	switch {
+	case o.logLevel == nil:
+		hint += "unavailable"
+	case o.defaultLogLevel == slog.LevelDebug:
+		hint += "DEBUG configured"
+	case o.logLevel.Level() == slog.LevelDebug:
+		hint += "restore " + o.defaultLogLevel.String()
+	default:
+		hint += "enable DEBUG"
 	}
-	hint += "[L/Esc] close"
+	hint += "  [f] "
+	if o.filter != "" {
+		hint += "all"
+	} else if o.defaultFilter != "" {
+		hint += "task"
+	} else {
+		hint += "no task"
+	}
+	hint += "\n[j/k] scroll  [g/G] top/bottom  [L/Esc] close"
+	return ansi.Hardwrap(titleStyle.Render(title), o.viewport.Width, true),
+		ansi.Hardwrap(hintStyle.Render(hint), o.viewport.Width, true)
+}
+
+func (o *LogOverlay) View() string {
+	bw, bh := logBoxDimensions(o.termW, o.termH)
+	title, hint := o.chrome()
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render(title),
+		title,
 		o.viewport.View(),
-		hintStyle.Render(hint),
+		hint,
 	)
 
 	boxed := theme.FocusedGlassBorder(logColorBorder).

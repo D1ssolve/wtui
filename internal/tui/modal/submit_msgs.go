@@ -49,9 +49,12 @@ type ConfirmReleaseExecuteMsg struct {
 }
 
 type ConfirmMergeMsg struct {
-	TaskID      string
-	ReleaseID   string
-	ServiceName string
+	Number       int
+	TargetBranch string
+	HeadSHA      string
+	TaskID       string
+	ReleaseID    string
+	ServiceName  string
 }
 
 type SubmitReleaseCleanupMsg struct {

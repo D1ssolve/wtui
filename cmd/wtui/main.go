@@ -74,9 +74,12 @@ func runTUI() error {
 		return fmt.Errorf("normalize config: %w", err)
 	}
 
-	logger, logErr := logutil.InitLogger("wtui", logutil.ParseLogLevel(cfg.LogLevel))
+	logLevel := new(slog.LevelVar)
+	logLevel.Set(logutil.ParseLogLevel(cfg.LogLevel))
+	logger, logErr := logutil.InitLogger("wtui", logLevel)
 	if logErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not open log file: %v\n", logErr)
+		logLevel = nil
 	}
 
 	deps := app.BuildDependencies(cfg, logger)
@@ -87,6 +90,7 @@ func runTUI() error {
 		GhAvailable:      deps.GhAvailable,
 		ResolvedFlow:     deps.ResolvedFlow,
 		Version:          resolveVersion(),
+		LogLevel:         logLevel,
 	})
 	if err != nil {
 		return fmt.Errorf("create TUI model: %w", err)

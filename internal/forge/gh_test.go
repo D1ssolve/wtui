@@ -243,7 +243,7 @@ printf '{"number":9,"state":"OPEN","url":"https://github.com/org/repo/pull/9","h
 	if err != nil {
 		t.Fatalf("read args: %v", err)
 	}
-	want := "pr view 9 --json number,state,url,headRefOid,mergeable,reviewDecision,statusCheckRollup --repo org/repo"
+	want := "pr view 9 --json number,state,url,headRefOid,headRefName,baseRefName,mergeCommit,mergeable,reviewDecision,statusCheckRollup --repo org/repo"
 	if strings.TrimSpace(string(args)) != want {
 		t.Fatalf("argv = %q, want %q", strings.TrimSpace(string(args)), want)
 	}

@@ -18,6 +18,12 @@ type TaskMergeInspection struct {
 	Services []ServiceMergeInspection
 }
 
+type MRSelection struct {
+	Number       int
+	TargetBranch string
+	HeadSHA      string
+}
+
 type ServiceMergeInspection struct {
 	ServiceName string
 	Status      string
@@ -45,6 +51,7 @@ func (m *manager) inspectTaskMerge(ctx context.Context, taskID string) (TaskMerg
 	}
 
 	inspection := TaskMergeInspection{TaskID: taskID, Services: make([]ServiceMergeInspection, len(services))}
+	hotfixRows := make([][]ServiceMergeInspection, len(services))
 	servicesByName := make(map[string]domain.Service, len(services))
 	for _, svc := range services {
 		servicesByName[svc.Name] = svc
@@ -59,6 +66,14 @@ func (m *manager) inspectTaskMerge(ctx context.Context, taskID string) (TaskMerg
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			item := ServiceMergeInspection{ServiceName: svc.Name}
+			if m.isHotfixReview(svc.Branch) {
+				rows, err := m.inspectHotfixMRs(ctx, svc)
+				if err != nil {
+					rows = []ServiceMergeInspection{{ServiceName: svc.Name, Status: "failed", Blockers: []string{err.Error()}}}
+				}
+				hotfixRows[i] = rows
+				return
+			}
 
 			client, clientErr := m.forgeClientForService(ctx, svc)
 			if clientErr != nil {
@@ -96,6 +111,15 @@ func (m *manager) inspectTaskMerge(ctx context.Context, taskID string) (TaskMerg
 		}()
 	}
 	wg.Wait()
+	var flattened []ServiceMergeInspection
+	for i, item := range inspection.Services {
+		if hotfixRows[i] != nil {
+			flattened = append(flattened, hotfixRows[i]...)
+		} else {
+			flattened = append(flattened, item)
+		}
+	}
+	inspection.Services = flattened
 
 	return inspection, servicesByName, nil
 }
@@ -104,20 +128,35 @@ func (m *manager) MergeTaskMRs(ctx context.Context, taskID string) (TaskMergeRes
 	return m.mergeTaskMRs(ctx, taskID, "")
 }
 
-func (m *manager) MergeServiceMR(ctx context.Context, taskID, serviceName string) (TaskMergeResult, error) {
-	return m.mergeTaskMRs(ctx, taskID, serviceName)
+func (m *manager) MergeServiceMR(ctx context.Context, taskID, serviceName string, selection ...MRSelection) (TaskMergeResult, error) {
+	return m.mergeTaskMRs(ctx, taskID, serviceName, selection...)
 }
 
-func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string) (TaskMergeResult, error) {
+func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string, selection ...MRSelection) (TaskMergeResult, error) {
+	if len(selection) > 1 {
+		return TaskMergeResult{}, errors.New("select exactly one MR")
+	}
 	inspection, services, err := m.inspectTaskMerge(ctx, taskID)
 	if err != nil {
 		return TaskMergeResult{}, err
 	}
 
 	result := TaskMergeResult{TaskID: taskID, Errs: make(map[string]error)}
+	matched := len(selection) == 0
 	for _, item := range inspection.Services {
 		if serviceName != "" && item.ServiceName != serviceName {
 			continue
+		}
+		if len(selection) > 0 {
+			selected := selection[0]
+			if item.MR.Number != selected.Number {
+				continue
+			}
+			matched = true
+			if selected.HeadSHA == "" || item.MR.HeadSHA != selected.HeadSHA || item.MR.TargetBranch != selected.TargetBranch {
+				recordMergeFailure(&result, item.ServiceName, errors.New("selected MR changed since preview"))
+				continue
+			}
 		}
 		if item.Status != "ready" {
 			result.Skipped = append(result.Skipped, item.ServiceName)
@@ -152,6 +191,10 @@ func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string) 
 				recordMergeFailure(&result, item.ServiceName, fmt.Errorf("head SHA drift: inspected=%s current=%s", item.MR.HeadSHA, fresh.HeadSHA))
 				continue
 			}
+			if m.isHotfixReview(svc.Branch) && (!fresh.Ready || fresh.SourceBranch != svc.Branch || fresh.TargetBranch != item.MR.TargetBranch || (fresh.State != "open" && fresh.State != "opened")) {
+				recordMergeFailure(&result, item.ServiceName, errors.New("hotfix MR readiness changed before merge"))
+				continue
+			}
 			if m.logger != nil {
 				m.logger.WarnContext(ctx, "forge does not support SHA-pinned merge", slog.String("service", item.ServiceName))
 			}
@@ -171,6 +214,70 @@ func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string) 
 		result.Steps = append(result.Steps, item.ServiceName+": merged")
 	}
 
+	if !matched {
+		return result, errors.New("selected MR no longer exists; inspect again")
+	}
+	return result, nil
+}
+
+func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]ServiceMergeInspection, error) {
+	client, err := m.forgeClientForService(ctx, svc)
+	if err != nil {
+		return nil, err
+	}
+	history, ok := client.(forge.HistoryClient)
+	if !ok {
+		return nil, errors.New("forge does not support MR history")
+	}
+	repo := forge.ExtractRepoPath(svc.RemoteURL)
+	if repo == "" {
+		return nil, errors.New("invalid forge repository")
+	}
+	rows, err := history.MRHistory(ctx, svc.Branch, repo)
+	if err != nil {
+		return nil, err
+	}
+	sha, err := m.git.ResolveRef(ctx, svc.RepoPath, svc.Branch)
+	if err != nil {
+		return nil, err
+	}
+	var result []ServiceMergeInspection
+	for _, target := range appendUnique(nil, m.flow.BranchTypes[gitflow.BranchTypeHotfix].ReviewTargets...) {
+		item := ServiceMergeInspection{ServiceName: svc.Name, Status: "no_mr", MR: forge.MRReadiness{TargetBranch: target}}
+		var matches []forge.MRInfo
+		for _, r := range rows {
+			if r.SourceBranch == svc.Branch && r.TargetBranch == target {
+				matches = append(matches, r)
+			}
+		}
+		if len(matches) > 1 {
+			return nil, fmt.Errorf("%s: ambiguous MR history for %s", svc.Name, target)
+		}
+		if len(matches) == 1 {
+			item.MR, err = client.MRReadinessByNumber(ctx, matches[0].Number, repo, svc.WorktreePath)
+			if err != nil {
+				return nil, err
+			}
+			if item.MR.SourceBranch != svc.Branch || item.MR.TargetBranch != target || item.MR.HeadSHA != sha || item.MR.Number != matches[0].Number {
+				return nil, errors.New("hotfix MR identity/source SHA changed")
+			}
+			item.Blockers = append([]string(nil), item.MR.Blockers...)
+			switch {
+			case item.MR.State == "merged":
+				item.Status = "merged"
+			case item.MR.Ready && (item.MR.State == "open" || item.MR.State == "opened"):
+				item.Status = "ready"
+			case waitingBlockers(item.Blockers):
+				item.Status = "waiting"
+			default:
+				item.Status = "blocked"
+			}
+		}
+		result = append(result, item)
+	}
+	if len(result) == 0 {
+		return nil, ErrNoMergeTargets
+	}
 	return result, nil
 }
 

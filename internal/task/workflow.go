@@ -30,6 +30,36 @@ func (m *manager) TaskWorkflow(ctx context.Context, taskID string) (domain.Workf
 	if err != nil {
 		return domain.WorkflowSummary{}, err
 	}
+	if len(services) > 0 && m.isHotfixReview(services[0].Branch) {
+		inspection, err := m.InspectTaskMerge(ctx, taskID)
+		if err != nil {
+			return domain.WorkflowSummary{}, err
+		}
+		steps := append([]domain.WorkflowStep(nil), taskWorkflowSteps...)
+		steps[len(steps)-1].Label = "tag"
+		allMerged := len(inspection.Services) > 0
+		missing, ready := false, false
+		var rows []domain.ServiceWorkflow
+		var blockers []string
+		for _, item := range inspection.Services {
+			allMerged = allMerged && item.Status == "merged"
+			missing = missing || item.Status == "no_mr"
+			ready = ready || item.Status == "ready"
+			if item.Status == "failed" || item.Status == "blocked" {
+				blockers = append(blockers, strings.Join(item.Blockers, "; "))
+			}
+			rows = append(rows, domain.ServiceWorkflow{ServiceName: item.ServiceName, Status: item.Status, Detail: item.MR.TargetBranch + ": " + strings.Join(item.Blockers, "; ")})
+		}
+		phase, next := domain.TaskWorkflowReviewCI, "Services → m → Merge MR"
+		if missing {
+			phase, next = domain.TaskWorkflowMR, "press C to create missing hotfix MRs"
+		} else if allMerged {
+			phase, next = domain.TaskWorkflowReleaseEligible, "press C to finalize hotfix"
+		} else if ready {
+			phase = domain.TaskWorkflowMerge
+		}
+		return workflowSummaryWithServices(steps, phase, next, strings.Join(blockers, "; "), false, len(blockers) > 0, rows), nil
+	}
 
 	integrationBranch := "develop"
 	if m.flow != nil && m.flow.IntegrationBranch != "" {

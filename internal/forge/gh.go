@@ -21,6 +21,9 @@ type ghCheck struct {
 }
 
 type ghPR struct {
+	MergeCommit struct {
+		OID string `json:"oid"`
+	} `json:"mergeCommit"`
 	Number            int       `json:"number"`
 	State             string    `json:"state"`
 	URL               string    `json:"url"`
@@ -137,7 +140,7 @@ func (c *GhClient) MRReadiness(ctx context.Context, sourceBranch, repo, worktree
 }
 
 func (c *GhClient) MRReadinessByNumber(ctx context.Context, number int, repo, worktreePath string) (MRReadiness, error) {
-	const fields = "number,state,url,headRefOid,mergeable,reviewDecision,statusCheckRollup"
+	const fields = "number,state,url,headRefOid,headRefName,baseRefName,mergeCommit,mergeable,reviewDecision,statusCheckRollup"
 	stdout, _, err := c.run(ctx, pickWorktree(c.worktreePath, worktreePath), "pr", "view", strconv.Itoa(number), "--json", fields, "--repo", repo)
 	if err != nil {
 		return MRReadiness{}, err
@@ -186,6 +189,7 @@ func ghReadiness(pr ghPR, sourceBranch string) MRReadiness {
 		SourceBranch:   pr.HeadRefName,
 		TargetBranch:   pr.BaseRefName,
 		HeadSHA:        pr.HeadRefOID,
+		MergedSHA:      pr.MergeCommit.OID,
 		Approved:       approved,
 		CIState:        ciState,
 		Mergeable:      mergeable,

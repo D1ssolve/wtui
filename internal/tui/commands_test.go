@@ -126,6 +126,7 @@ type cmdManager struct {
 	mergeTaskResult    task.TaskMergeResult
 	mergeServiceTask   string
 	mergeServiceName   string
+	mergeSelection     []task.MRSelection
 	updateServiceTask  string
 	updateServiceName  string
 	updateTarget       string
@@ -278,7 +279,8 @@ func (m *cmdManager) MergeTaskMRs(_ context.Context, taskID string) (task.TaskMe
 	return m.mergeTaskResult, nil
 }
 
-func (m *cmdManager) MergeServiceMR(_ context.Context, taskID, serviceName string) (task.TaskMergeResult, error) {
+func (m *cmdManager) MergeServiceMR(_ context.Context, taskID, serviceName string, selection ...task.MRSelection) (task.TaskMergeResult, error) {
+	m.mergeSelection = selection
 	m.mergeServiceTask = taskID
 	m.mergeServiceName = serviceName
 	return m.mergeTaskResult, nil

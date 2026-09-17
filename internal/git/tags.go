@@ -13,6 +13,11 @@ import (
 
 const tagListDelimiter = "|"
 
+func (c *CommandClient) CreateLightweightTag(ctx context.Context, repoPath, tag, ref string) error {
+	_, err := c.execGit(ctx, "-C", repoPath, "tag", "--", tag, ref)
+	return err
+}
+
 func (c *CommandClient) CreateTag(ctx context.Context, repoPath, tag, ref, message string) error {
 	_, err := c.execGit(ctx, "-C", repoPath, "tag", "-a", tag, ref, "-m", message)
 	if err != nil && ctx.Err() != nil {

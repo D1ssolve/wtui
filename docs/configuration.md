@@ -14,6 +14,16 @@ If no file exists, wtui starts with defaults. The config loader also accepts an 
 
 Logs are written to `$XDG_STATE_HOME/wtui/wtui.log`, with `$HOME/.local/state` used when `XDG_STATE_HOME` is unset.
 
+Press `L` to view logs inside wtui:
+
+- `Tab`: switch between **Commands** (CLI invocations) and **Application** (all recorded events, levels, task IDs, and full error fields).
+- `f`: selected task / all events. Events without a task ID appear with the all-events filter.
+- `d`: enable DEBUG recording for this process; press again to restore the startup `log_level`. If configured as DEBUG, it stays DEBUG. The header shows the current recording level. Closing the window does not reset it, and the YAML file is never changed.
+- `j/k` or arrows: scroll. `g/G`: first / last record. New events are followed only while at the bottom.
+- `L` or `Esc`: close the window.
+
+Logs refresh every second. Long lines and multiline errors wrap to the window width. DEBUG events omitted before enabling DEBUG cannot be recovered; enable it before reproducing a problem. The viewer shows existing instrumentation, not a trace of every internal operation. If file logging could not be initialized, runtime level control is unavailable and the viewer reports file-read failures.
+
 ## Minimal Configuration
 
 ```yaml
@@ -223,7 +233,7 @@ Keys live under `git_flow.branch_types.<name>`.
 | `requires_clean` | bool | no | Parsed and included in resolved rules, but currently not enforced by close execution. |
 | `tag_on_close` | bool | no | Create a tag during branch close. Releases use their own finalization flow. |
 | `tag_source` | string | when `tag_on_close` is true | Ref used for tag lookup and creation. |
-| `delete_source_branch_after_merge` | bool | no | Delete the local source branch after a successful close merge. |
+| `delete_source_branch_after_merge` | bool | no | Delete the local source branch after a successful close merge. Hotfix review continuation retains source branches; cleanup is separate. |
 | `trigger_pipeline_on_close` | bool | no | Ask the selected forge client to trigger a pipeline after close. |
 
 ## Forge
@@ -242,18 +252,18 @@ An absent `tag` block gets all defaults shown below. In a present block, omitted
 
 | Key | Type | Absent-block default | Runtime status |
 |---|---|---|---|
-| `tag.enabled` | bool | `true` | Parsed, currently unused. |
+| `tag.enabled` | bool | `true` | Enables tagging in hotfix review continuation; other close flows do not currently consult this flag. |
 | `tag.format` | string | `v{{.Version}}` | Used to render tag names. Empty values receive the default. |
 | `tag.version_scheme` | string | `semver` | Parsed, currently unused. |
 | `tag.parser` | string | `masterminds-semver` | Parsed, currently unused. |
 | `tag.strict` | bool | `true` | Parsed, currently unused. |
 | `tag.bump` | string | `manual` | Parsed, currently unused. |
-| `tag.annotated` | bool | `true` | Parsed into close plans, but currently does not change tag creation; Git tags are annotated. |
+| `tag.annotated` | bool | `true` | Selects annotated or lightweight tags in hotfix review continuation. Other flows create annotated tags. |
 | `tag.message_template` | string | `Release {{.Tag}} for {{.TaskID}}` | Tag annotation template. Empty values receive the default. |
 | `tag.source` | string | `production_branch` | Parsed, currently unused; branch rules use `tag_source`. |
 | `tag.push` | bool | `true` | Push task-close tags and provide the fallback for `release.push_tags`. |
-| `tag.shared_version` | bool | `false` | Parsed, currently unused. |
-| `tag.create_after_all_targets` | bool | `true` | Parsed, currently unused. |
+| `tag.shared_version` | bool | `false` | One version input for all services in hotfix review continuation. Otherwise versions are entered per service. |
+| `tag.create_after_all_targets` | bool | `true` | Hotfix review continuation always waits for every required target, regardless of this flag. Other flows currently do not consult it. |
 
 `tag.format` supports `{{.Version}}`. `tag.message_template` supports `{{.Tag}}` and `{{.TaskID}}`.
 
@@ -312,6 +322,53 @@ In a present block, omitted boolean fields remain `false`.
 | `close.show_plan_before_execute` | bool | `true` | Parsed, currently unused; the TUI always shows the plan. |
 
 In a present block, omitted boolean fields remain `false`.
+
+### Hotfix continuation from Tasks
+
+For `hotfix` with `close_strategy: review_request`, use **Tasks → select
+hotfix → C**. No Release needs to be created.
+
+This continuation requires a hotfix-only task. Mixed feature/hotfix tasks
+must be split, even when `allow_mixed_branch_types_on_close` is enabled.
+
+1. wtui fetches repositories and inspects open, closed and merged requests
+   for every configured `review_targets` entry. Existing merged requests
+   are recognized even if they were merged outside wtui.
+2. Confirm the plan to create missing requests. Open or merged requests
+   are not recreated. Source branches are retained for subsequent targets.
+3. Use **Services → select service → m → Merge MR** to choose a target with
+   `j/k` and merge its ready request. Readiness and the inspected head SHA
+   are checked again before merging.
+4. Return to **Tasks → C**. Only after all required targets of all services
+   are merged does wtui offer tag versions and the exact commit SHA.
+   Versions are entered per service (`Tab` switches fields), or together
+   when `tag.shared_version` is enabled.
+5. Confirm to create/push tags. Worktree cleanup remains a separate
+   **Tasks → P** operation.
+
+With `review_targets: [master, develop]`, an already merged master request
+is skipped and only the missing develop request is created. Active release
+branches do not automatically replace review targets; list them explicitly
+if they are required for this hotfix.
+
+Tagging honors `tag.enabled`, the resolved rule's `tag_on_close` and
+`tag_source`, plus `tag.format`, `tag.annotated`, `tag.push` and the message
+template. The tag points to the verified merge commit of the request into
+`tag_source`, not to the local master or a newer remote tip. That source
+must be one of the required review targets.
+
+The task-local `.hotfix-close.json` checkpoint saves confirmed versions and
+source/config identity. Review-stage changes require a fresh preview; after
+tag confirmation, the saved identity is locked. Keep the checkpoint until
+cleanup: retries reuse those versions,
+skip matching published tags and retry an unfinished push. Existing tags
+at another commit, changed source identity, closed-unmerged requests and
+ambiguous request history block continuation rather than silently changing
+the release. An uncertain pipeline-trigger response also blocks automatic
+retriggering; inspect its result in the forge.
+
+Prune currently checks hotfix ancestry against `origin/<production_branch>`
+only. Finish the remaining targets and tagging before pruning the task.
 
 ## Prune
 

@@ -64,7 +64,9 @@ func (m *CloseTaskSummaryModal) View() string {
 	}
 
 	sb.WriteString("\n")
-	if m.result.Success {
+	if m.result.Waiting && !hasFailedCloseStep(m.result.Steps) {
+		sb.WriteString(normalStyle.Bold(true).Render("Overall: WAITING FOR MERGE — return to Tasks → C after merging"))
+	} else if m.result.Success {
 		sb.WriteString(normalStyle.Bold(true).Render("Overall: SUCCESS"))
 	} else {
 		sb.WriteString(warnStyle.Bold(true).Render("Overall: FAILED"))
@@ -73,6 +75,15 @@ func (m *CloseTaskSummaryModal) View() string {
 	sb.WriteString("\n\n")
 	sb.WriteString(dimStyle.Render("[Enter/Esc] close"))
 	return sb.String()
+}
+
+func hasFailedCloseStep(steps []task.CloseTaskStep) bool {
+	for _, step := range steps {
+		if step.Status == task.StepStatusFailed {
+			return true
+		}
+	}
+	return false
 }
 
 func stepStatusIcon(status task.StepStatus) string {

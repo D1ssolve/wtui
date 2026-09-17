@@ -65,7 +65,7 @@ func ParseLogLevel(level string) slog.Level {
 	}
 }
 
-func InitLogger(app string, level slog.Level) (*slog.Logger, error) {
+func InitLogger(app string, level slog.Leveler) (*slog.Logger, error) {
 	logDir := XDGStateDir(app)
 	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		return fallbackLogger(), fmt.Errorf("create log directory %s: %w", logDir, err)

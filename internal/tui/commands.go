@@ -467,11 +467,11 @@ func mergeTaskMRsCmd(mgr task.Manager, taskID string) tea.Cmd {
 	}
 }
 
-func mergeServiceMRCmd(mgr task.Manager, taskID, serviceName string) tea.Cmd {
+func mergeServiceMRCmd(mgr task.Manager, taskID, serviceName string, selection ...task.MRSelection) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 10*time.Minute)
 		defer cancel()
-		result, err := mgr.MergeServiceMR(ctx, taskID, serviceName)
+		result, err := mgr.MergeServiceMR(ctx, taskID, serviceName, selection...)
 		return TaskMergeDoneMsg{Result: result, Err: err}
 	}
 }

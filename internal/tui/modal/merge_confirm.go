@@ -1,6 +1,7 @@
 package modal
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,12 +11,16 @@ import (
 var _ Modal = (*MergeConfirmDialog)(nil)
 
 type MergeServiceStatus struct {
-	ServiceName string
-	Status      string
-	Blockers    []string
+	Number       int
+	TargetBranch string
+	HeadSHA      string
+	ServiceName  string
+	Status       string
+	Blockers     []string
 }
 
 type MergeConfirmDialog struct {
+	selected    int
 	taskID      string
 	releaseID   string
 	serviceName string
@@ -36,15 +41,39 @@ func (d *MergeConfirmDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 		return d, nil
 	}
 	switch keyMsg.String() {
+	case "down", "j", "up", "k":
+		if d.serviceName != "" && len(d.services) > 0 {
+			delta := 1
+			if keyMsg.String() == "up" || keyMsg.String() == "k" {
+				delta = -1
+			}
+			d.selected = (d.selected + delta + len(d.services)) % len(d.services)
+		}
+		return d, nil
 	case "enter", "y":
+		if d.serviceName != "" && len(d.services) > 0 && d.services[d.selected].Status != "ready" {
+			return d, nil
+		}
+		confirmation := d.Confirmation()
 		return d, func() tea.Msg {
-			return ConfirmMergeMsg{TaskID: d.taskID, ReleaseID: d.releaseID, ServiceName: d.serviceName}
+			return confirmation
 		}
 	case "esc", "n":
 		return d, func() tea.Msg { return CloseModalMsg{} }
 	default:
 		return d, nil
 	}
+}
+
+func (d *MergeConfirmDialog) Confirmation() ConfirmMergeMsg {
+	msg := ConfirmMergeMsg{TaskID: d.taskID, ReleaseID: d.releaseID, ServiceName: d.serviceName}
+	if d.serviceName != "" && len(d.services) > 0 {
+		r := d.services[d.selected]
+		msg.Number = r.Number
+		msg.TargetBranch = r.TargetBranch
+		msg.HeadSHA = r.HeadSHA
+	}
+	return msg
 }
 
 func (d *MergeConfirmDialog) View() string {
@@ -61,8 +90,16 @@ func (d *MergeConfirmDialog) View() string {
 		b.WriteString(normal.Render("Release: " + d.releaseID))
 	}
 	b.WriteString("\n\nService | Status | Blockers\n")
-	for _, service := range d.services {
+	for i, service := range d.services {
 		line := service.ServiceName + " | " + service.Status
+		if service.Number > 0 {
+			line += fmt.Sprintf(" | #%d → %s", service.Number, service.TargetBranch)
+		} else if service.TargetBranch != "" {
+			line += " | → " + service.TargetBranch
+		}
+		if d.serviceName != "" && i == d.selected {
+			line = "> " + line
+		}
 		if len(service.Blockers) > 0 {
 			line += " | " + strings.Join(service.Blockers, "; ")
 		}
@@ -70,6 +107,10 @@ func (d *MergeConfirmDialog) View() string {
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
-	b.WriteString(dim.Render("[Enter/y] merge ready  [Esc/n] cancel"))
+	if d.serviceName != "" {
+		b.WriteString(dim.Render("[j/k] select target  [Enter/y] merge selected  [Esc/n] cancel"))
+	} else {
+		b.WriteString(dim.Render("[Enter/y] merge ready  [Esc/n] cancel"))
+	}
 	return b.String()
 }

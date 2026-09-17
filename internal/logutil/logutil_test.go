@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +74,31 @@ func TestInitLogger_CreatesLogFile(t *testing.T) {
 	logPath := filepath.Join(tmp, "testapp", "testapp.log")
 	if _, statErr := os.Stat(logPath); statErr != nil {
 		t.Errorf("expected log file at %s, got stat error: %v", logPath, statErr)
+	}
+}
+
+func TestInitLogger_RuntimeLevelControlsRecording(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	level := new(slog.LevelVar)
+	level.Set(slog.LevelWarn)
+	logger, err := InitLogger("runtime", level)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Debug("before-debug")
+	level.Set(slog.LevelDebug)
+	logger.With("service", "api").Debug("during-debug")
+	level.Set(slog.LevelWarn)
+	logger.Debug("after-debug")
+	logger.Info("after-info")
+	logger.Warn("after-warn")
+	data, err := os.ReadFile(filepath.Join(XDGStateDir("runtime"), "runtime.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "during-debug") || !strings.Contains(text, "after-warn") ||
+		strings.Contains(text, "before-debug") || strings.Contains(text, "after-debug") || strings.Contains(text, "after-info") {
+		t.Fatalf("runtime level did not control actual recording: %s", text)
 	}
 }

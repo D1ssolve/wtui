@@ -3,6 +3,9 @@ package task
 import "github.com/D1ssolve/wtui/internal/gitflow"
 
 type ClosePlan struct {
+	HotfixReview  bool
+	Fingerprint   string
+	SharedVersion bool
 	TaskID        string
 	BranchType    gitflow.BranchType
 	Services      []ServiceClosePlan
@@ -12,6 +15,10 @@ type ClosePlan struct {
 }
 
 type ServiceClosePlan struct {
+	RepoPath       string
+	RemoteURL      string
+	SourceSHA      string
+	Reviews        []HotfixReview
 	ServiceName    string
 	SourceBranch   string
 	TargetBranches []string
@@ -24,6 +31,7 @@ type ServiceClosePlan struct {
 }
 
 type TagPlan struct {
+	Locked    bool
 	TagName   string
 	Version   string
 	SourceRef string
@@ -46,6 +54,8 @@ type PipelinePlan struct {
 }
 
 type CloseTaskParams struct {
+	Fingerprint string
+	TagVersions map[string]string
 	TaskID      string
 	ServiceName string
 	StatusCh    chan<- string
@@ -54,6 +64,7 @@ type CloseTaskParams struct {
 }
 
 type CloseTaskResult struct {
+	Waiting    bool
 	TaskID     string
 	BranchType gitflow.BranchType
 	Steps      []CloseTaskStep
