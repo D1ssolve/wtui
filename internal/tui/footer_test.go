@@ -172,6 +172,22 @@ func TestRenderFooter_FocusReleases_IncludesReleaseHints(t *testing.T) {
 	}
 }
 
+func TestRenderFooter_ReleaseFolderActions(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m.focus = FocusReleases
+	m.width = 240
+	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel", Status: domain.ReleaseStatusFailed, Error: &domain.ReleaseError{Recoverable: true}}})
+	for _, want := range []string{"[O] editor folder", "[I] Rider folder", "[R] retry"} {
+		if got := stripANSIForModel(renderFooter(m)); !strings.Contains(got, want) {
+			t.Fatalf("footer missing %q: %s", want, got)
+		}
+	}
+	m.width = 40
+	if got := renderFooter(m); lipgloss.Width(got) > 40 {
+		t.Fatalf("compact footer overflows: %q", got)
+	}
+}
+
 func TestRenderFooter_FocusReleases_ShowsStatusAction(t *testing.T) {
 	for _, tc := range []struct {
 		status domain.ReleaseStatus

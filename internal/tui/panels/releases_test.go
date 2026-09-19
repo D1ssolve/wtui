@@ -25,6 +25,55 @@ func TestReleasesPanel_New_DefaultState(t *testing.T) {
 	}
 }
 
+func TestReleasesPanel_FolderActions_SelectedReleaseAllStatuses(t *testing.T) {
+	for _, status := range []domain.ReleaseStatus{
+		domain.ReleaseStatusDraft, domain.ReleaseStatusValidating, domain.ReleaseStatusMerging,
+		domain.ReleaseStatusBranching, domain.ReleaseStatusPushing, domain.ReleaseStatusPrepared,
+		domain.ReleaseStatusAwaitingMasterMerge, domain.ReleaseStatusMasterMerged, domain.ReleaseStatusSyncingDevelop,
+		domain.ReleaseStatusTagging, domain.ReleaseStatusReleased, domain.ReleaseStatusFailed, domain.ReleaseStatusRejected,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			p := NewReleasesPanel(60, 20)
+			p.SetFocused(true)
+			p.SetReleases([]domain.Release{{ID: "first", Dir: "/first"}, {ID: "selected", Dir: "/release folder", Status: status}})
+			p, _ = p.Update(sendKey("j"))
+			for _, key := range []string{"O", "I"} {
+				_, cmd := p.Update(sendKey(key))
+				if cmd == nil {
+					t.Fatalf("%s: missing action", key)
+				}
+				var want tea.Msg = OpenReleaseEditorMsg{ReleaseID: "selected", ReleaseDir: "/release folder"}
+				if key == "I" {
+					want = OpenReleaseRiderMsg{ReleaseID: "selected", ReleaseDir: "/release folder"}
+				}
+				if got := cmd(); got != want {
+					t.Fatalf("%s: got %#v, want %#v", key, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestReleasesPanel_FolderActions_EmptyOrUnfocused(t *testing.T) {
+	for _, focused := range []bool{false, true} {
+		for _, populated := range []bool{false, true} {
+			if focused && populated {
+				continue
+			}
+			p := NewReleasesPanel(60, 20)
+			p.SetFocused(focused)
+			if populated {
+				p.SetReleases([]domain.Release{{ID: "rel", Dir: "/rel"}})
+			}
+			for _, key := range []string{"O", "I", "R"} {
+				if _, cmd := p.Update(sendKey(key)); cmd != nil {
+					t.Fatalf("%s emitted action: focused=%v populated=%v", key, focused, populated)
+				}
+			}
+		}
+	}
+}
+
 func TestReleasesPanel_SetReleases_SelectedRelease(t *testing.T) {
 	p := NewReleasesPanel(60, 20)
 	releases := []domain.Release{

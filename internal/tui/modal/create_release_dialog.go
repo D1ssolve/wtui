@@ -3,11 +3,13 @@ package modal
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
@@ -47,13 +49,18 @@ const (
 type CreateReleaseDialog struct {
 	phase createReleasePhase
 
-	taskRows     []createReleaseTaskRow
-	taskCursor   int
-	inputRows    []createReleaseServiceInput
-	inputCursor  int
-	inputField   createReleaseInputField
-	title        string
-	titleFocused bool
+	taskRows      []createReleaseTaskRow
+	filteredTasks []int
+	query         string
+	searching     bool
+	taskCursor    int
+	taskOffset    int
+	inputRows     []createReleaseServiceInput
+	inputCursor   int
+	inputOffset   int
+	inputField    createReleaseInputField
+	title         string
+	titleFocused  bool
 
 	descriptionEditor  textarea.Model
 	editingDescription bool
@@ -103,6 +110,7 @@ func NewCreateReleaseDialog(tasks []domain.Task, width, height int) *CreateRelea
 		descriptionEditor: editor,
 	}
 	dialog.sizeDescriptionEditor()
+	dialog.filterTasks()
 	return dialog
 }
 
@@ -117,13 +125,23 @@ func (d *CreateReleaseDialog) SetTerminalSize(width, height int) {
 	d.width = width
 	d.height = height
 	d.sizeDescriptionEditor()
+	d.clampOffsets()
 }
 
 func (d *CreateReleaseDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
+	defer d.clampOffsets()
 	switch m := msg.(type) {
+	case tea.WindowSizeMsg:
+		d.SetTerminalSize(m.Width, m.Height)
+		return d, nil
 	case panels.ReleaseVersionsLoadedMsg:
 		d.applyVersions(m.Versions)
 		return d, nil
+	}
+	if d.tooSmall() {
+		if key, ok := msg.(tea.KeyMsg); !ok || key.Type != tea.KeyEsc {
+			return d, nil
+		}
 	}
 	if d.editingDescription {
 		return d.updateDescriptionEditor(msg)
@@ -141,7 +159,36 @@ func (d *CreateReleaseDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 }
 
 func (d *CreateReleaseDialog) updateTaskSelect(keyMsg tea.KeyMsg) (Modal, tea.Cmd) {
+	if d.searching {
+		switch keyMsg.Type {
+		case tea.KeyEnter:
+			d.searching = false
+		case tea.KeyEsc:
+			d.query = ""
+			d.searching = false
+		case tea.KeyBackspace:
+			runes := []rune(d.query)
+			if len(runes) > 0 {
+				d.query = string(runes[:len(runes)-1])
+			}
+		case tea.KeySpace:
+			d.query += " "
+		case tea.KeyRunes:
+			if !keyMsg.Alt {
+				for _, r := range keyMsg.Runes {
+					if unicode.IsPrint(r) {
+						d.query += string(r)
+					}
+				}
+			}
+		}
+		d.filterTasks()
+		return d, nil
+	}
 	switch keyMsg.String() {
+	case "/":
+		d.searching = true
+		return d, nil
 	case "up", "k":
 		d.moveTaskCursor(-1)
 		return d, nil
@@ -212,10 +259,31 @@ func (d *CreateReleaseDialog) updateVersionInput(keyMsg tea.KeyMsg) (Modal, tea.
 	return d, nil
 }
 
+func (d *CreateReleaseDialog) OverlayView() string {
+	if d.width <= 0 || d.height <= 0 {
+		return ""
+	}
+	width, height := overlayContentSize(d.width, d.height)
+	if width == 0 || height == 0 {
+		return ansi.Truncate("Resize terminal", d.width, "")
+	}
+	style := boxStyle(width + boxStyle(0).GetHorizontalPadding())
+	boxed := style.Height(height).MaxWidth(d.width).MaxHeight(d.height).Render(d.View())
+	return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, boxed)
+}
+
 func (d *CreateReleaseDialog) View() string {
+	if d.width <= 0 || d.height <= 0 {
+		return ""
+	}
+	width, _ := overlayContentSize(d.width, d.height)
+	if d.tooSmall() {
+		return releaseLine("Resize terminal — Esc back", max(1, width))
+	}
 	if d.editingDescription {
 		return d.descriptionEditorView()
 	}
+	d.clampOffsets()
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
@@ -223,21 +291,25 @@ func (d *CreateReleaseDialog) View() string {
 	errorStyle := lipgloss.NewStyle().Foreground(modalColorDanger)
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(d.Title()))
-	b.WriteString("\n\n")
+	line := func(style lipgloss.Style, text string) {
+		b.WriteString(style.Render(releaseLine(text, width)))
+		b.WriteByte('\n')
+	}
+	line(titleStyle, d.Title())
 
 	if d.phase == phaseTaskSelect {
-		b.WriteString(dimStyle.Render("Select root feature tasks. Non-feature and child tasks are disabled."))
-		b.WriteString("\n\n")
-
+		line(dimStyle, "Search: "+d.query)
+		end := min(len(d.filteredTasks), d.taskOffset+d.visibleRows())
+		start := min(d.taskOffset+1, end)
+		line(dimStyle, fmt.Sprintf("%d-%d/%d of %d; %d selected", start, end, len(d.filteredTasks), len(d.taskRows), len(d.selectedTaskIDs())))
 		if len(d.taskRows) == 0 {
-			b.WriteString(dimStyle.Render("No tasks available."))
-			b.WriteString("\n\n")
-			b.WriteString(dimStyle.Render("[Esc] close"))
-			return b.String()
+			line(dimStyle, "No tasks available.")
+		} else if len(d.filteredTasks) == 0 {
+			line(dimStyle, "No matches.")
 		}
 
-		for i, row := range d.taskRows {
+		for i := d.taskOffset; i < end; i++ {
+			row := d.taskRows[d.filteredTasks[i]]
 			cursor := "  "
 			if i == d.taskCursor {
 				cursor = "▸ "
@@ -265,37 +337,36 @@ func (d *CreateReleaseDialog) View() string {
 			if len(serviceNames) > 0 {
 				services = strings.Join(serviceNames, ", ")
 			}
-			line := fmt.Sprintf("%s%s %s [%s] (%s)", cursor, checkbox, row.task.ID, services, phase)
+			text := fmt.Sprintf("%s%s %s [%s] (%s)", cursor, checkbox, row.task.ID, services, phase)
 			if row.selectable {
 				if i == d.taskCursor {
-					b.WriteString(normalStyle.Bold(true).Render(line))
+					line(normalStyle.Bold(true), text)
 				} else {
-					b.WriteString(normalStyle.Render(line))
+					line(normalStyle, text)
 				}
 			} else {
-				blocked := line + " — disabled: " + row.reason
-				b.WriteString(dimStyle.Render(blocked))
+				line(dimStyle, text+" — disabled: "+row.reason)
 			}
-			b.WriteString("\n")
 		}
 
-		if d.err != "" {
-			b.WriteString("\n")
-			b.WriteString(errorStyle.Render(d.err))
-			b.WriteString("\n")
+		if d.err == "" && d.taskCursor >= 0 && !d.taskRows[d.filteredTasks[d.taskCursor]].selectable {
+			line(dimStyle, "Disabled: "+d.taskRows[d.filteredTasks[d.taskCursor]].reason)
+		} else {
+			line(errorStyle, d.err)
 		}
-
-		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("[j/k or arrows] navigate  [Space] toggle  [Enter] next  [Esc] cancel"))
-		return b.String()
+		if d.searching {
+			line(dimStyle, "Type search · Enter done · Esc clear")
+		} else {
+			line(dimStyle, "/ search ↑↓/jk Space pick Enter→ Esc←")
+		}
+		return strings.TrimSuffix(b.String(), "\n")
 	}
 
 	if d.loadingVersions {
-		b.WriteString(dimStyle.Render("Loading proposed versions..."))
+		line(dimStyle, "Loading proposed versions...")
 	} else {
-		b.WriteString(dimStyle.Render("Edit versions for each service and submit."))
+		line(dimStyle, "Edit versions; Enter submits")
 	}
-	b.WriteString("\n\n")
 	title := d.title
 	if title == "" {
 		title = "<optional>"
@@ -303,55 +374,41 @@ func (d *CreateReleaseDialog) View() string {
 	titleValueStyle := normalStyle
 	if d.titleFocused {
 		titleValueStyle = titleValueStyle.Bold(true).Underline(true)
+		title = releaseInputTail(title, width-7)
 	}
-	b.WriteString(normalStyle.Render("Title: "))
-	b.WriteString(titleValueStyle.Render(title))
-	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("Service                Proposed        Release        Tag description"))
-	b.WriteString("\n")
-	b.WriteString(dimStyle.Render(strings.Repeat("─", 80)))
-	b.WriteString("\n")
+	line(titleValueStyle, "Title: "+title)
+	end := min(len(d.inputRows), d.inputOffset+d.visibleRows())
+	line(dimStyle, fmt.Sprintf("%d-%d/%d services · proposed → release", min(d.inputOffset+1, end), end, len(d.inputRows)))
 
-	for i, row := range d.inputRows {
+	for i := d.inputOffset; i < end; i++ {
+		row := d.inputRows[i]
 		marker := " "
-		versionStyle := normalStyle
-		descriptionStyle := normalStyle
+		style := normalStyle
 		if !d.titleFocused && i == d.inputCursor {
 			marker = "▶"
-			if d.inputField == inputReleaseVersion {
-				versionStyle = normalStyle.Bold(true).Underline(true)
-			} else {
-				descriptionStyle = normalStyle.Bold(true).Underline(true)
+			style = style.Bold(true)
+		}
+		line(style, marker+" "+releaseLine(row.serviceName, width/3)+" "+releaseLine(row.proposed, width/4)+" → "+row.value)
+	}
+	field, fieldError := "", d.err
+	if !d.titleFocused && len(d.inputRows) > 0 {
+		row := d.inputRows[d.inputCursor]
+		field = "Version: " + releaseInputTail(row.value, width-9)
+		if d.inputField == inputTagDescription {
+			description := row.description
+			if description == "" {
+				description = "<optional>"
 			}
+			field = "Description: " + description
 		}
-
-		serviceCol := padRight(row.serviceName, 20)
-		proposedCol := padRight(row.proposed, 14)
-		releaseCol := versionStyle.Render(padRight(row.value, 14))
-		description := row.description
-		if description == "" {
-			description = "<optional>"
-		} else {
-			description = strings.ReplaceAll(description, "\n", " ↵ ")
-		}
-		descriptionCol := descriptionStyle.Render(description)
-		b.WriteString(normalStyle.Render(marker + " " + serviceCol + " " + proposedCol + " "))
-		b.WriteString(releaseCol + " " + descriptionCol)
-		b.WriteString("\n")
 		if row.err != "" {
-			b.WriteString(errorStyle.Render("    ✖ " + row.err))
-			b.WriteString("\n")
+			fieldError = row.err
 		}
 	}
-
-	if d.err != "" {
-		b.WriteString("\n")
-		b.WriteString(errorStyle.Render(d.err))
-	}
-
-	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("[Tab/Shift+Tab] focus  [Type] title/version  [Enter] edit description/submit  [Esc] back"))
-	return b.String()
+	line(normalStyle.Underline(true), field)
+	line(errorStyle, fieldError)
+	line(dimStyle, "Tab focus · Enter OK · Esc back")
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 func (d *CreateReleaseDialog) descriptionEditorView() string {
@@ -361,9 +418,10 @@ func (d *CreateReleaseDialog) descriptionEditorView() string {
 	if d.editingRow >= 0 && d.editingRow < len(d.inputRows) {
 		serviceName = d.inputRows[d.editingRow].serviceName
 	}
-	return titleStyle.Render("Tag description — "+serviceName) + "\n\n" +
-		d.descriptionEditor.View() + "\n\n" +
-		dimStyle.Render("[Ctrl+S] save  [Esc] cancel")
+	width, _ := overlayContentSize(d.width, d.height)
+	return titleStyle.Render(releaseLine("Tag description — "+serviceName, width)) + "\n" +
+		d.descriptionEditor.View() + "\n" +
+		dimStyle.Render(releaseLine("[Ctrl+S] save  [Esc] cancel", width))
 }
 
 func (d *CreateReleaseDialog) applyVersions(versions map[string]string) {
@@ -393,31 +451,56 @@ func (d *CreateReleaseDialog) applyVersions(versions map[string]string) {
 
 func (d *CreateReleaseDialog) selectedTaskIDs() []string {
 	ids := make([]string, 0, len(d.taskRows))
+	seen := make(map[string]bool)
 	for _, row := range d.taskRows {
-		if row.selectable && row.selected {
+		if row.selectable && row.selected && !seen[row.task.ID] {
 			ids = append(ids, row.task.ID)
+			seen[row.task.ID] = true
 		}
 	}
 	return ids
 }
 
 func (d *CreateReleaseDialog) moveTaskCursor(step int) {
-	if len(d.taskRows) == 0 {
-		d.taskCursor = 0
+	if len(d.filteredTasks) == 0 {
+		d.taskCursor = -1
 		return
 	}
-	d.taskCursor = (d.taskCursor + step + len(d.taskRows)) % len(d.taskRows)
+	d.taskCursor = (d.taskCursor + step + len(d.filteredTasks)) % len(d.filteredTasks)
 }
 
 func (d *CreateReleaseDialog) toggleTaskSelection() {
-	if len(d.taskRows) == 0 || d.taskCursor < 0 || d.taskCursor >= len(d.taskRows) {
+	if d.taskCursor < 0 || d.taskCursor >= len(d.filteredTasks) {
 		return
 	}
-	if !d.taskRows[d.taskCursor].selectable {
+	row := &d.taskRows[d.filteredTasks[d.taskCursor]]
+	if !row.selectable {
 		return
 	}
-	d.taskRows[d.taskCursor].selected = !d.taskRows[d.taskCursor].selected
+	row.selected = !row.selected
 	d.err = ""
+}
+
+func (d *CreateReleaseDialog) filterTasks() {
+	currentID := ""
+	if d.taskCursor >= 0 && d.taskCursor < len(d.filteredTasks) {
+		currentID = d.taskRows[d.filteredTasks[d.taskCursor]].task.ID
+	}
+	d.filteredTasks = d.filteredTasks[:0]
+	d.taskCursor = -1
+	query := strings.ToLower(d.query)
+	for i, row := range d.taskRows {
+		if strings.Contains(strings.ToLower(row.task.ID), query) {
+			d.filteredTasks = append(d.filteredTasks, i)
+			if row.task.ID == currentID {
+				d.taskCursor = len(d.filteredTasks) - 1
+			}
+		}
+	}
+	if d.taskCursor < 0 && len(d.filteredTasks) > 0 {
+		d.taskCursor = 0
+	}
+	d.clampOffsets()
 }
 
 func (d *CreateReleaseDialog) rebuildServiceInputs() {
@@ -594,6 +677,14 @@ func (d *CreateReleaseDialog) submitIfValid() tea.Cmd {
 
 	if !allValid {
 		d.err = "Fix invalid versions before submit"
+		for i, row := range d.inputRows {
+			if row.err != "" {
+				d.titleFocused = false
+				d.inputCursor = i
+				d.inputField = inputReleaseVersion
+				break
+			}
+		}
 		return nil
 	}
 
@@ -633,19 +724,56 @@ func (d *CreateReleaseDialog) updateDescriptionEditor(msg tea.Msg) (Modal, tea.C
 }
 
 func (d *CreateReleaseDialog) sizeDescriptionEditor() {
-	d.descriptionEditor.SetWidth(max(1, d.width-8))
-	d.descriptionEditor.SetHeight(max(1, min(10, d.height-8)))
+	width, height := overlayContentSize(d.width, d.height)
+	d.descriptionEditor.SetWidth(max(4, width))
+	d.descriptionEditor.SetHeight(max(1, height-2))
+	if d.editingDescription {
+		// Bubbles v1 refreshes wrapped viewport content in View, then follows the cursor in Update.
+		d.descriptionEditor.View()
+		d.descriptionEditor, _ = d.descriptionEditor.Update(nil)
+	}
+}
+
+func (d *CreateReleaseDialog) tooSmall() bool {
+	width, height := overlayContentSize(d.width, d.height)
+	return width < 24 || height < 8
+}
+
+func (d *CreateReleaseDialog) visibleRows() int {
+	_, height := overlayContentSize(d.width, d.height)
+	if d.phase == phaseTaskSelect {
+		return max(1, height-5)
+	}
+	return max(1, height-7)
+}
+
+func (d *CreateReleaseDialog) clampOffsets() {
+	rows := d.visibleRows()
+	if d.phase == phaseTaskSelect {
+		d.taskOffset = max(0, min(d.taskOffset, d.taskCursor, len(d.filteredTasks)-rows))
+		d.taskOffset = max(d.taskOffset, d.taskCursor-rows+1)
+	} else {
+		d.inputOffset = max(0, min(d.inputOffset, d.inputCursor, len(d.inputRows)-rows))
+		d.inputOffset = max(d.inputOffset, d.inputCursor-rows+1)
+	}
+}
+
+var releaseLineReplacer = strings.NewReplacer("\r", " ", "\n", " ↵ ", "\t", " ")
+
+func releaseInputTail(s string, width int) string {
+	s = releaseLineReplacer.Replace(s)
+	if ansi.StringWidth(s) > width {
+		return "…" + ansi.TruncateLeft(s, ansi.StringWidth(s)-width+1, "")
+	}
+	return s
+}
+
+func releaseLine(s string, width int) string {
+	s = releaseLineReplacer.Replace(s)
+	return ansi.Truncate(s, max(0, width), "…")
 }
 
 func isSemver(v string) bool {
 	_, err := semver.NewVersion(v)
 	return err == nil
-}
-
-func padRight(s string, width int) string {
-	r := []rune(s)
-	if len(r) >= width {
-		return string(r[:width])
-	}
-	return s + strings.Repeat(" ", width-len(r))
 }

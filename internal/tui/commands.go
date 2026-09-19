@@ -3,7 +3,10 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -216,6 +219,32 @@ func riderTaskCmd(taskID, dir string) tea.Cmd {
 
 func codeWorkspaceTaskCmd(editor, taskID, dir string) tea.Cmd {
 	return execProcessCmd(editor, []string{taskID + ".code-workspace"}, dir, "Open "+editor+" for "+taskID)
+}
+
+func openReleaseFolderCmd(executable, releaseID, dir string) tea.Cmd {
+	return func() tea.Msg {
+		path := dir
+		var err error
+		if dir == "" {
+			err = errors.New("release directory is empty")
+		} else {
+			var absolute string
+			absolute, err = filepath.Abs(dir)
+			if err == nil {
+				path = absolute
+				var info os.FileInfo
+				info, err = os.Stat(path)
+				if err == nil && !info.IsDir() {
+					err = errors.New("release path is not a directory")
+				}
+			}
+		}
+		op := fmt.Sprintf("Open %s for release %s folder %q", executable, releaseID, path)
+		if err != nil {
+			return execProcessDoneMsg(op, fmt.Errorf("%s: %w", op, err))
+		}
+		return execProcessCmd(executable, []string{path}, path, op)()
+	}
 }
 
 func lazygitServiceCmd(taskID, serviceName, worktreePath string) tea.Cmd {

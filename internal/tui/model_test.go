@@ -3,10 +3,13 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -685,6 +688,235 @@ func TestUpdate_KeyR_OnTasksOpensRider(t *testing.T) {
 	}
 }
 
+func releaseFolderTestModel(t *testing.T, dir string) Model {
+	t.Helper()
+	m := newLazygitUpdateTestModel(t, &mockManager{})
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "unrelated-task", Dir: t.TempDir()}})
+	m.releasesPanel.SetReleases([]domain.Release{{ID: "first", Dir: t.TempDir()}, {ID: "selected", Dir: dir}})
+	m.setFocus(FocusReleases)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	return updated.(Model)
+}
+
+func TestUpdate_ReleaseFolderActions_TargetAndDuplicateGuard(t *testing.T) {
+	for _, key := range []string{"O", "I"} {
+		t.Run(key, func(t *testing.T) {
+			executable, record := fakeIDE(t, "rider")
+			t.Setenv("PATH", filepath.Dir(executable)+string(os.PathListSeparator)+os.Getenv("PATH"))
+			dir := t.TempDir()
+			m := releaseFolderTestModel(t, dir)
+			m.cfg.Editor = executable
+			updated, dispatch := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+			if dispatch == nil {
+				t.Fatal("key did not dispatch release action")
+			}
+			m = updated.(Model)
+			action := dispatch()
+			updated, launch := m.Update(action)
+			m = updated.(Model)
+			if launch == nil || !m.opRunning {
+				t.Fatal("action did not start operation")
+			}
+			if _, duplicate := m.Update(action); duplicate != nil {
+				t.Fatal("duplicate action launched while busy")
+			}
+			done := runProcessTestCmd(t, launch)
+			if done.Err != nil {
+				t.Fatal(done.Err)
+			}
+			wantIDE := executable
+			if key == "I" {
+				wantIDE = "rider"
+			}
+			if !strings.Contains(done.Op, "Open "+wantIDE+" for release selected") {
+				t.Fatalf("wrong executable/identity: %q", done.Op)
+			}
+			got, err := os.ReadFile(record)
+			if err != nil || string(got) != "1\n"+dir+"\n"+dir+"\n" {
+				t.Fatalf("launch record = %q, err=%v", got, err)
+			}
+			updated, _ = m.Update(done)
+			if updated.(Model).opRunning {
+				t.Fatal("completion left operation running")
+			}
+		})
+	}
+}
+
+func TestUpdate_ReleaseFolderActions_Guards(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		block func(*Model)
+	}{
+		{"empty", func(m *Model) { m.releasesPanel.SetReleases(nil) }},
+		{"unfocused", func(m *Model) { m.setFocus(FocusOutput) }},
+		{"busy", func(m *Model) { m.opRunning = true }},
+		{"cleanup planning", func(m *Model) { m.releaseCleanupRequest = &releaseCleanupRequest{} }},
+		{"cleanup preview", func(m *Model) { m.pendingReleaseCleanupPlan = &task.ReleaseCleanupPlan{} }},
+		{"cleanup executing", func(m *Model) { m.releaseCleanupExecuting = 1 }},
+		{"modal", func(m *Model) { m.modal = modal.NewHelpOverlayWithOptions(false) }},
+		{"shell", func(m *Model) { m.shellInput = &shellInputState{} }},
+		{"logs", func(m *Model) { m.logOverlay = NewLogOverlay("", 80, 24, "") }},
+		{"pipeline", func(m *Model) { m.pipelineView = NewPipelineView("api", forge.PipelineStatus{}, 80, 24) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range []string{"O", "I"} {
+				m := releaseFolderTestModel(t, t.TempDir())
+				rel := *m.releasesPanel.SelectedRelease()
+				tc.block(&m)
+				if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}); cmd != nil {
+					t.Fatalf("%s dispatched blocked key", key)
+				}
+				var action tea.Msg = panels.OpenReleaseEditorMsg{ReleaseID: rel.ID, ReleaseDir: rel.Dir}
+				if key == "I" {
+					action = panels.OpenReleaseRiderMsg{ReleaseID: rel.ID, ReleaseDir: rel.Dir}
+				}
+				if _, cmd := m.Update(action); cmd != nil {
+					t.Fatalf("%s accepted blocked message", key)
+				}
+			}
+		})
+	}
+}
+
+func TestUpdate_ReleaseFolderActions_AllStatusesAllowManifestOnly(t *testing.T) {
+	for _, status := range []domain.ReleaseStatus{
+		domain.ReleaseStatusDraft, domain.ReleaseStatusValidating, domain.ReleaseStatusMerging,
+		domain.ReleaseStatusBranching, domain.ReleaseStatusPushing, domain.ReleaseStatusPrepared,
+		domain.ReleaseStatusAwaitingMasterMerge, domain.ReleaseStatusMasterMerged, domain.ReleaseStatusSyncingDevelop,
+		domain.ReleaseStatusTagging, domain.ReleaseStatusReleased, domain.ReleaseStatusFailed, domain.ReleaseStatusRejected,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			dir := t.TempDir()
+			m := releaseFolderTestModel(t, dir)
+			m.releasesPanel.SetReleases([]domain.Release{{ID: "selected", Dir: dir, Status: status}})
+			updated, cmd := m.Update(panels.OpenReleaseEditorMsg{ReleaseID: "selected", ReleaseDir: dir})
+			if cmd == nil || !updated.(Model).opRunning {
+				t.Fatal("manifest-only release action rejected")
+			}
+		})
+	}
+}
+
+func TestUpdate_KeyO_OnTasksPreservesWorkspaceAction(t *testing.T) {
+	m := releaseFolderTestModel(t, t.TempDir())
+	m.setFocus(FocusTasks)
+	selected := m.tasksPanel.SelectedTask()
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("O")})
+	if cmd == nil {
+		t.Fatal("missing task workspace action")
+	}
+	if got, want := cmd(), (panels.CodeWorkspaceTaskMsg{TaskID: selected.ID, TaskDir: selected.Dir}); got != want {
+		t.Fatalf("action = %#v, want %#v", got, want)
+	}
+}
+
+func TestUpdate_ReleaseFolderActions_StaleSelection(t *testing.T) {
+	for _, key := range []string{"O", "I"} {
+		for _, changeDir := range []bool{false, true} {
+			m := releaseFolderTestModel(t, t.TempDir())
+			_, dispatch := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+			if dispatch == nil {
+				t.Fatal("missing action")
+			}
+			action := dispatch()
+			if changeDir {
+				m.releasesPanel.SetReleases([]domain.Release{{ID: "selected", Dir: t.TempDir()}})
+			} else {
+				updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+				m = updated.(Model)
+			}
+			if _, cmd := m.Update(action); cmd != nil {
+				t.Fatalf("accepted stale action: key=%s changedDir=%v", key, changeDir)
+			}
+		}
+	}
+}
+
+func TestUpdate_ReleaseFolderActions_ErrorRecovery(t *testing.T) {
+	for _, failure := range []string{"empty", "missing directory", "missing executable", "exit"} {
+		t.Run(failure, func(t *testing.T) {
+			executable, record := fakeIDE(t, "editor")
+			workingExecutable := executable
+			dir := t.TempDir()
+			switch failure {
+			case "empty":
+				dir = ""
+			case "missing directory":
+				dir = filepath.Join(dir, "missing")
+			case "missing executable":
+				executable = filepath.Join(dir, "missing-editor")
+			case "exit":
+				t.Setenv("WTUI_TEST_IDE_EXIT", "7")
+			}
+			m := releaseFolderTestModel(t, dir)
+			m.cfg.Editor = executable
+			action := panels.OpenReleaseEditorMsg{ReleaseID: "selected", ReleaseDir: dir}
+			updated, cmd := m.Update(action)
+			m = updated.(Model)
+			if cmd == nil || !m.opRunning {
+				t.Fatal("missing launch/preflight operation")
+			}
+			done := runProcessTestCmd(t, cmd)
+			if done.Err == nil {
+				t.Fatal("expected error completion")
+			}
+			updated, _ = m.Update(done)
+			m = updated.(Model)
+			view := stripANSIForModel(m.outputPanel.View())
+			for _, want := range []string{"selected", executable, dir, "failed:", done.Err.Error()} {
+				if !strings.Contains(view, want) {
+					t.Fatalf("output missing %q: %s", want, view)
+				}
+			}
+			if m.opRunning || strings.Contains(view, " done.") {
+				t.Fatalf("failure left busy/success state: %s", view)
+			}
+			if _, tick := m.Update(m.spinner.Tick()); tick != nil {
+				t.Fatal("spinner kept ticking after error completion")
+			}
+			if _, err := os.Stat(record); failure != "exit" && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("preflight failure launched process: %v", err)
+			}
+			m.cfg.Editor = workingExecutable
+			t.Setenv("WTUI_TEST_IDE_EXIT", "0")
+			if failure == "empty" || failure == "missing directory" {
+				dir = t.TempDir()
+				m.releasesPanel.SetReleases([]domain.Release{{ID: "selected", Dir: dir}})
+			}
+			updated, dispatch := m.Update(sendKey("O"))
+			m = updated.(Model)
+			if dispatch == nil {
+				t.Fatal("next key blocked after completion")
+			}
+			updated, retry := m.Update(dispatch())
+			m = updated.(Model)
+			if retry == nil || !m.opRunning {
+				t.Fatal("next action did not start operation")
+			}
+			done = runProcessTestCmd(t, retry)
+			if done.Err != nil {
+				t.Fatalf("recovery launch failed: %v", done.Err)
+			}
+			updated, _ = m.Update(done)
+			m = updated.(Model)
+			if m.opRunning || !strings.Contains(stripANSIForModel(m.outputPanel.View()), done.Op+" done.") {
+				t.Fatal("recovery completion did not report success and clear busy state")
+			}
+			if _, tick := m.Update(m.spinner.Tick()); tick != nil {
+				t.Fatal("spinner kept ticking after recovery")
+			}
+			want := "1\n" + dir + "\n" + dir + "\n"
+			if failure == "exit" {
+				want += want
+			}
+			if got, err := os.ReadFile(record); err != nil || string(got) != want {
+				t.Fatalf("recovery launch records = %q, err=%v, want %q", got, err, want)
+			}
+		})
+	}
+}
+
 func TestUpdate_HelpKey_AfterResize_AllowsScrollToBottom(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 80, 10)
@@ -1077,6 +1309,156 @@ func TestUpdate_FocusReleasesAndNewRelease_OpensCreateReleaseDialog(t *testing.T
 	m = updated.(Model)
 	if _, ok := m.modal.(*modal.CreateReleaseDialog); !ok {
 		t.Fatalf("expected CreateReleaseDialog modal, got %T", m.modal)
+	}
+}
+
+func TestUpdate_CreateRelease_IntegratedOverlayFlow(t *testing.T) {
+	long := "\x1b[31m" + strings.Repeat("界🙂é", 30) + "\x1b[0m\n\tcontinued"
+	tasks := make([]domain.Task, 100)
+	versions := make(map[string]string, 40)
+	for i := range tasks {
+		tasks[i] = domain.Task{ID: fmt.Sprintf("TASK-%03d-%s", i, long), Phase: "feature"}
+	}
+	for i := range 40 {
+		name := fmt.Sprintf("svc-%02d-%s", i, long)
+		tasks[0].Services = append(tasks[0].Services, domain.Service{Name: name})
+		versions[name] = "1.2.3"
+	}
+	mgr := &mockManager{proposedVersions: versions}
+	m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+	update := func(msg tea.Msg) tea.Cmd {
+		t.Helper()
+		updated, cmd := m.Update(msg)
+		m = updated.(Model)
+		return cmd
+	}
+	requireView := func(wants ...string) {
+		t.Helper()
+		view := stripANSIForModel(m.View())
+		for _, want := range wants {
+			if !strings.Contains(view, want) {
+				t.Fatalf("Model.View missing %q: %s", want, view)
+			}
+		}
+	}
+	resizeMatrix := func(phase string) {
+		t.Helper()
+		for _, size := range [][2]int{{120, 40}, {80, 24}, {40, 12}, {20, 5}, {1, 1}, {0, 0}, {0, 24}, {80, 0}} {
+			update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+			view := m.View()
+			if size[0] == 0 || size[1] == 0 {
+				if view != "" || !m.ready {
+					t.Fatalf("%s: ready zero-size view = %q, ready=%v", phase, view, m.ready)
+				}
+			} else if w, h := lipgloss.Size(view); view == "" || w > size[0] || h > size[1] {
+				t.Fatalf("%s: Model.View %dx%d exceeds %v or is empty: %q", phase, w, h, size, view)
+			}
+			if size[0] < 40 || size[1] < 12 {
+				for _, key := range []tea.Msg{sendKey("changed"), tea.KeyMsg{Type: tea.KeySpace}, tea.KeyMsg{Type: tea.KeyEnter}, tea.KeyMsg{Type: tea.KeyCtrlS}} {
+					if cmd := update(key); cmd != nil {
+						t.Fatalf("%s: tiny input emitted command", phase)
+					}
+				}
+			}
+		}
+		update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	}
+	update(TasksLoadedMsg{Tasks: tasks})
+	update(sendKey("3"))
+	open := update(sendKey("N"))
+	if open == nil {
+		t.Fatal("N did not dispatch dialog opening")
+	}
+	update(open())
+	if _, ok := m.modal.(*modal.CreateReleaseDialog); !ok {
+		t.Fatalf("modal = %T, want CreateReleaseDialog", m.modal)
+	}
+	update(tea.KeyMsg{Type: tea.KeyEnter})
+	requireView("Select at least one root feature task")
+	resizeMatrix("task error")
+	update(tea.KeyMsg{Type: tea.KeySpace})
+	update(sendKey("/"))
+	update(sendKey("tAsK-099"))
+	if cmd := update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatal("search Enter advanced to versions")
+	}
+	update(tea.KeyMsg{Type: tea.KeySpace})
+	resizeMatrix("filtered selection")
+	requireView("Search: tAsK-099", "1-1/1 of 100; 2 selected", "▸ [x] TASK-099")
+	update(sendKey("/"))
+	update(sendKey("-missing"))
+	update(tea.KeyMsg{Type: tea.KeyEnter})
+	requireView("No matches.", "2 selected")
+	wantIDs := []string{tasks[0].ID, tasks[99].ID}
+	loadVersions := func() {
+		t.Helper()
+		cmd := update(tea.KeyMsg{Type: tea.KeyEnter})
+		if cmd == nil {
+			t.Fatal("next did not request versions")
+		}
+		request, ok := cmd().(modal.RequestReleaseVersionsMsg)
+		if !ok || !slices.Equal(request.TaskIDs, wantIDs) {
+			t.Fatalf("version request = %#v, want IDs %v", request, wantIDs)
+		}
+		load := update(request)
+		if load == nil {
+			t.Fatal("Model did not load versions")
+		}
+		update(load())
+		if !slices.Equal(mgr.proposedVersionIDs, wantIDs) {
+			t.Fatalf("manager received IDs %v", mgr.proposedVersionIDs)
+		}
+		requireView("Enter Versions", "/40 services", "1.2.3")
+	}
+	loadVersions()
+	update(tea.KeyMsg{Type: tea.KeyEsc})
+	resizeMatrix("back to tasks")
+	requireView("Search: tAsK-099-missing", "No matches.", "2 selected")
+	update(sendKey("/"))
+	if cmd := update(tea.KeyMsg{Type: tea.KeyEsc}); cmd != nil {
+		t.Fatal("search Esc closed dialog")
+	}
+	requireView("▸ [x] TASK-000")
+	update(sendKey("k"))
+	requireView("▸ [x] TASK-099")
+	update(sendKey("j"))
+	requireView("▸ [x] TASK-000")
+	loadVersions()
+	update(sendKey("Release 界"))
+	update(tea.KeyMsg{Type: tea.KeyUp})
+	update(tea.KeyMsg{Type: tea.KeyDelete})
+	update(sendKey("bad"))
+	if cmd := update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatal("invalid version submitted")
+	}
+	resizeMatrix("version error")
+	requireView("Title: Release 界", "▶ svc-39", "Version: bad", "Invalid semver")
+	update(tea.KeyMsg{Type: tea.KeyDelete})
+	update(sendKey("2.0.0"))
+	update(tea.KeyMsg{Type: tea.KeyTab})
+	update(tea.KeyMsg{Type: tea.KeyEnter})
+	update(sendKey("Description 界🙂"))
+	update(tea.KeyMsg{Type: tea.KeyEnter})
+	update(sendKey("second line"))
+	resizeMatrix("description draft")
+	requireView("Tag description", "second line", "Ctrl+S")
+	update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	cmd := update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("valid versions did not submit")
+	}
+	submit, ok := cmd().(modal.SubmitCreateReleaseMsg)
+	wantVersions := maps.Clone(versions)
+	lastService := tasks[0].Services[39].Name
+	wantVersions[lastService] = "2.0.0"
+	if !ok || !slices.Equal(submit.TaskIDs, wantIDs) || submit.Title != "Release 界" || !maps.Equal(submit.Versions, wantVersions) ||
+		!maps.Equal(submit.TagDescriptions, map[string]string{lastService: "Description 界🙂\nsecond line"}) {
+		t.Fatalf("submit lost selection or edited values: %#v", submit)
+	}
+	update(submit)
+	if _, ok := m.modal.(*modal.ReleaseExecuteConfirmDialog); !ok || m.pendingReleaseSubmit == nil || mgr.createReleaseCalls != 0 {
+		t.Fatal("submit must reach confirmation without executing release")
 	}
 }
 

@@ -95,6 +95,16 @@ type OpenForgeMenuMsg struct {
 
 type OpenCreateReleaseDialogMsg struct{}
 
+type OpenReleaseEditorMsg struct {
+	ReleaseID  string
+	ReleaseDir string
+}
+
+type OpenReleaseRiderMsg struct {
+	ReleaseID  string
+	ReleaseDir string
+}
+
 type PlanReleaseCleanupMsg struct{ ReleaseID string }
 
 type ReleaseVersionsLoadedMsg struct {

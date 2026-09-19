@@ -58,6 +58,7 @@ func renderFooter(m Model) string {
 			"[r] refresh",
 		}
 		if rel := m.releasesPanel.SelectedRelease(); rel != nil {
+			parts = append(parts, "[O] editor folder", "[I] Rider folder")
 			switch rel.Status {
 			case domain.ReleaseStatusPrepared:
 				parts = append(parts, "[F] promote")

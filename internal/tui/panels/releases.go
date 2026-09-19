@@ -110,6 +110,14 @@ func (p ReleasesPanel) Update(msg tea.Msg) (ReleasesPanel, tea.Cmd) {
 			return p, nil
 		case "N":
 			return p, func() tea.Msg { return OpenCreateReleaseDialogMsg{} }
+		case "O", "I":
+			if selected := p.SelectedRelease(); selected != nil {
+				id, dir := selected.ID, selected.Dir
+				if msg.String() == "I" {
+					return p, func() tea.Msg { return OpenReleaseRiderMsg{ReleaseID: id, ReleaseDir: dir} }
+				}
+				return p, func() tea.Msg { return OpenReleaseEditorMsg{ReleaseID: id, ReleaseDir: dir} }
+			}
 		case "D":
 			selected := p.SelectedRelease()
 			if selected != nil && selected.Status == domain.ReleaseStatusReleased {

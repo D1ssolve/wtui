@@ -85,6 +85,7 @@ wtui detects available tools automatically. Press `.` to view current integratio
 
 ## Documentation
 
+- [Task-to-release workflows and configured vs. default behavior (Russian)](docs/workflows.md)
 - [Complete configuration reference](docs/configuration.md)
 - [Releases](https://github.com/D1ssolve/wtui/releases)
 - [License](LICENSE)

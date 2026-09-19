@@ -185,6 +185,10 @@ func (h *HelpOverlay) contentLines() []string {
 	sb.WriteString("\n")
 	sb.WriteString(row("R", "Retry failed recoverable release"))
 	sb.WriteString("\n")
+	sb.WriteString(row("O", "Open selected release folder in configured editor"))
+	sb.WriteString("\n")
+	sb.WriteString(row("I", "Open selected release folder in Rider"))
+	sb.WriteString("\n")
 	sb.WriteString(row("M", "Merge selected release MRs when available"))
 	if h.releaseCleanupAvailable {
 		sb.WriteString("\n")

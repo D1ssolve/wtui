@@ -31,18 +31,16 @@ func boxStyle(innerWidth int) lipgloss.Style {
 		Padding(0, 1)
 }
 
-func OverlayView(content string, termW, termH, maxContentH int) string {
-	innerW := max(termW*50/100, 50)
-	maxInnerW := max(termW-4, 1)
-	if innerW > maxInnerW {
-		innerW = maxInnerW
-	}
+func overlayContentSize(termW, termH int) (int, int) {
+	style := boxStyle(0)
+	width := min(max(termW*50/100, 50), max(termW-4, 0)) - style.GetHorizontalPadding()
+	return max(0, min(width, termW-style.GetHorizontalFrameSize())),
+		max(0, min(max(termH*70/100, 10), termH-style.GetVerticalFrameSize()))
+}
 
-	innerH := maxContentH
-	if innerH > termH-2 {
-		innerH = termH - 2
-	}
-
-	boxed := boxStyle(innerW).Height(innerH).Render(content)
+func OverlayView(content string, termW, termH int) string {
+	width := min(max(termW*50/100, 50), max(termW-4, 1))
+	height := min(max(termH*70/100, 10), termH-2)
+	boxed := boxStyle(width).Height(height).Render(content)
 	return lipgloss.Place(termW, termH, lipgloss.Center, lipgloss.Center, boxed)
 }

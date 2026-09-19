@@ -365,6 +365,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 
 		case FocusReleases:
+			if (msg.String() == "O" || msg.String() == "I") && m.releaseMutationBlocked() {
+				return m, nil
+			}
 			before := selectedReleaseID(m.releasesPanel.SelectedRelease())
 			newPanel, cmd := m.releasesPanel.Update(msg)
 			m.releasesPanel = newPanel
@@ -602,6 +605,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panels.ShellExecMsg:
 		m.shellInput = &shellInputState{taskDir: msg.TaskDir}
 		return m, nil
+
+	case panels.OpenReleaseEditorMsg:
+		return m.openReleaseFolder(m.cfg.Editor, msg.ReleaseID, msg.ReleaseDir)
+
+	case panels.OpenReleaseRiderMsg:
+		return m.openReleaseFolder("rider", msg.ReleaseID, msg.ReleaseDir)
 
 	case panels.RiderTaskMsg:
 		m.opRunning = true
@@ -1535,8 +1544,10 @@ func (m Model) View() string {
 	}
 
 	if m.modal != nil {
-		maxContentH := max(m.height*70/100, 10)
-		return modal.OverlayView(m.modal.View(), m.width, m.height, maxContentH)
+		if dialog, ok := m.modal.(*modal.CreateReleaseDialog); ok {
+			return dialog.OverlayView()
+		}
+		return modal.OverlayView(m.modal.View(), m.width, m.height)
 	}
 
 	return fullView
@@ -1758,6 +1769,17 @@ func (m Model) releaseCleanupAvailable() bool {
 
 func releaseCleanupHasRemoteSelection(selection task.ReleaseCleanupSelection) bool {
 	return selection.DeleteRemoteTaskBranches || selection.DeleteRemoteReleaseBranches
+}
+
+func (m Model) openReleaseFolder(executable, releaseID, dir string) (Model, tea.Cmd) {
+	selected := m.releasesPanel.SelectedRelease()
+	if m.focus != FocusReleases || m.releaseMutationBlocked() || m.modal != nil || m.shellInput != nil || m.logOverlay != nil || m.pipelineView != nil ||
+		selected == nil || selected.ID != releaseID || selected.Dir != dir {
+		return m, nil
+	}
+	m.opRunning = true
+	m.outputPanel.AppendLine(fmt.Sprintf("Opening release %s folder %q in %s...", releaseID, dir, executable))
+	return m, tea.Batch(openReleaseFolderCmd(executable, releaseID, dir), m.spinner.Tick)
 }
 
 func (m Model) releaseMutationBlocked() bool {

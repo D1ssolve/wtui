@@ -3,7 +3,11 @@ package tui
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -55,6 +59,148 @@ func TestShellExecCommandUsesShAndTaskDir(t *testing.T) {
 	}
 	if cmd.Dir != "/tmp/.tasks/IN-001" {
 		t.Fatalf("Dir = %q, want /tmp/.tasks/IN-001", cmd.Dir)
+	}
+}
+
+type processTestModel struct {
+	cmd  tea.Cmd
+	done *CommandDoneMsg
+}
+
+func (m processTestModel) Init() tea.Cmd { return m.cmd }
+func (m processTestModel) View() string  { return "" }
+func (m processTestModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if done, ok := msg.(CommandDoneMsg); ok {
+		m.done = &done
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func runProcessTestCmd(t *testing.T, cmd tea.Cmd) CommandDoneMsg {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	model, err := tea.NewProgram(processTestModel{cmd: cmd}, tea.WithContext(ctx),
+		tea.WithInput(strings.NewReader("")), tea.WithOutput(io.Discard), tea.WithoutRenderer()).Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := model.(processTestModel).done
+	if done == nil {
+		t.Fatal("process did not produce CommandDoneMsg")
+	}
+	return *done
+}
+
+func fakeIDE(t *testing.T, name string) (string, string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake IDE uses a POSIX executable script")
+	}
+	dir := t.TempDir()
+	executable := filepath.Join(dir, name)
+	record := filepath.Join(dir, "launch.txt")
+	t.Setenv("WTUI_TEST_IDE_RECORD", record)
+	t.Setenv("WTUI_TEST_IDE_EXIT", "0")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nprintf '%s\\n' \"$#\" \"$1\" \"$PWD\" >> \"$WTUI_TEST_IDE_RECORD\"\nexit \"$WTUI_TEST_IDE_EXIT\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	return executable, record
+}
+
+func TestOpenReleaseFolderCmd_LiteralDirectoryAndCompletion(t *testing.T) {
+	executable, record := fakeIDE(t, "fake IDE")
+	root := t.TempDir()
+	t.Chdir(root)
+	dir := "release space ; $(touch injected) & 'quoted'"
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	wantDir := filepath.Join(root, dir)
+	for _, exit := range []string{"0", "7"} {
+		t.Run("exit_"+exit, func(t *testing.T) {
+			t.Setenv("WTUI_TEST_IDE_EXIT", exit)
+			done := runProcessTestCmd(t, openReleaseFolderCmd(executable, "rel-123", "./"+dir+"/../"+dir+"/."))
+			for _, value := range []string{executable, "rel-123", wantDir} {
+				if !strings.Contains(done.Op, value) {
+					t.Fatalf("Op = %q, missing %q", done.Op, value)
+				}
+			}
+			if exit == "0" && done.Err != nil {
+				t.Fatalf("success error = %v", done.Err)
+			}
+			if exit == "7" {
+				var exitErr *exec.ExitError
+				if !errors.As(done.Err, &exitErr) || exitErr.ExitCode() != 7 {
+					t.Fatalf("error = %v, want exit 7", done.Err)
+				}
+			}
+		})
+	}
+	got, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Repeat("1\n"+wantDir+"\n"+wantDir+"\n", 2); string(got) != want {
+		t.Fatalf("launch records = %q, want %q", got, want)
+	}
+}
+
+func TestOpenReleaseFolderCmd_InvalidDirectoryDoesNotLaunch(t *testing.T) {
+	executable, record := fakeIDE(t, "fake-editor")
+	file := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(file, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"", filepath.Join(t.TempDir(), "missing"), file, file + string(os.PathSeparator) + "child"} {
+		t.Run(dir, func(t *testing.T) {
+			msg := openReleaseFolderCmd(executable, "rel-invalid", dir)()
+			done, ok := msg.(CommandDoneMsg)
+			if !ok || done.Err == nil {
+				t.Fatalf("message = %#v, want completion error without process", msg)
+			}
+			for _, value := range []string{executable, "rel-invalid", dir} {
+				if !strings.Contains(done.Op, value) {
+					t.Fatalf("Op = %q, missing %q", done.Op, value)
+				}
+			}
+		})
+	}
+	if _, err := os.Stat(record); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid path launched IDE: stat error = %v", err)
+	}
+}
+
+func TestOpenReleaseFolderCmd_MissingExecutable(t *testing.T) {
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "missing-editor")
+	done := runProcessTestCmd(t, openReleaseFolderCmd(executable, "rel-missing", dir))
+	if !errors.Is(done.Err, os.ErrNotExist) {
+		t.Fatalf("error = %v, want missing executable", done.Err)
+	}
+	for _, value := range []string{executable, "rel-missing", dir} {
+		if !strings.Contains(done.Op, value) {
+			t.Fatalf("Op = %q, missing %q", done.Op, value)
+		}
+	}
+}
+
+func TestTaskIDECommands_PreserveTargetsAndWorkingDirectory(t *testing.T) {
+	executable, record := fakeIDE(t, "rider")
+	t.Setenv("PATH", filepath.Dir(executable)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dir := t.TempDir()
+	for _, cmd := range []tea.Cmd{riderTaskCmd("TASK-1", dir), codeWorkspaceTaskCmd(executable, "TASK-1", dir)} {
+		if done := runProcessTestCmd(t, cmd); done.Err != nil {
+			t.Fatal(done.Err)
+		}
+	}
+	got, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "1\nTASK-1.sln\n" + dir + "\n1\nTASK-1.code-workspace\n" + dir + "\n"; string(got) != want {
+		t.Fatalf("task launch records = %q, want %q", got, want)
 	}
 }
 

@@ -8,10 +8,12 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/gitflow"
+	"github.com/D1ssolve/wtui/internal/task"
 )
 
 func makeTestRepos(names ...string) []domain.Repo {
@@ -378,6 +380,8 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		"Browse task tags",
 		"Add service to task",
 		"Open <taskID>.sln in Rider",
+		"Open selected release folder in configured editor",
+		"Open selected release folder in Rider",
 		"Open <taskID>.code-workspace in VS Code",
 		"Run shell command in selected task directory",
 		"Open sync strategy selection",
@@ -529,27 +533,70 @@ func TestHelpOverlay_View_RendersVisibleSliceAfterScroll(t *testing.T) {
 
 func TestOverlayView_ReturnsNonEmpty(t *testing.T) {
 	tests := []struct {
-		name        string
-		content     string
-		termW       int
-		termH       int
-		maxContentH int
+		name    string
+		content string
+		termW   int
+		termH   int
 	}{
-		{"normal size", "hello world", 120, 40, 28},
-		{"tiny terminal", "x", 10, 5, 3},
-		{"empty content", "", 80, 24, 16},
-		{"wide content", strings.Repeat("a", 200), 80, 24, 16},
-		{"small terminal 80x24", "content", 80, 24, 16},
-		{"large terminal 200x60", "content", 200, 60, 42},
+		{"normal size", "hello world", 120, 40},
+		{"tiny terminal", "x", 10, 5},
+		{"empty content", "", 80, 24},
+		{"wide content", strings.Repeat("a", 200), 80, 24},
+		{"small terminal 80x24", "content", 80, 24},
+		{"large terminal 200x60", "content", 200, 60},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := OverlayView(tc.content, tc.termW, tc.termH, tc.maxContentH)
+			result := OverlayView(tc.content, tc.termW, tc.termH)
 			if result == "" {
 				t.Error("OverlayView must return a non-empty string")
 			}
 		})
+	}
+}
+
+func TestCreateReleaseDialog_OverlayBoundsIncludeFrame(t *testing.T) {
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {40, 12}, {20, 5}, {1, 1}, {0, 0}, {0, 24}, {80, 0}} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			d := NewCreateReleaseDialog(nil, size[0], size[1])
+			assertReleaseBounds(t, d.OverlayView(), size[0], size[1])
+		})
+	}
+}
+
+func TestOverlayView_NormalModals_PreserveRendering(t *testing.T) {
+	for _, m := range []Modal{NewHelpOverlayWithOptions(false), NewInitDialog("feature/", nil, 120, 40), NewReleaseCleanupChecklistModal(task.ReleaseCleanupPreview{ReleaseID: "REL-1"})} {
+		t.Run(m.Title(), func(t *testing.T) {
+			m.SetTerminalSize(120, 40)
+			content := m.View()
+			want := lipgloss.Place(120, 40, lipgloss.Center, lipgloss.Center, boxStyle(60).Height(28).Render(content))
+			if got := OverlayView(content, 120, 40); got != want {
+				t.Fatalf("normal overlay changed for %s", m.Title())
+			}
+		})
+	}
+}
+
+func TestOverlayView_PopulatedCleanup_PreservesBlockerFooterAndBorder(t *testing.T) {
+	preview := cleanupPreview(task.DefaultReleaseCleanupSelection(), "api worktree is dirty")
+	preview.Services = append(preview.Services, task.ReleaseCleanupServicePreview{
+		Name: "worker", RepoPath: "/repos/worker",
+		Worktrees:    []string{"/workspace/tasks/TASK-2/services/worker", "/workspace/releases/rel-1/services/worker"},
+		TaskBranches: []string{"feature/TASK-2"}, ReleaseBranch: "release/1.2.3",
+	})
+	m := NewReleaseCleanupChecklistModal(preview)
+	m.SetTerminalSize(80, 24)
+	got := OverlayView(m.View(), 80, 24)
+	border := boxStyle(50).GetBorderStyle()
+	for _, text := range []string{"api worktree is dirty", "Change selection to replan, or [Esc] cancel", border.BottomLeft, border.BottomRight} {
+		if !strings.Contains(stripAnsi(got), text) {
+			t.Errorf("cleanup overlay missing %q", text)
+		}
+	}
+	want := lipgloss.Place(80, 24, lipgloss.Center, lipgloss.Center, boxStyle(50).Height(16).Render(m.View()))
+	if got != want {
+		t.Errorf("cleanup overlay differs from legacy rendering: got height %d, want %d", lipgloss.Height(got), lipgloss.Height(want))
 	}
 }
 
