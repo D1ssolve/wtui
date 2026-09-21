@@ -27,7 +27,10 @@ type ReleasePreview struct {
 	PushIntegration     bool
 	PushReleaseBranches bool
 	PushTags            bool
-	Err                 error
+	// TaskMergeDuringPrepare reports config-only whether task MRs merge during
+	// release prepare (git_flow.task_merge.timing: release_prepare).
+	TaskMergeDuringPrepare bool
+	Err                    error
 }
 
 func BuildReleasePreview(cfg config.Config, versions map[string]string) (ReleasePreview, error) {
@@ -83,6 +86,8 @@ func BuildReleasePreview(cfg config.Config, versions map[string]string) (Release
 		PushIntegration:     boolPtrOrTrue(effectiveCfg.Release.PushIntegration),
 		PushReleaseBranches: boolPtrOrTrue(effectiveCfg.Release.PushReleaseBranches),
 		PushTags:            boolPtrOrTrue(effectiveCfg.Release.PushTags),
+		TaskMergeDuringPrepare: effectiveCfg.GitFlow != nil && effectiveCfg.GitFlow.TaskMerge != nil &&
+			effectiveCfg.GitFlow.TaskMerge.Timing == config.TaskMergeTimingReleasePrepare,
 	}, nil
 }
 

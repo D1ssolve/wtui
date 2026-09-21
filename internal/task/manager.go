@@ -67,6 +67,7 @@ type CreateReleaseParams struct {
 	TaskIDs                []string
 	ServiceVersions        map[string]string
 	ServiceTagDescriptions map[string]string
+	ConfirmedTaskMergePlan *ReleaseTaskMergePlan
 	StartImmediately       bool
 	StatusCh               chan<- string
 }
@@ -139,8 +140,11 @@ type Manager interface {
 	// BuildReleasePreview computes display-only release execute facts from the
 	// configured git-flow policy and release settings.
 	BuildReleasePreview(ctx context.Context, versions map[string]string) (ReleasePreview, error)
+	PlanReleaseTaskMerges(ctx context.Context, params CreateReleaseParams) (ReleaseTaskMergePlan, error)
 
 	RetryRelease(ctx context.Context, releaseID string) (domain.Release, error)
+	PlanReleaseTaskMergeRetry(ctx context.Context, releaseID string) (ReleaseTaskMergePlan, error)
+	RetryReleaseTaskMerges(ctx context.Context, releaseID string, confirmed *ReleaseTaskMergePlan) (domain.Release, error)
 
 	RejectRelease(ctx context.Context, releaseID string) (domain.Release, error)
 
@@ -153,7 +157,7 @@ type Manager interface {
 	ListTags(ctx context.Context, taskID string) ([]domain.TagInfo, error)
 	ProposeReleaseVersions(ctx context.Context, taskIDs []string) (map[string]string, error)
 
-	ForgeCreateMissingMRs(ctx context.Context, taskID, title string) (TaskMRCreateResult, error)
+	ForgeCreateMissingMRs(ctx context.Context, taskID, title string, force bool) (TaskMRCreateResult, error)
 
 	ForgePipelineStatus(ctx context.Context, taskID, serviceName string, branch string) ([]forge.PipelineStatus, error)
 

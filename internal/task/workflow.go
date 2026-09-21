@@ -193,6 +193,14 @@ func ReleaseWorkflow(release domain.Release) domain.WorkflowSummary {
 		current, next = domain.ReleaseWorkflowReleaseBranch, "creating release branches"
 	case domain.ReleaseStatusPushing:
 		current, next = domain.ReleaseWorkflowReleaseBranch, "pushing release branches"
+	case domain.ReleaseStatusAwaitingTaskMerge:
+		next = "awaiting task MR confirmation"
+	case domain.ReleaseStatusIntegratingTasks:
+		next = "integrating task MRs (press R to review retry)"
+	case domain.ReleaseStatusTaskMergeBlocked:
+		next, blocked = "press R to review blocked task MRs", true
+	case domain.ReleaseStatusTaskMergePartial:
+		next, blocked = "press R to review partial task MRs", true
 	case domain.ReleaseStatusPrepared:
 		current, next = domain.ReleaseWorkflowRegression, "press F to create master MRs"
 	case domain.ReleaseStatusAwaitingMasterMerge:
@@ -223,9 +231,32 @@ func ReleaseWorkflow(release domain.Release) domain.WorkflowSummary {
 		} else if service.ProductionMR != nil {
 			detail = fmt.Sprintf("MR #%d: %s", service.ProductionMR.Number, service.ProductionMR.State)
 		}
+		if summary := taskMergeProgressDetail(service.FeatureBranches); summary != "" {
+			if detail != "" {
+				detail += "  "
+			}
+			detail += summary
+		}
 		rows[i] = domain.ServiceWorkflow{ServiceName: service.Name, Status: string(service.Status), Detail: detail}
 	}
 	return workflowSummaryWithServices(releaseWorkflowSteps, current, next, blocker, done, blocked, rows)
+}
+
+func taskMergeProgressDetail(branches []domain.ReleaseFeatureBranch) string {
+	total, merged := 0, 0
+	for _, fb := range branches {
+		if fb.TaskMergeStatus == "" {
+			continue
+		}
+		total++
+		if fb.TaskMergeStatus == taskMergeStatusMerged {
+			merged++
+		}
+	}
+	if total == 0 {
+		return ""
+	}
+	return fmt.Sprintf("task MRs: %d/%d merged", merged, total)
 }
 
 func workflowSummaryWithServices(template []domain.WorkflowStep, current domain.WorkflowPhase, nextAction, blocker string, done, blocked bool, services []domain.ServiceWorkflow) domain.WorkflowSummary {

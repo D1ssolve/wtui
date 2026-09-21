@@ -77,6 +77,8 @@ git_flow:
   integration_branch: develop
   default_branch_type: feature
   allow_mixed_branch_types_on_close: false
+  task_merge:
+    timing: release_prepare
   branch_types:
     feature:
       prefixes: ["feature/"]
@@ -214,9 +216,18 @@ Built-in presets can be partially overridden. `custom` requires `production_bran
 | `git_flow.integration_branch` | string | preset value | Branch receiving integrated feature and hotfix work. |
 | `git_flow.default_branch_type` | string | `feature` | Fallback branch type when no prefix matches. |
 | `git_flow.allow_mixed_branch_types_on_close` | bool | `false` | Allow one task to close services with different detected branch types. |
+| `git_flow.task_merge.timing` | string | empty | Task MR merge timing during release preparation. The only valid non-empty value is `release_prepare`; any other value fails startup. |
 | `git_flow.branch_types` | map | preset rules | Per-type branch behavior. Required and unmerged for `custom`; merged into built-in presets otherwise. |
 
 Branch detection chooses the longest matching prefix. Equal-length matches from different branch types are treated as ambiguous and resolve to `unknown`.
+
+### Task MR Integration at Release Prepare
+
+`git_flow.task_merge` is opt-in. An absent block or an empty `timing` preserves the legacy behavior: release preparation only verifies that every selected task branch is already an ancestor of the integration branch and fails otherwise.
+
+With `timing: release_prepare`, release preparation instead merges the selected tasks' existing open MRs into the integration branch itself, sequentially and in a deterministic order, before creating release branches from the resulting accepted integration SHA. wtui does not create, update, or rebase the MR source branches in this flow; each task branch must already have a single ready MR into the integration branch, created beforehand by task Close. The confirmed merge plan is bound to the exact preview and to the release/task-merge configuration; changing `timing` or the release push/worktree settings between preview and confirmation invalidates the plan.
+
+Preview performs a fetch per service to refresh remote-tracking refs but creates, merges, and pushes nothing. Each task worktree `HEAD` must exactly equal its MR head SHA at preview and again at confirmation; a mismatch blocks the merge until the branch is synchronized and previewed again. Merging requires forge support for expected-head SHA pinning; a forge or MR without pinning support blocks the task merge. The confirmed plan is persisted in the release manifest per branch (MR number, head SHA, target SHA), and release branches are created from the persisted final accepted merge SHA, not from a later live integration tip: any integration movement after acceptance blocks preparation. Incomplete historical task-MR metadata fails closed and requires a fresh preview or a recreated release. Retry from `awaiting_task_merge`, `task_merge_blocked`, `task_merge_partial`, or `integrating_tasks` goes through a fresh preview and a new explicit confirmation; a recoverable `failed` release whose selected MRs are externally proven merged resumes only preparation from the persisted accepted SHA, without merging MRs again or pushing integration. See `docs/workflows.md` for the operational flow, retry behavior, and status sequence.
 
 ### Branch Rules
 

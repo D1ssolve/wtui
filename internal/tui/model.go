@@ -95,6 +95,17 @@ type Model struct {
 	pendingReleaseCleanupPlan    *task.ReleaseCleanupPlan
 	pendingReleaseCleanupPreview task.ReleaseCleanupPreview
 	releaseCleanupExecuting      uint64
+
+	releaseTaskMergeGeneration uint64
+	releaseTaskMerge           *releaseTaskMergeRequest
+}
+
+type releaseTaskMergeRequest struct {
+	generation uint64
+	releaseID  string
+	planning   bool
+	preview    task.ReleasePreview
+	plan       *task.ReleaseTaskMergePlan
 }
 
 type mergeInspectionRequest struct {
@@ -375,6 +386,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.invalidateReleaseCleanupRequest()
 				m.invalidateReleaseCleanupApproval()
 				m.invalidateMergeInspection()
+				m.invalidateReleaseTaskMergePlanning()
 				m.setSelectedReleaseWorkflow()
 			}
 			return m, cmd
@@ -637,7 +649,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if _, ok := m.modal.(*modal.ReleaseExecuteConfirmDialog); ok {
 			m.pendingReleaseSubmit = nil
+			m.releaseTaskMerge = nil
 			m.outputPanel.AppendLine("Release execution cancelled.")
+		}
+		if _, ok := m.modal.(*modal.ReleaseTaskMergeRetryConfirmDialog); ok {
+			m.releaseTaskMerge = nil
+			m.outputPanel.AppendLine("Task MR merge retry cancelled.")
 		}
 		if _, ok := m.modal.(*modal.MergeConfirmDialog); ok {
 			m.pendingMerge = nil
@@ -791,9 +808,93 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i := range preview.Rows {
 			preview.Rows[i].TagDescription = pending.TagDescriptions[preview.Rows[i].ServiceName]
 		}
+		if preview.Err == nil && preview.TaskMergeDuringPrepare {
+			m.releaseTaskMergeGeneration++
+			m.releaseTaskMerge = &releaseTaskMergeRequest{generation: m.releaseTaskMergeGeneration, planning: true, preview: preview}
+			m.modal = nil
+			m.opRunning = true
+			m.outputPanel.AppendLine("Planning task MR merges...")
+			return m, tea.Batch(planReleaseTaskMergesCmd(m.mgr, task.CreateReleaseParams{
+				Title:                  pending.Title,
+				TaskIDs:                append([]string(nil), pending.TaskIDs...),
+				ServiceVersions:        copyVersionMap(pending.Versions),
+				ServiceTagDescriptions: copyVersionMap(pending.TagDescriptions),
+			}, m.releaseTaskMergeGeneration), m.spinner.Tick)
+		}
+		m.releaseTaskMerge = nil
 		m.modal = modal.NewReleaseExecuteConfirmDialog(pending.Title, pending.TaskIDs, pending.Versions, preview)
 		m.modal.SetTerminalSize(m.width, m.height)
 		return m, nil
+
+	case ReleaseTaskMergePlanReadyMsg:
+		req := m.releaseTaskMerge
+		if req == nil || !req.planning || req.releaseID != "" || msg.Generation != req.generation || m.pendingReleaseSubmit == nil {
+			return m, nil
+		}
+		req.planning = false
+		m.opRunning = false
+		if msg.Err != nil {
+			m.releaseTaskMerge = nil
+			m.pendingReleaseSubmit = nil
+			m.outputPanel.AppendLine("Plan task MR merges failed: " + msg.Err.Error())
+			return m, nil
+		}
+		plan := msg.Plan
+		req.plan = &plan
+		submit := m.pendingReleaseSubmit
+		m.modal = modal.NewReleaseExecuteConfirmDialogWithTaskMerge(submit.Title, submit.TaskIDs, submit.Versions, req.preview, plan.Rows, req.generation)
+		m.modal.SetTerminalSize(m.width, m.height)
+		return m, nil
+
+	case ReleaseTaskMergeRetryPlanReadyMsg:
+		req := m.releaseTaskMerge
+		if req == nil || !req.planning || req.releaseID == "" || msg.ReleaseID != req.releaseID || msg.Generation != req.generation {
+			return m, nil
+		}
+		selected := m.releasesPanel.SelectedRelease()
+		if selected == nil || selected.ID != req.releaseID || !releaseTaskMergeRetryable(selected.Status) {
+			m.releaseTaskMerge = nil
+			m.opRunning = false
+			return m, nil
+		}
+		req.planning = false
+		m.opRunning = false
+		if msg.Err != nil {
+			m.releaseTaskMerge = nil
+			m.outputPanel.AppendLine("Plan task MR retry failed: " + msg.Err.Error())
+			return m, nil
+		}
+		retryPlan := msg.Plan
+		req.plan = &retryPlan
+		m.modal = modal.NewReleaseTaskMergeRetryConfirmDialog(req.releaseID, retryPlan.Rows, req.generation)
+		m.modal.SetTerminalSize(m.width, m.height)
+		return m, nil
+
+	case modal.ConfirmReleaseTaskMergeRetryMsg:
+		dlg, ok := m.modal.(*modal.ReleaseTaskMergeRetryConfirmDialog)
+		req := m.releaseTaskMerge
+		if !ok || req == nil || req.planning || req.plan == nil || req.releaseID == "" ||
+			msg.ReleaseID != req.releaseID || msg.Generation != req.generation ||
+			msg.ReleaseID != dlg.ReleaseID() || msg.Generation != dlg.Generation() {
+			return m, nil
+		}
+		selected := m.releasesPanel.SelectedRelease()
+		if selected == nil || selected.ID != req.releaseID {
+			return m, nil
+		}
+		for _, row := range req.plan.Rows {
+			if !row.Ready {
+				m.logger.Warn("ConfirmReleaseTaskMergeRetryMsg ignored: plan has blocked rows")
+				return m, nil
+			}
+		}
+		plan := req.plan
+		releaseID := req.releaseID
+		m.modal = nil
+		m.releaseTaskMerge = nil
+		m.opRunning = true
+		m.outputPanel.AppendLine("Retrying task MR merges for release " + releaseID + "...")
+		return m, tea.Batch(retryReleaseTaskMergesCmd(m.mgr, releaseID, plan), m.spinner.Tick)
 
 	case modal.SubmitReleaseCleanupMsg:
 		checklist, ok := m.modal.(*modal.ReleaseCleanupChecklistModal)
@@ -853,8 +954,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		var confirmedPlan *task.ReleaseTaskMergePlan
+		if req := m.releaseTaskMerge; req != nil {
+			dlg, ok := m.modal.(*modal.ReleaseExecuteConfirmDialog)
+			if !ok || req.planning || req.plan == nil || req.releaseID != "" ||
+				msg.Generation != req.generation || dlg.TaskMergeGeneration() != req.generation {
+				m.logger.Warn("ConfirmReleaseExecuteMsg ignored: task merge confirmation mismatch")
+				return m, nil
+			}
+			for _, row := range req.plan.Rows {
+				if !row.Ready {
+					m.logger.Warn("ConfirmReleaseExecuteMsg ignored: task merge plan has blocked rows")
+					return m, nil
+				}
+			}
+			confirmedPlan = req.plan
+		}
+
 		m.modal = nil
 		m.pendingReleaseSubmit = nil
+		m.releaseTaskMerge = nil
 		m.opRunning = true
 		m.outputPanel.AppendLine("Creating release from selected tasks...")
 		return m, tea.Batch(createReleaseCmd(m.mgr, task.CreateReleaseParams{
@@ -862,6 +981,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			TaskIDs:                append([]string(nil), submit.TaskIDs...),
 			ServiceVersions:        copyVersionMap(submit.Versions),
 			ServiceTagDescriptions: copyVersionMap(submit.TagDescriptions),
+			ConfirmedTaskMergePlan: confirmedPlan,
 			StartImmediately:       true,
 		}), m.spinner.Tick)
 
@@ -910,7 +1030,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = true
 		m.outputPanel.AppendLine("Creating missing review requests for " + msg.TaskID + "...")
 		return m, tea.Batch(
-			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", msg.Title),
+			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", forgeCreateMRParams{Title: msg.Title}),
+			m.spinner.Tick,
+		)
+
+	case modal.ForgeConfirmCreateMRMsg:
+		m.modal = nil
+		m.opRunning = true
+		m.outputPanel.AppendLine("Creating confirmed review requests for " + msg.TaskID + "...")
+		return m, tea.Batch(
+			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", forgeCreateMRParams{Title: msg.Title, Force: true}),
 			m.spinner.Tick,
 		)
 
@@ -977,6 +1106,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.releasesPanel.SetReleases(msg.Releases)
 		m.invalidateReleaseCleanupDrift()
+		m.invalidateReleaseTaskMergeDrift()
 		m.setSelectedReleaseWorkflow()
 		if m.refreshing {
 			m.outputPanel.AppendLine("Releases refreshed.")
@@ -1297,6 +1427,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			var created, existing, failed int
+			var confirmItems []modal.MRCreateConfirmItem
 			for _, service := range result.Services {
 				line := service.ServiceName + ": " + service.Status
 				switch service.Status {
@@ -1306,15 +1437,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					existing++
 				case "failed":
 					failed++
+				case "confirm":
+					confirmItems = append(confirmItems, modal.MRCreateConfirmItem{ServiceName: service.ServiceName, Reason: service.Reason})
 				}
 				if service.Err != nil {
 					line += ": " + service.Err.Error()
+				} else if service.Reason != "" {
+					line += ": " + service.Reason
 				} else if service.MR.URL != "" {
 					line += " " + service.MR.URL
 				}
 				m.outputPanel.AppendLine(line)
 			}
 			m.outputPanel.AppendLine(fmt.Sprintf("Create missing MR/PRs done: created=%d, existing=%d, failed=%d", created, existing, failed))
+			if len(confirmItems) > 0 {
+				m.modal = modal.NewMRCreateConfirmDialog(result.TaskID, result.Title, confirmItems)
+				m.modal.SetTerminalSize(m.width, m.height)
+			}
 			return m, nil
 		}
 		if msg.Err != nil {
@@ -1600,6 +1739,7 @@ func (m *Model) setFocus(focus FocusPanel) {
 			m.invalidateReleaseCleanupApproval()
 		}
 		m.invalidateMergeInspection()
+		m.invalidateReleaseTaskMergePlanning()
 	}
 	if focus == FocusServices || focus == FocusReleases {
 		m.rightPane = focus
@@ -1696,13 +1836,60 @@ func (m Model) startReleaseRetry() (Model, tea.Cmd) {
 		return m, nil
 	}
 	release := m.releasesPanel.SelectedRelease()
-	if release == nil || release.Status != domain.ReleaseStatusFailed || release.Error == nil || !release.Error.Recoverable {
+	if release == nil {
+		m.outputPanel.AppendLine("Release retry unavailable: release must be failed and recoverable.")
+		return m, nil
+	}
+	if releaseTaskMergeRetryable(release.Status) {
+		m.releaseTaskMergeGeneration++
+		m.releaseTaskMerge = &releaseTaskMergeRequest{generation: m.releaseTaskMergeGeneration, releaseID: release.ID, planning: true}
+		m.opRunning = true
+		m.outputPanel.AppendLine("Planning task MR retry for release " + release.ID + "...")
+		return m, tea.Batch(planReleaseTaskMergeRetryCmd(m.mgr, release.ID, m.releaseTaskMergeGeneration), m.spinner.Tick)
+	}
+	if release.Status != domain.ReleaseStatusFailed || release.Error == nil || !release.Error.Recoverable {
 		m.outputPanel.AppendLine("Release retry unavailable: release must be failed and recoverable.")
 		return m, nil
 	}
 	m.opRunning = true
 	m.outputPanel.AppendLine("Retrying release " + release.ID + "...")
 	return m, tea.Batch(retryReleaseCmd(m.mgr, release.ID), m.spinner.Tick)
+}
+
+func releaseTaskMergeRetryable(status domain.ReleaseStatus) bool {
+	switch status {
+	case domain.ReleaseStatusTaskMergeBlocked, domain.ReleaseStatusTaskMergePartial, domain.ReleaseStatusIntegratingTasks, domain.ReleaseStatusAwaitingTaskMerge:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Model) invalidateReleaseTaskMergePlanning() {
+	if req := m.releaseTaskMerge; req != nil && req.planning {
+		m.releaseTaskMerge = nil
+		m.releaseTaskMergeGeneration++
+		m.opRunning = false
+	}
+}
+
+func (m *Model) invalidateReleaseTaskMergeDrift() {
+	req := m.releaseTaskMerge
+	if req == nil || req.releaseID == "" {
+		return
+	}
+	selected := m.releasesPanel.SelectedRelease()
+	if selected != nil && selected.ID == req.releaseID && releaseTaskMergeRetryable(selected.Status) {
+		return
+	}
+	if req.planning {
+		m.opRunning = false
+	}
+	m.releaseTaskMerge = nil
+	m.releaseTaskMergeGeneration++
+	if _, ok := m.modal.(*modal.ReleaseTaskMergeRetryConfirmDialog); ok {
+		m.modal = nil
+	}
 }
 
 func (m Model) startReleaseCleanupPlan(releaseID string, selection task.ReleaseCleanupSelection, confirm bool) (Model, tea.Cmd) {
@@ -1861,9 +2048,11 @@ func releaseCleanupMutatingMessage(msg tea.Msg) bool {
 		modal.SubmitCloseTaskMsg,
 		modal.SubmitCreateReleaseMsg,
 		modal.ConfirmReleaseExecuteMsg,
+		modal.ConfirmReleaseTaskMergeRetryMsg,
 		modal.ConfirmMergeMsg,
 		modal.SubmitPruneMsg,
 		modal.ForgeCreateMRMsg,
+		modal.ForgeConfirmCreateMRMsg,
 		modal.ForgeMergeMRMsg:
 		return true
 	default:

@@ -301,6 +301,20 @@ type cmdManager struct {
 	cleanupExecuteCalls  int
 	cleanupExecuteResult task.ReleaseCleanupResult
 	cleanupExecuteErr    error
+
+	planTaskMergeCtx         context.Context
+	planTaskMergeParams      task.CreateReleaseParams
+	planTaskMergeResult      task.ReleaseTaskMergePlan
+	planTaskMergeErr         error
+	planTaskMergeRetryCtx    context.Context
+	planTaskMergeRetryID     string
+	planTaskMergeRetryResult task.ReleaseTaskMergePlan
+	planTaskMergeRetryErr    error
+	retryTaskMergeCtx        context.Context
+	retryTaskMergeID         string
+	retryTaskMergePlan       *task.ReleaseTaskMergePlan
+	retryTaskMergeResult     domain.Release
+	retryTaskMergeErr        error
 }
 
 func TestConvertHotfixCmd_CallsManager(t *testing.T) {
@@ -374,7 +388,7 @@ func (m *cmdManager) ListTags(_ context.Context, taskID string) ([]domain.TagInf
 	return m.tagResult, m.tagErr
 }
 
-func (m *cmdManager) ForgeCreateMissingMRs(_ context.Context, _ string, title string) (task.TaskMRCreateResult, error) {
+func (m *cmdManager) ForgeCreateMissingMRs(_ context.Context, _ string, title string, _ bool) (task.TaskMRCreateResult, error) {
 	m.forgeCreateMRTitle = title
 	return m.forgeMRResult, m.forgeErr
 }
@@ -442,6 +456,25 @@ func (m *cmdManager) RetryRelease(ctx context.Context, releaseID string) (domain
 	m.retryReleaseCtx = ctx
 	m.retryReleaseID = releaseID
 	return m.retryReleaseResult, m.retryReleaseErr
+}
+
+func (m *cmdManager) PlanReleaseTaskMerges(ctx context.Context, params task.CreateReleaseParams) (task.ReleaseTaskMergePlan, error) {
+	m.planTaskMergeCtx = ctx
+	m.planTaskMergeParams = params
+	return m.planTaskMergeResult, m.planTaskMergeErr
+}
+
+func (m *cmdManager) PlanReleaseTaskMergeRetry(ctx context.Context, releaseID string) (task.ReleaseTaskMergePlan, error) {
+	m.planTaskMergeRetryCtx = ctx
+	m.planTaskMergeRetryID = releaseID
+	return m.planTaskMergeRetryResult, m.planTaskMergeRetryErr
+}
+
+func (m *cmdManager) RetryReleaseTaskMerges(ctx context.Context, releaseID string, plan *task.ReleaseTaskMergePlan) (domain.Release, error) {
+	m.retryTaskMergeCtx = ctx
+	m.retryTaskMergeID = releaseID
+	m.retryTaskMergePlan = plan
+	return m.retryTaskMergeResult, m.retryTaskMergeErr
 }
 
 func (m *cmdManager) RejectRelease(_ context.Context, _ string) (domain.Release, error) {
@@ -594,7 +627,7 @@ func TestListTagsCmdReturnsTagListMsg(t *testing.T) {
 func TestForgeOpCmdDelegatesCreateMissingMRs(t *testing.T) {
 	mgr := &cmdManager{forgeMRResult: task.TaskMRCreateResult{TaskID: "T14"}}
 
-	msg := forgeOpCmd(mgr, "create_missing_mrs", "T14", "", "Shared title")()
+	msg := forgeOpCmd(mgr, "create_missing_mrs", "T14", "", forgeCreateMRParams{Title: "Shared title"})()
 	got, ok := msg.(ForgeResultMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want ForgeResultMsg", msg)
@@ -656,7 +689,7 @@ func TestForgeOpCmdUnsupportedOperation(t *testing.T) {
 
 func TestForgeOpCmdManagerWithoutForgeSupport(t *testing.T) {
 	mgr := &cmdManager{forgeErr: errors.New("forge unavailable")}
-	msg := forgeOpCmd(mgr, "create_missing_mrs", "T14", "", "title")()
+	msg := forgeOpCmd(mgr, "create_missing_mrs", "T14", "", forgeCreateMRParams{Title: "title"})()
 	got := msg.(ForgeResultMsg)
 	if got.Err == nil {
 		t.Fatal("Err = nil, want error")
@@ -1039,5 +1072,66 @@ func TestAddServiceCmd_PartialFailureEmitsPartialAddDoneMsg(t *testing.T) {
 	}
 	if partial.Result.TaskID != "T-2" || partial.Op != "Add services to T-2" {
 		t.Fatalf("partial msg = %+v, want task/op set", partial)
+	}
+}
+
+func TestPlanReleaseTaskMergesCmdCarriesParamsAndGeneration(t *testing.T) {
+	plan := task.ReleaseTaskMergePlan{Rows: []task.ReleaseTaskMergeRow{{ServiceName: "api", Ready: true}}}
+	mgr := &cmdManager{planTaskMergeResult: plan}
+
+	msg := planReleaseTaskMergesCmd(mgr, task.CreateReleaseParams{TaskIDs: []string{"T-1"}, ServiceVersions: map[string]string{"api": "1.2.3"}}, 7)()
+	ready, ok := msg.(ReleaseTaskMergePlanReadyMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want ReleaseTaskMergePlanReadyMsg", msg)
+	}
+	if ready.Generation != 7 || ready.Err != nil || len(ready.Plan.Rows) != 1 {
+		t.Fatalf("ready = %+v", ready)
+	}
+	if len(mgr.planTaskMergeParams.TaskIDs) != 1 || mgr.planTaskMergeParams.TaskIDs[0] != "T-1" {
+		t.Fatalf("plan params = %+v", mgr.planTaskMergeParams)
+	}
+}
+
+func TestPlanReleaseTaskMergesCmdReturnsError(t *testing.T) {
+	expectedErr := errors.New("plan failed")
+	mgr := &cmdManager{planTaskMergeErr: expectedErr}
+
+	msg := planReleaseTaskMergesCmd(mgr, task.CreateReleaseParams{TaskIDs: []string{"T-1"}}, 3)()
+	ready := msg.(ReleaseTaskMergePlanReadyMsg)
+	if !errors.Is(ready.Err, expectedErr) {
+		t.Fatalf("Err = %v, want %v", ready.Err, expectedErr)
+	}
+}
+
+func TestPlanReleaseTaskMergeRetryCmdCarriesReleaseAndGeneration(t *testing.T) {
+	plan := task.ReleaseTaskMergePlan{Rows: []task.ReleaseTaskMergeRow{{ServiceName: "api", Status: "merged", Ready: true}}}
+	mgr := &cmdManager{planTaskMergeRetryResult: plan}
+
+	msg := planReleaseTaskMergeRetryCmd(mgr, "rel-1", 11)()
+	ready, ok := msg.(ReleaseTaskMergeRetryPlanReadyMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want ReleaseTaskMergeRetryPlanReadyMsg", msg)
+	}
+	if ready.ReleaseID != "rel-1" || ready.Generation != 11 || len(ready.Plan.Rows) != 1 {
+		t.Fatalf("ready = %+v", ready)
+	}
+	if mgr.planTaskMergeRetryID != "rel-1" {
+		t.Fatalf("retry plan release ID = %q", mgr.planTaskMergeRetryID)
+	}
+}
+
+func TestRetryReleaseTaskMergesCmdPassesExactPlan(t *testing.T) {
+	mgr := &cmdManager{retryTaskMergeResult: domain.Release{ID: "rel-1", Status: domain.ReleaseStatusPrepared}}
+	plan := &task.ReleaseTaskMergePlan{Rows: []task.ReleaseTaskMergeRow{{ServiceName: "api", Ready: true}}}
+
+	done, ok := retryReleaseTaskMergesCmd(mgr, "rel-1", plan)().(ReleaseActionDoneMsg)
+	if !ok {
+		t.Fatalf("message type unexpected")
+	}
+	if done.Action != "retry" || done.Release.ID != "rel-1" || done.Err != nil {
+		t.Fatalf("done = %#v", done)
+	}
+	if mgr.retryTaskMergeID != "rel-1" || mgr.retryTaskMergePlan != plan {
+		t.Fatalf("RetryReleaseTaskMerges called with id=%q plan=%p, want id=rel-1 exact plan", mgr.retryTaskMergeID, mgr.retryTaskMergePlan)
 	}
 }

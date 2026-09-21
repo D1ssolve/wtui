@@ -140,12 +140,7 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 		}
 		for _, target := range sp.ReviewTargets {
 			review := HotfixReview{Target: target, State: "missing"}
-			var matches []forge.MRInfo
-			for _, r := range rows {
-				if r.SourceBranch == svc.Branch && r.TargetBranch == target {
-					matches = append(matches, r)
-				}
-			}
+			matches, closed := matchTargetMRs(rows, svc.Branch, target)
 			if len(matches) > 1 {
 				return plan, fmt.Errorf("%s → %s: ambiguous MR history", svc.Name, target)
 			}
@@ -184,6 +179,18 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 					}
 				default:
 					return plan, fmt.Errorf("%s → %s: MR #%d is %s", svc.Name, target, r.Number, r.State)
+				}
+			}
+			if review.State == "missing" {
+				if len(closed) > 0 {
+					plan.Warnings = append(plan.Warnings, fmt.Sprintf("[%s → %s] MR #%d was closed without merge; confirming will create a new MR", svc.Name, target, closed[0].Number))
+				}
+				ahead, err := m.git.RevListCount(ctx, svc.WorktreePath, svc.Branch, "origin/"+target)
+				if err != nil {
+					return plan, err
+				}
+				if ahead == 0 {
+					plan.Warnings = append(plan.Warnings, fmt.Sprintf("[%s → %s] no changes vs target; MR will be empty", svc.Name, target))
 				}
 			}
 			if review.State != "merged" {

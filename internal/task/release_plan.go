@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -42,6 +43,7 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 	plannedTasks := make([]domain.ReleaseTaskRef, 0, len(selectedTaskIDs))
 	plannedServices := make([]domain.ReleaseService, 0)
 	serviceIndexByName := make(map[string]int)
+	serviceByCommonDir := make(map[string]string)
 
 	for _, taskID := range selectedTaskIDs {
 		if err := validateTaskID(taskID); err != nil {
@@ -81,6 +83,22 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 			if err := m.validateSourceWorktreeState(ctx, svc); err != nil {
 				return releasePlan{}, err
 			}
+			commonDir, err := m.git.CommonDir(ctx, svc.WorktreePath)
+			if err != nil {
+				return releasePlan{}, fmt.Errorf("release plan: resolve repository for service %s: %w", svc.Name, err)
+			}
+			commonDir, err = filepath.Abs(commonDir)
+			if err != nil {
+				return releasePlan{}, fmt.Errorf("release plan: normalize repository for service %s: %w", svc.Name, err)
+			}
+			commonDir, err = filepath.EvalSymlinks(commonDir)
+			if err != nil {
+				return releasePlan{}, fmt.Errorf("release plan: canonical repository for service %s: %w", svc.Name, err)
+			}
+			if name, exists := serviceByCommonDir[commonDir]; exists && name != svc.Name {
+				return releasePlan{}, fmt.Errorf("%w: services=%s,%s share repository %s; use one service name per repository", ErrReleaseServiceRepoConflict, name, svc.Name, commonDir)
+			}
+			serviceByCommonDir[commonDir] = svc.Name
 
 			idx, alreadyPlanned := serviceIndexByName[svc.Name]
 			if alreadyPlanned {
@@ -134,13 +152,15 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 				idx = len(plannedServices) - 1
 			}
 
-			remoteIntegration := "origin/" + m.flow.IntegrationBranch
-			merged, err := m.git.IsAncestor(ctx, svc.RepoPath, svc.Branch, remoteIntegration)
-			if err != nil {
-				return releasePlan{}, fmt.Errorf("release plan: verify task branch service=%s branch=%s integration=%s: %w", svc.Name, svc.Branch, remoteIntegration, err)
-			}
-			if !merged {
-				return releasePlan{}, fmt.Errorf("%w: service=%s branch=%s integration=%s", ErrReleaseTaskNotMerged, svc.Name, svc.Branch, remoteIntegration)
+			if !m.releasePrepareTaskMergeEnabled() {
+				remoteIntegration := "origin/" + m.flow.IntegrationBranch
+				merged, err := m.git.IsAncestor(ctx, svc.RepoPath, svc.Branch, remoteIntegration)
+				if err != nil {
+					return releasePlan{}, fmt.Errorf("release plan: verify task branch service=%s branch=%s integration=%s: %w", svc.Name, svc.Branch, remoteIntegration, err)
+				}
+				if !merged {
+					return releasePlan{}, fmt.Errorf("%w: service=%s branch=%s integration=%s", ErrReleaseTaskNotMerged, svc.Name, svc.Branch, remoteIntegration)
+				}
 			}
 
 			plannedServices[idx].FeatureBranches = append(plannedServices[idx].FeatureBranches, domain.ReleaseFeatureBranch{
@@ -250,43 +270,4 @@ func normalizePlannedServiceVersion(serviceVersions map[string]string, serviceNa
 	}
 
 	return version, nil
-}
-
-func (m *manager) validateSourceWorktreeState(ctx context.Context, svc domain.Service) error {
-	requireClean := m.cfg != nil && m.cfg.Release != nil && m.cfg.Release.RequireCleanBeforeMerge != nil && *m.cfg.Release.RequireCleanBeforeMerge
-	if requireClean {
-		dirty, err := m.git.IsDirty(ctx, svc.WorktreePath)
-		if err != nil {
-			return fmt.Errorf("release plan: check dirty service=%s: %w", svc.Name, err)
-		}
-		if dirty {
-			return fmt.Errorf("%w: service=%s", ErrReleaseDirtyWorktree, svc.Name)
-		}
-	}
-
-	states, err := m.git.OperationState(ctx, svc.WorktreePath)
-	if err != nil {
-		return fmt.Errorf("release plan: check git operation state service=%s: %w", svc.Name, err)
-	}
-	for _, state := range states {
-		if isBlockingReleaseRepoState(state) {
-			return fmt.Errorf("%w: service=%s state=%d", ErrReleaseOperationInProgress, svc.Name, state)
-		}
-	}
-
-	return nil
-}
-
-func isBlockingReleaseRepoState(state domain.RepoState) bool {
-	switch state {
-	case domain.RepoStateConflicted,
-		domain.RepoStateMerging,
-		domain.RepoStateRebasing,
-		domain.RepoStateCherryPick,
-		domain.RepoStateReverting,
-		domain.RepoStateBisect:
-		return true
-	default:
-		return false
-	}
 }

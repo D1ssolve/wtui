@@ -41,6 +41,10 @@ func (m *manager) RetryRelease(ctx context.Context, releaseID string) (domain.Re
 		return domain.Release{}, fmt.Errorf("%w: failed release is not recoverable", ErrReleaseInvalidStatusTransition)
 	}
 
+	if hasTaskMR, _ := awaitingTaskMergeMetadataState(release); release.PreparedAt == nil && hasTaskMR {
+		return m.retryAcceptedPreparation(ctx, release)
+	}
+
 	if !IsLegacyManifest(release) {
 		switch {
 		case release.PreparedAt == nil:

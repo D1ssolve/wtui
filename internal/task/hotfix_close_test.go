@@ -60,7 +60,7 @@ func TestHotfixClose_TagRetryPinsVersionAndMergeSHA(t *testing.T) {
 }
 
 func TestHotfixClose_BlocksUnsafePlans(t *testing.T) {
-	for _, kind := range []string{"source", "closed", "ambiguous", "unreachable", "fingerprint", "remote-tag", "missing-merge-sha"} {
+	for _, kind := range []string{"source", "ambiguous", "unreachable", "fingerprint", "remote-tag", "missing-merge-sha"} {
 		t.Run(kind, func(t *testing.T) {
 			m, g, f := hotfixManager(t)
 			f.requests = append(f.requests, forge.MRReadiness{Number: 2, State: "merged", SourceBranch: "hotfix/H", TargetBranch: "develop", HeadSHA: "source", MergedSHA: "develop-merge"})
@@ -70,8 +70,6 @@ func TestHotfixClose_BlocksUnsafePlans(t *testing.T) {
 				f.requests[0].MergedSHA = ""
 			case "source":
 				f.requests[0].HeadSHA = "old"
-			case "closed":
-				f.requests[0].State = "closed"
 			case "ambiguous":
 				f.requests = append(f.requests, f.requests[0])
 			case "unreachable":
@@ -88,6 +86,43 @@ func TestHotfixClose_BlocksUnsafePlans(t *testing.T) {
 				t.Fatal("mutated unsafe plan")
 			}
 		})
+	}
+}
+
+func TestHotfixClose_ClosedDuplicateMRDoesNotBlock(t *testing.T) {
+	m, _, f := hotfixManager(t)
+	f.requests = append(f.requests, forge.MRReadiness{Number: 5, State: "closed", SourceBranch: "hotfix/H", TargetBranch: "master", HeadSHA: "source"})
+	p, err := m.PlanCloseTask(t.Context(), "H")
+	if err != nil {
+		t.Fatalf("closed duplicate must not be ambiguous: %v", err)
+	}
+	if p.Services[0].Reviews[0].State != "merged" {
+		t.Fatalf("active MR ignored: %+v", p.Services[0].Reviews)
+	}
+}
+
+func TestHotfixClose_ClosedMRIsRecreatedWithWarning(t *testing.T) {
+	m, _, f := hotfixManager(t)
+	f.requests[0].State = "closed"
+	p, err := m.PlanCloseTask(t.Context(), "H")
+	if err != nil {
+		t.Fatalf("closed MR must be treated as missing: %v", err)
+	}
+	var warned bool
+	for _, w := range p.Warnings {
+		if strings.Contains(w, "closed without merge") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("missing closed-MR warning: %v", p.Warnings)
+	}
+	r, err := m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", Fingerprint: p.Fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.created) != 2 || !r.Waiting {
+		t.Fatalf("closed MRs not recreated: created=%v result=%+v", f.created, r)
 	}
 }
 

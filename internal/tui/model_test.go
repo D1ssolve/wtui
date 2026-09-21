@@ -97,6 +97,21 @@ type mockManager struct {
 	cleanupExecuteResult   task.ReleaseCleanupResult
 	cleanupExecuteErr      error
 	cleanupExecuteStatuses []string
+
+	planTaskMergeCalls          int
+	planTaskMergeParams         task.CreateReleaseParams
+	planTaskMergeResult         task.ReleaseTaskMergePlan
+	planTaskMergeErr            error
+	planTaskMergeRetryCalls     int
+	planTaskMergeRetryReleaseID string
+	planTaskMergeRetryResult    task.ReleaseTaskMergePlan
+	planTaskMergeRetryErr       error
+	retryReleaseCalls           int
+	retryTaskMergeCalls         int
+	retryTaskMergeReleaseID     string
+	retryTaskMergePlan          *task.ReleaseTaskMergePlan
+	retryTaskMergeResult        domain.Release
+	retryTaskMergeErr           error
 }
 
 var _ task.Manager = (*mockManager)(nil)
@@ -190,7 +205,7 @@ func (m *mockManager) ProposeReleaseVersions(_ context.Context, taskIDs []string
 	return m.proposedVersions, m.proposedVersionErr
 }
 
-func (m *mockManager) ForgeCreateMissingMRs(_ context.Context, _ string, title string) (task.TaskMRCreateResult, error) {
+func (m *mockManager) ForgeCreateMissingMRs(_ context.Context, _ string, title string, _ bool) (task.TaskMRCreateResult, error) {
 	m.forgeCreateMRTitle = title
 	return m.forgeCreateMRResult, nil
 }
@@ -276,7 +291,35 @@ func (m *mockManager) BuildReleasePreview(_ context.Context, _ map[string]string
 }
 
 func (m *mockManager) RetryRelease(_ context.Context, _ string) (domain.Release, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.retryReleaseCalls++
 	return domain.Release{}, nil
+}
+
+func (m *mockManager) PlanReleaseTaskMerges(_ context.Context, params task.CreateReleaseParams) (task.ReleaseTaskMergePlan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.planTaskMergeCalls++
+	m.planTaskMergeParams = params
+	return m.planTaskMergeResult, m.planTaskMergeErr
+}
+
+func (m *mockManager) PlanReleaseTaskMergeRetry(_ context.Context, releaseID string) (task.ReleaseTaskMergePlan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.planTaskMergeRetryCalls++
+	m.planTaskMergeRetryReleaseID = releaseID
+	return m.planTaskMergeRetryResult, m.planTaskMergeRetryErr
+}
+
+func (m *mockManager) RetryReleaseTaskMerges(_ context.Context, releaseID string, plan *task.ReleaseTaskMergePlan) (domain.Release, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.retryTaskMergeCalls++
+	m.retryTaskMergeReleaseID = releaseID
+	m.retryTaskMergePlan = plan
+	return m.retryTaskMergeResult, m.retryTaskMergeErr
 }
 
 func (m *mockManager) RejectRelease(_ context.Context, _ string) (domain.Release, error) {

@@ -342,6 +342,33 @@ func TestBuildReleasePreview(t *testing.T) {
 	}
 }
 
+func TestBuildReleasePreview_TaskMergeDuringPrepare(t *testing.T) {
+	base := func() config.Config {
+		return config.Config{
+			Tag:     &config.TagConfig{Format: "v{{.Version}}"},
+			GitFlow: &config.GitFlowConfig{Preset: "git-flow"},
+		}
+	}
+
+	preview, err := BuildReleasePreview(base(), map[string]string{"svc": "1.2.3"})
+	if err != nil {
+		t.Fatalf("BuildReleasePreview() error = %v", err)
+	}
+	if preview.TaskMergeDuringPrepare {
+		t.Fatal("TaskMergeDuringPrepare = true, want false when task_merge timing is absent")
+	}
+
+	withTiming := base()
+	withTiming.GitFlow.TaskMerge = &config.TaskMergeConfig{Timing: config.TaskMergeTimingReleasePrepare}
+	preview, err = BuildReleasePreview(withTiming, map[string]string{"svc": "1.2.3"})
+	if err != nil {
+		t.Fatalf("BuildReleasePreview() error = %v", err)
+	}
+	if !preview.TaskMergeDuringPrepare {
+		t.Fatal("TaskMergeDuringPrepare = false, want true when task_merge timing is release_prepare")
+	}
+}
+
 func TestBuildReleasePreview_InvalidInput(t *testing.T) {
 	_, err := BuildReleasePreview(config.Config{}, map[string]string{"": "1.2.3"})
 	if !errors.Is(err, ErrReleaseVersionInvalid) {

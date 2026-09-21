@@ -240,6 +240,10 @@ func TestReleaseWorkflow_StatusMapping(t *testing.T) {
 		{domain.ReleaseStatusDraft, domain.ReleaseWorkflowDevelop, "prepare release", ""},
 		{domain.ReleaseStatusValidating, domain.ReleaseWorkflowDevelop, "validating release", ""},
 		{domain.ReleaseStatusMerging, domain.ReleaseWorkflowDevelop, "preparing release", ""},
+		{domain.ReleaseStatusAwaitingTaskMerge, domain.ReleaseWorkflowDevelop, "awaiting task MR confirmation", ""},
+		{domain.ReleaseStatusIntegratingTasks, domain.ReleaseWorkflowDevelop, "integrating task MRs (press R to review retry)", ""},
+		{domain.ReleaseStatusTaskMergeBlocked, domain.ReleaseWorkflowDevelop, "press R to review blocked task MRs", "MR !7 has unresolved discussions"},
+		{domain.ReleaseStatusTaskMergePartial, domain.ReleaseWorkflowDevelop, "press R to review partial task MRs", "merge failed for worker"},
 		{domain.ReleaseStatusBranching, domain.ReleaseWorkflowReleaseBranch, "creating release branches", ""},
 		{domain.ReleaseStatusPushing, domain.ReleaseWorkflowReleaseBranch, "pushing release branches", ""},
 		{domain.ReleaseStatusPrepared, domain.ReleaseWorkflowRegression, "press F to create master MRs", ""},
@@ -255,8 +259,13 @@ func TestReleaseWorkflow_StatusMapping(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(string(tt.status), func(t *testing.T) {
 			release := domain.Release{Status: tt.status}
-			if tt.status == domain.ReleaseStatusFailed {
+			switch tt.status {
+			case domain.ReleaseStatusFailed:
 				release.Error = &domain.ReleaseError{Message: "tag push failed"}
+			case domain.ReleaseStatusTaskMergeBlocked:
+				release.Error = &domain.ReleaseError{Message: "MR !7 has unresolved discussions"}
+			case domain.ReleaseStatusTaskMergePartial:
+				release.Error = &domain.ReleaseError{Message: "merge failed for worker"}
 			}
 			summary := ReleaseWorkflow(release)
 			if summary.Current != tt.want || summary.NextAction != tt.wantNext || summary.Blocker != tt.wantBlocker {
@@ -272,10 +281,32 @@ func TestReleaseWorkflow_StatusMapping(t *testing.T) {
 					}
 				}
 			}
-			if tt.status == domain.ReleaseStatusFailed && summary.Steps[0].State != "blocked" {
-				t.Fatalf("failed current state = %q, want blocked", summary.Steps[0].State)
+			if (tt.status == domain.ReleaseStatusFailed || tt.status == domain.ReleaseStatusTaskMergeBlocked || tt.status == domain.ReleaseStatusTaskMergePartial) && summary.Steps[0].State != "blocked" {
+				t.Fatalf("current state = %q, want blocked", summary.Steps[0].State)
 			}
 		})
+	}
+}
+
+func TestReleaseWorkflow_TaskMergeServiceDetail(t *testing.T) {
+	release := domain.Release{
+		Status: domain.ReleaseStatusTaskMergePartial,
+		Services: []domain.ReleaseService{{
+			Name:   "api",
+			Status: domain.ReleaseStatusTaskMergePartial,
+			FeatureBranches: []domain.ReleaseFeatureBranch{
+				{TaskID: "APP-1", TaskMergeStatus: "merged"},
+				{TaskID: "APP-2", TaskMergeStatus: "pending"},
+			},
+		}},
+	}
+
+	summary := ReleaseWorkflow(release)
+	if len(summary.Services) != 1 {
+		t.Fatalf("Services = %#v, want 1 row", summary.Services)
+	}
+	if !strings.Contains(summary.Services[0].Detail, "task MRs: 1/2 merged") {
+		t.Fatalf("Detail = %q, want task MR counts", summary.Services[0].Detail)
 	}
 }
 

@@ -14,6 +14,11 @@ type ForgeCreateMRMsg struct {
 	Title  string
 }
 
+type ForgeConfirmCreateMRMsg struct {
+	TaskID string
+	Title  string
+}
+
 type ForgePipelineStatusMsg struct {
 	TaskID      string
 	ServiceName string
@@ -46,6 +51,12 @@ type ConfirmReleaseExecuteMsg struct {
 	TaskIDs         []string
 	Versions        map[string]string
 	TagDescriptions map[string]string
+	Generation      uint64
+}
+
+type ConfirmReleaseTaskMergeRetryMsg struct {
+	ReleaseID  string
+	Generation uint64
 }
 
 type ConfirmMergeMsg struct {

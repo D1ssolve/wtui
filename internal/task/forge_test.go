@@ -105,7 +105,7 @@ func TestForgeCreateMissingMRs_BlankTitleDefaultsToTaskID(t *testing.T) {
 	}}
 	mgr := newForgeTaskTestManager(t, client)
 
-	if _, err := mgr.ForgeCreateMissingMRs(t.Context(), "IN-FORGE-MRS", ""); err != nil {
+	if _, err := mgr.ForgeCreateMissingMRs(t.Context(), "IN-FORGE-MRS", "", false); err != nil {
 		t.Fatalf("ForgeCreateMissingMRs() err = %v", err)
 	}
 	if len(titles) != 2 || titles[0] != "IN-FORGE-MRS" || titles[1] != "IN-FORGE-MRS" {
@@ -129,7 +129,7 @@ func TestForgeCreateMissingMRs_CreatesOnlyMissing(t *testing.T) {
 	}
 	mgr := newForgeTaskTestManager(t, client)
 
-	result, err := mgr.ForgeCreateMissingMRs(t.Context(), "IN-FORGE-MRS", "Shared title")
+	result, err := mgr.ForgeCreateMissingMRs(t.Context(), "IN-FORGE-MRS", "Shared title", false)
 	if err != nil {
 		t.Fatalf("ForgeCreateMissingMRs() err = %v", err)
 	}
@@ -158,12 +158,72 @@ func TestForgeCreateMissingMRs_ServiceFailureDoesNotStopRemainingServices(t *tes
 	}
 	mgr := newForgeTaskTestManager(t, client)
 
-	result, err := mgr.ForgeCreateMissingMRs(t.Context(), "IN-FORGE-MRS", "")
+	result, err := mgr.ForgeCreateMissingMRs(t.Context(), "IN-FORGE-MRS", "", false)
 	if err != nil {
 		t.Fatalf("ForgeCreateMissingMRs() err = %v", err)
 	}
 	if len(result.Services) != 2 || result.Services[0].Status != "failed" || result.Services[0].Err == nil || result.Services[1].Status != "created" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+type historyForgeClient struct {
+	*mockForgeClient
+	mrHistoryFn func(ctx context.Context, branch, repo string) ([]forge.MRInfo, error)
+}
+
+func (m *historyForgeClient) MRHistory(ctx context.Context, branch, repo string) ([]forge.MRInfo, error) {
+	return m.mrHistoryFn(ctx, branch, repo)
+}
+
+func TestForgeCreateMissingMRs_ClosedMRHistoryRequiresConfirmation(t *testing.T) {
+	created := 0
+	client := &historyForgeClient{
+		mockForgeClient: &mockForgeClient{createMRFn: func(_ context.Context, params forge.CreateMRParams) (forge.MRInfo, error) {
+			created++
+			return forge.MRInfo{Number: 9, URL: "https://gitlab.example/api/9"}, nil
+		}},
+		mrHistoryFn: func(_ context.Context, branch, _ string) ([]forge.MRInfo, error) {
+			if strings.HasSuffix(branch, "/api") {
+				return []forge.MRInfo{{Number: 3, State: "closed", SourceBranch: branch, TargetBranch: "develop"}}, nil
+			}
+			return nil, nil
+		},
+	}
+	mgr := newForgeTaskTestManager(t, client)
+
+	result, err := mgr.ForgeCreateMissingMRs(t.Context(), "IN-FORGE-MRS", "", false)
+	if err != nil {
+		t.Fatalf("ForgeCreateMissingMRs() err = %v", err)
+	}
+	if created != 1 || result.Services[0].Status != "confirm" || !strings.Contains(result.Services[0].Reason, "#3") || result.Services[1].Status != "created" {
+		t.Fatalf("result = %#v, created = %d", result, created)
+	}
+
+	result, err = mgr.ForgeCreateMissingMRs(t.Context(), "IN-FORGE-MRS", "", true)
+	if err != nil {
+		t.Fatalf("ForgeCreateMissingMRs(force) err = %v", err)
+	}
+	if created != 3 || result.Services[0].Status != "created" {
+		t.Fatalf("force result = %#v, created = %d", result, created)
+	}
+}
+
+func TestForgeCreateMissingMRs_NoDiffRequiresConfirmation(t *testing.T) {
+	created := 0
+	client := &mockForgeClient{createMRFn: func(_ context.Context, params forge.CreateMRParams) (forge.MRInfo, error) {
+		created++
+		return forge.MRInfo{Number: 9, URL: "https://gitlab.example/api/9"}, nil
+	}}
+	mgr := newForgeTaskTestManager(t, client)
+	mgr.(*manager).git.(*mockGitClient).revListCountFn = func(_, _, _ string) (int, error) { return 0, nil }
+
+	result, err := mgr.ForgeCreateMissingMRs(t.Context(), "IN-FORGE-MRS", "", false)
+	if err != nil {
+		t.Fatalf("ForgeCreateMissingMRs() err = %v", err)
+	}
+	if created != 0 || result.Services[0].Status != "confirm" || !strings.Contains(result.Services[0].Reason, "no changes") {
+		t.Fatalf("result = %#v, created = %d", result, created)
 	}
 }
 
@@ -190,6 +250,9 @@ func newForgeTaskTestManager(t *testing.T, client forge.ForgeClient) Manager {
 			}}, nil
 		},
 		remoteURLRes: "git@gitlab.com:group/project.git",
+		revListCountFn: func(_, _, _ string) (int, error) {
+			return 1, nil
+		},
 	}
 	return newTestManagerWithDeps(t, newCloseTestConfig(rootDir, tasksRoot), gitMock, nil, map[forge.ForgeProvider]forge.ForgeClient{
 		forge.ForgeProviderGitLab: client,

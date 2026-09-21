@@ -132,7 +132,7 @@ func (m *closeTaskE2EManager) ProposeReleaseVersions(_ context.Context, _ []stri
 	return nil, nil
 }
 
-func (m *closeTaskE2EManager) ForgeCreateMissingMRs(_ context.Context, taskID, _ string) (task.TaskMRCreateResult, error) {
+func (m *closeTaskE2EManager) ForgeCreateMissingMRs(_ context.Context, taskID, _ string, _ bool) (task.TaskMRCreateResult, error) {
 	return task.TaskMRCreateResult{TaskID: taskID}, nil
 }
 
@@ -190,6 +190,18 @@ func (m *closeTaskE2EManager) BuildReleasePreview(_ context.Context, _ map[strin
 }
 
 func (m *closeTaskE2EManager) RetryRelease(_ context.Context, _ string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
+func (m *closeTaskE2EManager) PlanReleaseTaskMerges(_ context.Context, _ task.CreateReleaseParams) (task.ReleaseTaskMergePlan, error) {
+	return task.ReleaseTaskMergePlan{}, nil
+}
+
+func (m *closeTaskE2EManager) PlanReleaseTaskMergeRetry(_ context.Context, _ string) (task.ReleaseTaskMergePlan, error) {
+	return task.ReleaseTaskMergePlan{}, nil
+}
+
+func (m *closeTaskE2EManager) RetryReleaseTaskMerges(_ context.Context, _ string, _ *task.ReleaseTaskMergePlan) (domain.Release, error) {
 	return domain.Release{}, nil
 }
 

@@ -53,7 +53,14 @@ type GitFlowConfig struct {
 	IntegrationBranch            string                    `yaml:"integration_branch"`
 	DefaultBranchType            string                    `yaml:"default_branch_type"`
 	AllowMixedBranchTypesOnClose bool                      `yaml:"allow_mixed_branch_types_on_close"`
+	TaskMerge                    *TaskMergeConfig          `yaml:"task_merge"`
 	BranchTypes                  map[string]BranchTypeRule `yaml:"branch_types"`
+}
+
+const TaskMergeTimingReleasePrepare = "release_prepare"
+
+type TaskMergeConfig struct {
+	Timing string `yaml:"timing"`
 }
 
 type BranchTypeRule struct {
@@ -384,6 +391,14 @@ func (c *Config) effectiveGitFlow() error {
 
 	if c.GitFlow.DefaultBranchType == "" {
 		c.GitFlow.DefaultBranchType = "feature"
+	}
+
+	if c.GitFlow.TaskMerge != nil {
+		switch c.GitFlow.TaskMerge.Timing {
+		case "", TaskMergeTimingReleasePrepare:
+		default:
+			return fmt.Errorf("config: invalid git_flow.task_merge.timing %q: expected release_prepare", c.GitFlow.TaskMerge.Timing)
+		}
 	}
 
 	if c.GitFlow.ProductionBranch == "" {

@@ -11,7 +11,6 @@ import (
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/discovery"
 	"github.com/D1ssolve/wtui/internal/domain"
-	"github.com/D1ssolve/wtui/internal/git"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/sln"
 	"github.com/D1ssolve/wtui/internal/validation"
@@ -431,35 +430,4 @@ func newReleasePlanTestManager(t *testing.T, gitMock *mockGitClient) (*manager, 
 	}
 
 	return m, gitMock
-}
-
-func seedReleasePlanTasks(t *testing.T, tasksRoot string, gitMock *mockGitClient, specs ...releasePlanTaskService) {
-	t.Helper()
-
-	commonByWorktree := map[string]string{}
-	for _, spec := range specs {
-		worktreePath := filepath.Join(tasksRoot, spec.TaskID, spec.ServiceName)
-		if err := os.MkdirAll(worktreePath, 0o755); err != nil {
-			t.Fatalf("mkdir worktree path: %v", err)
-		}
-
-		commonDir := filepath.Join(spec.RepoPath, ".git")
-		if err := os.MkdirAll(commonDir, 0o755); err != nil {
-			t.Fatalf("mkdir common dir: %v", err)
-		}
-
-		commonByWorktree[worktreePath] = commonDir
-		gitMock.listWorktreesRes = append(gitMock.listWorktreesRes, git.WorktreeEntry{
-			Path:   worktreePath,
-			Branch: "refs/heads/" + spec.Branch,
-		})
-	}
-
-	gitMock.commonDirFn = func(path string) (string, error) {
-		common, ok := commonByWorktree[path]
-		if !ok {
-			return "", errors.New("not a git repo")
-		}
-		return common, nil
-	}
 }

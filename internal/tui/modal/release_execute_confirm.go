@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/task"
 )
@@ -22,6 +23,11 @@ type ReleaseExecuteConfirmDialog struct {
 	width    int
 	height   int
 	viewport viewport.Model
+
+	hasTaskMerge        bool
+	taskMergeRows       []task.ReleaseTaskMergeRow
+	taskMergeGeneration uint64
+	narrowRows          bool
 }
 
 func NewReleaseExecuteConfirmDialog(title string, taskIDs []string, versions map[string]string, preview task.ReleasePreview) *ReleaseExecuteConfirmDialog {
@@ -43,14 +49,44 @@ func NewReleaseExecuteConfirmDialog(title string, taskIDs []string, versions map
 	return dialog
 }
 
+func NewReleaseExecuteConfirmDialogWithTaskMerge(title string, taskIDs []string, versions map[string]string, preview task.ReleasePreview, rows []task.ReleaseTaskMergeRow, generation uint64) *ReleaseExecuteConfirmDialog {
+	dialog := NewReleaseExecuteConfirmDialog(title, taskIDs, versions, preview)
+	dialog.hasTaskMerge = true
+	dialog.taskMergeRows = append([]task.ReleaseTaskMergeRow(nil), rows...)
+	dialog.taskMergeGeneration = generation
+	return dialog
+}
+
+func (d *ReleaseExecuteConfirmDialog) TaskMergeGeneration() uint64 { return d.taskMergeGeneration }
+
+func (d *ReleaseExecuteConfirmDialog) canConfirm() bool {
+	if d.preview.Err != nil {
+		return false
+	}
+	if !d.hasTaskMerge {
+		return true
+	}
+	if len(d.taskMergeRows) == 0 {
+		return false
+	}
+	for _, row := range d.taskMergeRows {
+		if !row.Ready {
+			return false
+		}
+	}
+	return true
+}
+
 func (d *ReleaseExecuteConfirmDialog) Title() string { return "Confirm Release Execution" }
 
 func (d *ReleaseExecuteConfirmDialog) SetTerminalSize(width, height int) {
 	d.width = width
 	d.height = height
-	d.viewport.Width = max(1, width-8)
+	contentWidth, _ := overlayContentSize(width, height)
+	d.viewport.Width = max(1, contentWidth)
 	d.viewport.Height = max(1, height*70/100-1)
-	d.viewport.SetContent(d.content())
+	d.narrowRows = width > 0 && (width < 120 || taskMergeTableWidth(d.taskMergeRows) > contentWidth)
+	d.viewport.SetContent(ansi.Wrap(d.content(), d.viewport.Width, " "))
 }
 
 func (d *ReleaseExecuteConfirmDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
@@ -70,6 +106,9 @@ func (d *ReleaseExecuteConfirmDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 
 	switch keyMsg.String() {
 	case "enter", "y":
+		if !d.canConfirm() {
+			return d, nil
+		}
 		return d, func() tea.Msg {
 			versions := make(map[string]string, len(d.versions))
 			for k, v := range d.versions {
@@ -81,7 +120,7 @@ func (d *ReleaseExecuteConfirmDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 					descriptions[row.ServiceName] = row.TagDescription
 				}
 			}
-			return ConfirmReleaseExecuteMsg{Title: d.title, TaskIDs: append([]string(nil), d.taskIDs...), Versions: versions, TagDescriptions: descriptions}
+			return ConfirmReleaseExecuteMsg{Title: d.title, TaskIDs: append([]string(nil), d.taskIDs...), Versions: versions, TagDescriptions: descriptions, Generation: d.taskMergeGeneration}
 		}
 	case "esc", "n":
 		return d, func() tea.Msg { return CloseModalMsg{} }
@@ -109,7 +148,7 @@ func (d *ReleaseExecuteConfirmDialog) View() string {
 	if d.width <= 0 || d.height <= 0 {
 		return d.content()
 	}
-	d.viewport.SetContent(d.content())
+	d.viewport.SetContent(ansi.Wrap(d.content(), d.viewport.Width, " "))
 	return d.viewport.View()
 }
 
@@ -164,12 +203,29 @@ func (d *ReleaseExecuteConfirmDialog) content() string {
 	b.WriteString(normalStyle.Render(fmt.Sprintf("- push tags: %t", d.preview.PushTags)))
 	b.WriteString("\n")
 
+	if d.hasTaskMerge {
+		b.WriteString("\n")
+		b.WriteString(normalStyle.Render("Task MR merges:"))
+		b.WriteString("\n")
+		renderTaskMergeRows(&b, d.taskMergeRows, d.narrowRows)
+	}
+
 	b.WriteString("\n")
-	b.WriteString(warnStyle.Bold(true).Render("⚠ Stage 1: This will verify feature branches are merged into the integration branch, create release branches, and push release branches if enabled."))
+	if d.hasTaskMerge {
+		b.WriteString(warnStyle.Bold(true).Render("⚠ Stage 1: This will merge confirmed ready reviews sequentially into the integration branch, create release branches, and push release branches if enabled."))
+	} else {
+		b.WriteString(warnStyle.Bold(true).Render("⚠ Stage 1: This will verify feature branches are merged into the integration branch, create release branches, and push release branches if enabled."))
+	}
 	b.WriteString("\n")
 	b.WriteString(warnStyle.Bold(true).Render("Tags are NOT created yet. Use \"Finish Release\" after regression testing."))
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("[Enter/y] execute [Esc/n] cancel"))
+	if d.canConfirm() {
+		b.WriteString(dimStyle.Render("[Enter/y] execute [Esc/n] cancel"))
+	} else {
+		b.WriteString(warnStyle.Render("Resolve blocked task MRs before executing."))
+		b.WriteString("\n")
+		b.WriteString(dimStyle.Render("[Esc/n] cancel"))
+	}
 	return b.String()
 }
 

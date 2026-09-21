@@ -106,6 +106,19 @@ type ReleaseCleanupPlanReadyMsg struct {
 	Err        error
 }
 
+type ReleaseTaskMergePlanReadyMsg struct {
+	Generation uint64
+	Plan       task.ReleaseTaskMergePlan
+	Err        error
+}
+
+type ReleaseTaskMergeRetryPlanReadyMsg struct {
+	ReleaseID  string
+	Generation uint64
+	Plan       task.ReleaseTaskMergePlan
+	Err        error
+}
+
 type ReleaseCleanupDoneMsg struct {
 	Generation uint64
 	Result     task.ReleaseCleanupResult

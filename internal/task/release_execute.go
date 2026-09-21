@@ -21,6 +21,11 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 	if err != nil {
 		return domain.Release{}, err
 	}
+	if m.releasePrepareTaskMergeEnabled() {
+		if err := m.validateConfirmedReleaseTaskMergePlan(ctx, plan, params.ConfirmedTaskMergePlan); err != nil {
+			return domain.Release{}, err
+		}
+	}
 
 	releaseVersion := sharedVersionOrEmpty(plan.Services)
 	releaseIDVersion := releaseVersion
@@ -81,12 +86,22 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 		return domain.Release{}, err
 	}
 
-	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusMerging, "merging", nil); err != nil {
-		return release, err
-	}
-	release, err = m.writeReleaseManifest(release)
-	if err != nil {
-		return domain.Release{}, err
+	if m.releasePrepareTaskMergeEnabled() {
+		if err := m.integrateReleaseTaskMRs(ctx, &release, params.ConfirmedTaskMergePlan, params.StatusCh); err != nil {
+			return release, err
+		}
+		release, err = m.writeReleaseManifest(release)
+		if err != nil {
+			return domain.Release{}, err
+		}
+	} else {
+		if err := m.moveReleaseStatus(&release, domain.ReleaseStatusMerging, "merging", nil); err != nil {
+			return release, err
+		}
+		release, err = m.writeReleaseManifest(release)
+		if err != nil {
+			return domain.Release{}, err
+		}
 	}
 
 	for i := range release.Services {
@@ -114,6 +129,9 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 }
 
 func (m *manager) executePrepareService(ctx context.Context, release *domain.Release, svc *domain.ReleaseService, statusCh chan<- string) (err error) {
+	if m.releasePrepareTaskMergeEnabled() {
+		return m.executeAcceptedPrepareService(ctx, release, svc, statusCh)
+	}
 	svc.Status = domain.ReleaseStatusMerging
 	if err := m.persistCheckpoint(release, "fetch", nil); err != nil {
 		return err
@@ -165,19 +183,21 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 
 	for fbIdx := range svc.FeatureBranches {
 		fb := &svc.FeatureBranches[fbIdx]
-		merged, verifyErr := m.git.IsAncestor(ctx, svc.RepoPath, fb.Branch, "origin/"+svc.IntegrationBranch)
-		if verifyErr != nil {
-			return fmt.Errorf("release prepare: verify task branch service=%s branch=%s integration=origin/%s: %w", svc.Name, fb.Branch, svc.IntegrationBranch, verifyErr)
+		if !m.releasePrepareTaskMergeEnabled() {
+			merged, verifyErr := m.git.IsAncestor(ctx, svc.RepoPath, fb.Branch, "origin/"+svc.IntegrationBranch)
+			if verifyErr != nil {
+				return fmt.Errorf("release prepare: verify task branch service=%s branch=%s integration=origin/%s: %w", svc.Name, fb.Branch, svc.IntegrationBranch, verifyErr)
+			}
+			if !merged {
+				return fmt.Errorf("%w: service=%s branch=%s integration=origin/%s", ErrReleaseTaskNotMerged, svc.Name, fb.Branch, svc.IntegrationBranch)
+			}
+			fb.Merged = true
+			mergeSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, fb.Branch)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			fb.MergeRef = mergeSHA
 		}
-		if !merged {
-			return fmt.Errorf("%w: service=%s branch=%s integration=origin/%s", ErrReleaseTaskNotMerged, svc.Name, fb.Branch, svc.IntegrationBranch)
-		}
-		fb.Merged = true
-		mergeSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, fb.Branch)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		fb.MergeRef = mergeSHA
 	}
 
 	svc.PostIntegrationRef = remoteIntegration
@@ -187,7 +207,7 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 	}
 	svc.PostIntegrationSHA = postIntegrationSHA
 
-	if m.cfg.Release != nil && m.cfg.Release.PushIntegration != nil && *m.cfg.Release.PushIntegration {
+	if !m.releasePrepareTaskMergeEnabled() && m.cfg.Release != nil && m.cfg.Release.PushIntegration != nil && *m.cfg.Release.PushIntegration {
 		sendStatus(statusCh, fmt.Sprintf("[%s][push] pushing integration branch %s", svc.Name, svc.IntegrationBranch))
 		if err := m.git.PushRef(ctx, integrationPath, "HEAD", svc.IntegrationBranch); err != nil {
 			return fmt.Errorf("%w: service=%s integration=%s: %v", ErrReleaseOperationInProgress, svc.Name, svc.IntegrationBranch, err)
@@ -217,6 +237,9 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 		return err
 	}
 	svc.ReleaseSHA = releaseSHA
+	if m.releasePrepareTaskMergeEnabled() && releaseSHA != postIntegrationSHA {
+		return fmt.Errorf("release prepare: release branch service=%s sha=%s want %s", svc.Name, releaseSHA, postIntegrationSHA)
+	}
 	if err := m.persistCheckpoint(release, "branch", nil); err != nil {
 		return err
 	}
@@ -240,6 +263,18 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 		sendStatus(statusCh, fmt.Sprintf("[%s][push] pushing release branch %s", svc.Name, svc.ReleaseBranch))
 		if err := m.git.PushBranchExplicit(ctx, pushPath, svc.ReleaseBranch); err != nil {
 			return fmt.Errorf("%w: service=%s branch=%s: %v", ErrReleaseOperationInProgress, svc.Name, svc.ReleaseBranch, err)
+		}
+		if m.releasePrepareTaskMergeEnabled() {
+			if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
+				return fmt.Errorf("release prepare: fetch pushed release branch service=%s: %w", svc.Name, err)
+			}
+			remoteReleaseSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+svc.ReleaseBranch)
+			if err != nil {
+				return err
+			}
+			if remoteReleaseSHA != postIntegrationSHA {
+				return fmt.Errorf("release prepare: remote release branch service=%s sha=%s want %s", svc.Name, remoteReleaseSHA, postIntegrationSHA)
+			}
 		}
 		svc.PushedReleaseBranch = true
 		if err := m.persistCheckpoint(release, "push_branch", nil); err != nil {

@@ -126,6 +126,7 @@ type mockGitClient struct {
 	resolveRefFn         func(repoPath, ref string) (string, error)
 	remoteRefSHAFn       func(repoPath, ref string) (string, error)
 	revListAheadBehindFn func(path, originBranch string) (int, int, error)
+	revListCountFn       func(path, tip, base string) (int, error)
 	repoStatusFn         func(path string) (git.RawStatus, error)
 	listLocalFilesRes    []string
 	listLocalFilesErr    error
@@ -407,7 +408,10 @@ func (m *mockGitClient) Version(_ context.Context) (int, int, error) {
 	return m.versionMajor, m.versionMinor, m.versionErr
 }
 
-func (m *mockGitClient) RevListCount(_ context.Context, _, _, _ string) (int, error) {
+func (m *mockGitClient) RevListCount(_ context.Context, path, tip, base string) (int, error) {
+	if m.revListCountFn != nil {
+		return m.revListCountFn(path, tip, base)
+	}
 	return 0, nil
 }
 
@@ -2320,7 +2324,7 @@ func TestManagerForgeMethods_WithoutClients_ReturnUnavailable(t *testing.T) {
 	}
 	mgr := newTestManagerWithCfg(t, effective, gitMock)
 
-	result, err := mgr.ForgeCreateMissingMRs(context.Background(), taskID, "")
+	result, err := mgr.ForgeCreateMissingMRs(context.Background(), taskID, "", false)
 	if err != nil || len(result.Services) != 1 || !errors.Is(result.Services[0].Err, forge.ErrForgeUnavailable) {
 		t.Fatalf("ForgeCreateMissingMRs result = %#v, err = %v", result, err)
 	}

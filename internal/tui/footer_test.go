@@ -247,3 +247,25 @@ func TestRenderFooter_FocusReleases_ShowsCleanupOnlyForReleasedSelection(t *test
 		}
 	}
 }
+
+func TestRenderFooter_FocusReleases_ShowsRetryForTaskMergeStates(t *testing.T) {
+	for _, tc := range []struct {
+		status domain.ReleaseStatus
+		want   bool
+	}{
+		{domain.ReleaseStatusTaskMergeBlocked, true},
+		{domain.ReleaseStatusTaskMergePartial, true},
+		{domain.ReleaseStatusIntegratingTasks, true},
+		{domain.ReleaseStatusAwaitingTaskMerge, true},
+	} {
+		t.Run(string(tc.status), func(t *testing.T) {
+			m := newTestModel(t, &mockManager{})
+			m.focus = FocusReleases
+			m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: tc.status}})
+			got := strings.Contains(renderFooter(m), "[R] retry")
+			if got != tc.want {
+				t.Fatalf("status %s retry hint = %v, want %v", tc.status, got, tc.want)
+			}
+		})
+	}
+}

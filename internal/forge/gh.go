@@ -88,17 +88,19 @@ func (c *GhClient) CreateMR(ctx context.Context, params CreateMRParams) (MRInfo,
 }
 
 func (c *GhClient) MRStatus(ctx context.Context, sourceBranch, repo string) ([]MRInfo, error) {
-	args := []string{"pr", "list", "--head", sourceBranch, "--json", "number,title,state,url", "--repo", repo}
+	args := []string{"pr", "list", "--head", sourceBranch, "--json", "number,title,state,url,headRefName,baseRefName", "--repo", repo}
 	stdout, _, err := c.run(ctx, c.worktreePath, args...)
 	if err != nil {
 		return nil, err
 	}
 
 	type ghPR struct {
-		Number int    `json:"number"`
-		Title  string `json:"title"`
-		State  string `json:"state"`
-		URL    string `json:"url"`
+		Number      int    `json:"number"`
+		Title       string `json:"title"`
+		State       string `json:"state"`
+		URL         string `json:"url"`
+		HeadRefName string `json:"headRefName"`
+		BaseRefName string `json:"baseRefName"`
 	}
 
 	var raw []ghPR
@@ -108,12 +110,16 @@ func (c *GhClient) MRStatus(ctx context.Context, sourceBranch, repo string) ([]M
 
 	out := make([]MRInfo, 0, len(raw))
 	for _, item := range raw {
+		if item.HeadRefName == "" {
+			item.HeadRefName = sourceBranch
+		}
 		out = append(out, MRInfo{
 			Number:       item.Number,
 			Title:        item.Title,
 			State:        strings.ToLower(item.State),
 			URL:          item.URL,
-			SourceBranch: sourceBranch,
+			SourceBranch: item.HeadRefName,
+			TargetBranch: item.BaseRefName,
 		})
 	}
 

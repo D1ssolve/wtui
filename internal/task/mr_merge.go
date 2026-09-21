@@ -220,6 +220,23 @@ func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string, 
 	return result, nil
 }
 
+// matchTargetMRs splits MR history for branch→target into active and closed rows.
+// ponytail: closed MRs are dead ends and never make history ambiguous; only
+// multiple active (open/merged) MRs do.
+func matchTargetMRs(rows []forge.MRInfo, branch, target string) (active, closed []forge.MRInfo) {
+	for _, r := range rows {
+		if r.SourceBranch != branch || r.TargetBranch != target {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(r.State), "closed") {
+			closed = append(closed, r)
+			continue
+		}
+		active = append(active, r)
+	}
+	return active, closed
+}
+
 func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]ServiceMergeInspection, error) {
 	client, err := m.forgeClientForService(ctx, svc)
 	if err != nil {
@@ -244,12 +261,7 @@ func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]S
 	var result []ServiceMergeInspection
 	for _, target := range appendUnique(nil, m.flow.BranchTypes[gitflow.BranchTypeHotfix].ReviewTargets...) {
 		item := ServiceMergeInspection{ServiceName: svc.Name, Status: "no_mr", MR: forge.MRReadiness{TargetBranch: target}}
-		var matches []forge.MRInfo
-		for _, r := range rows {
-			if r.SourceBranch == svc.Branch && r.TargetBranch == target {
-				matches = append(matches, r)
-			}
-		}
+		matches, _ := matchTargetMRs(rows, svc.Branch, target)
 		if len(matches) > 1 {
 			return nil, fmt.Errorf("%s: ambiguous MR history for %s", svc.Name, target)
 		}

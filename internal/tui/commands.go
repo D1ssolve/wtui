@@ -538,6 +538,33 @@ func retryReleaseCmd(mgr task.Manager, releaseID string) tea.Cmd {
 	}
 }
 
+func planReleaseTaskMergesCmd(mgr task.Manager, params task.CreateReleaseParams, generation uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		plan, err := mgr.PlanReleaseTaskMerges(ctx, params)
+		return ReleaseTaskMergePlanReadyMsg{Generation: generation, Plan: plan, Err: err}
+	}
+}
+
+func planReleaseTaskMergeRetryCmd(mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		plan, err := mgr.PlanReleaseTaskMergeRetry(ctx, releaseID)
+		return ReleaseTaskMergeRetryPlanReadyMsg{ReleaseID: releaseID, Generation: generation, Plan: plan, Err: err}
+	}
+}
+
+func retryReleaseTaskMergesCmd(mgr task.Manager, releaseID string, plan *task.ReleaseTaskMergePlan) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		release, err := mgr.RetryReleaseTaskMerges(ctx, releaseID, plan)
+		return ReleaseActionDoneMsg{Action: "retry", Release: release, Err: err}
+	}
+}
+
 func releaseActionCmd(mgr task.Manager, action, releaseID string) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan ReleaseActionDoneMsg, 1)
@@ -586,6 +613,11 @@ type forgePipelineStatusParams struct {
 	Provider forge.ForgeProvider
 }
 
+type forgeCreateMRParams struct {
+	Title string
+	Force bool
+}
+
 func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, params any) tea.Cmd {
 	return func() tea.Msg {
 		ctxBase := context.Background()
@@ -597,11 +629,11 @@ func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, 
 
 		switch op {
 		case "create_missing_mrs":
-			title, ok := params.(string)
+			p, ok := params.(forgeCreateMRParams)
 			if !ok {
 				return ForgeResultMsg{TaskID: taskID, Op: op, Err: errors.New("invalid params for create_missing_mrs")}
 			}
-			result, err := mgr.ForgeCreateMissingMRs(ctx, taskID, title)
+			result, err := mgr.ForgeCreateMissingMRs(ctx, taskID, p.Title, p.Force)
 			return ForgeResultMsg{TaskID: taskID, Op: op, Data: result, Err: err}
 
 		case "pipeline_status":

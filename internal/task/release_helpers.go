@@ -159,6 +159,10 @@ func isReleaseActiveStatus(status domain.ReleaseStatus) bool {
 		domain.ReleaseStatusValidating,
 		domain.ReleaseStatusMerging,
 		domain.ReleaseStatusBranching,
+		domain.ReleaseStatusAwaitingTaskMerge,
+		domain.ReleaseStatusIntegratingTasks,
+		domain.ReleaseStatusTaskMergeBlocked,
+		domain.ReleaseStatusTaskMergePartial,
 		domain.ReleaseStatusPrepared,
 		domain.ReleaseStatusAwaitingMasterMerge,
 		domain.ReleaseStatusMasterMerged,
@@ -183,7 +187,13 @@ func canTransitionReleaseStatus(from, to domain.ReleaseStatus) bool {
 	case domain.ReleaseStatusDraft:
 		return to == domain.ReleaseStatusValidating || to == domain.ReleaseStatusRejected
 	case domain.ReleaseStatusValidating:
-		return to == domain.ReleaseStatusMerging || to == domain.ReleaseStatusFailed
+		return to == domain.ReleaseStatusMerging || to == domain.ReleaseStatusAwaitingTaskMerge || to == domain.ReleaseStatusFailed
+	case domain.ReleaseStatusAwaitingTaskMerge:
+		return to == domain.ReleaseStatusIntegratingTasks || to == domain.ReleaseStatusTaskMergeBlocked || to == domain.ReleaseStatusFailed
+	case domain.ReleaseStatusIntegratingTasks:
+		return to == domain.ReleaseStatusMerging || to == domain.ReleaseStatusTaskMergeBlocked || to == domain.ReleaseStatusTaskMergePartial || to == domain.ReleaseStatusFailed
+	case domain.ReleaseStatusTaskMergeBlocked, domain.ReleaseStatusTaskMergePartial:
+		return to == domain.ReleaseStatusIntegratingTasks || to == domain.ReleaseStatusRejected || to == domain.ReleaseStatusFailed
 	case domain.ReleaseStatusMerging:
 		return to == domain.ReleaseStatusBranching || to == domain.ReleaseStatusFailed
 	case domain.ReleaseStatusBranching:
@@ -201,7 +211,7 @@ func canTransitionReleaseStatus(from, to domain.ReleaseStatus) bool {
 	case domain.ReleaseStatusSyncingDevelop:
 		return to == domain.ReleaseStatusTagging
 	case domain.ReleaseStatusFailed:
-		return to == domain.ReleaseStatusValidating || to == domain.ReleaseStatusPrepared || to == domain.ReleaseStatusMasterMerged || to == domain.ReleaseStatusRejected
+		return to == domain.ReleaseStatusValidating || to == domain.ReleaseStatusPrepared || to == domain.ReleaseStatusMasterMerged || to == domain.ReleaseStatusIntegratingTasks || to == domain.ReleaseStatusRejected
 	default:
 		return false
 	}

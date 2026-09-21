@@ -66,6 +66,8 @@ func renderFooter(m Model) string {
 				parts = append(parts, "[M] merge MRs")
 			case domain.ReleaseStatusMasterMerged:
 				parts = append(parts, "[F] finalize")
+			case domain.ReleaseStatusTaskMergeBlocked, domain.ReleaseStatusTaskMergePartial, domain.ReleaseStatusIntegratingTasks, domain.ReleaseStatusAwaitingTaskMerge:
+				parts = append(parts, "[R] retry")
 			case domain.ReleaseStatusFailed:
 				if rel.Error != nil && rel.Error.Recoverable {
 					parts = append(parts, "[R] retry")

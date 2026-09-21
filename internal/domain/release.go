@@ -10,6 +10,10 @@ const (
 	ReleaseStatusMerging             ReleaseStatus = "merging"
 	ReleaseStatusBranching           ReleaseStatus = "branching"
 	ReleaseStatusPushing             ReleaseStatus = "pushing"
+	ReleaseStatusAwaitingTaskMerge   ReleaseStatus = "awaiting_task_merge"
+	ReleaseStatusIntegratingTasks    ReleaseStatus = "integrating_tasks"
+	ReleaseStatusTaskMergeBlocked    ReleaseStatus = "task_merge_blocked"
+	ReleaseStatusTaskMergePartial    ReleaseStatus = "task_merge_partial"
 	ReleaseStatusPrepared            ReleaseStatus = "prepared"
 	ReleaseStatusAwaitingMasterMerge ReleaseStatus = "awaiting_master_merge"
 	ReleaseStatusMasterMerged        ReleaseStatus = "master_merged"
@@ -83,12 +87,18 @@ type ProductionMRRef struct {
 }
 
 type ReleaseFeatureBranch struct {
-	TaskID       string `json:"task_id"`
-	ServiceName  string `json:"service_name"`
-	Branch       string `json:"branch"`
-	WorktreePath string `json:"worktree_path,omitempty"`
-	Merged       bool   `json:"merged"`
-	MergeRef     string `json:"merge_ref,omitempty"`
+	TaskID                  string `json:"task_id"`
+	ServiceName             string `json:"service_name"`
+	Branch                  string `json:"branch"`
+	WorktreePath            string `json:"worktree_path,omitempty"`
+	Merged                  bool   `json:"merged"`
+	MergeRef                string `json:"merge_ref,omitempty"`
+	TaskMergeStatus         string `json:"task_merge_status,omitempty"`
+	TaskMergeMRNumber       int    `json:"task_merge_mr_number,omitempty"`
+	TaskMergeMRURL          string `json:"task_merge_mr_url,omitempty"`
+	TaskMergeHeadSHA        string `json:"task_merge_head_sha,omitempty"`
+	TaskMergeTargetSHA      string `json:"task_merge_target_sha,omitempty"`
+	TaskMergeExpectedTarget string `json:"task_merge_expected_target,omitempty"`
 }
 
 type ReleaseError struct {
