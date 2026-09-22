@@ -130,7 +130,7 @@ func (m *mockManager) ConvertHotfixToFeature(_ context.Context, params task.Conv
 	}
 	return m.convertErr
 }
-func (m *mockManager) Remove(_ context.Context, _ string, _, _ bool) error { return nil }
+func (m *mockManager) Remove(_ context.Context, _ string, _ task.RemoveOptions) error { return nil }
 
 func (m *mockManager) List(_ context.Context) ([]domain.Task, error) {
 	m.listTasksCalls++
@@ -1941,8 +1941,8 @@ func TestUpdate_SubmitRemoveMsg_StartsOperation(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
 	updated, cmd := m.Update(modal.SubmitRemoveTaskMsg{
-		TaskID: "IN-4444",
-		Force:  false,
+		TaskID:  "IN-4444",
+		Options: task.RemoveOptions{RemoveWorktrees: true},
 	})
 	m = updated.(Model)
 

@@ -766,7 +766,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = true
 		m.outputPanel.AppendLine("Removing task " + msg.TaskID + "...")
 		return m, tea.Batch(
-			removeTaskCmd(m.mgr, msg.TaskID, msg.Force, msg.DeleteBranches),
+			removeTaskCmd(m.mgr, msg.TaskID, msg.Options),
 			m.spinner.Tick,
 		)
 

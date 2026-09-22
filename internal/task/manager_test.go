@@ -1222,7 +1222,7 @@ func TestRemove_CallsGitAndRemovesTaskDir(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	if err := mgr.Remove(context.Background(), "IN-010", false, false); err != nil {
+	if err := mgr.Remove(context.Background(), "IN-010", RemoveOptions{RemoveWorktrees: true}); err != nil {
 		t.Fatalf("Remove returned unexpected error: %v", err)
 	}
 
@@ -1264,7 +1264,7 @@ func TestRemove_WithoutForce_FailedWorktreePreservesTaskDir(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	err := mgr.Remove(context.Background(), "IN-011", false, false)
+	err := mgr.Remove(context.Background(), "IN-011", RemoveOptions{RemoveWorktrees: true})
 	if err == nil {
 		t.Fatal("Remove returned nil, want error for dirty worktree without force")
 	}
@@ -1274,7 +1274,7 @@ func TestRemove_WithoutForce_FailedWorktreePreservesTaskDir(t *testing.T) {
 	}
 }
 
-func TestRemove_WithForce_DeletesTaskDirDespiteCleanupFailures(t *testing.T) {
+func TestRemove_WithForce_WorktreeFailure_ReturnsErrorAndPreservesTaskDir(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 
@@ -1291,7 +1291,7 @@ func TestRemove_WithForce_DeletesTaskDirDespiteCleanupFailures(t *testing.T) {
 	if err := os.MkdirAll(metadataDir, 0o755); err != nil {
 		t.Fatalf("setup metadata: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(metadataDir, "notes.md"), []byte("keep only without force"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(metadataDir, "notes.md"), []byte("must survive failed force"), 0o644); err != nil {
 		t.Fatalf("setup metadata file: %v", err)
 	}
 
@@ -1302,7 +1302,10 @@ func TestRemove_WithForce_DeletesTaskDirDespiteCleanupFailures(t *testing.T) {
 
 	gitMock := &mockGitClient{
 		commonDirResult: fakeCommonDir,
-		removeWorktreeFn: func(_ string, worktreePath string, _ bool) error {
+		removeWorktreeFn: func(_ string, worktreePath string, force bool) error {
+			if !force {
+				t.Error("Force must be passed to RemoveWorktree")
+			}
 			if worktreePath == failedSvcDir {
 				return errors.New("simulated git failure")
 			}
@@ -1311,11 +1314,672 @@ func TestRemove_WithForce_DeletesTaskDirDespiteCleanupFailures(t *testing.T) {
 	}
 	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
 
-	if err := mgr.Remove(context.Background(), "IN-012", true, false); err != nil {
+	err := mgr.Remove(context.Background(), "IN-012", RemoveOptions{RemoveWorktrees: true, Force: true})
+	if err == nil {
+		t.Fatal("Remove(force) returned nil, want error for failed worktree removal")
+	}
+	if !strings.Contains(err.Error(), "simulated git failure") {
+		t.Errorf("error = %v, want it to contain worktree failure", err)
+	}
+	if _, statErr := os.Stat(taskDir); statErr != nil {
+		t.Errorf("task directory must be preserved when force removal fails: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(metadataDir, "notes.md")); statErr != nil {
+		t.Errorf("task metadata must be preserved when force removal fails: %v", statErr)
+	}
+}
+
+func TestRemove_WithForce_AllSucceed_RemovesTaskDirIncludingMetadata(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-012b")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	metadataDir := filepath.Join(taskDir, ".ai")
+	if err := os.MkdirAll(metadataDir, 0o755); err != nil {
+		t.Fatalf("setup metadata: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataDir, "notes.md"), []byte("removed with force"), 0o644); err != nil {
+		t.Fatalf("setup metadata file: %v", err)
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	gitMock := &mockGitClient{commonDirResult: fakeCommonDir}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	if err := mgr.Remove(context.Background(), "IN-012b", RemoveOptions{RemoveWorktrees: true, Force: true}); err != nil {
 		t.Fatalf("Remove(force=true) returned unexpected error: %v", err)
 	}
 	if _, err := os.Stat(taskDir); !os.IsNotExist(err) {
-		t.Fatalf("task directory still exists after force removal: %v", err)
+		t.Fatalf("task directory still exists after successful force removal: %v", err)
+	}
+}
+
+func TestRemove_DeleteLocalBranches_UsesWorktreeBranchName(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-020")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirResult:      fakeCommonDir,
+		worktreeBranchResult: "feature/IN-020",
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	opts := RemoveOptions{RemoveWorktrees: true, DeleteLocalBranches: true}
+	if err := mgr.Remove(context.Background(), "IN-020", opts); err != nil {
+		t.Fatalf("Remove returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.deleteBranchCalls
+	gitMock.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected 1 DeleteBranch call, got %d", calls)
+	}
+}
+
+func TestRemove_DeleteRemoteBranches_UsesExactSHALease(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-021")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	var gotRepo, gotBranch, gotSHA string
+	remoteDeletes := 0
+	gitMock := &mockGitClient{
+		commonDirResult:      fakeCommonDir,
+		worktreeBranchResult: "feature/IN-021",
+		remoteRefSHAFn: func(_, ref string) (string, error) {
+			if ref != "refs/heads/feature/IN-021" {
+				t.Errorf("RemoteRefSHA ref = %q, want refs/heads/feature/IN-021", ref)
+			}
+			return "abc123", nil
+		},
+		deleteRemoteBranchIfUnchangedFn: func(repoPath, branch, expectedSHA string) error {
+			remoteDeletes++
+			gotRepo, gotBranch, gotSHA = repoPath, branch, expectedSHA
+			return nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	opts := RemoveOptions{RemoveWorktrees: true, DeleteRemoteBranches: true}
+	if err := mgr.Remove(context.Background(), "IN-021", opts); err != nil {
+		t.Fatalf("Remove returned unexpected error: %v", err)
+	}
+
+	if remoteDeletes != 1 {
+		t.Fatalf("expected 1 DeleteRemoteBranchIfUnchanged call, got %d", remoteDeletes)
+	}
+	if gotRepo != fakeCommonDir {
+		t.Errorf("repoPath = %q, want %q", gotRepo, fakeCommonDir)
+	}
+	if gotBranch != "feature/IN-021" {
+		t.Errorf("branch = %q, want feature/IN-021", gotBranch)
+	}
+	if gotSHA != "abc123" {
+		t.Errorf("expectedSHA = %q, want abc123", gotSHA)
+	}
+}
+
+func TestRemove_DeleteRemoteBranches_RemoteAbsent_NoOp(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-022")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	remoteDeletes := 0
+	gitMock := &mockGitClient{
+		commonDirResult:      fakeCommonDir,
+		worktreeBranchResult: "feature/IN-022",
+		remoteRefSHAFn:       func(_, _ string) (string, error) { return "", nil },
+		deleteRemoteBranchIfUnchangedFn: func(_, _, _ string) error {
+			remoteDeletes++
+			return nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	opts := RemoveOptions{RemoveWorktrees: true, DeleteRemoteBranches: true}
+	if err := mgr.Remove(context.Background(), "IN-022", opts); err != nil {
+		t.Fatalf("Remove returned unexpected error: %v", err)
+	}
+	if remoteDeletes != 0 {
+		t.Errorf("DeleteRemoteBranchIfUnchanged called %d times for absent remote, want 0", remoteDeletes)
+	}
+	if _, err := os.Stat(taskDir); !os.IsNotExist(err) {
+		t.Errorf("task directory still exists after Remove")
+	}
+}
+
+func TestRemove_RemoteOnly_PreservesWorktreesAndDirectories(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-030")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	var gotBranch, gotSHA string
+	remoteDeletes := 0
+	gitMock := &mockGitClient{
+		commonDirResult:      fakeCommonDir,
+		worktreeBranchResult: "feature/IN-030",
+		remoteRefSHAFn:       func(_, _ string) (string, error) { return "abc123", nil },
+		deleteRemoteBranchIfUnchangedFn: func(_, branch, expectedSHA string) error {
+			remoteDeletes++
+			gotBranch, gotSHA = branch, expectedSHA
+			return nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	if err := mgr.Remove(context.Background(), "IN-030", RemoveOptions{DeleteRemoteBranches: true}); err != nil {
+		t.Fatalf("Remove returned unexpected error: %v", err)
+	}
+
+	if remoteDeletes != 1 {
+		t.Fatalf("expected 1 DeleteRemoteBranchIfUnchanged call, got %d", remoteDeletes)
+	}
+	if gotBranch != "feature/IN-030" || gotSHA != "abc123" {
+		t.Errorf("lease args = (%q, %q), want (feature/IN-030, abc123)", gotBranch, gotSHA)
+	}
+
+	gitMock.mu.Lock()
+	worktreeCalls := len(gitMock.removeWorktreeCalls)
+	gitMock.mu.Unlock()
+	if worktreeCalls != 0 {
+		t.Errorf("RemoveWorktree called %d times, want 0 for remote-only removal", worktreeCalls)
+	}
+	if _, err := os.Stat(svcDir); err != nil {
+		t.Errorf("service directory must be preserved for remote-only removal: %v", err)
+	}
+	if _, err := os.Stat(taskDir); err != nil {
+		t.Errorf("task directory must be preserved for remote-only removal: %v", err)
+	}
+}
+
+func TestRemove_Force_BranchFailure_ReturnsErrorAndPreservesTaskDir(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-031")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirResult:      fakeCommonDir,
+		worktreeBranchResult: "feature/IN-031",
+		remoteRefSHAFn:       func(_, _ string) (string, error) { return "abc123", nil },
+		deleteRemoteBranchIfUnchangedFn: func(_, _, _ string) error {
+			return errors.New("remote rejected deletion")
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	opts := RemoveOptions{RemoveWorktrees: true, Force: true, DeleteRemoteBranches: true}
+	err := mgr.Remove(context.Background(), "IN-031", opts)
+	if err == nil {
+		t.Fatal("Remove(force+remote) returned nil, want branch deletion error")
+	}
+	if !strings.Contains(err.Error(), "remote rejected deletion") {
+		t.Errorf("error = %v, want it to contain remote failure", err)
+	}
+	if _, statErr := os.Stat(taskDir); statErr != nil {
+		t.Errorf("task directory must be preserved when branch deletion fails under force: %v", statErr)
+	}
+}
+
+func TestRemove_ProtectedRemoteBranch_NotDeleted(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-032")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	remoteDeletes := 0
+	gitMock := &mockGitClient{
+		commonDirResult:      fakeCommonDir,
+		worktreeBranchResult: "develop",
+		remoteRefSHAFn:       func(_, _ string) (string, error) { return "abc123", nil },
+		deleteRemoteBranchIfUnchangedFn: func(_, _, _ string) error {
+			remoteDeletes++
+			return nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Remove(context.Background(), "IN-032", RemoveOptions{DeleteRemoteBranches: true})
+	if err == nil {
+		t.Fatal("Remove returned nil, want error for protected remote branch")
+	}
+	if remoteDeletes != 0 {
+		t.Errorf("DeleteRemoteBranchIfUnchanged called %d times for protected branch, want 0", remoteDeletes)
+	}
+	if _, statErr := os.Stat(taskDir); statErr != nil {
+		t.Errorf("task directory must be preserved: %v", statErr)
+	}
+}
+
+func TestRemove_BranchNameError_SkipsServiceBeforeWorktreeRemoval(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-040")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	remoteDeletes := 0
+	gitMock := &mockGitClient{
+		commonDirResult:   fakeCommonDir,
+		worktreeBranchErr: errors.New("cannot resolve branch"),
+		deleteRemoteBranchIfUnchangedFn: func(_, _, _ string) error {
+			remoteDeletes++
+			return nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	opts := RemoveOptions{RemoveWorktrees: true, DeleteRemoteBranches: true}
+	err := mgr.Remove(context.Background(), "IN-040", opts)
+	if err == nil {
+		t.Fatal("Remove returned nil, want error when GetWorktreeBranch fails")
+	}
+	if !strings.Contains(err.Error(), "cannot resolve branch") {
+		t.Errorf("error = %v, want it to contain branch resolution failure", err)
+	}
+
+	gitMock.mu.Lock()
+	worktreeCalls := len(gitMock.removeWorktreeCalls)
+	gitMock.mu.Unlock()
+	if worktreeCalls != 0 {
+		t.Errorf("RemoveWorktree called %d times despite branch resolution failure, want 0", worktreeCalls)
+	}
+	if remoteDeletes != 0 {
+		t.Errorf("DeleteRemoteBranchIfUnchanged called %d times, want 0", remoteDeletes)
+	}
+	if _, statErr := os.Stat(taskDir); statErr != nil {
+		t.Errorf("task directory must be preserved: %v", statErr)
+	}
+}
+
+func TestRemove_BlankBranchName_RemoteOnly_ReturnsError(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-041")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	remoteDeletes := 0
+	gitMock := &mockGitClient{
+		commonDirResult:     fakeCommonDir,
+		getWorktreeBranchFn: func(_ string) (string, error) { return "", nil },
+		deleteRemoteBranchIfUnchangedFn: func(_, _, _ string) error {
+			remoteDeletes++
+			return nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Remove(context.Background(), "IN-041", RemoveOptions{DeleteRemoteBranches: true})
+	if err == nil {
+		t.Fatal("Remove returned nil, want error for blank branch name")
+	}
+	if remoteDeletes != 0 {
+		t.Errorf("DeleteRemoteBranchIfUnchanged called %d times, want 0", remoteDeletes)
+	}
+	if _, statErr := os.Stat(taskDir); statErr != nil {
+		t.Errorf("task directory must be preserved: %v", statErr)
+	}
+}
+
+func TestRemove_ProtectedLocalBranch_BlockedBeforeMutation(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-033")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirResult:      fakeCommonDir,
+		worktreeBranchResult: "develop",
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	opts := RemoveOptions{RemoveWorktrees: true, DeleteLocalBranches: true}
+	err := mgr.Remove(context.Background(), "IN-033", opts)
+	if err == nil {
+		t.Fatal("Remove returned nil, want error for protected local branch")
+	}
+	if !strings.Contains(err.Error(), "protected") {
+		t.Errorf("error = %v, want it to mention protected branch", err)
+	}
+
+	gitMock.mu.Lock()
+	worktreeCalls := len(gitMock.removeWorktreeCalls)
+	branchCalls := gitMock.deleteBranchCalls
+	gitMock.mu.Unlock()
+	if worktreeCalls != 0 {
+		t.Errorf("RemoveWorktree called %d times before protected-branch block, want 0", worktreeCalls)
+	}
+	if branchCalls != 0 {
+		t.Errorf("DeleteBranch called %d times for protected branch, want 0", branchCalls)
+	}
+	if _, statErr := os.Stat(taskDir); statErr != nil {
+		t.Errorf("task directory must be preserved: %v", statErr)
+	}
+}
+
+func TestRemove_ProtectedLocalAndRemoteBranch_BlockedBeforeMutation(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-034")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	remoteDeletes := 0
+	gitMock := &mockGitClient{
+		commonDirResult:      fakeCommonDir,
+		worktreeBranchResult: "develop",
+		remoteRefSHAFn:       func(_, _ string) (string, error) { return "abc123", nil },
+		deleteRemoteBranchIfUnchangedFn: func(_, _, _ string) error {
+			remoteDeletes++
+			return nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	opts := RemoveOptions{RemoveWorktrees: true, DeleteLocalBranches: true, DeleteRemoteBranches: true}
+	err := mgr.Remove(context.Background(), "IN-034", opts)
+	if err == nil {
+		t.Fatal("Remove returned nil, want error for protected branch")
+	}
+
+	gitMock.mu.Lock()
+	worktreeCalls := len(gitMock.removeWorktreeCalls)
+	branchCalls := gitMock.deleteBranchCalls
+	gitMock.mu.Unlock()
+	if worktreeCalls != 0 || branchCalls != 0 || remoteDeletes != 0 {
+		t.Errorf("protected branch must block all mutations, got %d worktree, %d local, %d remote calls",
+			worktreeCalls, branchCalls, remoteDeletes)
+	}
+	if _, statErr := os.Stat(taskDir); statErr != nil {
+		t.Errorf("task directory must be preserved: %v", statErr)
+	}
+}
+
+func TestRemove_RemoteOnly_CommonDirFailure_ReturnsError(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-035")
+	badSvcDir := filepath.Join(taskDir, "badsvc")
+	goodSvcDir := filepath.Join(taskDir, "goodsvc")
+	if err := os.MkdirAll(badSvcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.MkdirAll(goodSvcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "goodsvc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	remoteDeletes := 0
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == badSvcDir {
+				return "", errors.New("not a git worktree")
+			}
+			return fakeCommonDir, nil
+		},
+		worktreeBranchResult: "feature/IN-035",
+		remoteRefSHAFn:       func(_, _ string) (string, error) { return "abc123", nil },
+		deleteRemoteBranchIfUnchangedFn: func(_, _, _ string) error {
+			remoteDeletes++
+			return nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	err := mgr.Remove(context.Background(), "IN-035", RemoveOptions{DeleteRemoteBranches: true})
+	if err == nil {
+		t.Fatal("Remove returned nil, want repository resolution error")
+	}
+	if !strings.Contains(err.Error(), "not a git worktree") {
+		t.Errorf("error = %v, want it to contain common-dir failure", err)
+	}
+	if remoteDeletes != 1 {
+		t.Errorf("unaffected service remote deletion = %d, want 1", remoteDeletes)
+	}
+	if _, statErr := os.Stat(taskDir); statErr != nil {
+		t.Errorf("task directory must be preserved: %v", statErr)
+	}
+}
+
+func TestRemove_NonForceSuccess_RemovesTaskRootWithGeneratedFiles(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-050")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	metadataDir := filepath.Join(taskDir, ".ai")
+	if err := os.MkdirAll(metadataDir, 0o755); err != nil {
+		t.Fatalf("setup metadata: %v", err)
+	}
+	for name, content := range map[string]string{
+		"IN-050.code-workspace": "{}",
+		"IN-050.sln":            "Microsoft Visual Studio Solution File",
+		".ai/notes.md":          "metadata",
+	} {
+		if err := os.WriteFile(filepath.Join(taskDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("setup file %s: %v", name, err)
+		}
+	}
+
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			if path == metadataDir {
+				t.Errorf("CommonDir called for hidden metadata directory %s", path)
+			}
+			return fakeCommonDir, nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	if err := mgr.Remove(context.Background(), "IN-050", RemoveOptions{RemoveWorktrees: true}); err != nil {
+		t.Fatalf("Remove returned unexpected error: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.removeWorktreeCalls
+	gitMock.mu.Unlock()
+	if len(calls) != 1 || calls[0].WorktreePath != svcDir {
+		t.Errorf("RemoveWorktree calls = %v, want exactly one for %s", calls, svcDir)
+	}
+	if _, err := os.Stat(taskDir); !os.IsNotExist(err) {
+		t.Errorf("task root must be fully removed after successful removal, stat err = %v", err)
+	}
+}
+
+func TestRemove_RemoteDeletionAttemptedWhenWorktreeRemovalFails(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-051")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	var gotSHA string
+	remoteDeletes := 0
+	gitMock := &mockGitClient{
+		commonDirResult:      fakeCommonDir,
+		worktreeBranchResult: "feature/IN-051",
+		removeWorktreeErr:    errors.New("worktree locked"),
+		remoteRefSHAFn:       func(_, _ string) (string, error) { return "abc123", nil },
+		deleteRemoteBranchIfUnchangedFn: func(_, _, expectedSHA string) error {
+			remoteDeletes++
+			gotSHA = expectedSHA
+			return nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	opts := RemoveOptions{RemoveWorktrees: true, DeleteLocalBranches: true, DeleteRemoteBranches: true}
+	err := mgr.Remove(context.Background(), "IN-051", opts)
+	if err == nil {
+		t.Fatal("Remove returned nil, want worktree removal error")
+	}
+	if !strings.Contains(err.Error(), "worktree locked") {
+		t.Errorf("error = %v, want it to contain worktree failure", err)
+	}
+	if remoteDeletes != 1 {
+		t.Errorf("remote deletion attempted %d times despite worktree failure, want 1", remoteDeletes)
+	}
+	if gotSHA != "abc123" {
+		t.Errorf("remote lease SHA = %q, want abc123", gotSHA)
+	}
+
+	gitMock.mu.Lock()
+	branchCalls := gitMock.deleteBranchCalls
+	gitMock.mu.Unlock()
+	if branchCalls != 0 {
+		t.Errorf("DeleteBranch called %d times after failed worktree removal, want 0", branchCalls)
+	}
+	if _, statErr := os.Stat(taskDir); statErr != nil {
+		t.Errorf("task root must be preserved on failure: %v", statErr)
+	}
+}
+
+func TestRemove_BranchDeletionWithoutWorktrees_Errors(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+
+	taskDir := filepath.Join(tasksRoot, "IN-023")
+	svcDir := filepath.Join(taskDir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fakeCommonDir := filepath.Join(rootDir, "svc", ".git")
+	if err := os.MkdirAll(fakeCommonDir, 0o755); err != nil {
+		t.Fatalf("setup commonDir: %v", err)
+	}
+
+	gitMock := &mockGitClient{commonDirResult: fakeCommonDir}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	for _, opts := range []RemoveOptions{
+		{DeleteLocalBranches: true},
+		{},
+	} {
+		if err := mgr.Remove(context.Background(), "IN-023", opts); err == nil {
+			t.Errorf("Remove(%+v) returned nil, want error", opts)
+		}
+	}
+
+	gitMock.mu.Lock()
+	worktreeCalls := len(gitMock.removeWorktreeCalls)
+	branchCalls := gitMock.deleteBranchCalls
+	gitMock.mu.Unlock()
+	if worktreeCalls != 0 || branchCalls != 0 {
+		t.Errorf("expected no git mutations, got %d RemoveWorktree and %d DeleteBranch calls", worktreeCalls, branchCalls)
+	}
+	if _, err := os.Stat(taskDir); err != nil {
+		t.Errorf("task directory must be preserved: %v", err)
 	}
 }
 

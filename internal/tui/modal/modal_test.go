@@ -197,12 +197,221 @@ func TestAddDialog_Esc_Closes(t *testing.T) {
 	}
 }
 
-func TestRemoveDialog_Y_Submits(t *testing.T) {
-	d := NewRemoveTaskDialog("IN-6748", 3, []string{"service-a", "service-b"})
+func TestRemoveDialog_OldHotkeys_DoNotSubmit(t *testing.T) {
+	for _, key := range []string{"y", "f", "b", "n"} {
+		d := NewRemoveTaskDialog("IN-6748", 2, nil)
+		_, cmd := d.Update(sendKey(key))
+		if cmd != nil {
+			t.Fatalf("key %q must not produce a cmd in checklist mode", key)
+		}
+		if d.stage != removeStageChecklist {
+			t.Fatalf("key %q changed stage to %v, want checklist", key, d.stage)
+		}
+	}
+}
 
-	_, cmd := d.Update(sendKey("y"))
+func TestRemoveDialog_Space_UnchecksWorktrees_AndBlocksEmptySubmit(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-6748", 3, []string{"service-a"})
+	if !d.selection.RemoveWorktrees {
+		t.Fatal("RemoveWorktrees should be selected by default")
+	}
+
+	_, cmd := d.Update(sendKey(" "))
+	if cmd != nil {
+		t.Fatal("space must not submit")
+	}
+	if d.selection.RemoveWorktrees {
+		t.Fatal("space should uncheck Remove worktrees")
+	}
+
+	_, cmd = d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd != nil {
+		t.Fatal("enter with empty selection must not proceed")
+	}
+	if d.stage != removeStageChecklist {
+		t.Fatalf("stage = %v, want checklist after empty enter", d.stage)
+	}
+}
+
+func TestRemoveDialog_ForceRow_RequiresWorktreesAndClearsWithParent(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
+
+	_, _ = d.Update(sendKey(" "))
+	_, _ = d.Update(sendKey("j"))
+	_, _ = d.Update(sendKey(" "))
+	if d.selection.Force {
+		t.Fatal("Force must not be selectable while RemoveWorktrees is off")
+	}
+
+	_, _ = d.Update(sendKey("k"))
+	_, _ = d.Update(sendKey(" "))
+	_, _ = d.Update(sendKey("j"))
+	_, _ = d.Update(sendKey(" "))
+	if !d.selection.Force {
+		t.Fatal("Force should toggle on when RemoveWorktrees is selected")
+	}
+	_, _ = d.Update(sendKey("k"))
+	_, _ = d.Update(sendKey(" "))
+	if d.selection.Force {
+		t.Fatal("clearing RemoveWorktrees must clear Force")
+	}
+}
+
+func TestRemoveDialog_LocalBranchRow_RequiresWorktrees(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-6748", 2, nil)
+
+	_, _ = d.Update(sendKey(" "))
+	_, _ = d.Update(sendKey("j"))
+	_, _ = d.Update(sendKey("j"))
+	_, _ = d.Update(sendKey(" "))
+	if d.selection.DeleteLocalBranches {
+		t.Fatal("local branch deletion must not be selectable without worktree removal")
+	}
+
+	view := stripAnsi(d.View())
+	if strings.Count(view, "requires worktree removal") != 0 {
+		t.Errorf("long dependency suffix must be gone, got %d occurrences",
+			strings.Count(view, "requires worktree removal"))
+	}
+	if strings.Count(view, "(requires worktrees)") != 1 {
+		t.Errorf("local branch row must carry exactly one concise dependency marker, got %d",
+			strings.Count(view, "(requires worktrees)"))
+	}
+	for line := range strings.Lines(view) {
+		if strings.Contains(line, "Force removal") && strings.Contains(line, "requires") {
+			t.Errorf("Force row must have no dependency suffix: %q", line)
+		}
+	}
+
+	if !strings.Contains(view, "Delete local branches") {
+		t.Error("checklist row should use concise label \"Delete local branches\"")
+	}
+	if !strings.Contains(view, "Delete remote branches") {
+		t.Error("checklist row should use concise label \"Delete remote branches\"")
+	}
+	if strings.Contains(view, "Delete local task branches") || strings.Contains(view, "Delete remote task branches") {
+		t.Error("checklist rows must drop redundant \"task\" from branch labels")
+	}
+}
+
+func TestRemoveDialog_RemoteRow_IndependentOfWorktrees(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-6748", 2, nil)
+
+	_, _ = d.Update(sendKey(" "))
+	for range 3 {
+		_, _ = d.Update(sendKey("j"))
+	}
+	_, _ = d.Update(sendKey(" "))
+	if !d.selection.DeleteRemoteBranches {
+		t.Fatal("remote branch deletion must be selectable without worktree removal")
+	}
+
+	d2 := NewRemoveTaskDialog("IN-6748", 2, nil)
+	for range 3 {
+		_, _ = d2.Update(sendKey("j"))
+	}
+	_, _ = d2.Update(sendKey(" "))
+	if !d2.selection.DeleteRemoteBranches {
+		t.Fatal("setup: remote should be selected")
+	}
+	for range 3 {
+		_, _ = d2.Update(sendKey("k"))
+	}
+	_, _ = d2.Update(sendKey(" "))
+	if d2.selection.RemoveWorktrees {
+		t.Fatal("setup: worktrees should be unchecked")
+	}
+	if !d2.selection.DeleteRemoteBranches {
+		t.Fatal("clearing RemoveWorktrees must not clear remote branch deletion")
+	}
+}
+
+func TestRemoveDialog_RemoteOnly_SubmitsThroughDangerConfirm(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-1234", 2, nil)
+
+	_, _ = d.Update(sendKey(" "))
+	for range 3 {
+		_, _ = d.Update(sendKey("j"))
+	}
+	_, _ = d.Update(sendKey(" "))
+
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd != nil || d.stage != removeStagePreview {
+		t.Fatalf("first enter must show preview, cmd=%v stage=%v", cmd, d.stage)
+	}
+	_, cmd = d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd != nil || d.stage != removeStageRemoteConfirm {
+		t.Fatalf("remote selection must require danger confirmation, cmd=%v stage=%v", cmd, d.stage)
+	}
+	_, cmd = d.Update(sendSpecialKey(tea.KeyEnter))
 	if cmd == nil {
-		t.Fatal("y must return a cmd")
+		t.Fatal("enter in remote confirmation must submit")
+	}
+	msg := execCmd(cmd)
+	sub, ok := msg.(SubmitRemoveTaskMsg)
+	if !ok {
+		t.Fatalf("expected SubmitRemoveTaskMsg, got %T", msg)
+	}
+	want := task.RemoveOptions{DeleteRemoteBranches: true}
+	if sub.Options != want {
+		t.Errorf("Options = %+v, want %+v", sub.Options, want)
+	}
+}
+
+func TestRemoveDialog_Navigation_JKAndArrows(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-6748", 2, nil)
+
+	_, _ = d.Update(sendKey("j"))
+	if d.selectedIndex != 1 {
+		t.Fatalf("j: selectedIndex = %d, want 1", d.selectedIndex)
+	}
+	_, _ = d.Update(sendSpecialKey(tea.KeyDown))
+	if d.selectedIndex != 2 {
+		t.Fatalf("down: selectedIndex = %d, want 2", d.selectedIndex)
+	}
+	_, _ = d.Update(sendKey("k"))
+	if d.selectedIndex != 1 {
+		t.Fatalf("k: selectedIndex = %d, want 1", d.selectedIndex)
+	}
+	_, _ = d.Update(sendSpecialKey(tea.KeyUp))
+	if d.selectedIndex != 0 {
+		t.Fatalf("up: selectedIndex = %d, want 0", d.selectedIndex)
+	}
+	_, _ = d.Update(sendKey("k"))
+	if d.selectedIndex != 3 {
+		t.Fatalf("k wrap: selectedIndex = %d, want 3", d.selectedIndex)
+	}
+}
+
+func TestRemoveDialog_Enter_ShowsPreviewWithGroupsAndDirtyWarning(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
+	_, _ = d.Update(sendKey("j"))
+	_, _ = d.Update(sendKey("j"))
+	_, _ = d.Update(sendKey(" "))
+
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd != nil {
+		t.Fatal("enter in checklist must only show preview, not submit")
+	}
+	if d.stage != removeStagePreview {
+		t.Fatalf("stage = %v, want preview", d.stage)
+	}
+
+	view := stripAnsi(d.View())
+	for _, want := range []string{"Task worktrees", "Local task branches", "service-a", "uncommitted changes"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("preview should contain %q", want)
+		}
+	}
+}
+
+func TestRemoveDialog_PreviewEnter_LocalOnly_Submits(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-6748", 2, nil)
+
+	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("enter in preview must submit for local-only selection")
 	}
 	msg := execCmd(cmd)
 	sub, ok := msg.(SubmitRemoveTaskMsg)
@@ -212,11 +421,85 @@ func TestRemoveDialog_Y_Submits(t *testing.T) {
 	if sub.TaskID != "IN-6748" {
 		t.Errorf("TaskID: expected IN-6748, got %q", sub.TaskID)
 	}
-	if sub.Force {
-		t.Error("Force should be false for y")
+	want := task.RemoveOptions{RemoveWorktrees: true}
+	if sub.Options != want {
+		t.Errorf("Options = %+v, want %+v", sub.Options, want)
 	}
-	if sub.DeleteBranches {
-		t.Error("DeleteBranches should be false for y")
+}
+
+func TestRemoveDialog_RemoteSelected_EnterShowsDangerThenSubmits(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-1234", 2, nil)
+
+	_, _ = d.Update(sendSpecialKey(tea.KeyDown))
+	_, _ = d.Update(sendSpecialKey(tea.KeyDown))
+	_, _ = d.Update(sendSpecialKey(tea.KeyDown))
+	_, _ = d.Update(sendKey(" "))
+
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd != nil || d.stage != removeStagePreview {
+		t.Fatalf("first enter must show preview, cmd=%v stage=%v", cmd, d.stage)
+	}
+
+	_, cmd = d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd != nil {
+		t.Fatal("remote selection must require a second confirmation before submit")
+	}
+	if d.stage != removeStageRemoteConfirm {
+		t.Fatalf("stage = %v, want remote confirm", d.stage)
+	}
+	view := stripAnsi(d.View())
+	if !strings.Contains(view, "ORIGIN") {
+		t.Error("remote confirmation must warn about origin deletion")
+	}
+
+	_, cmd = d.Update(sendSpecialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("enter in remote confirmation must submit")
+	}
+	msg := execCmd(cmd)
+	sub, ok := msg.(SubmitRemoveTaskMsg)
+	if !ok {
+		t.Fatalf("expected SubmitRemoveTaskMsg, got %T", msg)
+	}
+	want := task.RemoveOptions{RemoveWorktrees: true, DeleteRemoteBranches: true}
+	if sub.Options != want {
+		t.Errorf("Options = %+v, want %+v", sub.Options, want)
+	}
+}
+
+func TestRemoveDialog_RemoteConfirm_Esc_ReturnsToPreview(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-1234", 2, nil)
+	_, _ = d.Update(sendSpecialKey(tea.KeyDown))
+	_, _ = d.Update(sendSpecialKey(tea.KeyDown))
+	_, _ = d.Update(sendSpecialKey(tea.KeyDown))
+	_, _ = d.Update(sendKey(" "))
+	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
+	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
+	if d.stage != removeStageRemoteConfirm {
+		t.Fatalf("stage = %v, want remote confirm", d.stage)
+	}
+
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEsc))
+	if cmd != nil {
+		t.Fatal("esc in remote confirmation must not close or submit")
+	}
+	if d.stage != removeStagePreview {
+		t.Fatalf("stage = %v, want preview", d.stage)
+	}
+}
+
+func TestRemoveDialog_PreviewEsc_ReturnsToChecklist(t *testing.T) {
+	d := NewRemoveTaskDialog("IN-1234", 2, nil)
+	_, _ = d.Update(sendSpecialKey(tea.KeyEnter))
+	if d.stage != removeStagePreview {
+		t.Fatalf("stage = %v, want preview", d.stage)
+	}
+	_, cmd := d.Update(sendSpecialKey(tea.KeyEsc))
+	if cmd != nil {
+		t.Fatal("esc in preview must not close or submit")
+	}
+	if d.stage != removeStageChecklist {
+		t.Fatalf("stage = %v, want checklist", d.stage)
 	}
 }
 
@@ -238,89 +521,6 @@ func TestConvertHotfixDialog_EnterSubmitsEditableTargetID(t *testing.T) {
 	}
 }
 
-func TestRemoveDialog_FThenY_ForceRemoves(t *testing.T) {
-	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
-
-	_, cmd := d.Update(sendKey("f"))
-	if cmd != nil {
-		t.Fatal("f must not submit immediately")
-	}
-	if !d.forceConfirm {
-		t.Fatal("f should enter force confirmation mode")
-	}
-
-	_, cmd = d.Update(sendKey("y"))
-	if cmd == nil {
-		t.Fatal("y in force confirmation mode must submit")
-	}
-	msg := execCmd(cmd)
-	sub, ok := msg.(SubmitRemoveTaskMsg)
-	if !ok {
-		t.Fatalf("expected SubmitRemoveTaskMsg, got %T", msg)
-	}
-	if sub.TaskID != "IN-6748" {
-		t.Errorf("TaskID: expected IN-6748, got %q", sub.TaskID)
-	}
-	if !sub.Force {
-		t.Error("Force should be true for f")
-	}
-	if sub.DeleteBranches {
-		t.Error("DeleteBranches should be false for f")
-	}
-}
-
-func TestRemoveDialog_FThenN_ReturnsToNormalView(t *testing.T) {
-	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
-
-	_, cmd := d.Update(sendKey("f"))
-	if cmd != nil {
-		t.Fatal("f must not submit immediately")
-	}
-	if !d.forceConfirm {
-		t.Fatal("f should enter force confirmation mode")
-	}
-
-	_, cmd = d.Update(sendKey("n"))
-	if cmd != nil {
-		t.Fatal("n in force confirmation mode should cancel back to normal view")
-	}
-	if d.forceConfirm {
-		t.Fatal("n should exit force confirmation mode")
-	}
-}
-
-func TestRemoveDialog_FThenEsc_ReturnsToNormalView(t *testing.T) {
-	d := NewRemoveTaskDialog("IN-6748", 2, []string{"service-a"})
-
-	_, cmd := d.Update(sendKey("f"))
-	if cmd != nil {
-		t.Fatal("f must not submit immediately")
-	}
-	if !d.forceConfirm {
-		t.Fatal("f should enter force confirmation mode")
-	}
-
-	_, cmd = d.Update(sendSpecialKey(tea.KeyEsc))
-	if cmd != nil {
-		t.Fatal("esc in force confirmation mode should cancel back to normal view")
-	}
-	if d.forceConfirm {
-		t.Fatal("esc should exit force confirmation mode")
-	}
-}
-
-func TestRemoveDialog_N_Closes(t *testing.T) {
-	d := NewRemoveTaskDialog("IN-6748", 1, nil)
-	_, cmd := d.Update(sendKey("n"))
-	if cmd == nil {
-		t.Fatal("n must return a cmd")
-	}
-	msg := execCmd(cmd)
-	if _, ok := msg.(CloseModalMsg); !ok {
-		t.Fatalf("expected CloseModalMsg, got %T", msg)
-	}
-}
-
 func TestRemoveDialog_Esc_Closes(t *testing.T) {
 	d := NewRemoveTaskDialog("IN-6748", 1, nil)
 	_, cmd := d.Update(sendSpecialKey(tea.KeyEsc))
@@ -330,29 +530,6 @@ func TestRemoveDialog_Esc_Closes(t *testing.T) {
 	msg := execCmd(cmd)
 	if _, ok := msg.(CloseModalMsg); !ok {
 		t.Fatalf("expected CloseModalMsg, got %T", msg)
-	}
-}
-
-func TestRemoveDialog_B_DeletesBranches(t *testing.T) {
-	d := NewRemoveTaskDialog("IN-1234", 2, nil)
-
-	_, cmd := d.Update(sendKey("b"))
-	if cmd == nil {
-		t.Fatal("b must return a cmd")
-	}
-	msg := execCmd(cmd)
-	sub, ok := msg.(SubmitRemoveTaskMsg)
-	if !ok {
-		t.Fatalf("expected SubmitRemoveTaskMsg, got %T", msg)
-	}
-	if sub.TaskID != "IN-1234" {
-		t.Errorf("TaskID: expected IN-1234, got %q", sub.TaskID)
-	}
-	if sub.Force {
-		t.Error("Force should be false for b")
-	}
-	if !sub.DeleteBranches {
-		t.Error("DeleteBranches should be true for b")
 	}
 }
 

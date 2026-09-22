@@ -17,9 +17,8 @@ type SubmitAddMsg struct {
 }
 
 type SubmitRemoveTaskMsg struct {
-	TaskID         string
-	Force          bool
-	DeleteBranches bool
+	TaskID  string
+	Options task.RemoveOptions
 }
 
 type SubmitConvertHotfixMsg struct {

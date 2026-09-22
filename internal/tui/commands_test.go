@@ -374,7 +374,7 @@ func (m *cmdManager) ScanPrunableTasks(_ context.Context) ([]domain.PruneCandida
 	return m.scanResult, m.scanErr
 }
 
-func (m *cmdManager) Remove(_ context.Context, taskID string, _, _ bool) error {
+func (m *cmdManager) Remove(_ context.Context, taskID string, _ task.RemoveOptions) error {
 	m.removeCalls = append(m.removeCalls, taskID)
 	if err, ok := m.removeErrs[taskID]; ok {
 		return err

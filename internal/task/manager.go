@@ -93,7 +93,7 @@ type Manager interface {
 
 	ListServices(ctx context.Context, taskID string) ([]domain.Service, error)
 
-	Remove(ctx context.Context, taskID string, force, deleteBranches bool) error
+	Remove(ctx context.Context, taskID string, opts RemoveOptions) error
 
 	Repos(ctx context.Context, refresh bool) ([]domain.Repo, error)
 

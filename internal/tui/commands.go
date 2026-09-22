@@ -178,11 +178,11 @@ func addServiceCmd(mgr task.Manager, params task.AddParams) tea.Cmd {
 	)
 }
 
-func removeTaskCmd(mgr task.Manager, taskID string, force, deleteBranches bool) tea.Cmd {
+func removeTaskCmd(mgr task.Manager, taskID string, opts task.RemoveOptions) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
 		defer cancel()
-		return CommandDoneMsg{Err: mgr.Remove(ctx, taskID, force, deleteBranches), Op: "Remove task " + taskID}
+		return CommandDoneMsg{Err: mgr.Remove(ctx, taskID, opts), Op: "Remove task " + taskID}
 	}
 }
 
@@ -390,7 +390,7 @@ func pruneTasksCmd(mgr task.Manager, taskIDs []string) tea.Cmd {
 			}
 
 			statusCh <- "Pruning task " + taskID + "..."
-			if err := mgr.Remove(logutil.WithTaskID(ctx, taskID), taskID, true, false); err != nil {
+			if err := mgr.Remove(logutil.WithTaskID(ctx, taskID), taskID, task.RemoveOptions{RemoveWorktrees: true, Force: true}); err != nil {
 				errList = append(errList, err)
 				statusCh <- "Prune task " + taskID + " failed: " + err.Error()
 				continue
