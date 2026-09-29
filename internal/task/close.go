@@ -95,21 +95,10 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 		}
 
 		targets := append([]string(nil), svcRule.MergeTargets...)
-		if svcBranchType == gitflow.BranchTypeHotfix {
-			releasePrefix := "release/"
-			if releaseRule, ok := flow.BranchTypes[gitflow.BranchTypeRelease]; ok && len(releaseRule.Prefixes) > 0 {
-				releasePrefix = releaseRule.Prefixes[0]
-			}
-			activeRelease, activeErr := gitflow.FindActiveReleaseBranch(ctx, m.git, svc.WorktreePath, releasePrefix)
-			if activeErr != nil {
-				plan.Warnings = append(plan.Warnings, fmt.Sprintf("[%s] active release detection failed: %v", svc.Name, activeErr))
-			} else if activeRelease != "" {
-				for i, target := range targets {
-					if target == flow.IntegrationBranch {
-						targets[i] = activeRelease
-					}
-				}
-			}
+		if resolvedTargets, warning := m.effectiveMergeTargets(ctx, svc, svcBranchType, targets); warning != "" {
+			plan.Warnings = append(plan.Warnings, warning)
+		} else {
+			targets = resolvedTargets
 		}
 
 		if svcRule.CloseStrategy == gitflow.CloseStrategyDirectMerge && len(targets) == 0 {
@@ -507,6 +496,34 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 
 	result.Success = !anyFailed
 	return result, nil
+}
+
+// effectiveMergeTargets substitutes the integration target with the active
+// release branch for hotfix direct merges, matching what CloseTask will merge
+// into. Shared by close planning and workflow guidance. The returned warning
+// (non-empty when detection fails) is informational; targets stay unchanged.
+func (m *manager) effectiveMergeTargets(ctx context.Context, svc domain.Service, branchType gitflow.BranchType, targets []string) ([]string, string) {
+	if branchType != gitflow.BranchTypeHotfix || m.flow == nil {
+		return targets, ""
+	}
+	releasePrefix := "release/"
+	if releaseRule, ok := m.flow.BranchTypes[gitflow.BranchTypeRelease]; ok && len(releaseRule.Prefixes) > 0 {
+		releasePrefix = releaseRule.Prefixes[0]
+	}
+	activeRelease, activeErr := gitflow.FindActiveReleaseBranch(ctx, m.git, svc.WorktreePath, releasePrefix)
+	if activeErr != nil {
+		return targets, fmt.Sprintf("[%s] active release detection failed: %v", svc.Name, activeErr)
+	}
+	if activeRelease == "" {
+		return targets, ""
+	}
+	resolved := append([]string(nil), targets...)
+	for i, target := range resolved {
+		if target == m.flow.IntegrationBranch {
+			resolved[i] = activeRelease
+		}
+	}
+	return resolved, ""
 }
 
 func (m *manager) findService(ctx context.Context, taskID, serviceName string) (domain.Service, error) {
