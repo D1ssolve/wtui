@@ -69,6 +69,8 @@ type Model struct {
 	opProgress                *panels.OperationProgress
 	refreshing                bool
 	taskWorkflowGeneration    uint64
+	taskWorkflow              *domain.WorkflowSummary
+	releaseWorkflow           *domain.WorkflowSummary
 	mergeInspectionGeneration uint64
 	mergeInspection           *mergeInspectionRequest
 
@@ -324,6 +326,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keymap.Help):
 			help := modal.NewHelpOverlayWithOptions(m.lazygitAvailable)
 			help.SetReleaseCleanupAvailable(m.releaseCleanupAvailable())
+			help.SetWorkflow(m.helpWorkflowContext())
 			m.modal = help
 			m.modal.SetTerminalSize(m.width, m.height)
 			return m, nil
@@ -1091,6 +1094,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		selected := m.tasksPanel.SelectedTask()
 		if selected == nil {
+			m.setServicesWorkflow(nil)
 			return m, nil
 		}
 		return m, m.loadTaskSelectionCmd(selected.ID)
@@ -2104,7 +2108,31 @@ func (m *Model) invalidateReleaseCleanupChecklist() {
 }
 
 func (m *Model) setServicesWorkflow(workflow *domain.WorkflowSummary) {
+	m.taskWorkflow = workflow
 	m.servicesPanel.SetWorkflow(workflow)
+	m.syncHelpWorkflow()
+}
+
+func (m *Model) helpWorkflowContext() (string, *domain.WorkflowSummary) {
+	switch m.focus {
+	case FocusTasks, FocusServices:
+		if selected := m.tasksPanel.SelectedTask(); selected != nil {
+			return "Task " + selected.ID, m.taskWorkflow
+		}
+	case FocusReleases:
+		if release := m.releasesPanel.SelectedRelease(); release != nil {
+			return "Release " + release.ID, m.releaseWorkflow
+		}
+	}
+	return "", nil
+}
+
+func (m *Model) syncHelpWorkflow() {
+	help, ok := m.modal.(*modal.HelpOverlay)
+	if !ok {
+		return
+	}
+	help.SetWorkflow(m.helpWorkflowContext())
 }
 
 func (m *Model) beginOpProgress(taskID, op string) {
@@ -2127,7 +2155,9 @@ func (m *Model) setSelectedReleaseWorkflow() {
 		value := task.ReleaseWorkflow(*release)
 		workflow = &value
 	}
+	m.releaseWorkflow = workflow
 	m.releasesPanel.SetWorkflow(workflow)
+	m.syncHelpWorkflow()
 }
 
 func (m *Model) loadTaskSelectionCmd(taskID string) tea.Cmd {
