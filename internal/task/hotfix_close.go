@@ -149,8 +149,8 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 				if err != nil {
 					return plan, err
 				}
-				if r.Number != matches[0].Number || r.SourceBranch != svc.Branch || r.TargetBranch != target || r.HeadSHA != sha {
-					return plan, fmt.Errorf("%s → %s: MR identity/source SHA changed", svc.Name, target)
+				if err := m.validateHotfixMRIdentity(ctx, svc, sha, matches[0], r); err != nil {
+					return plan, fmt.Errorf("%s → %s: %w", svc.Name, target, err)
 				}
 				review.Number, review.URL = r.Number, r.URL
 				switch strings.ToLower(r.State) {
@@ -158,25 +158,11 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 					review.State = "open"
 				case "merged":
 					review.State = "merged"
-					review.MergeSHA = r.MergedSHA
-					if review.MergeSHA == "" {
-						// As in release finalization, infer fast-forward only from an exact target/head match.
-						targetSHA, err := m.git.ResolveRef(ctx, svc.RepoPath, "origin/"+target)
-						if err != nil {
-							return plan, err
-						}
-						if targetSHA != sha {
-							return plan, fmt.Errorf("%s → %s: merge commit SHA unavailable for MR #%d", svc.Name, target, r.Number)
-						}
-						review.MergeSHA = sha
-					}
-					contained, err := m.git.IsAncestor(ctx, svc.RepoPath, review.MergeSHA, "origin/"+target)
+					mergeSHA, err := m.verifyHotfixMergeSHA(ctx, svc, target, r)
 					if err != nil {
-						return plan, err
+						return plan, fmt.Errorf("%s → %s: %w", svc.Name, target, err)
 					}
-					if !contained {
-						return plan, fmt.Errorf("%s: merged commit not contained in origin/%s", svc.Name, target)
-					}
+					review.MergeSHA = mergeSHA
 				default:
 					return plan, fmt.Errorf("%s → %s: MR #%d is %s", svc.Name, target, r.Number, r.State)
 				}

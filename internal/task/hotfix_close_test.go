@@ -70,6 +70,7 @@ func TestHotfixClose_BlocksUnsafePlans(t *testing.T) {
 				f.requests[0].MergedSHA = ""
 			case "source":
 				f.requests[0].HeadSHA = "old"
+				g.isAncestorFn = func(string, string, string) (bool, error) { return false, nil }
 			case "ambiguous":
 				f.requests = append(f.requests, f.requests[0])
 			case "unreachable":
@@ -124,6 +125,192 @@ func TestHotfixClose_ClosedMRIsRecreatedWithWarning(t *testing.T) {
 	if len(f.created) != 2 || !r.Waiting {
 		t.Fatalf("closed MRs not recreated: created=%v result=%+v", f.created, r)
 	}
+}
+
+func TestHotfixClose_MergedHistoricalHeadAcceptedWhenAncestor(t *testing.T) {
+	m, g, f := hotfixManager(t)
+	f.requests[0].HeadSHA = "old"
+	g.isAncestorFn = func(_, ancestor, descendant string) (bool, error) {
+		if descendant == "source" {
+			return ancestor == "old", nil
+		}
+		return true, nil // merge containment in origin target
+	}
+	p, err := m.PlanCloseTask(t.Context(), "H")
+	if err != nil {
+		t.Fatalf("ancestor historical head rejected: %v", err)
+	}
+	if p.Services[0].Reviews[0].State != "merged" || p.Services[0].Reviews[0].MergeSHA != "merge" {
+		t.Fatalf("master review not merged: %+v", p.Services[0].Reviews)
+	}
+	r, err := m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", Fingerprint: p.Fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Waiting || len(f.created) != 1 || f.created[0] != "develop" {
+		t.Fatalf("only missing develop MR expected: created=%v result=%+v", f.created, r)
+	}
+}
+
+func TestHotfixClose_MergedUnrelatedHistoricalHeadRejected(t *testing.T) {
+	m, g, f := hotfixManager(t)
+	f.requests[0].HeadSHA = "unrelated"
+	g.isAncestorFn = func(_, _, descendant string) (bool, error) {
+		if descendant == "source" {
+			return false, nil
+		}
+		return true, nil // merge containment in origin target
+	}
+	if _, err := m.PlanCloseTask(t.Context(), "H"); err == nil {
+		t.Fatal("unrelated historical head accepted")
+	}
+}
+
+func TestHotfixClose_OpenMRRequiresCurrentHeadSHA(t *testing.T) {
+	m, g, f := hotfixManager(t)
+	f.requests[0].State = "open"
+	f.requests[0].HeadSHA = "old"
+	g.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
+	if _, err := m.PlanCloseTask(t.Context(), "H"); err == nil {
+		t.Fatal("open MR with stale head accepted")
+	}
+}
+
+func TestHotfixClose_MissingMergeSHAInfersOnlyExactTargetHeadMatch(t *testing.T) {
+	newManager := func(t *testing.T, targetTip string) (*manager, *mockGitClient, *hotfixForge) {
+		m, g, f := hotfixManager(t)
+		f.requests[0].HeadSHA = "old"
+		f.requests[0].MergedSHA = ""
+		g.isAncestorFn = func(_, ancestor, descendant string) (bool, error) {
+			if descendant == "source" || descendant == targetTip {
+				return ancestor == "old", nil
+			}
+			return true, nil // merge containment in origin target
+		}
+		g.resolveRefFn = func(_ string, ref string) (string, error) {
+			if ref == "hotfix/H" {
+				return "source", nil
+			}
+			return targetTip, nil
+		}
+		return m, g, f
+	}
+
+	t.Run("target tip equals historical head", func(t *testing.T) {
+		m, _, _ := newManager(t, "old")
+		p, err := m.PlanCloseTask(t.Context(), "H")
+		if err != nil {
+			t.Fatalf("fast-forward merge not inferred: %v", err)
+		}
+		if p.Services[0].Reviews[0].MergeSHA != "old" {
+			t.Fatalf("merge SHA = %q, want historical head", p.Services[0].Reviews[0].MergeSHA)
+		}
+	})
+
+	t.Run("target advanced past historical head", func(t *testing.T) {
+		m, _, _ := newManager(t, "advanced")
+		if _, err := m.PlanCloseTask(t.Context(), "H"); err == nil {
+			t.Fatal("merge SHA inferred from ancestry after target advanced")
+		}
+	})
+}
+
+func TestHotfixMerge_InspectMergedHistoricalHead(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		head       string
+		wantStatus string
+		wantErr    bool
+	}{
+		{name: "ancestor", head: "old", wantStatus: "merged"},
+		{name: "unrelated", head: "unrelated", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, g, f := hotfixManager(t)
+			f.requests[0].HeadSHA = tc.head
+			g.isAncestorFn = func(_, ancestor, descendant string) (bool, error) {
+				if descendant == "source" {
+					return ancestor == "old", nil
+				}
+				return true, nil
+			}
+			inspection, err := m.InspectTaskMerge(t.Context(), "H")
+			if tc.wantErr {
+				if err == nil && inspection.Services[0].Status != "failed" {
+					t.Fatalf("historical head accepted: %+v", inspection.Services[0])
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ancestor historical head rejected: %v", err)
+			}
+			if inspection.Services[0].Status != tc.wantStatus {
+				t.Fatalf("status = %q, want %q", inspection.Services[0].Status, tc.wantStatus)
+			}
+		})
+	}
+}
+
+func TestHotfixMerge_InspectVerifiesMergedResultAgainstTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		mergedSHA  string
+		targetTip  string
+		contained  bool
+		wantStatus string
+		wantMerge  string
+	}{
+		{name: "explicit contained", mergedSHA: "merge", targetTip: "merge", contained: true, wantStatus: "merged", wantMerge: "merge"},
+		{name: "explicit not contained", mergedSHA: "merge", targetTip: "merge", contained: false, wantStatus: "failed"},
+		{name: "missing exact tip head match", mergedSHA: "", targetTip: "source", contained: true, wantStatus: "merged", wantMerge: "source"},
+		{name: "missing target advanced", mergedSHA: "", targetTip: "advanced", contained: true, wantStatus: "failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, g, f := hotfixManager(t)
+			f.requests[0].MergedSHA = tc.mergedSHA
+			g.resolveRefFn = func(_ string, ref string) (string, error) {
+				if ref == "hotfix/H" {
+					return "source", nil
+				}
+				return tc.targetTip, nil
+			}
+			g.isAncestorFn = func(_, _, descendant string) (bool, error) {
+				if descendant == "origin/master" {
+					return tc.contained, nil
+				}
+				return true, nil
+			}
+			inspection, err := m.InspectTaskMerge(t.Context(), "H")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if inspection.Services[0].Status != tc.wantStatus {
+				t.Fatalf("status = %q, want %q: %+v", inspection.Services[0].Status, tc.wantStatus, inspection.Services[0])
+			}
+			if tc.wantMerge != "" && inspection.Services[0].MR.MergedSHA != tc.wantMerge {
+				t.Fatalf("MergedSHA = %q, want %q", inspection.Services[0].MR.MergedSHA, tc.wantMerge)
+			}
+		})
+	}
+}
+
+func TestHotfixMerge_InspectRejectsEmptySourceOrHeadSHA(t *testing.T) {
+	t.Run("empty current source SHA", func(t *testing.T) {
+		m, g, _ := hotfixManager(t)
+		g.resolveRefFn = func(string, string) (string, error) { return "", nil }
+		inspection, err := m.InspectTaskMerge(t.Context(), "H")
+		if err != nil || inspection.Services[0].Status != "failed" {
+			t.Fatalf("empty source SHA accepted: %v %+v", err, inspection.Services[0])
+		}
+	})
+	t.Run("empty MR head SHA", func(t *testing.T) {
+		m, _, f := hotfixManager(t)
+		f.requests[0].HeadSHA = ""
+		inspection, err := m.InspectTaskMerge(t.Context(), "H")
+		if err != nil || inspection.Services[0].Status != "failed" {
+			t.Fatalf("empty head SHA accepted: %v %+v", err, inspection.Services[0])
+		}
+	})
 }
 
 type hotfixForge struct {

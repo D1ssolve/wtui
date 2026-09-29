@@ -192,6 +192,111 @@ func TestInspectTaskMerge_UnparseableRepoMarksServiceFailed(t *testing.T) {
 	}
 }
 
+func TestMergeTaskMRs_SkipsReadyMRWithWrongTarget(t *testing.T) {
+	client := &mergeForgeClient{readiness: map[string]forge.MRReadiness{
+		"feature/a": {Number: 1, State: "open", SourceBranch: "feature/a", TargetBranch: "master", HeadSHA: "a-sha", Ready: true, SupportsSHAPin: true},
+		"feature/b": {Number: 2, State: "open", SourceBranch: "feature/b", TargetBranch: "develop", HeadSHA: "b-sha", Ready: true, SupportsSHAPin: true},
+	}}
+	mgr := newMRMergeTestManager(t, map[string]string{"a": "feature/a", "b": "feature/b"}, "git@gitlab.com:group/repo.git", client)
+
+	inspection, err := mgr.InspectTaskMerge(t.Context(), "TASK-1")
+	if err != nil {
+		t.Fatalf("InspectTaskMerge() err = %v", err)
+	}
+	if inspection.Services[0].Status != "blocked" {
+		t.Fatalf("status = %q, want blocked: %#v", inspection.Services[0].Status, inspection.Services[0])
+	}
+	if blockers := inspection.Services[0].Blockers; len(blockers) == 0 || !strings.Contains(blockers[len(blockers)-1], "targets master, want develop") {
+		t.Fatalf("blockers = %v, want wrong-target blocker", blockers)
+	}
+
+	result, err := mgr.MergeTaskMRs(t.Context(), "TASK-1")
+	if err != nil {
+		t.Fatalf("MergeTaskMRs() err = %v", err)
+	}
+	if !slices.Equal(result.Merged, []string{"b"}) || !slices.Contains(result.Skipped, "a") {
+		t.Fatalf("result = %#v, want a skipped and b merged", result)
+	}
+	if len(client.merges) != 1 || client.merges[0].Number != 2 {
+		t.Fatalf("merges = %#v, want only MR 2 merged", client.merges)
+	}
+}
+
+func TestMergeServiceMR_SkipsReadyMRWithWrongSource(t *testing.T) {
+	client := &mergeForgeClient{readiness: map[string]forge.MRReadiness{
+		"feature/a": {Number: 1, State: "open", SourceBranch: "feature/other", TargetBranch: "develop", HeadSHA: "a-sha", Ready: true, SupportsSHAPin: true},
+	}}
+	mgr := newMRMergeTestManager(t, map[string]string{"a": "feature/a"}, "git@gitlab.com:group/repo.git", client)
+
+	inspection, err := mgr.InspectTaskMerge(t.Context(), "TASK-1")
+	if err != nil {
+		t.Fatalf("InspectTaskMerge() err = %v", err)
+	}
+	if inspection.Services[0].Status != "blocked" {
+		t.Fatalf("status = %q, want blocked: %#v", inspection.Services[0].Status, inspection.Services[0])
+	}
+	if blockers := inspection.Services[0].Blockers; len(blockers) == 0 || !strings.Contains(blockers[len(blockers)-1], "source is feature/other, want feature/a") {
+		t.Fatalf("blockers = %v, want wrong-source blocker", blockers)
+	}
+
+	selected := MRSelection{Number: 1, TargetBranch: "develop", HeadSHA: "a-sha"}
+	result, err := mgr.MergeServiceMR(t.Context(), "TASK-1", "a", selected)
+	if err != nil {
+		t.Fatalf("MergeServiceMR() err = %v", err)
+	}
+	if !slices.Equal(result.Skipped, []string{"a"}) || len(client.merges) != 0 {
+		t.Fatalf("result = %#v, merges = %#v; want skipped without merge", result, client.merges)
+	}
+}
+
+func TestInspectTaskMerge_PopulatedMatchingSourceAndTargetStayReady(t *testing.T) {
+	client := &mergeForgeClient{readiness: map[string]forge.MRReadiness{
+		"feature/a": {Number: 1, State: "open", SourceBranch: "feature/a", TargetBranch: "develop", HeadSHA: "a-sha", Ready: true, SupportsSHAPin: true},
+	}}
+	mgr := newMRMergeTestManager(t, map[string]string{"a": "feature/a"}, "git@gitlab.com:group/repo.git", client)
+
+	inspection, err := mgr.InspectTaskMerge(t.Context(), "TASK-1")
+	if err != nil {
+		t.Fatalf("InspectTaskMerge() err = %v", err)
+	}
+	if inspection.Services[0].Status != "ready" {
+		t.Fatalf("status = %q, want ready: %#v", inspection.Services[0].Status, inspection.Services[0])
+	}
+}
+
+func TestMergeTaskMRs_UnpinnedSourceTargetDriftSkipsMerge(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*forge.MRReadiness)
+	}{
+		{name: "target drift", mutate: func(r *forge.MRReadiness) { r.TargetBranch = "master" }},
+		{name: "source drift", mutate: func(r *forge.MRReadiness) { r.SourceBranch = "feature/other" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &mergeForgeClient{
+				readiness: map[string]forge.MRReadiness{
+					"feature/a": {Number: 1, State: "open", SourceBranch: "feature/a", TargetBranch: "develop", HeadSHA: "a-sha", Ready: true},
+				},
+			}
+			fresh := forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/a", TargetBranch: "develop", HeadSHA: "a-sha", Ready: true}
+			tc.mutate(&fresh)
+			client.readinessByNumber = map[int]forge.MRReadiness{1: fresh}
+			mgr := newMRMergeTestManager(t, map[string]string{"a": "feature/a"}, "git@gitlab.com:group/repo.git", client)
+
+			result, err := mgr.MergeTaskMRs(t.Context(), "TASK-1")
+			if err != nil {
+				t.Fatalf("MergeTaskMRs() err = %v", err)
+			}
+			if len(client.merges) != 0 {
+				t.Fatalf("merges = %#v, want none", client.merges)
+			}
+			if result.Errs["a"] == nil || !strings.Contains(result.Errs["a"].Error(), "want") {
+				t.Fatalf("Errs[a] = %v, want drift blocker", result.Errs["a"])
+			}
+		})
+	}
+}
+
 func newMRMergeTestManager(t *testing.T, services map[string]string, remoteURL string, client forge.ForgeClient) Manager {
 	t.Helper()
 	rootDir := t.TempDir()

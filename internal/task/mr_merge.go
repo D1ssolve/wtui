@@ -100,12 +100,20 @@ func (m *manager) inspectTaskMerge(ctx context.Context, taskID string) (TaskMerg
 				item.Blockers = []string{readErr.Error()}
 			case item.MR.Number == 0:
 				item.Status = "no_mr"
-			case item.MR.Ready:
-				item.Status = "ready"
-			case waitingBlockers(item.Blockers):
-				item.Status = "waiting"
 			default:
-				item.Status = "blocked"
+				if drift := reviewMRDriftBlocker(item.MR, svc.Branch, m.reviewTarget(svc.Branch)); drift != "" {
+					item.Status = "blocked"
+					item.Blockers = append(item.Blockers, drift)
+					break
+				}
+				switch {
+				case item.MR.Ready:
+					item.Status = "ready"
+				case waitingBlockers(item.Blockers):
+					item.Status = "waiting"
+				default:
+					item.Status = "blocked"
+				}
 			}
 			inspection.Services[i] = item
 		}()
@@ -191,8 +199,13 @@ func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string, 
 				recordMergeFailure(&result, item.ServiceName, fmt.Errorf("head SHA drift: inspected=%s current=%s", item.MR.HeadSHA, fresh.HeadSHA))
 				continue
 			}
-			if m.isHotfixReview(svc.Branch) && (!fresh.Ready || fresh.SourceBranch != svc.Branch || fresh.TargetBranch != item.MR.TargetBranch || (fresh.State != "open" && fresh.State != "opened")) {
-				recordMergeFailure(&result, item.ServiceName, errors.New("hotfix MR readiness changed before merge"))
+			if m.isHotfixReview(svc.Branch) {
+				if !fresh.Ready || fresh.SourceBranch != svc.Branch || fresh.TargetBranch != item.MR.TargetBranch || (fresh.State != "open" && fresh.State != "opened") {
+					recordMergeFailure(&result, item.ServiceName, errors.New("hotfix MR readiness changed before merge"))
+					continue
+				}
+			} else if drift := reviewMRDriftBlocker(fresh, svc.Branch, m.reviewTarget(svc.Branch)); drift != "" {
+				recordMergeFailure(&result, item.ServiceName, errors.New(drift))
 				continue
 			}
 			if m.logger != nil {
@@ -220,6 +233,21 @@ func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string, 
 	return result, nil
 }
 
+// reviewMRDriftBlocker reports why a reported MR no longer matches the service
+// branch or expected review target; empty means no drift. Only populated fields
+// are checked, so forge responses that omit source or target stay compatible.
+// Shared by merge inspection and workflow review so a drifted MR is blocked
+// identically on both paths and can never reach MergeMR as ready.
+func reviewMRDriftBlocker(mr forge.MRReadiness, branch, reviewTarget string) string {
+	if source := mr.SourceBranch; source != "" && source != branch {
+		return fmt.Sprintf("MR !%d source is %s, want %s", mr.Number, source, branch)
+	}
+	if target := mr.TargetBranch; target != "" && reviewTarget != "" && target != reviewTarget {
+		return fmt.Sprintf("MR !%d targets %s, want %s", mr.Number, target, reviewTarget)
+	}
+	return ""
+}
+
 // matchTargetMRs splits MR history for branch→target into active and closed rows.
 // ponytail: closed MRs are dead ends and never make history ambiguous; only
 // multiple active (open/merged) MRs do.
@@ -235,6 +263,63 @@ func matchTargetMRs(rows []forge.MRInfo, branch, target string) (active, closed 
 		active = append(active, r)
 	}
 	return active, closed
+}
+
+// validateHotfixMRIdentity enforces MR number/source/target identity plus a
+// state-aware head SHA check shared by close planning and merge inspection.
+// A merged MR may carry a historical head that equals or is an ancestor of the
+// current hotfix SHA (source advanced after merge); open MRs must match the
+// current SHA exactly. Unrelated historical heads are rejected.
+func (m *manager) validateHotfixMRIdentity(ctx context.Context, svc domain.Service, currentSHA string, want forge.MRInfo, r forge.MRReadiness) error {
+	if currentSHA == "" {
+		return errors.New("empty current hotfix source SHA")
+	}
+	if r.HeadSHA == "" {
+		return errors.New("empty MR head SHA")
+	}
+	if r.Number != want.Number || r.SourceBranch != svc.Branch || r.TargetBranch != want.TargetBranch {
+		return errors.New("hotfix MR identity changed")
+	}
+	if r.HeadSHA == currentSHA {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(r.State), "merged") {
+		return errors.New("hotfix MR source SHA changed")
+	}
+	ancestor, err := m.git.IsAncestor(ctx, svc.RepoPath, r.HeadSHA, currentSHA)
+	if err != nil {
+		return err
+	}
+	if !ancestor {
+		return fmt.Errorf("hotfix MR head %s is not an ancestor of current source %s", r.HeadSHA, currentSHA)
+	}
+	return nil
+}
+
+// verifyHotfixMergeSHA verifies the merge result of a merged hotfix MR against
+// its target: an explicit MergedSHA must be contained in origin/<target>; when
+// missing, fast-forward is inferred only from an exact origin tip/historical
+// head match, never from ancestry. Returns the verified merge SHA.
+func (m *manager) verifyHotfixMergeSHA(ctx context.Context, svc domain.Service, target string, r forge.MRReadiness) (string, error) {
+	mergeSHA := r.MergedSHA
+	if mergeSHA == "" {
+		targetSHA, err := m.git.ResolveRef(ctx, svc.RepoPath, "origin/"+target)
+		if err != nil {
+			return "", err
+		}
+		if targetSHA != r.HeadSHA {
+			return "", fmt.Errorf("merge commit SHA unavailable for MR #%d", r.Number)
+		}
+		mergeSHA = r.HeadSHA
+	}
+	contained, err := m.git.IsAncestor(ctx, svc.RepoPath, mergeSHA, "origin/"+target)
+	if err != nil {
+		return "", err
+	}
+	if !contained {
+		return "", fmt.Errorf("merged commit not contained in origin/%s", target)
+	}
+	return mergeSHA, nil
 }
 
 func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]ServiceMergeInspection, error) {
@@ -270,12 +355,17 @@ func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]S
 			if err != nil {
 				return nil, err
 			}
-			if item.MR.SourceBranch != svc.Branch || item.MR.TargetBranch != target || item.MR.HeadSHA != sha || item.MR.Number != matches[0].Number {
-				return nil, errors.New("hotfix MR identity/source SHA changed")
+			if err := m.validateHotfixMRIdentity(ctx, svc, sha, matches[0], item.MR); err != nil {
+				return nil, err
 			}
 			item.Blockers = append([]string(nil), item.MR.Blockers...)
 			switch {
 			case item.MR.State == "merged":
+				mergeSHA, err := m.verifyHotfixMergeSHA(ctx, svc, target, item.MR)
+				if err != nil {
+					return nil, err
+				}
+				item.MR.MergedSHA = mergeSHA
 				item.Status = "merged"
 			case item.MR.Ready && (item.MR.State == "open" || item.MR.State == "opened"):
 				item.Status = "ready"
