@@ -5,12 +5,17 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/D1ssolve/wtui/internal/domain"
 )
 
 type HelpOverlay struct {
 	lazygitAvailable        bool
 	releaseCleanupAvailable bool
+	workflowTitle           string
+	workflow                *domain.WorkflowSummary
 	scrollOffset            int
+	terminalWidth           int
 	terminalHeight          int
 }
 
@@ -25,7 +30,7 @@ func NewHelpOverlayWithOptions(lazygitAvailable bool) *HelpOverlay {
 func (h *HelpOverlay) Title() string { return "Keyboard Shortcuts" }
 
 func (h *HelpOverlay) SetTerminalSize(width, height int) {
-	_ = width
+	h.terminalWidth = width
 	h.terminalHeight = height
 	h.clampScroll()
 }
@@ -35,6 +40,8 @@ func (h *HelpOverlay) Update(msg tea.Msg) (Modal, tea.Cmd) {
 		switch msg.String() {
 		case "esc", "?":
 			return h, func() tea.Msg { return CloseModalMsg{} }
+		case "q", "ctrl+c":
+			return h, tea.Quit
 		case "up", "k":
 			h.scrollOffset--
 			h.clampScroll()
@@ -44,11 +51,11 @@ func (h *HelpOverlay) Update(msg tea.Msg) (Modal, tea.Cmd) {
 			h.clampScroll()
 			return h, nil
 		case "pgup":
-			h.scrollOffset -= h.visibleLines()
+			h.scrollOffset -= h.contentVisible()
 			h.clampScroll()
 			return h, nil
 		case "pgdown":
-			h.scrollOffset += h.visibleLines()
+			h.scrollOffset += h.contentVisible()
 			h.clampScroll()
 			return h, nil
 		case "home", "g":
@@ -71,148 +78,144 @@ func (h *HelpOverlay) contentLines() []string {
 		Bold(true).
 		Foreground(modalColorNormal)
 
-	keyStyle := lipgloss.NewStyle().
-		Foreground(modalColorInfo).
-		Width(16)
-
-	descStyle := lipgloss.NewStyle().
-		Foreground(modalColorNormal)
-
 	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 
-	row := func(key, desc string) string {
-		return "  " + keyStyle.Render(key) + descStyle.Render(desc)
-	}
-
 	var sb strings.Builder
+
+	if workflowLines := h.renderWorkflow(); len(workflowLines) > 0 {
+		sb.WriteString(strings.Join(workflowLines, "\n"))
+		sb.WriteString("\n\n")
+	}
 
 	sb.WriteString(titleStyle.Render("Keyboard Shortcuts"))
 	sb.WriteString("\n\n")
 	sb.WriteString(sectionStyle.Render("Global:"))
 	sb.WriteString("\n")
-	sb.WriteString(row("Tab / 1 / 2 / 3 / 0", "Move focus: next / Tasks / Services / Releases / Output"))
+	sb.WriteString(h.shortcutRow("Tab / 1 / 2 / 3 / 0", "Move focus: next / Tasks / Services / Releases / Output"))
 	sb.WriteString("\n")
-	sb.WriteString(row("r", "Refresh tasks, releases, and repository cache"))
+	sb.WriteString(h.shortcutRow("r", "Refresh tasks, releases, and repository cache"))
 	sb.WriteString("\n")
-	sb.WriteString(row("L", "Toggle logs (commands / application)"))
+	sb.WriteString(h.shortcutRow("L", "Toggle logs (commands / application)"))
 	sb.WriteString("\n")
-	sb.WriteString(row("?", "Toggle this help"))
+	sb.WriteString(h.shortcutRow("?", "Toggle this help"))
 	sb.WriteString("\n")
-	sb.WriteString(row(".", "System status (tools / forge)"))
+	sb.WriteString(h.shortcutRow(".", "System status (tools / forge)"))
 	sb.WriteString("\n")
-	sb.WriteString(row("q / Ctrl+C", "Quit"))
+	sb.WriteString(h.shortcutRow("q / Ctrl+C", "Quit"))
 	sb.WriteString("\n\n")
 	sb.WriteString(sectionStyle.Render("Log Overlay:"))
 	sb.WriteString("\n")
-	sb.WriteString(row("Tab", "Switch Commands / Application"))
+	sb.WriteString(h.shortcutRow("Tab", "Switch Commands / Application"))
 	sb.WriteString("\n")
-	sb.WriteString(row("d", "Enable session DEBUG / restore configured level"))
+	sb.WriteString(h.shortcutRow("d", "Enable session DEBUG / restore configured level"))
 	sb.WriteString("\n")
-	sb.WriteString(row("f", "Selected task / all events"))
+	sb.WriteString(h.shortcutRow("f", "Selected task / all events"))
 	sb.WriteString("\n")
-	sb.WriteString(row("j/k, g/G", "Scroll, top / bottom (follow new events)"))
+	sb.WriteString(h.shortcutRow("j/k, g/G", "Scroll, top / bottom (follow new events)"))
 	sb.WriteString("\n")
-	sb.WriteString(row("L / Esc", "Close logs; recording level stays active"))
+	sb.WriteString(h.shortcutRow("L / Esc", "Close logs; recording level stays active"))
 	sb.WriteString("\n\n")
 
 	sb.WriteString(sectionStyle.Render("Tasks Panel:"))
 	sb.WriteString("\n")
-	sb.WriteString(row("j/k, arrows", "Move selection"))
+	sb.WriteString(h.shortcutRow("j/k, arrows", "Move selection"))
 	sb.WriteString("\n")
-	sb.WriteString(row("g/G, h/l", "First/last task, previous/next page"))
+	sb.WriteString(h.shortcutRow("g/G, h/l", "First/last task, previous/next page"))
 	sb.WriteString("\n")
-	sb.WriteString(row("i", "Init new task group"))
+	sb.WriteString(h.shortcutRow("i", "Init new task group"))
 	sb.WriteString("\n")
-	sb.WriteString(row("c", "Clone selected task group"))
+	sb.WriteString(h.shortcutRow("c", "Clone selected task group"))
 	sb.WriteString("\n")
-	sb.WriteString(row("F", "Convert hotfix to feature"))
+	sb.WriteString(h.shortcutRow("F", "Convert hotfix to feature"))
 	sb.WriteString("\n")
-	sb.WriteString(row("d/Del", "Remove task group"))
+	sb.WriteString(h.shortcutRow("d/Del", "Remove task group"))
 	sb.WriteString("\n")
-	sb.WriteString(row("S", "Open sync strategy selection"))
+	sb.WriteString(h.shortcutRow("S", "Open sync strategy selection"))
 	sb.WriteString("\n")
-	sb.WriteString(row("C", "Plan close selected task"))
+	sb.WriteString(h.shortcutRow("C", "Plan close selected task"))
 	sb.WriteString("\n")
-	sb.WriteString(row("P", "Scan prunable tasks"))
+	sb.WriteString(h.shortcutRow("P", "Scan prunable tasks"))
 	sb.WriteString("\n")
-	sb.WriteString(row("V", "Validate selected task"))
+	sb.WriteString(h.shortcutRow("V", "Validate selected task"))
 	sb.WriteString("\n")
-	sb.WriteString(row("T", "Browse task tags"))
+	sb.WriteString(h.shortcutRow("M", "Inspect and merge ready task MRs"))
 	sb.WriteString("\n")
-	sb.WriteString(row("R", "Open <taskID>.sln in Rider"))
+	sb.WriteString(h.shortcutRow("T", "Browse task tags"))
 	sb.WriteString("\n")
-	sb.WriteString(row("O", "Open <taskID>.code-workspace in VS Code"))
+	sb.WriteString(h.shortcutRow("R", "Open <taskID>.sln in Rider"))
 	sb.WriteString("\n")
-	sb.WriteString(row(";", "Run shell command in selected task directory"))
+	sb.WriteString(h.shortcutRow("O", "Open <taskID>.code-workspace in VS Code"))
 	sb.WriteString("\n")
-	sb.WriteString(row(",", "Show effective config"))
+	sb.WriteString(h.shortcutRow(";", "Run shell command in selected task directory"))
 	sb.WriteString("\n")
-	sb.WriteString(row("/", "Filter tasks"))
+	sb.WriteString(h.shortcutRow(",", "Show effective config"))
 	sb.WriteString("\n")
-	sb.WriteString(row("Enter", "View services (opens Services panel)"))
+	sb.WriteString(h.shortcutRow("/", "Filter tasks"))
 	sb.WriteString("\n")
-	sb.WriteString(row("r", "Refresh tasks and repository cache"))
+	sb.WriteString(h.shortcutRow("Enter", "View services (opens Services panel)"))
+	sb.WriteString("\n")
+	sb.WriteString(h.shortcutRow("r", "Refresh tasks and repository cache"))
 	sb.WriteString("\n\n")
 
 	sb.WriteString(sectionStyle.Render("Services Panel:"))
 	sb.WriteString("\n")
-	sb.WriteString(row("j/k, arrows", "Move selection"))
+	sb.WriteString(h.shortcutRow("j/k, arrows", "Move selection"))
 	sb.WriteString("\n")
-	sb.WriteString(row("h/l", "Previous/next page"))
+	sb.WriteString(h.shortcutRow("h/l", "Previous/next page"))
 	sb.WriteString("\n")
-	sb.WriteString(row("a", "Add service to task"))
+	sb.WriteString(h.shortcutRow("a", "Add service to task"))
 	sb.WriteString("\n")
-	sb.WriteString(row("d/Del", "Remove service from task"))
+	sb.WriteString(h.shortcutRow("d/Del", "Remove service from task"))
 	sb.WriteString("\n")
 	if h.lazygitAvailable {
-		sb.WriteString(row("g", "Open lazygit for selected service"))
+		sb.WriteString(h.shortcutRow("g", "Open lazygit for selected service"))
 		sb.WriteString("\n")
 	}
-	sb.WriteString(row("m", "Open forge action menu"))
+	sb.WriteString(h.shortcutRow("m", "Open forge action menu"))
 	sb.WriteString("\n")
-	sb.WriteString(row("v", "Validate current task"))
+	sb.WriteString(h.shortcutRow("v", "Validate current task"))
 	sb.WriteString("\n")
-	sb.WriteString(row("Esc", "Back to tasks"))
+	sb.WriteString(h.shortcutRow("Esc", "Back to tasks"))
 	sb.WriteString("\n\n")
 
 	sb.WriteString(sectionStyle.Render("Releases Panel:"))
 	sb.WriteString("\n")
-	sb.WriteString(row("j/k, arrows", "Move selection"))
+	sb.WriteString(h.shortcutRow("j/k, arrows", "Move selection"))
 	sb.WriteString("\n")
-	sb.WriteString(row("N", "Create release"))
+	sb.WriteString(h.shortcutRow("N", "Create release"))
 	sb.WriteString("\n")
-	sb.WriteString(row("F", "Promote or finalize selected release when available"))
+	sb.WriteString(h.shortcutRow("F", "Promote or finalize selected release when available"))
 	sb.WriteString("\n")
-	sb.WriteString(row("R", "Retry failed recoverable release"))
+	sb.WriteString(h.shortcutRow("R", "Retry failed recoverable release"))
 	sb.WriteString("\n")
-	sb.WriteString(row("O", "Open selected release folder in configured editor"))
+	sb.WriteString(h.shortcutRow("O", "Open selected release folder in configured editor"))
 	sb.WriteString("\n")
-	sb.WriteString(row("I", "Open selected release folder in Rider"))
+	sb.WriteString(h.shortcutRow("I", "Open selected release folder in Rider"))
 	sb.WriteString("\n")
-	sb.WriteString(row("M", "Merge selected release MRs when available"))
+	sb.WriteString(h.shortcutRow("M", "Merge selected release MRs when available"))
 	if h.releaseCleanupAvailable {
 		sb.WriteString("\n")
-		sb.WriteString(row("D", "Cleanup selected released release"))
+		sb.WriteString(h.shortcutRow("D", "Cleanup selected released release"))
 	}
 	sb.WriteString("\n\n")
 	sb.WriteString(sectionStyle.Render("Release Confirmation:"))
 	sb.WriteString("\n")
-	sb.WriteString(row("j/k, arrows, g/G", "Scroll preview; top/bottom"))
+	sb.WriteString(h.shortcutRow("j/k, arrows, g/G", "Scroll preview; top/bottom"))
 	sb.WriteString("\n")
-	sb.WriteString(row("Enter/y", "Execute release"))
+	sb.WriteString(h.shortcutRow("Enter/y", "Execute release"))
 	sb.WriteString("\n")
-	sb.WriteString(row("Esc/n", "Cancel"))
+	sb.WriteString(h.shortcutRow("Esc/n", "Cancel"))
 	sb.WriteString("\n\n")
 
 	sb.WriteString(sectionStyle.Render("Output Panel:"))
 	sb.WriteString("\n")
-	sb.WriteString(row("j/k", "Scroll up/down"))
+	sb.WriteString(h.shortcutRow("j/k", "Scroll up/down"))
 	sb.WriteString("\n")
-	sb.WriteString(row("g/G", "Top/bottom"))
+	sb.WriteString(h.shortcutRow("g/G", "Top/bottom"))
 	sb.WriteString("\n")
-	sb.WriteString(row("mouse wheel", "Scroll (always active)"))
+	sb.WriteString(h.shortcutRow("mouse wheel", "Scroll (always active)"))
 	sb.WriteString("\n")
-	sb.WriteString(row("Esc", "Back to tasks"))
+	sb.WriteString(h.shortcutRow("Esc", "Back to tasks"))
 	sb.WriteString("\n\n")
 
 	sb.WriteString(dimStyle.Render("[Esc] or [?] to close"))
@@ -232,37 +235,4 @@ func (h *HelpOverlay) visibleLines() int {
 		return 3
 	}
 	return available
-}
-
-func (h *HelpOverlay) maxScrollOffset() int {
-	lines := len(h.contentLines())
-	visible := h.visibleLines()
-	if lines <= visible {
-		return 0
-	}
-	return lines - visible
-}
-
-func (h *HelpOverlay) clampScroll() {
-	if h.scrollOffset < 0 {
-		h.scrollOffset = 0
-	}
-	maxOffset := h.maxScrollOffset()
-	if h.scrollOffset > maxOffset {
-		h.scrollOffset = maxOffset
-	}
-}
-
-func (h *HelpOverlay) View() string {
-	lines := h.contentLines()
-	visible := h.visibleLines()
-	h.clampScroll()
-
-	end := min(len(lines), h.scrollOffset+visible)
-	viewLines := lines[h.scrollOffset:end]
-	if len(viewLines) == 0 {
-		return ""
-	}
-
-	return strings.Join(viewLines, "\n")
 }
