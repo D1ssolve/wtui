@@ -83,6 +83,10 @@ type PlanCloseTaskMsg struct{ TaskID string }
 
 type OpenCleanupDialogMsg struct{}
 
+type CleanupTaskMsg struct{ TaskID string }
+
+type CleanupReleaseMsg struct{ ReleaseID string }
+
 type ValidateTaskMsg struct{ TaskID string }
 
 type OpenTagBrowserMsg struct{ TaskID string }
