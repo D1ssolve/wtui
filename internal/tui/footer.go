@@ -22,10 +22,11 @@ func renderFooter(m Model) string {
 		parts := []string{
 			"[Enter] services",
 			"[i] init",
-			"[d] remove",
+			"[d] cleanup",
+			"[Del] remove",
 			"[S] sync",
 			"[C] close",
-			"[D] cleanup",
+			"[D] scan",
 			"[M] merge MRs",
 			"[O] VS Code",
 			"[;] shell",
@@ -57,9 +58,12 @@ func renderFooter(m Model) string {
 		parts := []string{
 			"[N] prepare release",
 			"[r] refresh",
-			"[D] cleanup",
+			"[D] scan",
 		}
 		if rel := m.releasesPanel.SelectedRelease(); rel != nil {
+			if rel.Status == domain.ReleaseStatusReleased {
+				parts = append(parts, "[d] cleanup")
+			}
 			parts = append(parts, "[O] editor folder", "[I] Rider folder")
 			switch rel.Status {
 			case domain.ReleaseStatusPrepared:

@@ -33,7 +33,8 @@ func TestRenderFooter_FocusTasks_IncludesCoreHints(t *testing.T) {
 	for _, want := range []string{
 		"[Enter] services",
 		"[i] init",
-		"[d] remove",
+		"[d] cleanup",
+		"[Del] remove",
 		"[S] sync",
 		"[C] close",
 		"[M] merge MRs",
@@ -231,17 +232,22 @@ func TestRenderFooter_FocusReleases_ShowsRetryOnlyForRecoverableFailure(t *testi
 
 func TestRenderFooter_FocusReleases_ShowsCleanupHint(t *testing.T) {
 	for _, tc := range []struct {
-		status domain.ReleaseStatus
+		status          domain.ReleaseStatus
+		wantSelectedKey bool
 	}{
-		{status: domain.ReleaseStatusReleased},
+		{status: domain.ReleaseStatusReleased, wantSelectedKey: true},
 		{status: domain.ReleaseStatusFailed},
 		{status: domain.ReleaseStatusDraft},
 	} {
 		m := newTestModel(t, &mockManager{})
 		m.focus = FocusReleases
 		m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: tc.status}})
-		if !strings.Contains(renderFooter(m), "[D] cleanup") {
-			t.Fatalf("status %s missing cleanup hint", tc.status)
+		footer := renderFooter(m)
+		if !strings.Contains(footer, "[D] scan") {
+			t.Fatalf("status %s missing cleanup scan hint", tc.status)
+		}
+		if got := strings.Contains(footer, "[d] cleanup"); got != tc.wantSelectedKey {
+			t.Fatalf("status %s selected cleanup hint = %v, want %v", tc.status, got, tc.wantSelectedKey)
 		}
 	}
 }
