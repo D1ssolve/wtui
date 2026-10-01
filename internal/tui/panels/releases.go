@@ -118,6 +118,11 @@ func (p ReleasesPanel) Update(msg tea.Msg) (ReleasesPanel, tea.Cmd) {
 				}
 				return p, func() tea.Msg { return OpenReleaseEditorMsg{ReleaseID: id, ReleaseDir: dir} }
 			}
+		case "d":
+			if selected := p.SelectedRelease(); selected != nil {
+				id := selected.ID
+				return p, func() tea.Msg { return CleanupReleaseMsg{ReleaseID: id} }
+			}
 		case "D", "P":
 			return p, func() tea.Msg { return OpenCleanupDialogMsg{} }
 		}

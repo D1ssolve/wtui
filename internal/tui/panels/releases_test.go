@@ -207,6 +207,39 @@ func TestReleasesPanel_KeyP_EmitsOpenCleanupDialogMsg(t *testing.T) {
 	}
 }
 
+func TestReleasesPanel_Keyd_EmitsCleanupReleaseMsg(t *testing.T) {
+	p := NewReleasesPanel(60, 20)
+	p.SetFocused(true)
+	p.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
+
+	_, cmd := p.Update(sendKey("d"))
+	if cmd == nil {
+		t.Fatal("d key should return a cmd")
+	}
+	msg, ok := cmd().(CleanupReleaseMsg)
+	if !ok {
+		t.Fatalf("expected CleanupReleaseMsg, got %T", cmd())
+	}
+	if msg.ReleaseID != "rel-1" {
+		t.Fatalf("ReleaseID = %q, want rel-1", msg.ReleaseID)
+	}
+}
+
+func TestReleasesPanel_Keyd_NoSelection_Noop(t *testing.T) {
+	p := NewReleasesPanel(60, 20)
+	p.SetFocused(true)
+
+	if _, cmd := p.Update(sendKey("d")); cmd != nil {
+		t.Fatal("d with no releases should be a no-op")
+	}
+
+	p.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
+	p.SetFocused(false)
+	if _, cmd := p.Update(sendKey("d")); cmd != nil {
+		t.Fatal("d when unfocused should be a no-op")
+	}
+}
+
 func TestReleasesPanel_KeyD_Unfocused_Noop(t *testing.T) {
 	p := NewReleasesPanel(60, 20)
 	p.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
