@@ -456,6 +456,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panels.OpenCleanupDialogMsg:
 		return m.startCleanupScan()
 
+	case panels.CleanupTaskMsg:
+		if m.focus != FocusTasks {
+			return m, nil
+		}
+		if selected := m.tasksPanel.SelectedTask(); selected == nil || selected.ID != msg.TaskID {
+			return m, nil
+		}
+		return m.startSelectedCleanup(cleanupQueueItem{kind: modal.CleanupKindTask, id: msg.TaskID})
+
+	case panels.CleanupReleaseMsg:
+		if m.focus != FocusReleases {
+			return m, nil
+		}
+		selected := m.releasesPanel.SelectedRelease()
+		if selected == nil || selected.ID != msg.ReleaseID {
+			return m, nil
+		}
+		if selected.Status != domain.ReleaseStatusReleased {
+			m.outputPanel.AppendLine("Cleanup requires a released release: " + msg.ReleaseID)
+			return m, nil
+		}
+		return m.startSelectedCleanup(cleanupQueueItem{kind: modal.CleanupKindRelease, id: msg.ReleaseID})
+
 	case panels.OpenInitDialogMsg:
 		flow := m.flow
 		if len(m.repos) > 0 {
@@ -2406,6 +2429,8 @@ func releaseCleanupMutatingMessage(msg tea.Msg) bool {
 		panels.OpenLazygitServiceMsg,
 		panels.PlanCloseTaskMsg,
 		panels.OpenCleanupDialogMsg,
+		panels.CleanupTaskMsg,
+		panels.CleanupReleaseMsg,
 		panels.ValidateTaskMsg,
 		panels.OpenTagBrowserMsg,
 		panels.PushTaskMsg,

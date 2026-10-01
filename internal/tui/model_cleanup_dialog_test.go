@@ -927,3 +927,165 @@ func TestCleanupDialog_QueuedReleasePlanErrorStopsQueue(t *testing.T) {
 		t.Fatal("plan error did not refresh lists")
 	}
 }
+
+func TestUpdate_KeydStartsSelectedTaskCleanupWithoutScan(t *testing.T) {
+	mgr := &mockManager{listTasksResult: []domain.Task{{ID: "T-1"}}}
+	m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+	m.tasksPanel.SetTasks(mgr.listTasksResult)
+
+	updated, keyCmd := m.Update(sendKey("d"))
+	m = updated.(Model)
+	if keyCmd == nil {
+		t.Fatal("expected key d to emit CleanupTaskMsg command")
+	}
+	msg, ok := keyCmd().(panels.CleanupTaskMsg)
+	if !ok {
+		t.Fatalf("expected CleanupTaskMsg, got %T", keyCmd())
+	}
+	if msg.TaskID != "T-1" {
+		t.Fatalf("TaskID = %q, want T-1", msg.TaskID)
+	}
+
+	updated, cmd := m.Update(msg)
+	m = updated.(Model)
+	if cmd == nil || m.taskCleanupRequest == nil {
+		t.Fatal("selected task cleanup inspection did not start")
+	}
+	if m.cleanupQueueCurrent == nil || m.cleanupQueueCurrent.kind != modal.CleanupKindTask || m.cleanupQueueCurrent.id != "T-1" {
+		t.Fatalf("queue current = %+v, want task T-1", m.cleanupQueueCurrent)
+	}
+	if m.cleanupScanning || m.cleanupScanGeneration != 0 {
+		t.Fatal("selected cleanup must not run the candidate scan")
+	}
+	runBatchCommands(cmd())
+	if mgr.taskCleanupPlanCalls != 1 {
+		t.Fatalf("task cleanup plan calls = %d, want 1", mgr.taskCleanupPlanCalls)
+	}
+}
+
+func TestUpdate_CleanupTaskMsgRejectsBusyAndWrongContext(t *testing.T) {
+	t.Run("cleanup already in flight", func(t *testing.T) {
+		mgr := &mockManager{listTasksResult: []domain.Task{{ID: "T-1"}}}
+		m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+		m.tasksPanel.SetTasks(mgr.listTasksResult)
+		m.cleanupQueueCurrent = &cleanupQueueItem{kind: modal.CleanupKindTask, id: "T-1"}
+
+		updated, cmd := m.Update(panels.CleanupTaskMsg{TaskID: "T-1"})
+		m = updated.(Model)
+		if cmd != nil || mgr.taskCleanupPlanCalls != 0 {
+			t.Fatal("busy cleanup accepted a duplicate start")
+		}
+	})
+
+	t.Run("wrong focus", func(t *testing.T) {
+		mgr := &mockManager{listTasksResult: []domain.Task{{ID: "T-1"}}}
+		m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+		m.tasksPanel.SetTasks(mgr.listTasksResult)
+		m.setFocus(FocusServices)
+
+		updated, cmd := m.Update(panels.CleanupTaskMsg{TaskID: "T-1"})
+		m = updated.(Model)
+		if cmd != nil || mgr.taskCleanupPlanCalls != 0 || m.cleanupQueueCurrent != nil {
+			t.Fatal("cleanup task message outside tasks focus must be ignored")
+		}
+	})
+
+	t.Run("stale selection identity", func(t *testing.T) {
+		mgr := &mockManager{listTasksResult: []domain.Task{{ID: "T-1"}}}
+		m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+		m.tasksPanel.SetTasks(mgr.listTasksResult)
+
+		updated, cmd := m.Update(panels.CleanupTaskMsg{TaskID: "T-2"})
+		m = updated.(Model)
+		if cmd != nil || mgr.taskCleanupPlanCalls != 0 || m.cleanupQueueCurrent != nil {
+			t.Fatal("cleanup task message for a non-selected task must be ignored")
+		}
+	})
+}
+
+func TestUpdate_KeydStartsSelectedReleaseCleanupWithoutScan(t *testing.T) {
+	mgr := &mockManager{}
+	m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+	m.setFocus(FocusReleases)
+	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
+
+	updated, keyCmd := m.Update(sendKey("d"))
+	m = updated.(Model)
+	if keyCmd == nil {
+		t.Fatal("expected key d to emit CleanupReleaseMsg command")
+	}
+	msg, ok := keyCmd().(panels.CleanupReleaseMsg)
+	if !ok {
+		t.Fatalf("expected CleanupReleaseMsg, got %T", keyCmd())
+	}
+	if msg.ReleaseID != "rel-1" {
+		t.Fatalf("ReleaseID = %q, want rel-1", msg.ReleaseID)
+	}
+
+	updated, cmd := m.Update(msg)
+	m = updated.(Model)
+	if cmd == nil || m.releaseCleanupRequest == nil {
+		t.Fatal("selected release cleanup planning did not start")
+	}
+	if m.cleanupQueueCurrent == nil || m.cleanupQueueCurrent.kind != modal.CleanupKindRelease || m.cleanupQueueCurrent.id != "rel-1" {
+		t.Fatalf("queue current = %+v, want release rel-1", m.cleanupQueueCurrent)
+	}
+	if m.cleanupScanning || m.cleanupScanGeneration != 0 {
+		t.Fatal("selected cleanup must not run the candidate scan")
+	}
+	runBatchCommands(cmd())
+	if mgr.cleanupPlanCalls != 1 {
+		t.Fatalf("release cleanup plan calls = %d, want 1", mgr.cleanupPlanCalls)
+	}
+	if mgr.cleanupPlanSelection != (task.ReleaseCleanupSelection{RemoveRelease: true}) {
+		t.Fatalf("release selection = %+v, want release-only", mgr.cleanupPlanSelection)
+	}
+}
+
+func TestUpdate_CleanupReleaseMsgRejectsUnreleasedAndWrongContext(t *testing.T) {
+	t.Run("unreleased release", func(t *testing.T) {
+		mgr := &mockManager{}
+		m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+		m.setFocus(FocusReleases)
+		m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusDraft}})
+
+		updated, cmd := m.Update(panels.CleanupReleaseMsg{ReleaseID: "rel-1"})
+		m = updated.(Model)
+		if cmd != nil || mgr.cleanupPlanCalls != 0 || m.cleanupQueueCurrent != nil {
+			t.Fatal("cleanup of an unreleased release must not start")
+		}
+	})
+
+	t.Run("wrong focus", func(t *testing.T) {
+		mgr := &mockManager{}
+		m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+		m.setFocus(FocusTasks)
+		m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
+
+		updated, cmd := m.Update(panels.CleanupReleaseMsg{ReleaseID: "rel-1"})
+		m = updated.(Model)
+		if cmd != nil || mgr.cleanupPlanCalls != 0 || m.cleanupQueueCurrent != nil {
+			t.Fatal("cleanup release message outside releases focus must be ignored")
+		}
+	})
+}
+
+func TestUpdate_KeyDeleteStillOpensRemoveTaskDialog(t *testing.T) {
+	mgr := &mockManager{listTasksResult: []domain.Task{{ID: "T-1"}}}
+	m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+	m.tasksPanel.SetTasks(mgr.listTasksResult)
+
+	updated, keyCmd := m.Update(tea.KeyMsg{Type: tea.KeyDelete})
+	m = updated.(Model)
+	if keyCmd == nil {
+		t.Fatal("expected delete key to emit OpenRemoveDialogMsg command")
+	}
+	if _, ok := keyCmd().(panels.OpenRemoveDialogMsg); !ok {
+		t.Fatalf("expected OpenRemoveDialogMsg, got %T", keyCmd())
+	}
+	updated, _ = m.Update(keyCmd())
+	m = updated.(Model)
+	if _, ok := m.modal.(*modal.RemoveTaskDialog); !ok {
+		t.Fatalf("delete key modal = %T, want RemoveTaskDialog", m.modal)
+	}
+}

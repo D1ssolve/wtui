@@ -38,6 +38,16 @@ func (m Model) startCleanupScan() (Model, tea.Cmd) {
 	return m, tea.Batch(scanCleanupCandidatesCmd(m.mgr, m.cleanupScanGeneration), m.spinner.Tick)
 }
 
+// startSelectedCleanup seeds a one-item queue for the current selection and
+// reuses the shared queue/confirmation flow, skipping the candidate scan.
+func (m Model) startSelectedCleanup(item cleanupQueueItem) (Model, tea.Cmd) {
+	if m.cleanupBusy() {
+		return m, nil
+	}
+	m.cleanupQueue = []cleanupQueueItem{item}
+	return m.advanceCleanupQueue()
+}
+
 // verifyCleanupSelection returns the submitted IDs in submission order only
 // when every one names a ready scanned candidate of the requested kind;
 // anything else is a forged or stale submit and yields nil.
