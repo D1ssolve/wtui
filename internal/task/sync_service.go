@@ -12,7 +12,8 @@ import (
 )
 
 func (m *manager) SyncService(ctx context.Context, taskID, serviceName string, strategy SyncStrategy, lineCh chan<- string) error {
-	defer close(lineCh)
+	lineCh, closeLineCh := nilSafeLineCh(lineCh)
+	defer closeLineCh()
 
 	if err := validateTaskID(taskID); err != nil {
 		return err

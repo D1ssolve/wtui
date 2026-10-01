@@ -50,7 +50,7 @@ func TestE2E_Init_RemoteConflict_FetchAndSwitch(t *testing.T) {
 		BranchName:  "feature/TASK-123",
 		RepoPath:    "/tmp/repos/service-a",
 	}
-	doneMsg := CommandDoneMsg{Err: conflictErr}
+	doneMsg := CommandDoneMsg{Generation: m.operationGeneration, Err: conflictErr}
 
 	updated, conflictCmd := m.Update(doneMsg)
 	m = updated.(Model)
@@ -167,7 +167,7 @@ func TestE2E_Init_RemoteConflict_NewBranchWithSuffix(t *testing.T) {
 		BranchName:  "feature/TASK-456",
 		RepoPath:    "/tmp/repos/service-a",
 	}
-	doneMsg := CommandDoneMsg{Err: conflictErr}
+	doneMsg := CommandDoneMsg{Generation: m.operationGeneration, Err: conflictErr}
 
 	updated, conflictCmd := m.Update(doneMsg)
 	m = updated.(Model)
@@ -288,7 +288,7 @@ func TestE2E_Init_RemoteConflict_Cancel(t *testing.T) {
 		BranchName:  "feature/TASK-789",
 		RepoPath:    "/tmp/repos/service-a",
 	}
-	doneMsg := CommandDoneMsg{Err: conflictErr}
+	doneMsg := CommandDoneMsg{Generation: m.operationGeneration, Err: conflictErr}
 
 	updated, conflictCmd := m.Update(doneMsg)
 	m = updated.(Model)
@@ -368,7 +368,7 @@ func TestE2E_Init_NoRemoteConflict_NormalFlow(t *testing.T) {
 	}
 
 	t.Log("Step 2: Simulate CommandDoneMsg with no error")
-	doneMsg := CommandDoneMsg{Err: nil}
+	doneMsg := CommandDoneMsg{Generation: m.operationGeneration, Err: nil}
 
 	updated, _ = m.Update(doneMsg)
 	m = updated.(Model)
@@ -414,7 +414,7 @@ func TestE2E_Init_RemoteConflict_EscCancels(t *testing.T) {
 		BranchName:  "feature/TASK-ESC",
 		RepoPath:    "/tmp/repos/service-a",
 	}
-	doneMsg := CommandDoneMsg{Err: conflictErr}
+	doneMsg := CommandDoneMsg{Generation: m.operationGeneration, Err: conflictErr}
 
 	updated, conflictCmd := m.Update(doneMsg)
 	m = updated.(Model)
@@ -496,7 +496,7 @@ func TestE2E_Init_RemoteConflict_MultipleServices(t *testing.T) {
 		BranchName:  "feature/TASK-MULTI",
 		RepoPath:    "/tmp/repos/service-a",
 	}
-	doneMsg := CommandDoneMsg{Err: conflictErr}
+	doneMsg := CommandDoneMsg{Generation: m.operationGeneration, Err: conflictErr}
 
 	updated, conflictCmd := m.Update(doneMsg)
 	m = updated.(Model)
@@ -562,7 +562,7 @@ func TestE2E_Init_OtherError_ClearsPendingParams(t *testing.T) {
 	m = updated.(Model)
 
 	t.Log("Step 2: Simulate CommandDoneMsg with a regular error")
-	doneMsg := CommandDoneMsg{Err: errors.New("some other error")}
+	doneMsg := CommandDoneMsg{Generation: m.operationGeneration, Err: errors.New("some other error")}
 
 	updated, _ = m.Update(doneMsg)
 	m = updated.(Model)
@@ -600,7 +600,7 @@ func TestE2E_Init_RemoteConflict_SuffixInputValidation(t *testing.T) {
 		BranchName:  "feature/TASK-SUFFIX",
 		RepoPath:    "/tmp/repos/service-a",
 	}
-	updated, conflictCmd := m.Update(CommandDoneMsg{Err: conflictErr})
+	updated, conflictCmd := m.Update(CommandDoneMsg{Generation: m.operationGeneration, Err: conflictErr})
 	m = updated.(Model)
 	conflictMsg := conflictCmd().(modal.RemoteBranchConflictMsg)
 	updated, _ = m.Update(conflictMsg)

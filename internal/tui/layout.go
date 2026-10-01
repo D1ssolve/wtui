@@ -12,6 +12,7 @@ type appLayout struct {
 	tier            layoutTier
 	gutter          int
 	headerHeight    int
+	workflowHeight  int
 	mainHeight      int
 	outputHeight    int
 	footerHeight    int
@@ -30,7 +31,7 @@ func layoutTierForWidth(width int) layoutTier {
 	return layoutNarrow
 }
 
-func calculateLayout(width, height, preferredOutput int) appLayout {
+func calculateLayout(width, height, preferredOutput, workflowHeight int) appLayout {
 	l := appLayout{tier: layoutTierForWidth(width)}
 	if width <= 0 || height <= 0 {
 		return l
@@ -41,6 +42,8 @@ func calculateLayout(width, height, preferredOutput int) appLayout {
 		l.headerHeight = 1
 	}
 	remaining := max(0, height-l.headerHeight)
+	l.workflowHeight = min(max(0, workflowHeight), remaining)
+	remaining -= l.workflowHeight
 	l.footerHeight = min(1, remaining)
 	remaining -= l.footerHeight
 	wantedGutters := 3

@@ -41,20 +41,24 @@ type MRInfo struct {
 }
 
 type MRReadiness struct {
-	Number               int
-	State                string
-	URL                  string
-	SourceBranch         string
-	TargetBranch         string
-	HeadSHA              string
-	MergedSHA            string
-	Approved             bool
-	CIState              string
-	Mergeable            bool
-	Ready                bool
-	Blockers             []string
-	SupportsSHAPin       bool
-	StatusChecksBlocking bool
+	Number         int
+	State          string
+	URL            string
+	SourceBranch   string
+	TargetBranch   string
+	HeadSHA        string
+	MergedSHA      string
+	Approved       bool
+	CIState        string
+	Mergeable      bool
+	Ready          bool
+	Blockers       []string
+	SupportsSHAPin bool
+	// SupportsTargetBinding reports atomic target-branch/repo binding during
+	// merge. Zero value false: forges that pin only the source head (gh/glab)
+	// advertise unsupported so automatic merges fail closed.
+	SupportsTargetBinding bool
+	StatusChecksBlocking  bool
 }
 
 type MergeMRParams struct {
@@ -62,7 +66,13 @@ type MergeMRParams struct {
 	Repo            string
 	Number          int
 	ExpectedHeadSHA string
-	Method          string
+	// ExpectedTargetBranch binds the merge to the exact target branch; the
+	// adapter must refuse the merge if the MR no longer targets it.
+	ExpectedTargetBranch string
+	// ExpectedTargetSHA additionally binds the merge to an exact target tip;
+	// required at release frontiers where a moved target must abort the merge.
+	ExpectedTargetSHA string
+	Method            string
 }
 
 type MRMergeResult struct {

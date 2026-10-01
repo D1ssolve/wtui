@@ -75,7 +75,7 @@ func TestHelpModal_ReleasesFocus_ShowsSelectedReleaseWorkflow(t *testing.T) {
 
 	m = openHelp(t, m)
 	view := helpView(t, m)
-	if !strings.Contains(view, "Release REL-1") || !strings.Contains(view, "press M to merge ready MRs") {
+	if !strings.Contains(view, "Release REL-1") || !strings.Contains(view, "merge ready MRs in forge, then press M to reconcile") {
 		t.Fatalf("help must show selected release workflow, got %q", view)
 	}
 }
@@ -141,6 +141,9 @@ func TestHelpModal_TaskSelectionChange_ClearsWorkflowContext(t *testing.T) {
 		Steps:      []domain.WorkflowStep{{Label: "merge", State: "now"}},
 		NextAction: "merge now",
 	}})
+	m = updated.(Model)
+
+	updated, _ = m.Update(sendKey("j"))
 	m = updated.(Model)
 	m = openHelp(t, m)
 	if !strings.Contains(helpView(t, m), "merge now") {

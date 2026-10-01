@@ -118,22 +118,27 @@ func (p ReleasesPanel) Update(msg tea.Msg) (ReleasesPanel, tea.Cmd) {
 				}
 				return p, func() tea.Msg { return OpenReleaseEditorMsg{ReleaseID: id, ReleaseDir: dir} }
 			}
-		case "D":
-			selected := p.SelectedRelease()
-			if selected != nil && selected.Status == domain.ReleaseStatusReleased {
-				return p, func() tea.Msg { return PlanReleaseCleanupMsg{ReleaseID: selected.ID} }
-			}
+		case "D", "P":
+			return p, func() tea.Msg { return OpenCleanupDialogMsg{} }
 		}
 	}
 
 	return p, nil
 }
 
+// SelectRelease moves the cursor to the release with the given ID.
+func (p *ReleasesPanel) SelectRelease(id string) bool {
+	for i := range p.releases {
+		if p.releases[i].ID == id {
+			p.cursor = i
+			return true
+		}
+	}
+	return false
+}
+
 func (p ReleasesPanel) View() string {
 	inner := innerDimensions(p.width, p.height)
-	if inner.w <= 0 || inner.h <= 0 {
-		return ""
-	}
 
 	total := len(p.releases)
 	current := 0
@@ -146,11 +151,7 @@ func (p ReleasesPanel) View() string {
 	body := p.renderBody(inner.w, max(0, inner.h-1))
 	content := lipgloss.JoinVertical(lipgloss.Left, titleRendered, body)
 
-	borderStyle := panelBorderStyle(p.focused)
-	return borderStyle.
-		Width(inner.w).
-		Height(inner.h).
-		Render(content)
+	return renderPanelFrame(p.focused, p.width, p.height, titleRendered, content)
 }
 
 func (p ReleasesPanel) renderBody(width, height int) string {
@@ -237,9 +238,6 @@ func (p ReleasesPanel) renderDetail(width int) string {
 		lines = append(lines, lipgloss.NewStyle().Foreground(releasesColorDim).Render("ID: "+rel.ID))
 	}
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorBold).Render(versionLabel))
-	if workflow := renderWorkflow(p.workflow, width); workflow != "" {
-		lines = append(lines, workflow)
-	}
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorBold).Render("Services:"))
 	if len(rel.Services) == 0 {
 		lines = append(lines, lipgloss.NewStyle().Foreground(releasesColorDim).Render("No services."))

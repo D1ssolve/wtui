@@ -64,17 +64,16 @@ type TaskMergeConfig struct {
 }
 
 type BranchTypeRule struct {
-	Prefixes                     []string `yaml:"prefixes"`
-	BaseBranch                   string   `yaml:"base_branch"`
-	MergeTargets                 []string `yaml:"merge_targets"`
-	ReviewTargets                []string `yaml:"review_targets"`
-	CloseStrategy                string   `yaml:"close_strategy"`
-	MergeStrategy                string   `yaml:"merge_strategy"`
-	RequiresClean                bool     `yaml:"requires_clean"`
-	TagOnClose                   bool     `yaml:"tag_on_close"`
-	TagSource                    string   `yaml:"tag_source"`
-	DeleteSourceBranchAfterMerge bool     `yaml:"delete_source_branch_after_merge"`
-	TriggerPipelineOnClose       bool     `yaml:"trigger_pipeline_on_close"`
+	Prefixes               []string `yaml:"prefixes"`
+	BaseBranch             string   `yaml:"base_branch"`
+	MergeTargets           []string `yaml:"merge_targets"`
+	ReviewTargets          []string `yaml:"review_targets"`
+	CloseStrategy          string   `yaml:"close_strategy"`
+	MergeStrategy          string   `yaml:"merge_strategy"`
+	RequiresClean          bool     `yaml:"requires_clean"`
+	TagOnClose             bool     `yaml:"tag_on_close"`
+	TagSource              string   `yaml:"tag_source"`
+	TriggerPipelineOnClose bool     `yaml:"trigger_pipeline_on_close"`
 }
 
 type ForgeConfig struct {

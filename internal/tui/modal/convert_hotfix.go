@@ -61,7 +61,9 @@ func (d *ConvertHotfixDialog) View() string {
 
 	view := title.Render(fmt.Sprintf("Convert hotfix task %q", d.sourceTaskID)) + "\n\n" +
 		normal.Render("Target TASK ID") + "\n" + d.targetInput.View() + "\n\n" +
-		normal.Render("Feature task is staged and pushed before hotfix deletion.") + "\n" +
+		normal.Render("Local hotfix worktree/branch may be removed") + "\n" +
+		normal.Render("or converted. The remote source branch is") + "\n" +
+		normal.Render("kept; delete it on the forge after verifying.") + "\n" +
 		normal.Render("Source worktrees must be clean.")
 	if d.errorMsg != "" {
 		view += "\n\n" + danger.Render(d.errorMsg)

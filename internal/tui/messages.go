@@ -4,45 +4,49 @@ import (
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tui/modal"
 )
 
 type ValidationResultMsg struct {
+	Generation uint64
 	Validation domain.TaskValidation
 }
 
 type ClosePlanReadyMsg struct {
-	Plan task.ClosePlan
-	Err  error
+	Generation uint64
+	Plan       task.ClosePlan
+	Err        error
 }
 
 type CloseTaskFinishedMsg struct {
-	Result task.CloseTaskResult
-	Err    error
+	Generation uint64
+	Result     task.CloseTaskResult
+	DryRun     bool
+	Err        error
 }
 
 type ConvertHotfixDoneMsg struct {
+	Generation   uint64
 	SourceTaskID string
 	TargetTaskID string
 	Err          error
 }
 
-type PrunePlanReadyMsg struct {
-	Candidates []domain.PruneCandidate
+type CleanupScanReadyMsg struct {
+	Generation uint64
+	Candidates []modal.CleanupCandidate
 	Err        error
 }
 
-type PruneFinishedMsg struct {
-	Removed []string
-	Errors  []error
-}
-
 type TagListMsg struct {
-	TaskID string
-	Tags   []domain.TagInfo
-	Err    error
+	Generation uint64
+	TaskID     string
+	Tags       []domain.TagInfo
+	Err        error
 }
 
 type ForgeResultMsg struct {
+	Generation  uint64
 	TaskID      string
 	ServiceName string
 	Op          string
@@ -57,8 +61,9 @@ type ReleasesLoadedMsg struct {
 }
 
 type CreateReleaseDoneMsg struct {
-	Release domain.Release
-	Err     error
+	Generation uint64
+	Release    domain.Release
+	Err        error
 }
 
 type TaskMergeInspectionMsg struct {
@@ -76,20 +81,23 @@ type ReleaseMergeInspectionMsg struct {
 }
 
 type TaskMergeDoneMsg struct {
-	Result task.TaskMergeResult
-	Err    error
+	Generation uint64
+	Result     task.TaskMergeResult
+	Err        error
 }
 
 type ReleaseMergeDoneMsg struct {
-	Release domain.Release
-	Result  task.ReleaseMergeResult
-	Err     error
+	Generation uint64
+	Release    domain.Release
+	Result     task.ReleaseMergeResult
+	Err        error
 }
 
 type ReleaseActionDoneMsg struct {
-	Action  string
-	Release domain.Release
-	Err     error
+	Generation uint64
+	Action     string
+	Release    domain.Release
+	Err        error
 }
 
 type TaskWorkflowLoadedMsg struct {
@@ -102,7 +110,6 @@ type TaskWorkflowLoadedMsg struct {
 type ReleaseCleanupPlanReadyMsg struct {
 	Generation uint64
 	Plan       task.ReleaseCleanupPlan
-	Preview    task.ReleaseCleanupPreview
 	Err        error
 }
 
@@ -123,4 +130,20 @@ type ReleaseCleanupDoneMsg struct {
 	Generation uint64
 	Result     task.ReleaseCleanupResult
 	Err        error
+}
+
+type TaskCleanupPlanReadyMsg struct {
+	TaskID              string
+	Generation          uint64
+	OperationGeneration uint64
+	Plan                task.TaskCleanupPlan
+	Err                 error
+}
+
+type TaskCleanupDoneMsg struct {
+	TaskID              string
+	Generation          uint64
+	OperationGeneration uint64
+	Result              task.TaskCleanupResult
+	Err                 error
 }

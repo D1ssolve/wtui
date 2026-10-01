@@ -128,6 +128,46 @@ branch refs/heads/main`,
 	}
 }
 
+func TestPushURL_UsesPushGetURL(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf '%s\n' "$*" > "$GIT_ARGS_FILE"
+printf 'git@gitlab.com:group/svc.git\n'
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	got, err := NewCommandClient(slog.Default()).PushURL(t.Context(), "/repo", "origin")
+	if err != nil || got != "git@gitlab.com:group/svc.git" {
+		t.Fatalf("PushURL() = %q, %v", got, err)
+	}
+	args, _ := os.ReadFile(argsFile)
+	if want := "-C /repo remote get-url --push --all origin\n"; string(args) != want {
+		t.Fatalf("args = %q, want %q", args, want)
+	}
+}
+
+func TestPushURL_MultiplePushURLsFailClosed(t *testing.T) {
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf 'git@gitlab.com:group/a.git\ngit@gitlab.com:group/b.git\n'
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, err := NewCommandClient(slog.Default()).PushURL(t.Context(), "/repo", "origin"); err == nil {
+		t.Fatal("PushURL() error = nil, want fail-closed error for multiple push URLs")
+	}
+}
+
 func TestRemoteRefSHA_ParsesExactRef(t *testing.T) {
 	binDir := t.TempDir()
 	argsFile := filepath.Join(t.TempDir(), "git-args")
@@ -164,17 +204,49 @@ func TestDeleteRemoteBranchIfUnchanged_UsesExactLease(t *testing.T) {
 	}, "-C /repo push --force-with-lease=refs/heads/feature/ABC-1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa origin :refs/heads/feature/ABC-1\n")
 }
 
-func TestMoveRemoteBranchIfUnchanged_UsesAtomicLeases(t *testing.T) {
+func TestPushRefWithLease_AbsentTargetUsesEmptyExpectLease(t *testing.T) {
 	assertGitArgs(t, func(client *CommandClient) error {
-		return client.MoveRemoteBranchIfUnchanged(
+		return client.PushRefWithLease(
 			t.Context(),
 			"/repo",
-			"hotfix/ABC-1",
-			"feature/ABC-1",
-			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"git@gitlab.com:group/repo.git",
+			"refs/heads/feature/ABC-1",
 			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"refs/heads/feature/ABC-1",
+			"",
 		)
-	}, "-C /repo push --atomic --force-with-lease=refs/heads/hotfix/ABC-1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --force-with-lease=refs/heads/feature/ABC-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb origin bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/feature/ABC-1 :refs/heads/hotfix/ABC-1\n")
+	}, "-C /repo push --force-with-lease=refs/heads/feature/ABC-1: -- git@gitlab.com:group/repo.git bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/feature/ABC-1\n")
+}
+
+func TestPushRefWithLease_RejectsInvalidArguments(t *testing.T) {
+	client := NewCommandClient(slog.Default())
+	const oid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	cases := []struct {
+		name      string
+		remoteURL string
+		targetRef string
+		leaseRef  string
+		exactOID  string
+		leaseOID  string
+	}{
+		{name: "empty remote URL", remoteURL: "", targetRef: "refs/heads/feature/ABC-1", leaseRef: "refs/heads/feature/ABC-1", exactOID: oid},
+		{name: "blank remote URL", remoteURL: "   ", targetRef: "refs/heads/feature/ABC-1", leaseRef: "refs/heads/feature/ABC-1", exactOID: oid},
+		{name: "option-like remote URL", remoteURL: "--upload-pack=touch /tmp/pwned", targetRef: "refs/heads/feature/ABC-1", leaseRef: "refs/heads/feature/ABC-1", exactOID: oid},
+		{name: "target ref not full ref", remoteURL: "git@gitlab.com:group/repo.git", targetRef: "feature/ABC-1", leaseRef: "refs/heads/feature/ABC-1", exactOID: oid},
+		{name: "target ref traversal", remoteURL: "git@gitlab.com:group/repo.git", targetRef: "refs/heads/../evil", leaseRef: "refs/heads/feature/ABC-1", exactOID: oid},
+		{name: "lease ref not full ref", remoteURL: "git@gitlab.com:group/repo.git", targetRef: "refs/heads/feature/ABC-1", leaseRef: "feature/ABC-1", exactOID: oid},
+		{name: "lease ref symbolic", remoteURL: "git@gitlab.com:group/repo.git", targetRef: "refs/heads/feature/ABC-1", leaseRef: "refs/heads/HEAD", exactOID: oid},
+		{name: "invalid exact OID", remoteURL: "git@gitlab.com:group/repo.git", targetRef: "refs/heads/feature/ABC-1", leaseRef: "refs/heads/feature/ABC-1", exactOID: "not-a-sha"},
+		{name: "invalid lease OID", remoteURL: "git@gitlab.com:group/repo.git", targetRef: "refs/heads/feature/ABC-1", leaseRef: "refs/heads/feature/ABC-1", exactOID: oid, leaseOID: "zzz"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := client.PushRefWithLease(t.Context(), "/repo", tc.remoteURL, tc.targetRef, tc.exactOID, tc.leaseRef, tc.leaseOID); err == nil {
+				t.Fatal("PushRefWithLease() error = nil, want validation error")
+			}
+		})
+	}
 }
 
 func TestMoveWorktree_UsesExpectedArgv(t *testing.T) {
@@ -542,13 +614,13 @@ exit 0
 	if err != nil {
 		t.Fatalf("read args file: %v", err)
 	}
-	want := "-C /repo tag -a v1.2.0 main -m Release v1.2.0\n"
+	want := "-C /repo tag -a -m Release v1.2.0 -- v1.2.0 main\n"
 	if string(args) != want {
 		t.Fatalf("git args = %q, want %q", string(args), want)
 	}
 }
 
-func TestCommandClient_PushTagUsesOrigin(t *testing.T) {
+func TestCommandClient_CreateTagRejectsInvalidTagBeforeMutation(t *testing.T) {
 	binDir := t.TempDir()
 	argsFile := filepath.Join(t.TempDir(), "git-args")
 	fakeGit := filepath.Join(binDir, "git")
@@ -563,7 +635,35 @@ exit 0
 	t.Setenv("GIT_ARGS_FILE", argsFile)
 
 	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
-	if err := client.PushTag(t.Context(), "/repo", "v1.2.0"); err != nil {
+	for _, tag := range []string{"", "refs/heads/x", "bad tag", "v1..0", "x^{}"} {
+		if err := client.CreateTag(t.Context(), "/repo", tag, "main", "msg"); err == nil {
+			t.Fatalf("CreateTag(%q) error = nil, want rejection", tag)
+		}
+	}
+
+	if _, err := os.Stat(argsFile); !os.IsNotExist(err) {
+		t.Fatalf("git was invoked for invalid tags: %v", err)
+	}
+}
+
+func TestCommandClient_PushTagPushesCapturedOIDToTagRef(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	oid := strings.Repeat("a", 40)
+	const remoteURL = "git@gitlab.com:group/repo.git"
+	if err := client.PushTag(t.Context(), "/repo", remoteURL, "v1.2.0", oid); err != nil {
 		t.Fatalf("PushTag returned error: %v", err)
 	}
 
@@ -571,9 +671,51 @@ exit 0
 	if err != nil {
 		t.Fatalf("read args file: %v", err)
 	}
-	want := "-C /repo push origin v1.2.0\n"
+	want := "-C /repo push -- " + remoteURL + " " + oid + ":refs/tags/v1.2.0\n"
 	if string(args) != want {
 		t.Fatalf("git args = %q, want %q", string(args), want)
+	}
+}
+
+func TestCommandClient_PushTagRejectsInvalidInputBeforeMutation(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	oid := strings.Repeat("a", 40)
+	for _, tc := range []struct {
+		name      string
+		remoteURL string
+		tag       string
+		oid       string
+	}{
+		{name: "empty remote URL", remoteURL: "", tag: "v1.2.0", oid: oid},
+		{name: "blank remote URL", remoteURL: "  ", tag: "v1.2.0", oid: oid},
+		{name: "option-like remote URL", remoteURL: "--force", tag: "v1.2.0", oid: oid},
+		{name: "empty tag", remoteURL: "git@gitlab.com:group/repo.git", tag: "", oid: oid},
+		{name: "tag is full ref", remoteURL: "git@gitlab.com:group/repo.git", tag: "refs/heads/x", oid: oid},
+		{name: "bad tag", remoteURL: "git@gitlab.com:group/repo.git", tag: "bad tag", oid: oid},
+		{name: "empty OID", remoteURL: "git@gitlab.com:group/repo.git", tag: "v1.2.0", oid: ""},
+		{name: "short OID", remoteURL: "git@gitlab.com:group/repo.git", tag: "v1.2.0", oid: "short"},
+		{name: "non-hex OID", remoteURL: "git@gitlab.com:group/repo.git", tag: "v1.2.0", oid: "zzz" + strings.Repeat("a", 37)},
+	} {
+		if err := client.PushTag(t.Context(), "/repo", tc.remoteURL, tc.tag, tc.oid); err == nil {
+			t.Fatalf("PushTag(%s) error = nil, want rejection", tc.name)
+		}
+	}
+
+	if _, err := os.Stat(argsFile); !os.IsNotExist(err) {
+		t.Fatalf("git was invoked for invalid input: %v", err)
 	}
 }
 
@@ -600,9 +742,77 @@ exit 0
 	if err != nil {
 		t.Fatalf("read args file: %v", err)
 	}
-	want := "-C /repo tag -d v1.2.0\n"
+	want := "-C /repo tag -d -- v1.2.0\n"
 	if string(args) != want {
 		t.Fatalf("git args = %q, want %q", string(args), want)
+	}
+}
+
+func TestCommandClient_DeleteTagRejectsInvalidTagBeforeMutation(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	for _, tag := range []string{"", "refs/heads/x", "bad tag", "v1..0"} {
+		if err := client.DeleteTag(t.Context(), "/repo", tag); err == nil {
+			t.Fatalf("DeleteTag(%q) error = nil, want rejection", tag)
+		}
+	}
+
+	if _, err := os.Stat(argsFile); !os.IsNotExist(err) {
+		t.Fatalf("git was invoked for invalid tags: %v", err)
+	}
+}
+
+func TestCommandClient_DeleteTagIfUnchangedUsesUpdateRefLease(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "git-args")
+	fakeGit := filepath.Join(binDir, "git")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
+exit 0
+`
+	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_ARGS_FILE", argsFile)
+
+	client := NewCommandClient(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	oid := strings.Repeat("b", 40)
+	if err := client.DeleteTagIfUnchanged(t.Context(), "/repo", "v1.2.0", oid); err != nil {
+		t.Fatalf("DeleteTagIfUnchanged returned error: %v", err)
+	}
+
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read args file: %v", err)
+	}
+	want := "-C /repo update-ref -d refs/tags/v1.2.0 " + oid + "\n"
+	if string(args) != want {
+		t.Fatalf("git args = %q, want %q", string(args), want)
+	}
+
+	for _, tc := range []struct {
+		tag string
+		oid string
+	}{
+		{tag: "bad tag", oid: oid},
+		{tag: "v1.2.0", oid: "short"},
+	} {
+		if err := client.DeleteTagIfUnchanged(t.Context(), "/repo", tc.tag, tc.oid); err == nil {
+			t.Fatalf("DeleteTagIfUnchanged(%q, %q) error = nil, want rejection", tc.tag, tc.oid)
+		}
 	}
 }
 

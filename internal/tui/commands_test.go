@@ -18,12 +18,13 @@ import (
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
 )
 
 func TestExecTeaProcessReturnsOriginalErrorAndOp(t *testing.T) {
 	original := errors.New("rider failed")
-	msg := execProcessDoneMsg("Open Rider for IN-001", original)
+	msg := execProcessDoneMsg("Open Rider for IN-001", original, 7)
 	done, ok := msg.(CommandDoneMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want CommandDoneMsg", msg)
@@ -38,7 +39,7 @@ func TestExecTeaProcessReturnsOriginalErrorAndOp(t *testing.T) {
 		t.Fatalf("op = %q, want Open Rider for IN-001", done.Op)
 	}
 
-	msg = execProcessDoneMsg("Open Rider for IN-001", nil)
+	msg = execProcessDoneMsg("Open Rider for IN-001", nil, 7)
 	done, ok = msg.(CommandDoneMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want CommandDoneMsg", msg)
@@ -121,7 +122,7 @@ func TestOpenReleaseFolderCmd_LiteralDirectoryAndCompletion(t *testing.T) {
 	for _, exit := range []string{"0", "7"} {
 		t.Run("exit_"+exit, func(t *testing.T) {
 			t.Setenv("WTUI_TEST_IDE_EXIT", exit)
-			done := runProcessTestCmd(t, openReleaseFolderCmd(executable, "rel-123", "./"+dir+"/../"+dir+"/."))
+			done := runProcessTestCmd(t, openReleaseFolderCmd(executable, "rel-123", "./"+dir+"/../"+dir+"/.", 7))
 			for _, value := range []string{executable, "rel-123", wantDir} {
 				if !strings.Contains(done.Op, value) {
 					t.Fatalf("Op = %q, missing %q", done.Op, value)
@@ -155,7 +156,7 @@ func TestOpenReleaseFolderCmd_InvalidDirectoryDoesNotLaunch(t *testing.T) {
 	}
 	for _, dir := range []string{"", filepath.Join(t.TempDir(), "missing"), file, file + string(os.PathSeparator) + "child"} {
 		t.Run(dir, func(t *testing.T) {
-			msg := openReleaseFolderCmd(executable, "rel-invalid", dir)()
+			msg := openReleaseFolderCmd(executable, "rel-invalid", dir, 7)()
 			done, ok := msg.(CommandDoneMsg)
 			if !ok || done.Err == nil {
 				t.Fatalf("message = %#v, want completion error without process", msg)
@@ -175,7 +176,7 @@ func TestOpenReleaseFolderCmd_InvalidDirectoryDoesNotLaunch(t *testing.T) {
 func TestOpenReleaseFolderCmd_MissingExecutable(t *testing.T) {
 	dir := t.TempDir()
 	executable := filepath.Join(dir, "missing-editor")
-	done := runProcessTestCmd(t, openReleaseFolderCmd(executable, "rel-missing", dir))
+	done := runProcessTestCmd(t, openReleaseFolderCmd(executable, "rel-missing", dir, 7))
 	if !errors.Is(done.Err, os.ErrNotExist) {
 		t.Fatalf("error = %v, want missing executable", done.Err)
 	}
@@ -190,7 +191,7 @@ func TestTaskIDECommands_PreserveTargetsAndWorkingDirectory(t *testing.T) {
 	executable, record := fakeIDE(t, "rider")
 	t.Setenv("PATH", filepath.Dir(executable)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	dir := t.TempDir()
-	for _, cmd := range []tea.Cmd{riderTaskCmd("TASK-1", dir), codeWorkspaceTaskCmd(executable, "TASK-1", dir)} {
+	for _, cmd := range []tea.Cmd{riderTaskCmd("TASK-1", dir, 7), codeWorkspaceTaskCmd(executable, "TASK-1", dir, 7)} {
 		if done := runProcessTestCmd(t, cmd); done.Err != nil {
 			t.Fatal(done.Err)
 		}
@@ -320,7 +321,7 @@ type cmdManager struct {
 func TestConvertHotfixCmd_CallsManager(t *testing.T) {
 	mgr := &cmdManager{}
 	params := task.ConvertHotfixParams{SourceTaskID: "IN-1", TargetTaskID: "IN-2"}
-	msg := convertHotfixCmd(mgr, params)()
+	msg := convertHotfixCmd(mgr, params, 7)()
 	batch, ok := msg.(tea.BatchMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want tea.BatchMsg", msg)
@@ -503,7 +504,7 @@ func TestCmdManager_ImplementsTaskManager(t *testing.T) {
 func TestValidateTaskCmdReturnsValidationResult(t *testing.T) {
 	mgr := &cmdManager{validateResult: domain.TaskValidation{TaskID: "T14", Blocking: true}}
 
-	msg := validateTaskCmd(mgr, "T14")()
+	msg := validateTaskCmd(mgr, "T14", 7)()
 	got, ok := msg.(ValidationResultMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want ValidationResultMsg", msg)
@@ -519,7 +520,7 @@ func TestValidateTaskCmdReturnsValidationResult(t *testing.T) {
 func TestPlanCloseTaskCmdReturnsClosePlanReadyMsg(t *testing.T) {
 	mgr := &cmdManager{planResult: task.ClosePlan{TaskID: "T14"}}
 
-	msg := planCloseTaskCmd(mgr, "T14")()
+	msg := planCloseTaskCmd(mgr, "T14", 7)()
 	got, ok := msg.(ClosePlanReadyMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want ClosePlanReadyMsg", msg)
@@ -532,7 +533,7 @@ func TestPlanCloseTaskCmdReturnsClosePlanReadyMsg(t *testing.T) {
 func TestCloseTaskCmdStreamsOutputAndFinishes(t *testing.T) {
 	mgr := &cmdManager{closeResult: task.CloseTaskResult{TaskID: "T14", Success: true}}
 
-	cmd := closeTaskCmd(mgr, task.CloseTaskParams{TaskID: "T14"})
+	cmd := closeTaskCmd(mgr, task.CloseTaskParams{TaskID: "T14"}, 7)
 	msg1 := cmd()
 	line1, ok := msg1.(OutputLineMsg)
 	if !ok {
@@ -564,54 +565,88 @@ func TestCloseTaskCmdStreamsOutputAndFinishes(t *testing.T) {
 	}
 }
 
-func TestScanPrunableTasksCmdReturnsPlanReady(t *testing.T) {
-	mgr := &cmdManager{scanResult: []domain.PruneCandidate{{TaskID: "T1", Prunable: true}}}
-
-	msg := scanPrunableTasksCmd(mgr)()
-	got, ok := msg.(PrunePlanReadyMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want PrunePlanReadyMsg", msg)
+func TestScanCleanupCandidatesCmdReadOnlyAndPreservesIdentity(t *testing.T) {
+	mgr := &mockManager{
+		listTasksResult: []domain.Task{{ID: "T-1", Phase: "release"}, {ID: "T-2"}},
+		listReleasesResult: []domain.Release{
+			{ID: "rel-1", Status: domain.ReleaseStatusReleased},
+			{ID: "rel-2", Status: domain.ReleaseStatusDraft},
+		},
 	}
-	if len(got.Candidates) != 1 || got.Candidates[0].TaskID != "T1" {
-		t.Fatalf("candidates = %#v, want one T1", got.Candidates)
+
+	msg := scanCleanupCandidatesCmd(mgr, 7)()
+	got, ok := msg.(CleanupScanReadyMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want CleanupScanReadyMsg", msg)
+	}
+	if got.Err != nil {
+		t.Fatalf("scan err = %v", got.Err)
+	}
+	if got.Generation != 7 {
+		t.Fatalf("generation = %d, want 7", got.Generation)
+	}
+	if len(got.Candidates) != 3 {
+		t.Fatalf("candidates = %+v, want 3", got.Candidates)
+	}
+	if got.Candidates[0].Kind != modal.CleanupKindTask || got.Candidates[0].ID != "T-1" {
+		t.Fatalf("release-phase task lost task identity: %+v", got.Candidates[0])
+	}
+	if got.Candidates[1].Kind != modal.CleanupKindTask || got.Candidates[1].ID != "T-2" {
+		t.Fatalf("task candidate = %+v", got.Candidates[1])
+	}
+	if got.Candidates[2].Kind != modal.CleanupKindRelease || got.Candidates[2].ID != "rel-1" {
+		t.Fatalf("release candidate = %+v", got.Candidates[2])
+	}
+	if mgr.cleanupPlanSelection != (task.ReleaseCleanupSelection{RemoveRelease: true}) {
+		t.Fatalf("release scan selection = %+v, want release-only", mgr.cleanupPlanSelection)
+	}
+	if mgr.taskCleanupExecCalls != 0 || mgr.cleanupExecuteCalls != 0 {
+		t.Fatal("scan invoked mutation methods")
 	}
 }
 
-func TestPruneTasksCmdStreamsAndReturnsSummary(t *testing.T) {
-	mgr := &cmdManager{removeErrs: map[string]error{"T2": errors.New("boom")}}
+func TestScanCleanupCandidatesCmdListErrorSurfaces(t *testing.T) {
+	mgr := &mockManager{listTasksErr: errors.New("disk gone")}
 
-	cmd := pruneTasksCmd(mgr, []string{"T1", "T2"})
+	msg := scanCleanupCandidatesCmd(mgr, 7)()
+	got, ok := msg.(CleanupScanReadyMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want CleanupScanReadyMsg", msg)
+	}
+	if got.Err == nil {
+		t.Fatal("list error not reported")
+	}
+	if len(got.Candidates) != 0 {
+		t.Fatalf("error scan returned candidates: %+v", got.Candidates)
+	}
+}
 
-	lineCount := 0
-	for msg := cmd(); ; {
-		switch m := msg.(type) {
-		case OutputLineMsg:
-			lineCount++
-			msg = m.Next()
-		case PruneFinishedMsg:
-			if len(m.Removed) != 1 || m.Removed[0] != "T1" {
-				t.Fatalf("Removed = %v, want [T1]", m.Removed)
-			}
-			if len(m.Errors) != 1 {
-				t.Fatalf("Errors len = %d, want 1", len(m.Errors))
-			}
-			if lineCount < 3 {
-				t.Fatalf("lineCount = %d, want >= 3", lineCount)
-			}
-			if len(mgr.removeCalls) != 2 {
-				t.Fatalf("remove calls = %v, want [T1 T2]", mgr.removeCalls)
-			}
-			return
-		default:
-			t.Fatalf("unexpected msg type %T", msg)
-		}
+func TestScanCleanupCandidatesCmdPlanErrorMarksCandidateBlocked(t *testing.T) {
+	mgr := &mockManager{
+		listTasksResult:    []domain.Task{{ID: "T-1"}},
+		taskCleanupPlanErr: errors.New("planner boom"),
+	}
+
+	msg := scanCleanupCandidatesCmd(mgr, 7)()
+	got, ok := msg.(CleanupScanReadyMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want CleanupScanReadyMsg", msg)
+	}
+	if got.Err != nil {
+		t.Fatalf("per-item plan error failed whole scan: %v", got.Err)
+	}
+	if len(got.Candidates) != 1 || got.Candidates[0].Ready {
+		t.Fatalf("candidates = %+v, want one blocked", got.Candidates)
+	}
+	if !strings.Contains(got.Candidates[0].Reason, "planner boom") {
+		t.Fatalf("block reason = %q, want planner error", got.Candidates[0].Reason)
 	}
 }
 
 func TestListTagsCmdReturnsTagListMsg(t *testing.T) {
 	mgr := &cmdManager{tagResult: []domain.TagInfo{{Name: "v1.2.3"}}}
 
-	msg := listTagsCmd(mgr, "T14")()
+	msg := listTagsCmd(mgr, "T14", 7)()
 	got, ok := msg.(TagListMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want TagListMsg", msg)
@@ -627,7 +662,7 @@ func TestListTagsCmdReturnsTagListMsg(t *testing.T) {
 func TestForgeOpCmdDelegatesCreateMissingMRs(t *testing.T) {
 	mgr := &cmdManager{forgeMRResult: task.TaskMRCreateResult{TaskID: "T14"}}
 
-	msg := forgeOpCmd(mgr, "create_missing_mrs", "T14", "", forgeCreateMRParams{Title: "Shared title"})()
+	msg := forgeOpCmd(mgr, "create_missing_mrs", "T14", "", forgeCreateMRParams{Title: "Shared title"}, 7)()
 	got, ok := msg.(ForgeResultMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want ForgeResultMsg", msg)
@@ -648,7 +683,7 @@ func TestForgeOpCmdDelegatesPipelineStatus(t *testing.T) {
 	mgr := &cmdManager{forgePipelineResult: []forge.PipelineStatus{{ID: "1"}}}
 	params := forgePipelineStatusParams{Branch: "develop", Provider: forge.ForgeProviderGitLab}
 
-	msg := forgeOpCmd(mgr, "pipeline_status", "T14", "svc", params)()
+	msg := forgeOpCmd(mgr, "pipeline_status", "T14", "svc", params, 7)()
 	got := msg.(ForgeResultMsg)
 	data, ok := got.Data.([]forge.PipelineStatus)
 	if !ok {
@@ -666,7 +701,7 @@ func TestForgeOpCmdDelegatesListIssues(t *testing.T) {
 	mgr := &cmdManager{forgeIssuesResult: []forge.IssueInfo{{Number: 7}}}
 	params := forge.ListIssuesParams{State: "open"}
 
-	msg := forgeOpCmd(mgr, "list_issues", "T14", "svc", params)()
+	msg := forgeOpCmd(mgr, "list_issues", "T14", "svc", params, 7)()
 	got := msg.(ForgeResultMsg)
 	data, ok := got.Data.([]forge.IssueInfo)
 	if !ok {
@@ -680,7 +715,7 @@ func TestForgeOpCmdDelegatesListIssues(t *testing.T) {
 func TestForgeOpCmdUnsupportedOperation(t *testing.T) {
 	mgr := &cmdManager{}
 
-	msg := forgeOpCmd(mgr, "unknown", "T14", "svc", nil)()
+	msg := forgeOpCmd(mgr, "unknown", "T14", "svc", nil, 7)()
 	got := msg.(ForgeResultMsg)
 	if got.Err == nil {
 		t.Fatal("Err = nil, want error")
@@ -689,7 +724,7 @@ func TestForgeOpCmdUnsupportedOperation(t *testing.T) {
 
 func TestForgeOpCmdManagerWithoutForgeSupport(t *testing.T) {
 	mgr := &cmdManager{forgeErr: errors.New("forge unavailable")}
-	msg := forgeOpCmd(mgr, "create_missing_mrs", "T14", "", forgeCreateMRParams{Title: "title"})()
+	msg := forgeOpCmd(mgr, "create_missing_mrs", "T14", "", forgeCreateMRParams{Title: "title"}, 7)()
 	got := msg.(ForgeResultMsg)
 	if got.Err == nil {
 		t.Fatal("Err = nil, want error")
@@ -754,7 +789,7 @@ func TestPlanReleaseCleanupCmdCarriesSelectionAndGeneration(t *testing.T) {
 
 func TestExecuteReleaseCleanupCmdStreamsAndReturnsGeneration(t *testing.T) {
 	mgr := &cmdManager{cleanupExecuteResult: task.ReleaseCleanupResult{ReleaseID: "rel-1"}}
-	cmd := executeReleaseCleanupCmd(mgr, task.ReleaseCleanupPlan{}, 12)
+	cmd := executeReleaseCleanupCmd(mgr, task.ReleaseCleanupPlan{}, "rel-1", 12)
 
 	first, ok := cmd().(OutputLineMsg)
 	if !ok || first.Line != "remove release worktree" {
@@ -777,11 +812,97 @@ func TestExecuteReleaseCleanupCmdStreamsAndReturnsGeneration(t *testing.T) {
 	}
 }
 
+func TestPlanTaskCleanupCmdReturnsReadyMsg(t *testing.T) {
+	mgr := &cmdManager{}
+	msg := planTaskCleanupCmd(mgr, "TASK-9", 4, 11)()
+	ready, ok := msg.(TaskCleanupPlanReadyMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want TaskCleanupPlanReadyMsg", msg)
+	}
+	if ready.TaskID != "TASK-9" || ready.Generation != 4 || ready.OperationGeneration != 11 || ready.Err != nil {
+		t.Fatalf("ready = %+v", ready)
+	}
+	if len(mgr.taskCleanupPlanTaskIDs) != 1 || mgr.taskCleanupPlanTaskIDs[0] != "TASK-9" {
+		t.Fatalf("plan calls = %v", mgr.taskCleanupPlanTaskIDs)
+	}
+}
+
+func TestExecuteTaskCleanupCmdStreamsAndReturnsGeneration(t *testing.T) {
+	mgr := &cmdManager{}
+	mgr.taskCleanupExecStatuses = []string{"remove task worktree w1"}
+	mgr.taskCleanupExecResult = task.TaskCleanupResult{TaskID: "TASK-9", Completed: []string{"remove task worktree w1"}}
+	cmd := executeTaskCleanupCmd(mgr, task.TaskCleanupPlan{}, "TASK-9", 7, 12)
+
+	first, ok := cmd().(OutputLineMsg)
+	if !ok || first.Line != "remove task worktree w1" {
+		t.Fatalf("first = %#v", first)
+	}
+	done, ok := first.Next().(TaskCleanupDoneMsg)
+	if !ok || done.TaskID != "TASK-9" || done.Generation != 7 || done.OperationGeneration != 12 || done.Result.TaskID != "TASK-9" || done.Err != nil {
+		t.Fatalf("done = %#v", done)
+	}
+	if len(done.Result.Completed) != 1 {
+		t.Fatalf("completed = %v", done.Result.Completed)
+	}
+	if mgr.taskCleanupExecCalls != 1 {
+		t.Fatalf("execute calls = %d", mgr.taskCleanupExecCalls)
+	}
+}
+
+func TestExecuteReleaseCleanupCmdStampsConfirmedReleaseIDOnError(t *testing.T) {
+	mgr := &cmdManager{cleanupExecuteErr: errors.New("boom")}
+	cmd := executeReleaseCleanupCmd(mgr, task.ReleaseCleanupPlan{}, "rel-1", 12)
+
+	msg := cmd()
+	for {
+		line, ok := msg.(OutputLineMsg)
+		if !ok {
+			break
+		}
+		msg = line.Next()
+	}
+	done, ok := msg.(ReleaseCleanupDoneMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want ReleaseCleanupDoneMsg", msg)
+	}
+	if done.Result.ReleaseID != "rel-1" {
+		t.Fatalf("done result identity = %q, want rel-1", done.Result.ReleaseID)
+	}
+	if done.Err == nil {
+		t.Fatal("error not propagated")
+	}
+}
+
+func TestExecuteTaskCleanupCmdStampsConfirmedTaskIDOnError(t *testing.T) {
+	mgr := &cmdManager{}
+	mgr.taskCleanupExecErr = errors.New("boom")
+	cmd := executeTaskCleanupCmd(mgr, task.TaskCleanupPlan{}, "TASK-9", 7, 12)
+
+	msg := cmd()
+	for {
+		line, ok := msg.(OutputLineMsg)
+		if !ok {
+			break
+		}
+		msg = line.Next()
+	}
+	done, ok := msg.(TaskCleanupDoneMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want TaskCleanupDoneMsg", msg)
+	}
+	if done.TaskID != "TASK-9" || done.Result.TaskID != "TASK-9" {
+		t.Fatalf("done identity = (%q, %q), want TASK-9", done.TaskID, done.Result.TaskID)
+	}
+	if done.Err == nil {
+		t.Fatal("error not propagated")
+	}
+}
+
 func TestCreateReleaseCmdStreamsStatusAndReturnsDone(t *testing.T) {
 	expected := domain.Release{ID: "rel-1", Status: domain.ReleaseStatusReleased}
 	mgr := &cmdManager{createReleaseResult: expected}
 
-	cmd := createReleaseCmd(mgr, task.CreateReleaseParams{TaskIDs: []string{"T-1"}})
+	cmd := createReleaseCmd(mgr, task.CreateReleaseParams{TaskIDs: []string{"T-1"}}, 5)
 
 	msg1 := cmd()
 	line1, ok := msg1.(OutputLineMsg)
@@ -829,7 +950,7 @@ func TestCreateReleaseCmdReturnsErrorInMessage(t *testing.T) {
 	expectedErr := errors.New("create failed")
 	mgr := &cmdManager{createReleaseErr: expectedErr}
 
-	cmd := createReleaseCmd(mgr, task.CreateReleaseParams{TaskIDs: []string{"T-1"}})
+	cmd := createReleaseCmd(mgr, task.CreateReleaseParams{TaskIDs: []string{"T-1"}}, 3)
 	msg := cmd()
 	line, ok := msg.(OutputLineMsg)
 	if !ok {
@@ -842,6 +963,9 @@ func TestCreateReleaseCmdReturnsErrorInMessage(t *testing.T) {
 	}
 	msg = line.Next()
 	done := msg.(CreateReleaseDoneMsg)
+	if done.Generation != 3 {
+		t.Fatalf("done.Generation = %d, want 3", done.Generation)
+	}
 	if !errors.Is(done.Err, expectedErr) {
 		t.Fatalf("Err = %v, want %v", done.Err, expectedErr)
 	}
@@ -851,7 +975,7 @@ func TestFinalizeReleaseCmdReturnsDoneMsg(t *testing.T) {
 	expected := domain.Release{ID: "rel-1", Status: domain.ReleaseStatusPrepared}
 	mgr := &cmdManager{finishReleaseResult: expected}
 
-	cmd := finalizeReleaseCmd(mgr, "rel-1")
+	cmd := finalizeReleaseCmd(mgr, "rel-1", 11)
 
 	msg2 := cmd()
 	done, ok := msg2.(ReleaseActionDoneMsg)
@@ -860,6 +984,9 @@ func TestFinalizeReleaseCmdReturnsDoneMsg(t *testing.T) {
 	}
 	if done.Action != "finalize" {
 		t.Fatalf("action = %q, want finalize", done.Action)
+	}
+	if done.Generation != 11 {
+		t.Fatalf("done.Generation = %d, want 11", done.Generation)
 	}
 	if done.Release.ID != "rel-1" {
 		t.Fatalf("done.Release.ID = %q, want rel-1", done.Release.ID)
@@ -890,12 +1017,15 @@ func TestRetryReleaseCmdReturnsDoneMsg(t *testing.T) {
 	expected := domain.Release{ID: "rel-1", Status: domain.ReleaseStatusPrepared}
 	mgr := &cmdManager{retryReleaseResult: expected}
 
-	done, ok := retryReleaseCmd(mgr, "rel-1")().(ReleaseActionDoneMsg)
+	done, ok := retryReleaseCmd(mgr, "rel-1", 13)().(ReleaseActionDoneMsg)
 	if !ok {
 		t.Fatalf("message type = %T, want ReleaseActionDoneMsg", done)
 	}
 	if done.Action != "retry" || done.Release.ID != "rel-1" || done.Err != nil {
 		t.Fatalf("done = %#v", done)
+	}
+	if done.Generation != 13 {
+		t.Fatalf("done.Generation = %d, want 13", done.Generation)
 	}
 	if mgr.retryReleaseID != "rel-1" || mgr.retryReleaseCtx == nil {
 		t.Fatalf("RetryRelease called with id=%q ctx=%v", mgr.retryReleaseID, mgr.retryReleaseCtx)
@@ -923,24 +1053,30 @@ func TestInspectAndMergeTaskCommandsPreserveTaskID(t *testing.T) {
 	if inspection.Generation != 7 {
 		t.Fatalf("generation = %d, want 7", inspection.Generation)
 	}
-	merged := mergeTaskMRsCmd(mgr, "TASK-1")().(TaskMergeDoneMsg)
+	merged := mergeTaskMRsCmd(mgr, "TASK-1", 8)().(TaskMergeDoneMsg)
 	if len(merged.Result.Merged) != 1 || mgr.mergeTaskID != "TASK-1" {
 		t.Fatalf("merge = %#v, called with %q", merged, mgr.mergeTaskID)
+	}
+	if merged.Generation != 8 {
+		t.Fatalf("merged.Generation = %d, want 8", merged.Generation)
 	}
 }
 
 func TestMergeServiceMRCmdPreservesTaskAndService(t *testing.T) {
 	mgr := &cmdManager{mergeTaskResult: task.TaskMergeResult{TaskID: "TASK-1", Merged: []string{"api"}}}
 
-	merged := mergeServiceMRCmd(mgr, "TASK-1", "api")().(TaskMergeDoneMsg)
+	merged := mergeServiceMRCmd(mgr, "TASK-1", "api", 9)().(TaskMergeDoneMsg)
 	if len(merged.Result.Merged) != 1 || mgr.mergeServiceTask != "TASK-1" || mgr.mergeServiceName != "api" {
 		t.Fatalf("merge = %#v, called with task=%q service=%q", merged, mgr.mergeServiceTask, mgr.mergeServiceName)
+	}
+	if merged.Generation != 9 {
+		t.Fatalf("merged.Generation = %d, want 9", merged.Generation)
 	}
 }
 
 func TestPromoteReleaseCmdStreamsStatusAndReturnsDone(t *testing.T) {
 	mgr := &cmdManager{promoteResult: domain.Release{ID: "rel-1"}}
-	msg := promoteReleaseCmd(mgr, "rel-1")()
+	msg := promoteReleaseCmd(mgr, "rel-1", 21)()
 	line, ok := msg.(OutputLineMsg)
 	if !ok || line.Line != "promoting" {
 		t.Fatalf("first message = %#v, want promoting output", msg)
@@ -955,7 +1091,7 @@ func TestLoadReleaseVersionsCmdUsesManagerProposals(t *testing.T) {
 	mgr := &cmdManager{}
 	mgr.proposedVersions = map[string]string{"api": "1.2.4", "worker": "2.0.1"}
 
-	msg := loadReleaseVersionsCmd(mgr, []string{"T-1", "T-2"})()
+	msg := loadReleaseVersionsCmd(mgr, []string{"T-1", "T-2"}, 7)()
 	loaded, ok := msg.(panels.ReleaseVersionsLoadedMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want panels.ReleaseVersionsLoadedMsg", msg)
@@ -976,7 +1112,7 @@ func TestLoadReleaseVersionsCmdReturnsCommandDoneOnManagerError(t *testing.T) {
 	mgr := &cmdManager{}
 	mgr.proposedVersionErr = expectedErr
 
-	msg := loadReleaseVersionsCmd(mgr, []string{"T-1"})()
+	msg := loadReleaseVersionsCmd(mgr, []string{"T-1"}, 7)()
 	done, ok := msg.(CommandDoneMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want CommandDoneMsg", msg)
@@ -1005,7 +1141,7 @@ func TestInitTaskCmd_PartialFailureEmitsPartialInitDoneMsg(t *testing.T) {
 		initErr: errors.New("partial failure"),
 	}
 
-	msg := initTaskCmd(mgr, task.InitParams{TaskID: "T-1"})()
+	msg := initTaskCmd(mgr, task.InitParams{TaskID: "T-1"}, 7)()
 	batch, ok := msg.(tea.BatchMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want tea.BatchMsg", msg)
@@ -1048,7 +1184,7 @@ func TestAddServiceCmd_PartialFailureEmitsPartialAddDoneMsg(t *testing.T) {
 		addErr: errors.New("partial failure"),
 	}
 
-	msg := addServiceCmd(mgr, task.AddParams{TaskID: "T-2"})()
+	msg := addServiceCmd(mgr, task.AddParams{TaskID: "T-2"}, 7)()
 	batch, ok := msg.(tea.BatchMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want tea.BatchMsg", msg)
@@ -1124,14 +1260,113 @@ func TestRetryReleaseTaskMergesCmdPassesExactPlan(t *testing.T) {
 	mgr := &cmdManager{retryTaskMergeResult: domain.Release{ID: "rel-1", Status: domain.ReleaseStatusPrepared}}
 	plan := &task.ReleaseTaskMergePlan{Rows: []task.ReleaseTaskMergeRow{{ServiceName: "api", Ready: true}}}
 
-	done, ok := retryReleaseTaskMergesCmd(mgr, "rel-1", plan)().(ReleaseActionDoneMsg)
+	done, ok := retryReleaseTaskMergesCmd(mgr, "rel-1", plan, 17)().(ReleaseActionDoneMsg)
 	if !ok {
 		t.Fatalf("message type unexpected")
 	}
 	if done.Action != "retry" || done.Release.ID != "rel-1" || done.Err != nil {
 		t.Fatalf("done = %#v", done)
 	}
+	if done.Generation != 17 {
+		t.Fatalf("done.Generation = %d, want 17", done.Generation)
+	}
 	if mgr.retryTaskMergeID != "rel-1" || mgr.retryTaskMergePlan != plan {
 		t.Fatalf("RetryReleaseTaskMerges called with id=%q plan=%p, want id=rel-1 exact plan", mgr.retryTaskMergeID, mgr.retryTaskMergePlan)
+	}
+}
+
+// runStatusBatch executes a status-channel command batch and returns the
+// CommandDoneMsg plus whether the reader observed a drained (closed) channel.
+func runStatusBatch(t *testing.T, cmd tea.Cmd) (CommandDoneMsg, bool) {
+	t.Helper()
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want tea.BatchMsg", batch)
+	}
+	var done CommandDoneMsg
+	drained := false
+	for _, sub := range batch {
+		switch v := sub().(type) {
+		case CommandDoneMsg:
+			done = v
+		case channelDrainedMsg:
+			drained = true
+		}
+	}
+	return done, drained
+}
+
+func TestSyncTaskCmd_ClosesChannelAndReaderDrains(t *testing.T) {
+	mgr := &cmdManager{}
+	done, drained := runStatusBatch(t, syncTaskCmd(mgr, "IN-1", task.SyncStrategyRebase, 7))
+	if done.Err != nil || done.Op != "Sync task IN-1" {
+		t.Fatalf("done = %#v", done)
+	}
+	if mgr.syncTaskTaskID != "IN-1" || mgr.syncTaskStrategy != task.SyncStrategyRebase {
+		t.Fatalf("SyncTask called with id=%q strategy=%v", mgr.syncTaskTaskID, mgr.syncTaskStrategy)
+	}
+	if !drained {
+		t.Fatal("status channel was not closed by syncTaskCmd; reader did not drain")
+	}
+}
+
+func TestSyncTaskCmd_ErrorPathStillClosesChannel(t *testing.T) {
+	mgr := &cmdManager{}
+	mgr.syncTaskErr = errors.New("sync failed")
+	done, drained := runStatusBatch(t, syncTaskCmd(mgr, "IN-1", task.SyncStrategyMerge, 7))
+	if done.Err == nil {
+		t.Fatal("done.Err = nil, want sync error")
+	}
+	if !drained {
+		t.Fatal("status channel was not closed on error path")
+	}
+}
+
+func TestSyncServiceCmd_ClosesChannelAndReaderDrains(t *testing.T) {
+	mgr := &cmdManager{}
+	done, drained := runStatusBatch(t, syncServiceCmd(mgr, "IN-1", "api", task.SyncStrategyMerge, 7))
+	if done.Err != nil || done.Op != "Sync service api" {
+		t.Fatalf("done = %#v", done)
+	}
+	if !drained {
+		t.Fatal("status channel was not closed by syncServiceCmd; reader did not drain")
+	}
+}
+
+func TestSyncServiceCmd_ErrorPathStillClosesChannel(t *testing.T) {
+	mgr := &cmdManager{}
+	mgr.syncServiceErr = errors.New("sync failed")
+	done, drained := runStatusBatch(t, syncServiceCmd(mgr, "IN-1", "api", task.SyncStrategyMerge, 7))
+	if done.Err == nil {
+		t.Fatal("done.Err = nil, want sync error")
+	}
+	if !drained {
+		t.Fatal("status channel was not closed on error path")
+	}
+}
+
+func TestPushTaskCmd_ClosesChannelAndReaderDrains(t *testing.T) {
+	mgr := &cmdManager{}
+	done, drained := runStatusBatch(t, pushTaskCmd(mgr, "IN-1", 7))
+	if done.Err != nil || done.Op != "Push task IN-1" {
+		t.Fatalf("done = %#v", done)
+	}
+	if mgr.pushTaskID != "IN-1" {
+		t.Fatalf("PushTask called with id=%q", mgr.pushTaskID)
+	}
+	if !drained {
+		t.Fatal("status channel was not closed by pushTaskCmd; reader did not drain")
+	}
+}
+
+func TestPushTaskCmd_ErrorPathStillClosesChannel(t *testing.T) {
+	mgr := &cmdManager{}
+	mgr.pushTaskErr = errors.New("push failed")
+	done, drained := runStatusBatch(t, pushTaskCmd(mgr, "IN-1", 7))
+	if done.Err == nil {
+		t.Fatal("done.Err = nil, want push error")
+	}
+	if !drained {
+		t.Fatal("status channel was not closed on error path")
 	}
 }

@@ -26,6 +26,11 @@ type ServiceWorkflow struct {
 	ServiceName string
 	Status      string
 	Detail      string
+	// Current/NextAction/Blocker are derived guidance; Status/Detail stay
+	// authoritative for existing service-card rendering.
+	Current    WorkflowPhase
+	NextAction string
+	Blocker    string
 }
 
 type WorkflowSummary struct {

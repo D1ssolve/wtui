@@ -115,6 +115,7 @@ func removeGeneratedTaskFiles(taskDir, taskID string) error {
 	paths := []string{
 		filepath.Join(taskDir, taskID+".code-workspace"),
 		filepath.Join(taskDir, taskID+".sln"),
+		filepath.Join(taskDir, closePostActionsProofFileName),
 	}
 
 	var removeErrs []error

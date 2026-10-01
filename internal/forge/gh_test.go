@@ -193,6 +193,9 @@ printf '[{"number":5,"state":"OPEN","url":"https://github.com/org/repo/pull/5","
 	if !got.Ready || !got.Approved || !got.Mergeable || got.CIState != "success" || !got.SupportsSHAPin {
 		t.Fatalf("MRReadiness() = %#v, want ready", got)
 	}
+	if got.SupportsTargetBinding {
+		t.Fatalf("SupportsTargetBinding = true, want false: gh pins head only")
+	}
 	if got.Number != 5 || got.SourceBranch != "feature/a" || got.TargetBranch != "main" || got.HeadSHA != "abc123" || len(got.Blockers) != 0 {
 		t.Fatalf("MRReadiness() = %#v, want mapped PR fields", got)
 	}
@@ -322,6 +325,43 @@ fi
 	}
 	if !strings.Contains(string(args), "pr merge 5 --merge --repo org/repo --match-head-commit abc123") {
 		t.Fatalf("merge argv = %q, want SHA pin", args)
+	}
+}
+
+func TestGhMergeMR_RejectsTargetBinding(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args")
+	fake := filepath.Join(binDir, "gh")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$ARGS_FILE"
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("ARGS_FILE", argsFile)
+
+	for _, tc := range []struct {
+		name   string
+		params MergeMRParams
+	}{
+		{name: "target branch", params: MergeMRParams{Repo: "org/repo", Number: 5, ExpectedHeadSHA: "abc123", ExpectedTargetBranch: "main"}},
+		{name: "target SHA", params: MergeMRParams{Repo: "org/repo", Number: 5, ExpectedHeadSHA: "abc123", ExpectedTargetSHA: "base456"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewGhClient(t.TempDir()).MergeMR(t.Context(), tc.params)
+			var ferr *ForgeError
+			if err == nil || !errors.As(err, &ferr) {
+				t.Fatalf("MergeMR() err = %v, want *ForgeError", err)
+			}
+			args, readErr := os.ReadFile(argsFile)
+			if readErr != nil && !os.IsNotExist(readErr) {
+				t.Fatalf("read args: %v", readErr)
+			}
+			if strings.Contains(string(args), "pr merge") {
+				t.Fatalf("gh executed merge despite unsupported target binding: %q", args)
+			}
+		})
 	}
 }
 

@@ -229,21 +229,19 @@ func TestRenderFooter_FocusReleases_ShowsRetryOnlyForRecoverableFailure(t *testi
 	}
 }
 
-func TestRenderFooter_FocusReleases_ShowsCleanupOnlyForReleasedSelection(t *testing.T) {
+func TestRenderFooter_FocusReleases_ShowsCleanupHint(t *testing.T) {
 	for _, tc := range []struct {
 		status domain.ReleaseStatus
-		want   bool
 	}{
-		{status: domain.ReleaseStatusReleased, want: true},
+		{status: domain.ReleaseStatusReleased},
 		{status: domain.ReleaseStatusFailed},
 		{status: domain.ReleaseStatusDraft},
 	} {
 		m := newTestModel(t, &mockManager{})
 		m.focus = FocusReleases
 		m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: tc.status}})
-		got := strings.Contains(renderFooter(m), "[D] cleanup")
-		if got != tc.want {
-			t.Fatalf("status %s cleanup hint = %v, want %v", tc.status, got, tc.want)
+		if !strings.Contains(renderFooter(m), "[D] cleanup") {
+			t.Fatalf("status %s missing cleanup hint", tc.status)
 		}
 	}
 }

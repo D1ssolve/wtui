@@ -108,6 +108,50 @@ func TestPlanReleaseCleanup_RejectsHotfixAsReleasePrefixException(t *testing.T) 
 	}
 }
 
+// Release cleanup is authorized only by the exact branch the flow resolves
+// for the manifest version: same-type prefixes, wrong versions, and custom
+// suffixes must block.
+func TestPlanReleaseCleanup_RequiresExactResolvedReleaseBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		branch  string
+		blocked bool
+	}{
+		{"exact match", "release/1.0.0", false},
+		{"wrong version", "release/9.9.9", true},
+		{"custom suffix", "release/1.0.0-rc1", true},
+		{"release namespace other", "release/anything", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, _ := cleanupTestManager(t, domain.ReleaseStatusReleased)
+			release, err := mgr.loadReleaseManifest("rel-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			release.Services[0].ReleaseBranch = tc.branch
+			if _, err := mgr.writeReleaseManifest(release); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := mgr.PlanReleaseCleanup(t.Context(), "rel-1", DefaultReleaseCleanupSelection())
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, blocker := range plan.Preview().Blockers {
+				if strings.Contains(blocker, "does not match resolved release branch") {
+					found = true
+				}
+			}
+			if found != tc.blocked {
+				t.Fatalf("blockers = %q, blocked = %v, want %v", plan.Preview().Blockers, found, tc.blocked)
+			}
+			if !tc.blocked && len(plan.Preview().Blockers) != 0 {
+				t.Fatalf("blockers = %q", plan.Preview().Blockers)
+			}
+		})
+	}
+}
+
 func TestPlanReleaseCleanup_RejectsWrongManifestIntegrationBranch(t *testing.T) {
 	mgr, _ := cleanupTestManager(t, domain.ReleaseStatusReleased)
 	release, err := mgr.loadReleaseManifest("rel-1")
@@ -163,6 +207,66 @@ func TestPlanReleaseCleanup_UsesFreshMergeTargetSHA(t *testing.T) {
 		}
 	}
 	t.Fatal("local task branch step missing")
+}
+
+func TestPlanReleaseCleanup_MRSquashManifestUsesSourceLeaseAndIntegratedAncestry(t *testing.T) {
+	mgr, gitMock := cleanupTestManager(t, domain.ReleaseStatusReleased)
+	const squashSHA = "9999999999999999999999999999999999999999"
+	release, err := mgr.loadReleaseManifest("rel-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release.Services[0].FeatureBranches[0] = domain.ReleaseFeatureBranch{
+		TaskID: "APP-1", ServiceName: "svc", Branch: "feature/APP-1",
+		WorktreePath: filepath.Join(mgr.cfg.TasksRoot, "APP-1", "svc"),
+		Merged:       true, MergeRef: squashSHA,
+		TaskMergeStatus: "merged", TaskMergeMRNumber: 7, TaskMergeHeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	if _, err := mgr.writeReleaseManifest(release); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := mgr.PlanReleaseCleanup(t.Context(), "rel-1", DefaultReleaseCleanupSelection())
+	if err != nil || len(plan.Preview().Blockers) != 0 {
+		t.Fatalf("plan = %+v, %v", plan.Preview(), err)
+	}
+	for _, step := range plan.steps {
+		if step.kind != cleanupLocalTaskBranch {
+			continue
+		}
+		if step.expectedSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+			t.Fatalf("branch lease = %q, want MR source head SHA", step.expectedSHA)
+		}
+	}
+	found := false
+	for _, call := range gitMock.isAncestorCalls {
+		if call.Ancestor == squashSHA {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("integrated identity ancestry not checked: %+v", gitMock.isAncestorCalls)
+	}
+}
+
+func TestPlanReleaseCleanup_PartialMRManifestBlocksWithoutFallback(t *testing.T) {
+	mgr, _ := cleanupTestManager(t, domain.ReleaseStatusReleased)
+	release, err := mgr.loadReleaseManifest("rel-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release.Services[0].FeatureBranches[0].TaskMergeMRNumber = 7
+	if _, err := mgr.writeReleaseManifest(release); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := mgr.PlanReleaseCleanup(t.Context(), "rel-1", DefaultReleaseCleanupSelection())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(plan.Preview().Blockers, "\n"), "MR head identity") {
+		t.Fatalf("blockers = %q", plan.Preview().Blockers)
+	}
 }
 
 func TestPlanReleaseCleanup_SafetyBlockers(t *testing.T) {
@@ -232,6 +336,69 @@ func TestPlanReleaseCleanup_RemoteOptionsCreateLeasedBranchSteps(t *testing.T) {
 	}
 }
 
+// A manifest feature branch is trusted only when it exactly equals a
+// configured branch-type prefix joined with its own TaskID. Release-namespace
+// names take precedence, and suffixed, other-task, or unconfigured names
+// fail closed before any worktree cleanup is planned.
+func TestPlanReleaseCleanup_FeatureBranchOutsideTaskOwnershipBlocks(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch string
+	}{
+		{"suffix", "feature/APP-1-extra"},
+		{"other task", "feature/APP-2"},
+		{"release namespace", "release/APP-1"},
+		{"unconfigured prefix", "custom/APP-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, _ := cleanupTestManager(t, domain.ReleaseStatusReleased)
+			release, err := mgr.loadReleaseManifest("rel-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			release.Services[0].FeatureBranches[0].Branch = tc.branch
+			if _, err := mgr.writeReleaseManifest(release); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := mgr.PlanReleaseCleanup(t.Context(), "rel-1", ReleaseCleanupSelection{RemoveTasks: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, blocker := range plan.Preview().Blockers {
+				if strings.Contains(blocker, "outside task branch ownership") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("blockers = %q, want ownership blocker for %s", plan.Preview().Blockers, tc.branch)
+			}
+		})
+	}
+}
+
+// Release branches may embed a task ID under the release prefix; the release
+// namespace wins, so such a branch must not authorize task cleanup even
+// though prefix+TaskID collides with a configured release prefix candidate.
+func TestPlanReleaseCleanup_ReleaseNamespaceBranchNeverTaskOwned(t *testing.T) {
+	mgr, _ := cleanupTestManager(t, domain.ReleaseStatusReleased)
+	release, err := mgr.loadReleaseManifest("rel-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release.Services[0].FeatureBranches[0].Branch = "release/APP-1"
+	if _, err := mgr.writeReleaseManifest(release); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := mgr.PlanReleaseCleanup(t.Context(), "rel-1", ReleaseCleanupSelection{RemoveTasks: true, DeleteLocalTaskBranches: true, DeleteRemoteTaskBranches: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Preview().Blockers) == 0 {
+		t.Fatal("release-namespace feature branch planned without blocker")
+	}
+}
+
 func cleanupTestManager(t *testing.T, status domain.ReleaseStatus) (*manager, *mockGitClient) {
 	t.Helper()
 	root := t.TempDir()
@@ -252,7 +419,7 @@ func cleanupTestManager(t *testing.T, status domain.ReleaseStatus) (*manager, *m
 	const acceptedSHA = "cccccccccccccccccccccccccccccccccccccccc"
 	release := domain.Release{ManifestVersion: releaseManifestVersion, ID: "rel-1", Dir: filepath.Join(releaseRoot, "rel-1"), Status: status, TaskIDs: []string{"APP-1"},
 		Tasks: []domain.ReleaseTaskRef{{TaskID: "APP-1", TaskDir: filepath.Join(tasksRoot, "APP-1"), ServiceNames: []string{"svc"}}},
-		Services: []domain.ReleaseService{{Name: "svc", RepoPath: repo, ReleaseWorktreePath: filepath.Join(releaseRoot, "rel-1", "services", "svc"), IntegrationBranch: "develop", ReleaseBranch: "release/1.0.0", Tag: "v1.0.0", ReleaseSHA: releaseSHA, AcceptedMergeSHA: acceptedSHA, PushedTag: true, PushedReleaseBranch: true,
+		Services: []domain.ReleaseService{{Name: "svc", RepoPath: repo, ReleaseWorktreePath: filepath.Join(releaseRoot, "rel-1", "services", "svc"), IntegrationBranch: "develop", ReleaseBranch: "release/1.0.0", Version: "1.0.0", Tag: "v1.0.0", ReleaseSHA: releaseSHA, AcceptedMergeSHA: acceptedSHA, PushedTag: true, PushedReleaseBranch: true,
 			FeatureBranches: []domain.ReleaseFeatureBranch{{TaskID: "APP-1", ServiceName: "svc", Branch: "feature/APP-1", WorktreePath: filepath.Join(tasksRoot, "APP-1", "svc"), Merged: true, MergeRef: taskSHA}}}},
 	}
 	manifestDir := filepath.Join(releaseRoot, "rel-1")

@@ -9,7 +9,8 @@ import (
 )
 
 func (m *manager) PushTask(ctx context.Context, taskID string, lineCh chan<- string) error {
-	defer close(lineCh)
+	lineCh, closeLineCh := nilSafeLineCh(lineCh)
+	defer closeLineCh()
 
 	if err := validateTaskID(taskID); err != nil {
 		return err

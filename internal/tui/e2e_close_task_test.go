@@ -68,18 +68,15 @@ func (m *closeTaskE2EManager) Repos(_ context.Context, _ bool) ([]domain.Repo, e
 	return nil, nil
 }
 
-func (m *closeTaskE2EManager) SyncTask(_ context.Context, _ string, _ task.SyncStrategy, lineCh chan<- string) error {
-	close(lineCh)
+func (m *closeTaskE2EManager) SyncTask(_ context.Context, _ string, _ task.SyncStrategy, _ chan<- string) error {
 	return nil
 }
 
-func (m *closeTaskE2EManager) SyncService(_ context.Context, _, _ string, _ task.SyncStrategy, lineCh chan<- string) error {
-	close(lineCh)
+func (m *closeTaskE2EManager) SyncService(_ context.Context, _, _ string, _ task.SyncStrategy, _ chan<- string) error {
 	return nil
 }
 
-func (m *closeTaskE2EManager) PushTask(_ context.Context, _ string, lineCh chan<- string) error {
-	close(lineCh)
+func (m *closeTaskE2EManager) PushTask(_ context.Context, _ string, _ chan<- string) error {
 	return nil
 }
 
@@ -218,6 +215,12 @@ func (m *closeTaskE2EManager) PlanReleaseCleanup(context.Context, string, task.R
 func (m *closeTaskE2EManager) ExecuteReleaseCleanup(context.Context, task.ReleaseCleanupPlan, chan<- string) (task.ReleaseCleanupResult, error) {
 	return task.ReleaseCleanupResult{}, nil
 }
+func (m *closeTaskE2EManager) PlanTaskCleanup(context.Context, task.TaskCleanupRequest) (task.TaskCleanupPlan, error) {
+	return task.TaskCleanupPlan{}, nil
+}
+func (m *closeTaskE2EManager) ExecuteTaskCleanup(context.Context, task.TaskCleanupPlan, chan<- string) (task.TaskCleanupResult, error) {
+	return task.TaskCleanupResult{}, nil
+}
 
 func TestE2E_CloseTask_DirtyTask_ShowsValidationModalAndDoesNotExecuteClose(t *testing.T) {
 	mgr := &closeTaskE2EManager{
@@ -263,7 +266,7 @@ func TestE2E_CloseTask_DirtyTask_ShowsValidationModalAndDoesNotExecuteClose(t *t
 		t.Fatalf("expected no close confirm modal on dirty task, got %T", m.modal)
 	}
 
-	validationMsg := validateTaskCmd(mgr, "IN-200")()
+	validationMsg := validateTaskCmd(mgr, "IN-200", m.operationGeneration)()
 	updated, _ = m.Update(validationMsg)
 	m = updated.(Model)
 

@@ -78,6 +78,10 @@ func (m *mockGitClient) Fetch(_ context.Context, _ string) error {
 	panic("mockGitClient.Fetch called unexpectedly")
 }
 
+func (m *mockGitClient) EnsureCommit(_ context.Context, _, _ string) error {
+	panic("mockGitClient.EnsureCommit called unexpectedly")
+}
+
 func (m *mockGitClient) Rebase(_ context.Context, _, _ string) error {
 	panic("mockGitClient.Rebase called unexpectedly")
 }
@@ -118,7 +122,7 @@ func (m *mockGitClient) RemoteRefSHA(context.Context, string, string) (string, e
 	panic("mockGitClient.RemoteRefSHA called unexpectedly")
 }
 
-func (m *mockGitClient) DeleteBranchIfUnchanged(context.Context, string, string, string) error {
+func (m *mockGitClient) DeleteBranchIfUnchanged(context.Context, string, string, string, ...git.RefGuard) error {
 	panic("mockGitClient.DeleteBranchIfUnchanged called unexpectedly")
 }
 
@@ -126,8 +130,8 @@ func (m *mockGitClient) DeleteRemoteBranchIfUnchanged(context.Context, string, s
 	panic("mockGitClient.DeleteRemoteBranchIfUnchanged called unexpectedly")
 }
 
-func (m *mockGitClient) MoveRemoteBranchIfUnchanged(context.Context, string, string, string, string, string) error {
-	panic("mockGitClient.MoveRemoteBranchIfUnchanged called unexpectedly")
+func (m *mockGitClient) PushRefWithLease(context.Context, string, string, string, string, string, string) error {
+	panic("mockGitClient.PushRefWithLease called unexpectedly")
 }
 
 func (m *mockGitClient) RemoteBranchExists(_ context.Context, _, _ string) (bool, error) {
@@ -153,11 +157,14 @@ func (m *mockGitClient) IsAncestor(_ context.Context, _, _, _ string) (bool, err
 func (m *mockGitClient) CreateTag(_ context.Context, _, _, _, _ string) error {
 	panic("mockGitClient.CreateTag called unexpectedly")
 }
-func (m *mockGitClient) PushTag(_ context.Context, _, _ string) error {
+func (m *mockGitClient) PushTag(_ context.Context, _, _, _, _ string) error {
 	panic("mockGitClient.PushTag called unexpectedly")
 }
 func (m *mockGitClient) DeleteTag(_ context.Context, _, _ string) error {
 	panic("mockGitClient.DeleteTag called unexpectedly")
+}
+func (m *mockGitClient) DeleteTagIfUnchanged(_ context.Context, _, _, _ string) error {
+	panic("mockGitClient.DeleteTagIfUnchanged called unexpectedly")
 }
 func (m *mockGitClient) ListTags(_ context.Context, _ string) ([]domain.TagInfo, error) {
 	panic("mockGitClient.ListTags called unexpectedly")
@@ -170,6 +177,9 @@ func (m *mockGitClient) ListBranches(_ context.Context, _ string, _ string) ([]s
 }
 func (m *mockGitClient) RemoteURL(_ context.Context, _, _ string) (string, error) {
 	panic("mockGitClient.RemoteURL called unexpectedly")
+}
+func (m *mockGitClient) PushURL(_ context.Context, _, _ string) (string, error) {
+	panic("mockGitClient.PushURL called unexpectedly")
 }
 func (m *mockGitClient) Checkout(_ context.Context, _, _ string) error {
 	panic("mockGitClient.Checkout called unexpectedly")

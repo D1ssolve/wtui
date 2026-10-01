@@ -108,15 +108,9 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 		if gitflow.DetectBranchType(svc.Branch, m.flow) != gitflow.BranchTypeHotfix {
 			return plan, ErrMixedBranchTypes
 		}
-		if err = m.git.Fetch(ctx, svc.WorktreePath); err != nil {
-			return plan, err
-		}
-		sha, err := m.git.ResolveRef(ctx, svc.RepoPath, svc.Branch)
+		sha, err := m.resolveFreshSourceSHA(ctx, svc)
 		if err != nil {
 			return plan, err
-		}
-		if sha == "" {
-			return plan, errors.New("empty hotfix source SHA")
 		}
 		client, err := m.forgeClientForService(ctx, svc)
 		if err != nil {
@@ -149,7 +143,7 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 				if err != nil {
 					return plan, err
 				}
-				if err := m.validateHotfixMRIdentity(ctx, svc, sha, matches[0], r); err != nil {
+				if err := validateHotfixMRIdentity(svc, sha, matches[0], r); err != nil {
 					return plan, fmt.Errorf("%s → %s: %w", svc.Name, target, err)
 				}
 				review.Number, review.URL = r.Number, r.URL
@@ -228,7 +222,7 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 			plan.RequiresTag = true
 		}
 	}
-	plan.Warnings = append(plan.Warnings, "Cleanup is separate: Prune checks origin/"+m.flow.ProductionBranch+" only.")
+	plan.Warnings = append(plan.Warnings, "Cleanup is manual: press D to review and confirm cleanup candidates; Prune is separate and checks origin/"+m.flow.ProductionBranch+" only; remote branch deletion remains unsupported.")
 	return plan, nil
 }
 
@@ -346,8 +340,19 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 				}
 			}
 			if sp.TagPlan != nil {
+				// Fresh source resolution immediately before the tag action:
+				// any movement since plan validation blocks the remaining
+				// mutations (tag push and proof persistence), and the captured
+				// SHA binds the proof to this exact action source.
+				actionSHA, err := m.resolveFreshSourceSHA(ctx, svc)
+				if err != nil {
+					return fmt.Errorf("%s: source moved after confirmation: %w", svc.Name, err)
+				}
 				tag := cp.Tags[svc.Name]
 				if err = m.ensureHotfixTag(ctx, svc, tag); err != nil {
+					return err
+				}
+				if err = m.proveClosePostAction(ctx, p.TaskID, svc, closePostActionTag, actionSHA); err != nil {
 					return err
 				}
 				result.TagCreated = tag.TagName
@@ -379,15 +384,28 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 		rule := m.flow.BranchTypes[gitflow.BranchTypeHotfix]
 		if rule.TriggerPipelineOnClose {
 			for _, sp := range plan.Services {
-				if cp.Pipelines[sp.ServiceName] == "done" {
-					continue
-				}
-				if cp.Pipelines[sp.ServiceName] == "started" {
-					return result, fmt.Errorf("%s: pipeline launch outcome unknown; inspect forge before retry", sp.ServiceName)
-				}
 				svc, err := m.findService(ctx, p.TaskID, sp.ServiceName)
 				if err != nil {
 					return result, err
+				}
+				// Fresh source resolution immediately before pipeline launch and
+				// proof persistence: any movement blocks the remaining mutations,
+				// and the captured SHA binds the proof to this exact action source.
+				pipelineSHA, err := m.resolveFreshSourceSHA(ctx, svc)
+				if err != nil {
+					return result, fmt.Errorf("%s: source moved before pipeline: %w", sp.ServiceName, err)
+				}
+				switch cp.Pipelines[sp.ServiceName] {
+				case "done":
+					// The pipeline already ran; only the durable proof may be
+					// missing (e.g. a crash after the checkpoint save). Recreate
+					// it without launching another pipeline.
+					if err := m.proveClosePostAction(ctx, p.TaskID, svc, closePostActionPipeline, pipelineSHA); err != nil {
+						return result, fmt.Errorf("%s: %w", sp.ServiceName, err)
+					}
+					continue
+				case "started":
+					return result, fmt.Errorf("%s: pipeline launch outcome unknown; inspect forge before retry", sp.ServiceName)
 				}
 				client, err := m.forgeClientForService(ctx, svc)
 				if err != nil {
@@ -406,6 +424,9 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 				}
 				cp.Pipelines[sp.ServiceName] = "done"
 				if err = m.saveHotfixCheckpoint(p.TaskID, cp); err != nil {
+					return result, err
+				}
+				if err = m.proveClosePostAction(ctx, p.TaskID, svc, closePostActionPipeline, pipelineSHA); err != nil {
 					return result, err
 				}
 			}
@@ -450,6 +471,17 @@ func (m *manager) ensureHotfixTag(ctx context.Context, svc domain.Service, tag T
 	if err != nil {
 		return err
 	}
+	pushURL := ""
+	if tag.Push {
+		// Prove the push destination before any tag mutation: a tag pushed
+		// to a different remote than the bound identity ships nothing the
+		// proof covers. The captured URL is the push target, never the
+		// mutable remote name.
+		pushURL, err = m.verifiedPushURL(ctx, svc)
+		if err != nil {
+			return err
+		}
+	}
 	if !local && !remote {
 		if !tag.Annotated {
 			creator, ok := m.git.(interface {
@@ -466,7 +498,11 @@ func (m *manager) ensureHotfixTag(ctx context.Context, svc domain.Service, tag T
 		}
 	}
 	if tag.Push && !remote {
-		return m.git.PushTag(ctx, svc.WorktreePath, tag.TagName)
+		tagObjectSHA, err := m.resolveTagObjectSHA(ctx, svc.RepoPath, tag.TagName, tag.SourceRef)
+		if err != nil {
+			return err
+		}
+		return m.git.PushTag(ctx, svc.WorktreePath, pushURL, tag.TagName, tagObjectSHA)
 	}
 	return nil
 }

@@ -15,6 +15,7 @@ func TestRetryRelease_MetadataFreeKeepsLegacyPreparation(t *testing.T) {
 			// Given
 			g := &mockGitClient{}
 			m, _ := newReleasePlanTestManager(t, g)
+			wireMockOwnedWorktreeCleanup(g, mockHeadFromWorktreeHEAD)
 			if enabled {
 				enableReleasePrepareTaskMerge(t, m)
 			}

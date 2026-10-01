@@ -24,37 +24,7 @@ func testCleanupPreview(selection task.ReleaseCleanupSelection, blockers ...stri
 	}
 }
 
-func TestUpdate_ReleaseCleanupRequestPlansApprovedDefaults(t *testing.T) {
-	mgr := &mockManager{}
-	m := sendWindowSize(newTestModel(t, mgr), 120, 40)
-	m.setFocus(FocusReleases)
-	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
-
-	updated, cmd := m.Update(panels.PlanReleaseCleanupMsg{ReleaseID: "rel-1"})
-	m = updated.(Model)
-	if cmd == nil || !m.opRunning || m.releaseCleanupGeneration == 0 {
-		t.Fatalf("cleanup planning not started: cmd nil=%v running=%v generation=%d", cmd == nil, m.opRunning, m.releaseCleanupGeneration)
-	}
-	runBatchCommands(cmd())
-	if mgr.cleanupPlanReleaseID != "rel-1" || mgr.cleanupPlanSelection != task.DefaultReleaseCleanupSelection() {
-		t.Fatalf("plan call ID=%q selection=%+v", mgr.cleanupPlanReleaseID, mgr.cleanupPlanSelection)
-	}
-}
-
-func TestUpdate_ReleaseCleanupRequestRejectsUnmatchedOrNonReleasedSelection(t *testing.T) {
-	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
-	m.setFocus(FocusReleases)
-	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusDraft}})
-	for _, id := range []string{"rel-1", "rel-other"} {
-		updated, cmd := m.Update(panels.PlanReleaseCleanupMsg{ReleaseID: id})
-		m = updated.(Model)
-		if cmd != nil || m.opRunning {
-			t.Fatalf("request %q started cleanup", id)
-		}
-	}
-}
-
-func TestUpdate_ReleaseCleanupPlanReadyOpensChecklistAndIgnoresStale(t *testing.T) {
+func TestUpdate_ReleaseCleanupPlanReadyIgnoresStaleGeneration(t *testing.T) {
 	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
 	m.setFocus(FocusReleases)
 	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
@@ -62,52 +32,32 @@ func TestUpdate_ReleaseCleanupPlanReadyOpensChecklistAndIgnoresStale(t *testing.
 	m.releaseCleanupGeneration = 2
 	m.releaseCleanupRequest = &releaseCleanupRequest{generation: 2, releaseID: "rel-1", selection: selection}
 
-	updated, _ := m.Update(ReleaseCleanupPlanReadyMsg{Generation: 1, Preview: testCleanupPreview(selection)})
+	updated, _ := m.Update(ReleaseCleanupPlanReadyMsg{Generation: 1})
 	m = updated.(Model)
-	if m.modal != nil {
-		t.Fatalf("stale result opened %T", m.modal)
-	}
-	updated, _ = m.Update(ReleaseCleanupPlanReadyMsg{Generation: 2, Preview: testCleanupPreview(selection)})
-	m = updated.(Model)
-	if _, ok := m.modal.(*modal.ReleaseCleanupChecklistModal); !ok {
-		t.Fatalf("modal = %T", m.modal)
+	if m.modal != nil || m.releaseCleanupRequest == nil {
+		t.Fatalf("stale result mutated state: modal=%T request=%v", m.modal, m.releaseCleanupRequest != nil)
 	}
 }
 
-func TestUpdate_ReleaseCleanupSubmitReplansAndStoresOnlyUnblockedPlan(t *testing.T) {
-	selection := task.DefaultReleaseCleanupSelection()
-	for _, tc := range []struct {
-		name     string
-		blockers []string
-		wantPlan bool
-	}{
-		{name: "ready", wantPlan: true},
-		{name: "blocked", blockers: []string{"api worktree dirty"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
-			m.setFocus(FocusReleases)
-			m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
-			m.modal = modal.NewReleaseCleanupChecklistModal(testCleanupPreview(selection))
-			updated, cmd := m.Update(modal.SubmitReleaseCleanupMsg{ReleaseID: "rel-1", Selection: selection})
-			m = updated.(Model)
-			if cmd == nil || m.releaseCleanupRequest == nil || !m.releaseCleanupRequest.confirm {
-				t.Fatal("submitted selection did not start replan")
-			}
-			generation := m.releaseCleanupGeneration
-			updated, _ = m.Update(ReleaseCleanupPlanReadyMsg{Generation: generation, Preview: testCleanupPreview(selection, tc.blockers...)})
-			m = updated.(Model)
-			if (m.pendingReleaseCleanupPlan != nil) != tc.wantPlan {
-				t.Fatalf("pending plan = %v, want %v", m.pendingReleaseCleanupPlan != nil, tc.wantPlan)
-			}
-			if tc.wantPlan {
-				if _, ok := m.modal.(*modal.ReleaseCleanupConfirmModal); !ok {
-					t.Fatalf("modal = %T", m.modal)
-				}
-			} else if _, ok := m.modal.(*modal.ReleaseCleanupChecklistModal); !ok {
-				t.Fatalf("blocked modal = %T", m.modal)
-			}
-		})
+func TestUpdate_ReleaseCleanupSubmitStartsReplanAndRejectsZeroPlan(t *testing.T) {
+	selection := task.ReleaseCleanupSelection{RemoveTasks: true, RemoveRelease: true}
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.setFocus(FocusReleases)
+	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
+	m.modal = modal.NewReleaseCleanupChecklistModal(testCleanupPreview(selection))
+	updated, cmd := m.Update(modal.SubmitReleaseCleanupMsg{ReleaseID: "rel-1", Selection: selection})
+	m = updated.(Model)
+	if cmd == nil || m.releaseCleanupRequest == nil || !m.releaseCleanupRequest.confirm {
+		t.Fatal("submitted selection did not start replan")
+	}
+
+	updated, _ = m.Update(ReleaseCleanupPlanReadyMsg{Generation: m.releaseCleanupGeneration})
+	m = updated.(Model)
+	if m.pendingReleaseCleanupPlan != nil {
+		t.Fatal("zero plan stored as approval")
+	}
+	if _, ok := m.modal.(*modal.ReleaseCleanupConfirmModal); ok {
+		t.Fatal("zero plan opened confirmation")
 	}
 }
 
@@ -121,6 +71,7 @@ func TestUpdate_ReleaseCleanupLocalConfirmExecutesStoredPlan(t *testing.T) {
 	m.pendingReleaseCleanupPlan = &task.ReleaseCleanupPlan{}
 	m.pendingReleaseCleanupPreview = testCleanupPreview(selection)
 	m.modal = modal.NewReleaseCleanupConfirmModal(m.pendingReleaseCleanupPreview, 5)
+	m.cleanupQueueCurrent = &cleanupQueueItem{kind: modal.CleanupKindRelease, id: "rel-1"}
 
 	updated, cmd := m.Update(modal.ConfirmReleaseCleanupMsg{ReleaseID: "rel-1", Generation: 5})
 	m = updated.(Model)
@@ -144,6 +95,7 @@ func TestUpdate_ReleaseCleanupRemoteRequiresSecondConfirmAndRejectsStale(t *test
 	m.pendingReleaseCleanupPlan = &task.ReleaseCleanupPlan{}
 	m.pendingReleaseCleanupPreview = testCleanupPreview(selection)
 	m.modal = modal.NewReleaseCleanupConfirmModal(m.pendingReleaseCleanupPreview, 8)
+	m.cleanupQueueCurrent = &cleanupQueueItem{kind: modal.CleanupKindRelease, id: "rel-1"}
 
 	updated, cmd := m.Update(modal.ConfirmReleaseCleanupMsg{ReleaseID: "rel-1", Generation: 7})
 	m = updated.(Model)
@@ -189,6 +141,7 @@ func TestUpdate_ReleaseCleanupDoneRefreshesTasksReleasesAndRepoOnSuccessOrFailur
 		m := sendWindowSize(newTestModel(t, mgr), 120, 40)
 		m.opRunning = true
 		m.releaseCleanupExecuting = 4
+		m.releaseCleanupExecutingID = "rel-1"
 		updated, cmd := m.Update(ReleaseCleanupDoneMsg{Generation: 4, Result: task.ReleaseCleanupResult{ReleaseID: "rel-1"}, Err: executeErr})
 		m = updated.(Model)
 		if cmd == nil || m.opRunning {
@@ -234,11 +187,11 @@ func TestUpdate_ReleaseCleanupPlanningInvalidatedByFocusOrSelectionChange(t *tes
 				{ID: "rel-1", Status: domain.ReleaseStatusReleased},
 				{ID: "rel-2", Status: domain.ReleaseStatusReleased},
 			})
-			updated, _ := m.Update(panels.PlanReleaseCleanupMsg{ReleaseID: "rel-1"})
-			m = updated.(Model)
+			planned, _ := m.startReleaseCleanupPlan("rel-1", task.DefaultReleaseCleanupSelection(), false)
+			m = planned
 			generation := m.releaseCleanupGeneration
 
-			updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(change.key)})
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(change.key)})
 			m = updated.(Model)
 			if m.releaseCleanupRequest != nil || m.opRunning || m.releaseCleanupGeneration == generation {
 				t.Fatalf("planning not invalidated: request=%v running=%v generation=%d", m.releaseCleanupRequest != nil, m.opRunning, m.releaseCleanupGeneration)
@@ -275,7 +228,7 @@ func TestUpdate_ReleaseCleanupStateBlocksRepeatedAndMutatingReleaseActions(t *te
 				status domain.ReleaseStatus
 				msg    tea.Msg
 			}{
-				{status: domain.ReleaseStatusReleased, msg: panels.PlanReleaseCleanupMsg{ReleaseID: "rel-1"}},
+				{status: domain.ReleaseStatusReleased, msg: panels.OpenCleanupDialogMsg{}},
 				{status: domain.ReleaseStatusDraft, msg: panels.OpenCreateReleaseDialogMsg{}},
 				{status: domain.ReleaseStatusPrepared, msg: tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("F")}},
 				{status: domain.ReleaseStatusAwaitingMasterMerge, msg: tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("M")}},
@@ -303,6 +256,7 @@ func TestUpdate_ReleaseCleanupSecondExecutionCannotOverwriteActiveGeneration(t *
 	m.pendingReleaseCleanupPlan = &task.ReleaseCleanupPlan{}
 	m.pendingReleaseCleanupPreview = testCleanupPreview(task.DefaultReleaseCleanupSelection())
 	m.modal = modal.NewReleaseCleanupConfirmModal(m.pendingReleaseCleanupPreview, 10)
+	m.cleanupQueueCurrent = &cleanupQueueItem{kind: modal.CleanupKindRelease, id: "rel-1"}
 
 	updated, cmd := m.Update(modal.ConfirmReleaseCleanupMsg{ReleaseID: "rel-1", Generation: 10})
 	m = updated.(Model)
@@ -342,6 +296,7 @@ func TestUpdate_ReleaseCleanupConfirmRequiresCurrentReleasedSelection(t *testing
 					m.modal = modal.NewReleaseCleanupConfirmModal(m.pendingReleaseCleanupPreview, 4)
 					msg = modal.ConfirmReleaseCleanupMsg{ReleaseID: "rel-1", Generation: 4}
 				}
+				m.cleanupQueueCurrent = &cleanupQueueItem{kind: modal.CleanupKindRelease, id: "rel-1"}
 				updated, cmd := m.Update(msg)
 				m = updated.(Model)
 				if cmd != nil || m.releaseCleanupExecuting != 0 {
@@ -381,7 +336,7 @@ func TestUpdate_ExecutingReleaseCleanupBlocksTaskMutations(t *testing.T) {
 		panels.OpenSyncStrategyDialogMsg{TaskID: "TASK-1"},
 		panels.PushTaskMsg{TaskID: "TASK-1"},
 		panels.ShellExecMsg{TaskDir: "/tasks/TASK-1"},
-		modal.SubmitPruneMsg{SelectedTaskIDs: []string{"TASK-1"}},
+		modal.SubmitCleanupMsg{Generation: 1, Tasks: []string{"TASK-1"}},
 		modal.ConfirmMergeMsg{TaskID: "TASK-1"},
 	} {
 		updated, cmd := m.Update(msg)
@@ -467,5 +422,125 @@ func TestUpdate_ReleaseRefreshDriftClearsActiveCleanupPlanningRequest(t *testing
 	m = updated.(Model)
 	if m.releaseCleanupRequest != nil || m.opRunning || m.releaseCleanupGeneration == 2 {
 		t.Fatalf("refresh retained planning request: request=%v running=%v generation=%d", m.releaseCleanupRequest != nil, m.opRunning, m.releaseCleanupGeneration)
+	}
+}
+
+func TestUpdate_ReleaseCleanupPlanReadyRejectsZeroPlan(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.setFocus(FocusReleases)
+	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
+	selection := task.DefaultReleaseCleanupSelection()
+	m.releaseCleanupGeneration = 2
+	m.releaseCleanupRequest = &releaseCleanupRequest{generation: 2, releaseID: "rel-1", selection: selection}
+
+	updated, _ := m.Update(ReleaseCleanupPlanReadyMsg{Generation: 2})
+	m = updated.(Model)
+	if m.pendingReleaseCleanupPlan != nil {
+		t.Fatal("zero plan stored as approval")
+	}
+	if m.modal != nil {
+		t.Fatalf("zero plan opened %T", m.modal)
+	}
+}
+
+func TestUpdate_ReleaseCleanupRemoteConfirmRejectsMismatchedQueuedRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		current *cleanupQueueItem
+	}{
+		{name: "nil current item", current: nil},
+		{name: "task kind current item", current: &cleanupQueueItem{kind: modal.CleanupKindTask, id: "rel-1"}},
+		{name: "different release current item", current: &cleanupQueueItem{kind: modal.CleanupKindRelease, id: "rel-2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := &mockManager{}
+			m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+			m.setFocus(FocusReleases)
+			m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
+			selection := task.DefaultReleaseCleanupSelection()
+			selection.DeleteRemoteTaskBranches = true
+			m.releaseCleanupGeneration = 6
+			m.pendingReleaseCleanupPlan = &task.ReleaseCleanupPlan{}
+			m.pendingReleaseCleanupPreview = task.ReleaseCleanupPreview{ReleaseID: "rel-1", Selection: selection}
+			m.modal = modal.NewReleaseCleanupRemoteConfirmModal(m.pendingReleaseCleanupPreview, 6)
+			m.cleanupQueueCurrent = tc.current
+
+			updated, cmd := m.Update(modal.ConfirmRemoteReleaseCleanupMsg{ReleaseID: "rel-1", Generation: 6})
+			m = updated.(Model)
+			if cmd != nil || m.releaseCleanupExecuting != 0 || mgr.cleanupExecuteCalls != 0 {
+				t.Fatal("remote confirmation without matching queued release executed")
+			}
+		})
+	}
+}
+
+func TestUpdate_ReleaseCleanupDoneRejectsMismatchedResultID(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		resultID string
+	}{
+		{name: "different release", resultID: "rel-2"},
+		{name: "empty release", resultID: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := &mockManager{cleanupExecuteResult: task.ReleaseCleanupResult{ReleaseID: "rel-1"}}
+			m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+			m.setFocus(FocusReleases)
+			m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
+			selection := task.DefaultReleaseCleanupSelection()
+			m.releaseCleanupGeneration = 5
+			m.pendingReleaseCleanupPlan = &task.ReleaseCleanupPlan{}
+			m.pendingReleaseCleanupPreview = testCleanupPreview(selection)
+			m.modal = modal.NewReleaseCleanupConfirmModal(m.pendingReleaseCleanupPreview, 5)
+			m.cleanupQueueCurrent = &cleanupQueueItem{kind: modal.CleanupKindRelease, id: "rel-1"}
+
+			updated, cmd := m.Update(modal.ConfirmReleaseCleanupMsg{ReleaseID: "rel-1", Generation: 5})
+			m = updated.(Model)
+			if cmd == nil || m.releaseCleanupExecuting == 0 {
+				t.Fatal("confirmation did not start execution")
+			}
+
+			updated, cmd = m.Update(ReleaseCleanupDoneMsg{Generation: 5, Result: task.ReleaseCleanupResult{ReleaseID: tc.resultID}})
+			m = updated.(Model)
+			if cmd != nil {
+				t.Fatal("mismatched completion produced a command")
+			}
+			if m.releaseCleanupExecuting == 0 {
+				t.Fatal("mismatched completion accepted")
+			}
+			if strings.Contains(m.outputPanel.View(), "Release cleanup done") {
+				t.Fatalf("mismatched completion reported done: %s", m.outputPanel.View())
+			}
+		})
+	}
+}
+
+func TestUpdate_ReleaseCleanupConfirmRejectsMismatchedQueuedRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		current *cleanupQueueItem
+	}{
+		{name: "nil current item", current: nil},
+		{name: "task kind current item", current: &cleanupQueueItem{kind: modal.CleanupKindTask, id: "rel-1"}},
+		{name: "different release current item", current: &cleanupQueueItem{kind: modal.CleanupKindRelease, id: "rel-2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := &mockManager{}
+			m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+			m.setFocus(FocusReleases)
+			m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
+			selection := task.DefaultReleaseCleanupSelection()
+			m.releaseCleanupGeneration = 6
+			m.pendingReleaseCleanupPlan = &task.ReleaseCleanupPlan{}
+			m.pendingReleaseCleanupPreview = task.ReleaseCleanupPreview{ReleaseID: "rel-1", Selection: selection}
+			m.modal = modal.NewReleaseCleanupConfirmModal(m.pendingReleaseCleanupPreview, 6)
+			m.cleanupQueueCurrent = tc.current
+
+			updated, cmd := m.Update(modal.ConfirmReleaseCleanupMsg{ReleaseID: "rel-1", Generation: 6})
+			m = updated.(Model)
+			if cmd != nil || m.releaseCleanupExecuting != 0 || mgr.cleanupExecuteCalls != 0 {
+				t.Fatal("confirmation without matching queued release executed")
+			}
+		})
 	}
 }

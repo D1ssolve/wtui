@@ -1,8 +1,11 @@
 package modal
 
 import (
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
@@ -36,6 +39,10 @@ func overlayContentSize(termW, termH int) (int, int) {
 	width := min(max(termW*50/100, 50), max(termW-4, 0)) - style.GetHorizontalPadding()
 	return max(0, min(width, termW-style.GetHorizontalFrameSize())),
 		max(0, min(max(termH*70/100, 10), termH-style.GetVerticalFrameSize()))
+}
+
+func wrappedHeight(s string, width int) int {
+	return strings.Count(ansi.Wrap(s, max(1, width), " "), "\n") + 1
 }
 
 func OverlayView(content string, termW, termH int) string {

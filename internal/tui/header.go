@@ -43,6 +43,13 @@ func renderHeader(m Model) string {
 	}
 	parts = append(parts, lipgloss.NewStyle().Foreground(indicatorColor).Render(indicator))
 
+	if m.height > 0 && m.height < 12 {
+		// Short terminals: the layout reserves a single header line, so skip
+		// the bordered box.
+		line := ansi.Truncate(strings.Join(parts, "  "), m.width, "…")
+		return lipgloss.PlaceHorizontal(m.width, lipgloss.Left, line)
+	}
+
 	contentWidth := max(0, m.width-4)
 	content := ansi.Truncate(strings.Join(parts, "  "), contentWidth, "…")
 	content = lipgloss.PlaceHorizontal(contentWidth, lipgloss.Left, content)

@@ -3,7 +3,6 @@ package task
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,7 +51,7 @@ func (m *manager) ConvertHotfixToFeature(ctx context.Context, params ConvertHotf
 		}
 		if err := m.ensureConversionTargetReservation(ctx, manifest, true); err != nil {
 			_ = os.Remove(filepath.Join(m.taskDir(manifest.SourceTaskID), conversionMarkerName))
-			_ = os.RemoveAll(manifest.StagingDir)
+			_ = removeConversionStagingDir(manifest.StagingDir)
 			return err
 		}
 	}
@@ -317,7 +316,7 @@ func (m *manager) executeHotfixConversion(ctx context.Context, manifest conversi
 		}
 	}
 	for i := range manifest.Services {
-		if err := m.removeConversionSourceRemote(ctx, manifest.Services[i], statusCh); err != nil {
+		if err := m.retainConversionSourceRemote(ctx, manifest.Services[i], statusCh); err != nil {
 			return err
 		}
 	}
@@ -362,27 +361,35 @@ func (m *manager) ensureConversionTargetWorktree(ctx context.Context, svc conver
 }
 
 func (m *manager) ensureConversionTargetPushed(ctx context.Context, svc conversionService, statusCh chan<- string) error {
-	if exists, err := m.git.RemoteBranchExists(ctx, svc.RepoPath, svc.TargetBranch); err != nil {
+	targetRef := "refs/heads/" + svc.TargetBranch
+	sha, err := m.git.RemoteRefSHA(ctx, svc.RepoPath, targetRef)
+	if err != nil {
 		return fmt.Errorf("conversion: check remote target for %s: %w", svc.Name, err)
-	} else if !exists {
-		entry, found, err := m.findConversionWorktree(ctx, svc.RepoPath, svc.TargetBranch)
-		if err != nil {
-			return err
-		}
-		if !found {
-			return fmt.Errorf("conversion: target worktree missing for %s", svc.Name)
-		}
-		sendStatus(statusCh, fmt.Sprintf("[%s] pushing %s...", svc.Name, svc.TargetBranch))
-		if err := m.git.PushBranchExplicit(ctx, entry.Path, svc.TargetBranch); err != nil {
-			return fmt.Errorf("conversion: push target for %s: %w", svc.Name, err)
-		}
 	}
-	sha, err := m.git.RemoteRefSHA(ctx, svc.RepoPath, "refs/heads/"+svc.TargetBranch)
+	if sha == svc.SourceSHA {
+		return nil
+	}
+	if sha != "" {
+		return fmt.Errorf("conversion: remote target for %s points to %s, want %s", svc.Name, sha, svc.SourceSHA)
+	}
+	sendStatus(statusCh, fmt.Sprintf("[%s] pushing %s...", svc.Name, svc.TargetBranch))
+	// Prove the push destination before mutating the remote: a conversion
+	// push to a fetch-vs-push mismatched remote would ship nothing the
+	// conversion identity covers. The captured URL is the push target,
+	// never the mutable remote name.
+	pushURL, err := m.verifiedRepoPushURL(ctx, svc.Name, svc.RepoPath)
+	if err != nil {
+		return fmt.Errorf("conversion: verify push destination for %s: %w", svc.Name, err)
+	}
+	if err := m.git.PushRefWithLease(ctx, svc.RepoPath, pushURL, targetRef, svc.SourceSHA, targetRef, ""); err != nil {
+		return fmt.Errorf("conversion: push target for %s: %w", svc.Name, err)
+	}
+	pushed, err := m.git.RemoteRefSHA(ctx, svc.RepoPath, targetRef)
 	if err != nil {
 		return fmt.Errorf("conversion: verify remote target for %s: %w", svc.Name, err)
 	}
-	if sha != svc.SourceSHA {
-		return fmt.Errorf("conversion: remote target for %s points to %s, want %s", svc.Name, sha, svc.SourceSHA)
+	if pushed != svc.SourceSHA {
+		return fmt.Errorf("conversion: remote target for %s points to %s, want %s", svc.Name, pushed, svc.SourceSHA)
 	}
 	return nil
 }
@@ -422,7 +429,10 @@ func (m *manager) revalidateConversionSource(ctx context.Context, svc conversion
 	return nil
 }
 
-func (m *manager) removeConversionSourceRemote(ctx context.Context, svc conversionService, statusCh chan<- string) error {
+// retainConversionSourceRemote reports the remote source as retained and
+// never deletes it: a concurrent source move therefore cannot lose work, and
+// the user removes the branch on the forge after merging the target.
+func (m *manager) retainConversionSourceRemote(ctx context.Context, svc conversionService, statusCh chan<- string) error {
 	if svc.SourceRemoteSHA == "" {
 		return nil
 	}
@@ -431,6 +441,7 @@ func (m *manager) removeConversionSourceRemote(ctx context.Context, svc conversi
 		return fmt.Errorf("conversion: check remote source for %s: %w", svc.Name, err)
 	}
 	if !exists {
+		sendStatus(statusCh, fmt.Sprintf("[%s] remote %s already absent; nothing to retain", svc.Name, svc.SourceBranch))
 		return nil
 	}
 	sha, err := m.git.RemoteRefSHA(ctx, svc.RepoPath, "refs/heads/"+svc.SourceBranch)
@@ -438,27 +449,11 @@ func (m *manager) removeConversionSourceRemote(ctx context.Context, svc conversi
 		return fmt.Errorf("conversion: verify remote source for %s: %w", svc.Name, err)
 	}
 	if sha != svc.SourceRemoteSHA {
-		return fmt.Errorf("conversion: remote source for %s moved to %s, want %s", svc.Name, sha, svc.SourceRemoteSHA)
+		sendStatus(statusCh, fmt.Sprintf("[%s] retaining remote %s (moved to %s, not deleted)", svc.Name, svc.SourceBranch, sha))
+		return nil
 	}
-	sendStatus(statusCh, fmt.Sprintf("[%s] deleting remote %s...", svc.Name, svc.SourceBranch))
-	if err := m.git.MoveRemoteBranchIfUnchanged(ctx, svc.RepoPath, svc.SourceBranch, svc.TargetBranch, svc.SourceRemoteSHA, svc.SourceSHA); err != nil {
-		if isProtectedBranchDeletionError(err) {
-			sendStatus(statusCh, fmt.Sprintf("[%s] keeping protected remote %s", svc.Name, svc.SourceBranch))
-			return nil
-		}
-		return fmt.Errorf("conversion: delete remote source for %s: %w", svc.Name, err)
-	}
+	sendStatus(statusCh, fmt.Sprintf("[%s] retaining remote %s (delete on the forge after merge)", svc.Name, svc.SourceBranch))
 	return nil
-}
-
-func isProtectedBranchDeletionError(err error) bool {
-	var execErr *git.ExecError
-	if !errors.As(err, &execErr) {
-		return false
-	}
-	stderr := strings.ToLower(execErr.Stderr)
-	return strings.Contains(stderr, "protected branch") &&
-		(strings.Contains(stderr, "delete") || strings.Contains(stderr, "deletion"))
 }
 
 func (m *manager) removeConversionSourceLocal(ctx context.Context, svc conversionService, statusCh chan<- string) error {
@@ -561,7 +556,7 @@ func (m *manager) promoteConversionTarget(ctx context.Context, manifest conversi
 			return err
 		}
 	}
-	if err := os.RemoveAll(manifest.StagingDir); err != nil {
+	if err := removeConversionStagingDir(manifest.StagingDir); err != nil {
 		return fmt.Errorf("conversion: remove staging directory: %w", err)
 	}
 	return nil
@@ -628,26 +623,6 @@ func (m *manager) moveConversionSourceExtras(manifest conversionManifest) error 
 		if err := os.Rename(sourcePath, targetPath); err != nil {
 			return fmt.Errorf("conversion: move source task root entry %s: %w", entry.Name(), err)
 		}
-	}
-	return nil
-}
-
-func (m *manager) removeConversionSourceRoot(manifest conversionManifest) error {
-	root := m.taskDir(manifest.SourceTaskID)
-	if err := m.requireConvertibleSourceRoot(manifest); err != nil {
-		return err
-	}
-	for _, name := range []string{manifest.SourceTaskID + ".code-workspace", manifest.SourceTaskID + ".sln"} {
-		if err := os.Remove(filepath.Join(root, name)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("conversion: remove source task file %s: %w", name, err)
-		}
-	}
-	cleanupPath := filepath.Join(manifest.StagingDir, "source-cleanup")
-	if err := os.Rename(root, cleanupPath); err != nil {
-		return fmt.Errorf("conversion: stage source task cleanup: %w", err)
-	}
-	if err := os.RemoveAll(cleanupPath); err != nil {
-		return fmt.Errorf("conversion: remove staged source task: %w", err)
 	}
 	return nil
 }

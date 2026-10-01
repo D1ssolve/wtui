@@ -33,6 +33,7 @@ func TestPushTask_NoServices(t *testing.T) {
 		t.Errorf("PushTask returned error for task with no services: %v", err)
 	}
 
+	close(lineCh)
 	for line := range lineCh {
 		t.Errorf("unexpected line on lineCh: %q", line)
 	}
@@ -82,6 +83,7 @@ func TestPushTask_PushesAllServices(t *testing.T) {
 	}
 
 	var lines []string
+	close(lineCh)
 	for line := range lineCh {
 		lines = append(lines, line)
 	}
@@ -177,6 +179,7 @@ func TestPushTask_ContinuesOnError(t *testing.T) {
 	}
 
 	var lines []string
+	close(lineCh)
 	for line := range lineCh {
 		lines = append(lines, line)
 	}
@@ -225,6 +228,7 @@ func TestPushTask_ReportsProgress(t *testing.T) {
 	}
 
 	var lines []string
+	close(lineCh)
 	for line := range lineCh {
 		lines = append(lines, line)
 	}
@@ -305,6 +309,7 @@ func TestPushTask_ProtectedBranch_RefusesPush(t *testing.T) {
 	}
 
 	var lines []string
+	close(lineCh)
 	for line := range lineCh {
 		lines = append(lines, line)
 	}
@@ -513,6 +518,7 @@ func TestPushTask_AllowedBranch_Pushes(t *testing.T) {
 	}
 
 	var lines []string
+	close(lineCh)
 	for line := range lineCh {
 		lines = append(lines, line)
 	}

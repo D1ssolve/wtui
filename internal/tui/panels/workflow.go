@@ -50,6 +50,9 @@ func renderWorkflow(wf *domain.WorkflowSummary, width int) string {
 		for start := 0; start < len(wf.Steps); {
 			end := workflowRowEnd(wf.Steps, start, width)
 			row := renderWorkflowChain(wf.Steps[start:end])
+			if lipgloss.Width(row) > width {
+				row = ansi.Truncate(row, width, "…")
+			}
 			lines = append(lines, row)
 			start = end
 		}

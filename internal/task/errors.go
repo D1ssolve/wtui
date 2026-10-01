@@ -40,6 +40,13 @@ var (
 	ErrReleaseLegacyManifest          = errors.New("release: legacy manifest")
 	ErrReleaseMasterMoved             = errors.New("release: master moved")
 	ErrReleaseCleanupBlocked          = errors.New("release: cleanup blocked")
+	ErrTaskCleanupBlocked             = errors.New("task cleanup blocked")
+
+	// ErrRemoteAtomicGuardUnsupported reports that remote source deletion was
+	// refused because no genuine atomic target guard exists: git push may omit
+	// no-op ref updates, so a force-with-lease on an unchanged target ref is
+	// not a lock. The remote branch is retained.
+	ErrRemoteAtomicGuardUnsupported = errors.New("unsupported: remote source deletion lacks an atomic target guard")
 
 	ErrPushProtectedBranch = errors.New("refusing to push protected branch")
 )

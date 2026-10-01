@@ -448,8 +448,11 @@ func TestRemoveDialog_RemoteSelected_EnterShowsDangerThenSubmits(t *testing.T) {
 		t.Fatalf("stage = %v, want remote confirm", d.stage)
 	}
 	view := stripAnsi(d.View())
-	if !strings.Contains(view, "ORIGIN") {
-		t.Error("remote confirmation must warn about origin deletion")
+	if !strings.Contains(view, "NOT SUPPORTED") {
+		t.Error("remote confirmation must state remote deletion is unsupported")
+	}
+	if strings.Contains(view, "WILL BE DELETED FROM ORIGIN") {
+		t.Error("remote confirmation must not promise origin deletion")
 	}
 
 	_, cmd = d.Update(sendSpecialKey(tea.KeyEnter))
@@ -552,7 +555,7 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		"Clone selected task group",
 		"Remove task group",
 		"Plan close selected task",
-		"Scan prunable tasks",
+		"Open cleanup review",
 		"Validate selected task",
 		"Browse task tags",
 		"Add service to task",
@@ -597,14 +600,10 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 	}
 }
 
-func TestHelpOverlay_CleanupHintRequiresReleasedSelection(t *testing.T) {
+func TestHelpOverlay_CleanupHintAlwaysShown(t *testing.T) {
 	h := NewHelpOverlayWithOptions(false)
-	if strings.Contains(stripAnsi(h.View()), "Cleanup selected released release") {
-		t.Fatal("cleanup help shown without released selection")
-	}
-	h.SetReleaseCleanupAvailable(true)
-	if !strings.Contains(stripAnsi(h.View()), "Cleanup selected released release") {
-		t.Fatal("cleanup help missing for released selection")
+	if !strings.Contains(stripAnsi(h.View()), "Open cleanup review") {
+		t.Fatal("cleanup help missing")
 	}
 }
 

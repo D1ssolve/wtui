@@ -35,15 +35,14 @@ type ResolvedGitFlow struct {
 }
 
 type BranchTypeRule struct {
-	Prefixes                     []string
-	BaseBranch                   string
-	MergeTargets                 []string
-	ReviewTargets                []string
-	CloseStrategy                CloseStrategy
-	MergeStrategy                MergeStrategy
-	RequiresClean                bool
-	TagOnClose                   bool
-	TagSource                    string
-	DeleteSourceBranchAfterMerge bool
-	TriggerPipelineOnClose       bool
+	Prefixes               []string
+	BaseBranch             string
+	MergeTargets           []string
+	ReviewTargets          []string
+	CloseStrategy          CloseStrategy
+	MergeStrategy          MergeStrategy
+	RequiresClean          bool
+	TagOnClose             bool
+	TagSource              string
+	TriggerPipelineOnClose bool
 }

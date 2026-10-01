@@ -74,7 +74,7 @@ func newTaskPrepareRecovery(t *testing.T) *taskPrepareRecovery {
 	var specs []releasePlanTaskService
 	for n := 1; n <= 2; n++ {
 		id := fmt.Sprintf("APP-%d", n)
-		x.f.readiness[n] = forge.MRReadiness{Number: n, State: "open", SourceBranch: "feature/" + id, TargetBranch: "develop", HeadSHA: fmt.Sprintf("head-%d", n), Ready: true, SupportsSHAPin: true}
+		x.f.readiness[n] = forge.MRReadiness{Number: n, State: "open", SourceBranch: "feature/" + id, TargetBranch: "develop", HeadSHA: fmt.Sprintf("head-%d", n), Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 		specs = append(specs, releasePlanTaskService{TaskID: id, ServiceName: "api", Branch: "feature/" + id, RepoPath: filepath.Join(x.m.cfg.RootDir, "repo-api")})
 	}
 	seedReleasePlanTasks(t, x.m.cfg.TasksRoot, x.g, specs...)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -202,6 +203,8 @@ func ghReadiness(pr ghPR, sourceBranch string) MRReadiness {
 		Ready:          len(blockers) == 0,
 		Blockers:       blockers,
 		SupportsSHAPin: true,
+		// gh pr merge pins the source head only; no target binding exists.
+		SupportsTargetBinding: false,
 	}
 }
 
@@ -237,6 +240,13 @@ func ghChecksState(checks []ghCheck) string {
 }
 
 func (c *GhClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMergeResult, error) {
+	if params.ExpectedTargetBranch != "" || params.ExpectedTargetSHA != "" {
+		return MRMergeResult{}, &ForgeError{
+			Category: ErrCategoryUnknown,
+			Cause:    errors.New("gh merge: requested target binding cannot be enforced: gh pr merge pins the source head only"),
+			Stderr:   "gh pr merge does not support target branch/SHA pinning",
+		}
+	}
 	worktreePath := pickWorktree(c.worktreePath, params.WorktreePath)
 	number := strconv.Itoa(params.Number)
 	method := params.Method

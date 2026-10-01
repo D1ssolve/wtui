@@ -74,7 +74,19 @@ func (m *manager) FinalizeRelease(ctx context.Context, params FinishReleaseParam
 		svc := &release.Services[i]
 		if m.cfg.Release != nil && m.cfg.Release.PushTags != nil && *m.cfg.Release.PushTags {
 			sendStatus(params.StatusCh, fmt.Sprintf("[%s][push] pushing tag %s", svc.Name, svc.Tag))
-			if err := m.git.PushTag(ctx, svc.RepoPath, svc.Tag); err != nil {
+			// Prove the push destination before publishing: a tag pushed to a
+			// fetch-vs-push mismatched remote ships nothing the release
+			// identity covers. The captured URL is the push target, never
+			// the mutable remote name.
+			pushURL, err := m.verifiedRepoPushURL(ctx, svc.Name, svc.RepoPath)
+			if err != nil {
+				return m.failFinalization(&release, svc, fmt.Errorf("release finalize: verify push destination for service=%s: %w", svc.Name, err))
+			}
+			tagObjectSHA, err := m.resolveTagObjectSHA(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA)
+			if err != nil {
+				return m.failFinalization(&release, svc, err)
+			}
+			if err := m.git.PushTag(ctx, svc.RepoPath, pushURL, svc.Tag, tagObjectSHA); err != nil {
 				return m.failFinalization(&release, svc, fmt.Errorf("%w: service=%s tag=%s: %v", ErrReleaseTagPushFailed, svc.Name, svc.Tag, err))
 			}
 			svc.PushedTag = true
@@ -101,15 +113,8 @@ func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Relea
 		return fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
 	}
 	if svc.IntegrationWorktreePath != "" {
-		commonDir, commonErr := m.git.CommonDir(ctx, svc.RepoPath)
-		if commonErr != nil {
-			return fmt.Errorf("release finalize: resolve retained worktree common dir: %w", commonErr)
-		}
-		if err := m.git.RemoveWorktree(ctx, commonDir, svc.IntegrationWorktreePath, true); err != nil {
+		if err := m.removeOwnedIntegrationWorktree(ctx, release, svc, svc.IntegrationWorktreePath, svc.PostIntegrationSHA); err != nil {
 			return fmt.Errorf("release finalize: remove retained worktree: %w", err)
-		}
-		if err := os.RemoveAll(svc.IntegrationWorktreePath); err != nil {
-			return fmt.Errorf("release finalize: clean retained worktree: %w", err)
 		}
 		svc.IntegrationWorktreePath = ""
 	}
@@ -125,11 +130,10 @@ func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Relea
 		if keep {
 			return
 		}
-		commonDir, commonErr := m.git.CommonDir(ctx, integrationPath)
-		if commonErr == nil {
-			_ = m.git.RemoveWorktree(ctx, commonDir, integrationPath, true)
+		if err := m.removeOwnedIntegrationWorktree(ctx, release, svc, integrationPath, svc.PostIntegrationSHA); err != nil {
+			sendStatus(statusCh, fmt.Sprintf("[%s][finalize] integration worktree preserved: %v", svc.Name, err))
+			return
 		}
-		_ = os.RemoveAll(integrationPath)
 		svc.IntegrationWorktreePath = ""
 	}()
 	if err := m.persistCheckpoint(release, "integration_worktree", nil); err != nil {
@@ -158,6 +162,12 @@ func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Relea
 	}
 
 	if pushIntegration {
+		// Prove the push destination before mutating the remote: an
+		// integration push to a fetch-vs-push mismatched remote would ship
+		// nothing the release identity covers.
+		if _, err := m.verifiedRepoPushURL(ctx, svc.Name, svc.RepoPath); err != nil {
+			return fmt.Errorf("release finalize: verify push destination for service=%s: %w", svc.Name, err)
+		}
 		if err := m.git.PushRef(ctx, integrationPath, "HEAD", svc.IntegrationBranch); err != nil {
 			return fmt.Errorf("release finalize: push service=%s integration=%s: %w", svc.Name, svc.IntegrationBranch, err)
 		}
@@ -222,12 +232,26 @@ func (m *manager) runFinishService(ctx context.Context, release *domain.Release,
 	if svc.AcceptedMergeSHA == "" {
 		return fmt.Errorf("%w: service=%s accepted merge SHA missing", ErrReleaseLegacyManifest, svc.Name)
 	}
-	if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA, releaseTagMessage(release.ID, svc.TagDescription)); err != nil {
-		return fmt.Errorf("%w: %v", ErrReleaseTagCreateFailed, err)
+	exists, err := m.git.TagExists(ctx, svc.RepoPath, svc.Tag)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA, releaseTagMessage(release.ID, svc.TagDescription)); err != nil {
+			return fmt.Errorf("%w: %v", ErrReleaseTagCreateFailed, err)
+		}
+	}
+	tagObjectSHA, err := m.resolveTagObjectSHA(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA)
+	if err != nil {
+		return err
 	}
 	svc.TagRef, svc.TagSHA = svc.Tag, svc.AcceptedMergeSHA
 	if m.cfg.Release != nil && m.cfg.Release.PushTags != nil && *m.cfg.Release.PushTags {
-		if err := m.git.PushTag(ctx, svc.RepoPath, svc.Tag); err != nil {
+		pushURL, err := m.verifiedRepoPushURL(ctx, svc.Name, svc.RepoPath)
+		if err != nil {
+			return fmt.Errorf("release finish: verify push destination for service=%s: %w", svc.Name, err)
+		}
+		if err := m.git.PushTag(ctx, svc.RepoPath, pushURL, svc.Tag, tagObjectSHA); err != nil {
 			return fmt.Errorf("%w: %v", ErrReleaseTagPushFailed, err)
 		}
 		svc.PushedTag = true

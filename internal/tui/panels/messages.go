@@ -81,7 +81,7 @@ type OpenLazygitServiceMsg struct {
 
 type PlanCloseTaskMsg struct{ TaskID string }
 
-type ScanPrunableTasksMsg struct{}
+type OpenCleanupDialogMsg struct{}
 
 type ValidateTaskMsg struct{ TaskID string }
 
@@ -104,8 +104,6 @@ type OpenReleaseRiderMsg struct {
 	ReleaseID  string
 	ReleaseDir string
 }
-
-type PlanReleaseCleanupMsg struct{ ReleaseID string }
 
 type ReleaseVersionsLoadedMsg struct {
 	Versions map[string]string // serviceName → proposed version

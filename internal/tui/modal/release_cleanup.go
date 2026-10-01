@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/task"
 )
@@ -14,11 +16,7 @@ type cleanupOption uint8
 
 const (
 	cleanupTasks cleanupOption = iota
-	cleanupLocalTaskBranches
-	cleanupRemoteTaskBranches
 	cleanupRelease
-	cleanupLocalReleaseBranches
-	cleanupRemoteReleaseBranches
 )
 
 type releaseCleanupRow struct {
@@ -26,13 +24,12 @@ type releaseCleanupRow struct {
 	label  string
 }
 
+// Only destructive resource scopes are toggles. Branch deletion is never
+// offered: local and remote branches are always retained by cleanup, so the
+// checklist renders their retention as explanatory text instead of checkboxes.
 var releaseCleanupRows = []releaseCleanupRow{
 	{cleanupTasks, "Remove task worktrees and task directories"},
-	{cleanupLocalTaskBranches, "Delete local task branches"},
-	{cleanupRemoteTaskBranches, "Delete remote task branches"},
 	{cleanupRelease, "Remove release worktrees and manifest"},
-	{cleanupLocalReleaseBranches, "Delete local release branches"},
-	{cleanupRemoteReleaseBranches, "Delete remote release branches"},
 }
 
 type ReleaseCleanupChecklistModal struct {
@@ -40,20 +37,66 @@ type ReleaseCleanupChecklistModal struct {
 	selection     task.ReleaseCleanupSelection
 	rows          []releaseCleanupRow
 	selectedIndex int
+	width         int
+	height        int
+	contentWidth  int
+	contentHeight int
+	viewport      viewport.Model
+	scrollable    bool
 }
 
+const (
+	releaseCleanupMinWidth  = 40
+	releaseCleanupMinHeight = 12
+)
+
 func NewReleaseCleanupChecklistModal(preview task.ReleaseCleanupPreview) *ReleaseCleanupChecklistModal {
+	selection := task.ReleaseCleanupSelection{
+		RemoveTasks:   preview.Selection.RemoveTasks,
+		RemoveRelease: preview.Selection.RemoveRelease,
+	}
 	return &ReleaseCleanupChecklistModal{
 		preview:   preview,
-		selection: preview.Selection,
+		selection: selection,
 		rows:      append([]releaseCleanupRow(nil), releaseCleanupRows...),
+		viewport:  viewport.New(1, 1),
 	}
 }
 
-func (m *ReleaseCleanupChecklistModal) Title() string                           { return "Release Cleanup" }
-func (m *ReleaseCleanupChecklistModal) SetTerminalSize(_, _ int)                {}
-func (m *ReleaseCleanupChecklistModal) ReleaseID() string                       { return m.preview.ReleaseID }
-func (m *ReleaseCleanupChecklistModal) Selection() task.ReleaseCleanupSelection { return m.selection }
+func (m *ReleaseCleanupChecklistModal) Title() string     { return "Release Cleanup" }
+func (m *ReleaseCleanupChecklistModal) ReleaseID() string { return m.preview.ReleaseID }
+func (m *ReleaseCleanupChecklistModal) Selection() task.ReleaseCleanupSelection {
+	return task.ReleaseCleanupSelection{RemoveTasks: m.selection.RemoveTasks, RemoveRelease: m.selection.RemoveRelease}
+}
+
+func (m *ReleaseCleanupChecklistModal) SetTerminalSize(width, height int) {
+	m.width = width
+	m.height = height
+	contentWidth, contentHeight := overlayContentSize(width, height)
+	m.contentWidth = max(1, contentWidth)
+	m.contentHeight = max(1, contentHeight)
+	m.viewport.Width = m.contentWidth
+	m.refreshViewport()
+}
+
+func (m *ReleaseCleanupChecklistModal) usable() bool {
+	return m.width <= 0 || (m.width >= releaseCleanupMinWidth && m.height >= releaseCleanupMinHeight)
+}
+
+func (m *ReleaseCleanupChecklistModal) refreshViewport() {
+	if !m.usable() {
+		return
+	}
+	headerH := wrappedHeight(m.header(), m.contentWidth)
+	footerH := wrappedHeight(m.footer(true), m.contentWidth)
+	m.viewport.Height = max(1, m.contentHeight-headerH-footerH)
+	wrapped := ansi.Wrap(m.body(), m.viewport.Width, "/")
+	m.scrollable = strings.Count(wrapped, "\n")+1 > m.viewport.Height
+	m.viewport.SetContent(wrapped)
+	if len(m.preview.Blockers) > 0 {
+		m.viewport.GotoBottom()
+	}
+}
 
 func (m *ReleaseCleanupChecklistModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)
@@ -63,52 +106,57 @@ func (m *ReleaseCleanupChecklistModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	switch keyMsg.String() {
 	case "up", "k":
 		m.selectedIndex = (m.selectedIndex - 1 + len(m.rows)) % len(m.rows)
+		return m, nil
 	case "down", "j":
 		m.selectedIndex = (m.selectedIndex + 1) % len(m.rows)
+		return m, nil
 	case " ":
 		m.toggle(m.rows[m.selectedIndex].option)
+		m.refreshViewport()
+		return m, nil
 	case "enter":
-		if len(m.preview.Blockers) > 0 && m.selection == m.preview.Selection {
+		if !m.usable() {
 			return m, nil
 		}
-		msg := SubmitReleaseCleanupMsg{ReleaseID: m.preview.ReleaseID, Selection: m.selection}
+		selection := m.Selection()
+		if !selection.RemoveTasks && !selection.RemoveRelease {
+			return m, nil
+		}
+		if len(m.preview.Blockers) > 0 && selection == m.planSelection() {
+			return m, nil
+		}
+		msg := SubmitReleaseCleanupMsg{ReleaseID: m.preview.ReleaseID, Selection: selection}
 		return m, func() tea.Msg { return msg }
 	case "esc":
 		return m, func() tea.Msg { return CloseModalMsg{} }
+	case "g", "home":
+		m.viewport.GotoTop()
+		return m, nil
+	case "G", "end":
+		m.viewport.GotoBottom()
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
 	}
-	return m, nil
+}
+
+// planSelection returns the planned scope reduced to resource scopes, used to
+// detect whether the user changed anything relative to a blocked plan.
+func (m *ReleaseCleanupChecklistModal) planSelection() task.ReleaseCleanupSelection {
+	return task.ReleaseCleanupSelection{
+		RemoveTasks:   m.preview.Selection.RemoveTasks,
+		RemoveRelease: m.preview.Selection.RemoveRelease,
+	}
 }
 
 func (m *ReleaseCleanupChecklistModal) toggle(option cleanupOption) {
 	switch option {
 	case cleanupTasks:
 		m.selection.RemoveTasks = !m.selection.RemoveTasks
-		if !m.selection.RemoveTasks {
-			m.selection.DeleteLocalTaskBranches = false
-			m.selection.DeleteRemoteTaskBranches = false
-		}
-	case cleanupLocalTaskBranches:
-		if m.selection.RemoveTasks {
-			m.selection.DeleteLocalTaskBranches = !m.selection.DeleteLocalTaskBranches
-		}
-	case cleanupRemoteTaskBranches:
-		if m.selection.RemoveTasks {
-			m.selection.DeleteRemoteTaskBranches = !m.selection.DeleteRemoteTaskBranches
-		}
 	case cleanupRelease:
 		m.selection.RemoveRelease = !m.selection.RemoveRelease
-		if !m.selection.RemoveRelease {
-			m.selection.DeleteLocalReleaseBranches = false
-			m.selection.DeleteRemoteReleaseBranches = false
-		}
-	case cleanupLocalReleaseBranches:
-		if m.selection.RemoveRelease {
-			m.selection.DeleteLocalReleaseBranches = !m.selection.DeleteLocalReleaseBranches
-		}
-	case cleanupRemoteReleaseBranches:
-		if m.selection.RemoveRelease {
-			m.selection.DeleteRemoteReleaseBranches = !m.selection.DeleteRemoteReleaseBranches
-		}
 	}
 }
 
@@ -116,30 +164,32 @@ func (m *ReleaseCleanupChecklistModal) selected(option cleanupOption) bool {
 	switch option {
 	case cleanupTasks:
 		return m.selection.RemoveTasks
-	case cleanupLocalTaskBranches:
-		return m.selection.DeleteLocalTaskBranches
-	case cleanupRemoteTaskBranches:
-		return m.selection.DeleteRemoteTaskBranches
 	case cleanupRelease:
 		return m.selection.RemoveRelease
-	case cleanupLocalReleaseBranches:
-		return m.selection.DeleteLocalReleaseBranches
-	case cleanupRemoteReleaseBranches:
-		return m.selection.DeleteRemoteReleaseBranches
 	default:
 		return false
 	}
 }
 
 func (m *ReleaseCleanupChecklistModal) View() string {
+	if m.width <= 0 || m.height <= 0 {
+		return m.header() + m.body() + m.footer(false)
+	}
+	if !m.usable() {
+		return m.tooSmallNotice()
+	}
+	return ansi.Wrap(m.header(), m.contentWidth, " ") +
+		m.viewport.View() +
+		ansi.Wrap(m.footer(m.scrollable), m.contentWidth, " ")
+}
+
+func (m *ReleaseCleanupChecklistModal) header() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
-	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
-	dangerStyle := lipgloss.NewStyle().Foreground(modalColorDanger)
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Cleanup release " + m.preview.ReleaseID))
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 	for i, row := range m.rows {
 		cursor := "  "
 		if i == m.selectedIndex {
@@ -149,18 +199,31 @@ func (m *ReleaseCleanupChecklistModal) View() string {
 		if m.selected(row.option) {
 			checked = "[x]"
 		}
-		dependency := ""
-		if (row.option == cleanupLocalTaskBranches || row.option == cleanupRemoteTaskBranches) && !m.selection.RemoveTasks {
-			dependency = " (requires task removal)"
+		prefix := cursor + checked + " "
+		label := row.label
+		if m.width > 0 {
+			indent := lipgloss.Width(prefix)
+			label = ansi.Wrap(label, max(1, m.contentWidth-indent), " ")
+			label = strings.ReplaceAll(label, "\n", "\n"+strings.Repeat(" ", indent))
 		}
-		if (row.option == cleanupLocalReleaseBranches || row.option == cleanupRemoteReleaseBranches) && !m.selection.RemoveRelease {
-			dependency = " (requires release removal)"
-		}
-		b.WriteString(normalStyle.Render(cursor + checked + " " + row.label + dependency))
+		b.WriteString(normalStyle.Render(prefix + label))
 		b.WriteString("\n")
 	}
-	b.WriteString("\n")
+	return b.String()
+}
+
+func (m *ReleaseCleanupChecklistModal) body() string {
+	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
+	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
+	dangerStyle := lipgloss.NewStyle().Foreground(modalColorDanger)
+
+	var b strings.Builder
 	b.WriteString(renderCleanupOwnership(m.preview, normalStyle, dimStyle))
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("Local task and release branches are retained (never deleted)."))
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("Remote branches are not deleted by cleanup; delete them on the forge."))
+	b.WriteString("\n")
 	if len(m.preview.Blockers) > 0 {
 		b.WriteString("\n")
 		b.WriteString(dangerStyle.Bold(true).Render("Blockers:"))
@@ -170,13 +233,36 @@ func (m *ReleaseCleanupChecklistModal) View() string {
 			b.WriteString("\n")
 		}
 	}
-	b.WriteString("\n")
-	footer := "[j/k] navigate  [Space] toggle  [Enter] review  [Esc] cancel"
-	if len(m.preview.Blockers) > 0 && m.selection == m.preview.Selection {
-		footer = "Change selection to replan, or [Esc] cancel"
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m *ReleaseCleanupChecklistModal) footer(withScrollHint bool) string {
+	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
+	status := "[Enter] review  [Esc] cancel"
+	switch {
+	case !m.selection.RemoveTasks && !m.selection.RemoveRelease:
+		status = "Select at least one cleanup scope, or [Esc] cancel"
+	case len(m.preview.Blockers) > 0 && m.Selection() == m.planSelection():
+		status = "Change selection to replan, or [Esc] cancel"
 	}
-	b.WriteString(dimStyle.Render(footer))
-	return b.String()
+	footer := "[j/k] navigate  [Space] toggle\n" + status
+	if withScrollHint {
+		footer += "\n[g/G] details"
+	}
+	return "\n" + dimStyle.Render(footer)
+}
+
+func (m *ReleaseCleanupChecklistModal) tooSmallNotice() string {
+	warningStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorDanger)
+	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
+	notice := warningStyle.Render("RELEASE CLEANUP BLOCKED") + "\n\n" +
+		dimStyle.Render("Terminal too small to review safely.") + "\n\n" +
+		dimStyle.Render("[Esc] cancel")
+	lines := strings.Split(ansi.Wrap(notice, m.contentWidth, " "), "\n")
+	if len(lines) > m.contentHeight {
+		lines = lines[:m.contentHeight]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderCleanupOwnership(preview task.ReleaseCleanupPreview, normalStyle, dimStyle lipgloss.Style) string {
@@ -240,7 +326,7 @@ func (m *ReleaseCleanupConfirmModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 func (m *ReleaseCleanupConfirmModal) View() string {
 	warning := "Review cleanup for selected groups."
 	if cleanupHasRemoteSelection(m.preview.Selection) {
-		warning += " Remote branch deletion requires one more confirmation."
+		warning += " Remote branch deletion is unsupported and fails before any mutation."
 	}
 	return cleanupConfirmView(m.preview, warning, "[Enter/y] confirm  [Esc/n] cancel", false)
 }
@@ -278,8 +364,8 @@ func (m *ReleaseCleanupRemoteConfirmModal) View() string {
 	if m.preview.Selection.DeleteRemoteReleaseBranches {
 		remoteGroups = append(remoteGroups, "Release remote branches")
 	}
-	warning := "REMOTE BRANCHES WILL BE DELETED FROM ORIGIN: " + strings.Join(remoteGroups, " and ") + "."
-	return cleanupConfirmView(m.preview, warning, "[Enter/y] delete remote branches  [Esc/n] cancel", true)
+	warning := "REMOTE BRANCH DELETION IS UNSUPPORTED: " + strings.Join(remoteGroups, " and ") + " fail before any mutation and are retained."
+	return cleanupConfirmView(m.preview, warning, "[Enter/y] confirm (remote step fails before mutation)  [Esc/n] cancel", true)
 }
 
 func cleanupConfirmView(preview task.ReleaseCleanupPreview, warning, footer string, danger bool) string {
@@ -307,19 +393,19 @@ func renderCleanupSelection(selection task.ReleaseCleanupSelection, style lipglo
 		groups = append(groups, "Task worktrees and task directories")
 	}
 	if selection.DeleteLocalTaskBranches {
-		groups = append(groups, "Local task branches")
+		groups = append(groups, "Local task branches (retained)")
 	}
 	if selection.DeleteRemoteTaskBranches {
-		groups = append(groups, "Remote task branches")
+		groups = append(groups, "Remote task branches (unsupported, fail before mutation)")
 	}
 	if selection.RemoveRelease {
 		groups = append(groups, "Release worktrees and manifest")
 	}
 	if selection.DeleteLocalReleaseBranches {
-		groups = append(groups, "Local release branches")
+		groups = append(groups, "Local release branches (retained)")
 	}
 	if selection.DeleteRemoteReleaseBranches {
-		groups = append(groups, "Remote release branches")
+		groups = append(groups, "Remote release branches (unsupported, fail before mutation)")
 	}
 	var b strings.Builder
 	b.WriteString(style.Bold(true).Render("Selected cleanup groups"))

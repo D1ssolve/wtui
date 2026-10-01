@@ -136,7 +136,9 @@ func (m *manager) hotfixReviewWorkflow(ctx context.Context, taskID string) (doma
 		if item.Status == "failed" || item.Status == "blocked" {
 			blockers = append(blockers, strings.Join(item.Blockers, "; "))
 		}
-		rows = append(rows, domain.ServiceWorkflow{ServiceName: item.ServiceName, Status: item.Status, Detail: item.MR.TargetBranch + ": " + strings.Join(item.Blockers, "; ")})
+		row := reviewWorkflowRow(item)
+		row.Detail = item.MR.TargetBranch + ": " + strings.Join(item.Blockers, "; ")
+		rows = append(rows, row)
 	}
 	phase, next := domain.TaskWorkflowReviewCI, "Services → m → Merge MR"
 	if missing {

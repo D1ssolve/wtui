@@ -22,10 +22,10 @@ func TestCreateRelease_MergeErrorReconcilesProvenMergedMR(t *testing.T) {
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
 	f.mergeErr = errors.New("timeout")
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	f.afterMerge = func(number int) {
 		targetTip = "d1"
-		f.readiness[number] = forge.MRReadiness{Number: number, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", MergedSHA: "d1", Ready: true, SupportsSHAPin: true}
+		f.readiness[number] = forge.MRReadiness{Number: number, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", MergedSHA: "d1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
@@ -46,6 +46,12 @@ func TestCreateRelease_MergeErrorReconcilesProvenMergedMR(t *testing.T) {
 	}
 	if f.mergeCalls != 1 {
 		t.Fatalf("merge calls = %d, want one", f.mergeCalls)
+	}
+	if len(f.mergeExpectedTargets) != 1 || f.mergeExpectedTargets[0] != "develop" {
+		t.Fatalf("merge targets = %v, want develop binding", f.mergeExpectedTargets)
+	}
+	if len(f.mergeExpectedTargetSHAs) != 1 || f.mergeExpectedTargetSHAs[0] != "d0" {
+		t.Fatalf("merge target SHAs = %v, want frontier tip d0", f.mergeExpectedTargetSHAs)
 	}
 	if release.Services[0].FeatureBranches[0].TaskMergeStatus != taskMergeStatusMerged || release.Services[0].FeatureBranches[0].MergeRef != "d1" {
 		t.Fatalf("feature branch = %#v", release.Services[0].FeatureBranches[0])

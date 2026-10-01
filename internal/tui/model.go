@@ -65,10 +65,12 @@ type Model struct {
 
 	spinner                   spinner.Model
 	opRunning                 bool
+	operationGeneration       uint64
 	conversionRunning         bool
 	opProgress                *panels.OperationProgress
 	refreshing                bool
 	taskWorkflowGeneration    uint64
+	taskWorkflowPending       bool
 	taskWorkflow              *domain.WorkflowSummary
 	releaseWorkflow           *domain.WorkflowSummary
 	mergeInspectionGeneration uint64
@@ -97,6 +99,21 @@ type Model struct {
 	pendingReleaseCleanupPlan    *task.ReleaseCleanupPlan
 	pendingReleaseCleanupPreview task.ReleaseCleanupPreview
 	releaseCleanupExecuting      uint64
+	releaseCleanupExecutingID    string
+
+	taskCleanupGeneration     uint64
+	taskCleanupRequest        *taskCleanupRequest
+	taskCleanupExecuting      uint64
+	taskCleanupExecutingID    string
+	pendingTaskCleanupPlan    *task.TaskCleanupPlan
+	pendingTaskCleanupPreview task.TaskCleanupPreview
+
+	cleanupScanning       bool
+	cleanupScanGeneration uint64
+	cleanupScanModalGen   uint64
+	cleanupScanCandidates []modal.CleanupCandidate
+	cleanupQueue          []cleanupQueueItem
+	cleanupQueueCurrent   *cleanupQueueItem
 
 	releaseTaskMergeGeneration uint64
 	releaseTaskMerge           *releaseTaskMergeRequest
@@ -123,6 +140,12 @@ type releaseCleanupRequest struct {
 	releaseID  string
 	selection  task.ReleaseCleanupSelection
 	confirm    bool
+}
+
+type taskCleanupRequest struct {
+	generation          uint64
+	operationGeneration uint64
+	taskID              string
 }
 
 type shellInputState struct {
@@ -197,7 +220,7 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		loadTasksCmd(m.mgr),
+		loadTasksCmd(m.mgr, m.operationGeneration),
 		loadReposCmd(m.mgr, false),
 		loadReleasesCmd(m.mgr),
 		m.spinner.Tick,
@@ -212,6 +235,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.hasPendingConversion() && releaseCleanupMutatingMessage(msg) && !m.conversionRetryMessage(msg) {
+		return m, nil
+	}
+	// Centralized busy guard: while a mutating operation holds the model,
+	// every mutating start/confirm/submit message is ignored. Completion
+	// messages are not in the mutating set and keep flowing.
+	if m.opRunning && releaseCleanupMutatingMessage(msg) {
 		return m, nil
 	}
 	switch msg := msg.(type) {
@@ -283,12 +312,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.tasksPanel.FilterActive() {
 				newPanel, cmd := m.tasksPanel.Update(msg)
 				m.tasksPanel = newPanel
+				m.recalculateDimensions()
 				return m, cmd
 			}
 		case FocusServices:
 			if m.servicesPanel.FilterActive() {
 				newPanel, cmd := m.servicesPanel.Update(msg)
 				m.servicesPanel = newPanel
+				m.recalculateDimensions()
 				return m, cmd
 			}
 		}
@@ -325,7 +356,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keymap.Help):
 			help := modal.NewHelpOverlayWithOptions(m.lazygitAvailable)
-			help.SetReleaseCleanupAvailable(m.releaseCleanupAvailable())
 			help.SetWorkflow(m.helpWorkflowContext())
 			m.modal = help
 			m.modal.SetTerminalSize(m.width, m.height)
@@ -349,7 +379,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keymap.Refresh):
 			m.outputPanel.AppendLine("Refreshing tasks and repository cache...")
 			m.refreshing = true
-			cmds := []tea.Cmd{loadTasksCmd(m.mgr), loadReposCmd(m.mgr, true), loadReleasesCmd(m.mgr)}
+			cmds := []tea.Cmd{loadTasksCmd(m.mgr, m.operationGeneration), loadReposCmd(m.mgr, true), loadReleasesCmd(m.mgr)}
 			return m, tea.Batch(cmds...)
 
 		case key.Matches(msg, m.keymap.MergeMRs):
@@ -366,11 +396,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case FocusTasks:
 			newPanel, cmd := m.tasksPanel.Update(msg)
 			m.tasksPanel = newPanel
+			m.recalculateDimensions()
 			return m, cmd
 
 		case FocusServices:
 			newPanel, cmd := m.servicesPanel.Update(msg)
 			m.servicesPanel = newPanel
+			m.recalculateDimensions()
 			return m, cmd
 
 		case FocusOutput:
@@ -392,16 +424,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.invalidateReleaseTaskMergePlanning()
 				m.setSelectedReleaseWorkflow()
 			}
+			m.recalculateDimensions()
 			return m, cmd
 		}
 
 	case panels.TaskSelectionChangedMsg:
+		selected := m.tasksPanel.SelectedTask()
+		if selected == nil || selected.ID != msg.TaskID {
+			return m, nil
+		}
 		m.invalidateMergeInspection()
-		return m, m.loadTaskSelectionCmd(msg.TaskID)
+		selectionCmd := m.loadTaskSelectionCmd(msg.TaskID)
+		m.recalculateDimensions()
+		return m, selectionCmd
 
 	case panels.FocusServicesMsg:
 		m.setFocus(FocusServices)
-		return m, loadServicesCmd(m.mgr, msg.TaskID)
+		return m, loadServicesCmd(m.mgr, msg.TaskID, m.taskWorkflowGeneration, m.operationGeneration)
 
 	case panels.FocusTasksMsg:
 		m.setFocus(FocusTasks)
@@ -414,12 +453,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = modal.NewCreateReleaseDialog(m.tasks, m.width, m.height)
 		return m, nil
 
-	case panels.PlanReleaseCleanupMsg:
-		selected := m.releasesPanel.SelectedRelease()
-		if m.releaseMutationBlocked() || m.focus != FocusReleases || selected == nil || selected.ID != msg.ReleaseID || selected.Status != domain.ReleaseStatusReleased {
-			return m, nil
-		}
-		return m.startReleaseCleanupPlan(msg.ReleaseID, task.DefaultReleaseCleanupSelection(), false)
+	case panels.OpenCleanupDialogMsg:
+		return m.startCleanupScan()
 
 	case panels.OpenInitDialogMsg:
 		flow := m.flow
@@ -485,23 +520,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingCloseTask = &domain.Task{ID: msg.TaskID}
 		}
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Planning close for task " + msg.TaskID + "...")
-		return m, tea.Batch(planCloseTaskCmd(m.mgr, msg.TaskID), m.spinner.Tick)
-
-	case panels.ScanPrunableTasksMsg:
-		m.opRunning = true
-		m.outputPanel.AppendLine("Scanning for prunable tasks...")
-		return m, tea.Batch(scanPrunableTasksCmd(m.mgr), m.spinner.Tick)
+		return m, tea.Batch(planCloseTaskCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
 
 	case panels.ValidateTaskMsg:
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Validating task " + msg.TaskID + "...")
-		return m, tea.Batch(validateTaskCmd(m.mgr, msg.TaskID), m.spinner.Tick)
+		return m, tea.Batch(validateTaskCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
 
 	case panels.OpenTagBrowserMsg:
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Loading tags for task " + msg.TaskID + "...")
-		return m, tea.Batch(listTagsCmd(m.mgr, msg.TaskID), m.spinner.Tick)
+		return m, tea.Batch(listTagsCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
 
 	case panels.OpenForgeMenuMsg:
 		provider := msg.Provider
@@ -530,8 +563,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			op = "Unstashing"
 		}
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine(op + " service " + msg.ServiceName + " for task " + msg.TaskID + "...")
-		return m, tea.Batch(stashServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Pop, false), m.spinner.Tick)
+		return m, tea.Batch(stashServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Pop, false, m.operationGeneration), m.spinner.Tick)
 
 	case panels.OpenStashDialogMsg:
 		m.modal = modal.NewStashDialog(msg.TaskID, msg.ServiceName, msg.Pop)
@@ -548,8 +582,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			untracked = " (including untracked)"
 		}
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine(op + " service " + msg.ServiceName + " for task " + msg.TaskID + untracked + "...")
-		return m, tea.Batch(stashServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Pop, msg.IncludeUntracked), m.spinner.Tick)
+		return m, tea.Batch(stashServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Pop, msg.IncludeUntracked, m.operationGeneration), m.spinner.Tick)
 
 	case modal.SubmitPushMsg:
 		if _, ok := m.modal.(*modal.PushConfirmDialog); !ok {
@@ -572,13 +607,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingPushSubmit = nil
 		m.modal = nil
 		m.opRunning = true
+		m.operationGeneration++
 		m.beginOpProgress(msg.TaskID, "PUSH")
 		if strings.TrimSpace(msg.ServiceName) == "" {
 			m.outputPanel.AppendLine("Pushing task " + msg.TaskID + "...")
-			return m, tea.Batch(pushTaskCmd(m.mgr, msg.TaskID), m.spinner.Tick)
+			return m, tea.Batch(pushTaskCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
 		}
 		m.outputPanel.AppendLine("Pushing service " + msg.ServiceName + " for task " + msg.TaskID + "...")
-		return m, tea.Batch(pushServiceCmd(m.mgr, msg.TaskID, msg.ServiceName), m.spinner.Tick)
+		return m, tea.Batch(pushServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, m.operationGeneration), m.spinner.Tick)
 
 	case panels.OpenRemoveServiceDialogMsg:
 		m.modal = modal.NewRemoveServiceDialog(msg.TaskID, msg.ServiceName, msg.BranchName)
@@ -587,9 +623,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case modal.SubmitRemoveServiceMsg:
 		m.modal = nil
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Removing service " + msg.ServiceName + "...")
 		return m, tea.Batch(
-			removeServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.RemoveBranch),
+			removeServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.RemoveBranch, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
@@ -603,8 +640,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		pending := msg
 		m.pendingSyncTask = &pending
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Validating task " + msg.TaskID + " before sync...")
-		return m, tea.Batch(validateTaskCmd(m.mgr, msg.TaskID), m.spinner.Tick)
+		return m, tea.Batch(validateTaskCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
 
 	case modal.SubmitSyncServiceStrategyMsg:
 		m.modal = nil
@@ -613,9 +651,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.opRunning = true
+		m.operationGeneration++
 		m.beginOpProgress(msg.TaskID, "SYNC")
 		m.outputPanel.AppendLine("Syncing service " + msg.ServiceName + " with " + msg.Strategy.String() + " strategy...")
-		return m, tea.Batch(syncServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Strategy), m.spinner.Tick)
+		return m, tea.Batch(syncServiceCmd(m.mgr, msg.TaskID, msg.ServiceName, msg.Strategy, m.operationGeneration), m.spinner.Tick)
 
 	case panels.ShellExecMsg:
 		m.shellInput = &shellInputState{taskDir: msg.TaskDir}
@@ -629,13 +668,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case panels.RiderTaskMsg:
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Opening " + msg.TaskID + ".sln in Rider from " + msg.TaskDir + "...")
-		return m, tea.Batch(riderTaskCmd(msg.TaskID, msg.TaskDir), m.spinner.Tick)
+		return m, tea.Batch(riderTaskCmd(msg.TaskID, msg.TaskDir, m.operationGeneration), m.spinner.Tick)
 
 	case panels.CodeWorkspaceTaskMsg:
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Opening " + msg.TaskID + ".code-workspace in " + m.cfg.Editor + " from " + msg.TaskDir + "...")
-		return m, tea.Batch(codeWorkspaceTaskCmd(m.cfg.Editor, msg.TaskID, msg.TaskDir), m.spinner.Tick)
+		return m, tea.Batch(codeWorkspaceTaskCmd(m.cfg.Editor, msg.TaskID, msg.TaskDir, m.operationGeneration), m.spinner.Tick)
 
 	case modal.CloseModalMsg:
 		switch m.modal.(type) {
@@ -645,6 +686,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingReleaseCleanupPlan = nil
 			m.pendingReleaseCleanupPreview = task.ReleaseCleanupPreview{}
 			m.outputPanel.AppendLine("Release cleanup cancelled.")
+			if m.cleanupQueueActive() {
+				m.modal = nil
+				return m.stopCleanupQueue("")
+			}
+		}
+		if _, ok := m.modal.(*modal.CleanupCandidatesModal); ok {
+			m.cleanupScanModalGen++
+			m.cleanupScanCandidates = nil
+			m.outputPanel.AppendLine("Cleanup review cancelled.")
+		}
+		if _, ok := m.modal.(*modal.TaskCleanupConfirmModal); ok {
+			m.pendingTaskCleanupPlan = nil
+			m.pendingTaskCleanupPreview = task.TaskCleanupPreview{}
+			m.outputPanel.AppendLine("Task cleanup cancelled.")
+			m.modal = nil
+			return m.stopCleanupQueue("")
 		}
 		if _, ok := m.modal.(*modal.PushConfirmDialog); ok {
 			m.outputPanel.AppendLine("Push cancelled.")
@@ -703,8 +760,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			m.outputPanel.AppendLine("Retrying with " + msg.Strategy.String() + " strategy for " + msg.ServiceName + "...")
+			m.opRunning = true
+			m.operationGeneration++
 			return m, tea.Batch(
-				initTaskCmd(m.mgr, *m.pendingInitParams),
+				initTaskCmd(m.mgr, *m.pendingInitParams, m.operationGeneration),
 				m.spinner.Tick,
 			)
 		}
@@ -723,8 +782,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			m.outputPanel.AppendLine("Retrying with " + msg.Strategy.String() + " strategy for " + msg.ServiceName + "...")
+			m.opRunning = true
+			m.operationGeneration++
 			return m, tea.Batch(
-				addServiceCmd(m.mgr, *m.pendingAddParams),
+				addServiceCmd(m.mgr, *m.pendingAddParams, m.operationGeneration),
 				m.spinner.Tick,
 			)
 		}
@@ -735,6 +796,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case modal.SubmitInitMsg:
 		m.modal = nil
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Initializing task " + msg.TaskID + "...")
 		m.pendingInitParams = &task.InitParams{
 			TaskID:       msg.TaskID,
@@ -745,13 +807,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingAddParams = nil
 		return m, tea.Batch(
-			initTaskCmd(m.mgr, *m.pendingInitParams),
+			initTaskCmd(m.mgr, *m.pendingInitParams, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
 	case modal.SubmitAddMsg:
 		m.modal = nil
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Adding services to " + msg.TaskID + "...")
 		m.pendingAddParams = &task.AddParams{
 			TaskID:     msg.TaskID,
@@ -760,39 +823,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingInitParams = nil
 		return m, tea.Batch(
-			addServiceCmd(m.mgr, *m.pendingAddParams),
+			addServiceCmd(m.mgr, *m.pendingAddParams, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
 	case modal.SubmitRemoveTaskMsg:
 		m.modal = nil
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Removing task " + msg.TaskID + "...")
 		return m, tea.Batch(
-			removeTaskCmd(m.mgr, msg.TaskID, msg.Options),
+			removeTaskCmd(m.mgr, msg.TaskID, msg.Options, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
 	case modal.SubmitConvertHotfixMsg:
 		m.modal = nil
 		m.opRunning = true
+		m.operationGeneration++
 		m.conversionRunning = true
 		m.outputPanel.AppendLine("Converting hotfix " + msg.SourceTaskID + " to feature task " + msg.TargetTaskID + "...")
 		return m, tea.Batch(
 			convertHotfixCmd(m.mgr, task.ConvertHotfixParams{
 				SourceTaskID: msg.SourceTaskID,
 				TargetTaskID: msg.TargetTaskID,
-			}),
+			}, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
 	case modal.SubmitCloseTaskMsg:
 		m.modal = nil
 		m.opRunning = true
+		m.operationGeneration++
 		m.beginOpProgress(msg.TaskID, "CLOSE")
 		m.outputPanel.AppendLine("Closing task " + msg.TaskID + "...")
 		return m, tea.Batch(
-			closeTaskCmd(m.mgr, task.CloseTaskParams{TaskID: msg.TaskID, TagVersion: msg.TagVersion, Fingerprint: msg.Fingerprint, TagVersions: msg.TagVersions}),
+			closeTaskCmd(m.mgr, task.CloseTaskParams{TaskID: msg.TaskID, TagVersion: msg.TagVersion, Fingerprint: msg.Fingerprint, TagVersions: msg.TagVersions}, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
@@ -896,8 +962,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = nil
 		m.releaseTaskMerge = nil
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Retrying task MR merges for release " + releaseID + "...")
-		return m, tea.Batch(retryReleaseTaskMergesCmd(m.mgr, releaseID, plan), m.spinner.Tick)
+		return m, tea.Batch(retryReleaseTaskMergesCmd(m.mgr, releaseID, plan, m.operationGeneration), m.spinner.Tick)
 
 	case modal.SubmitReleaseCleanupMsg:
 		checklist, ok := m.modal.(*modal.ReleaseCleanupChecklistModal)
@@ -909,6 +976,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.startReleaseCleanupPlan(msg.ReleaseID, msg.Selection, true)
 
 	case modal.ConfirmReleaseCleanupMsg:
+		if m.cleanupQueueCurrent == nil || m.cleanupQueueCurrent.kind != modal.CleanupKindRelease || m.cleanupQueueCurrent.id != msg.ReleaseID {
+			return m, nil
+		}
 		confirm, ok := m.modal.(*modal.ReleaseCleanupConfirmModal)
 		if !ok || !m.releaseCleanupConfirmationMatches(msg.ReleaseID, msg.Generation, confirm.ReleaseID(), confirm.Generation()) {
 			return m, nil
@@ -921,6 +991,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.startReleaseCleanupExecution(msg.Generation)
 
 	case modal.ConfirmRemoteReleaseCleanupMsg:
+		if m.cleanupQueueCurrent == nil || m.cleanupQueueCurrent.kind != modal.CleanupKindRelease || m.cleanupQueueCurrent.id != msg.ReleaseID {
+			return m, nil
+		}
 		confirm, ok := m.modal.(*modal.ReleaseCleanupRemoteConfirmModal)
 		if !ok || !m.releaseCleanupConfirmationMatches(msg.ReleaseID, msg.Generation, confirm.ReleaseID(), confirm.Generation()) {
 			return m, nil
@@ -978,6 +1051,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingReleaseSubmit = nil
 		m.releaseTaskMerge = nil
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Creating release from selected tasks...")
 		return m, tea.Batch(createReleaseCmd(m.mgr, task.CreateReleaseParams{
 			Title:                  submit.Title,
@@ -986,7 +1060,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ServiceTagDescriptions: copyVersionMap(submit.TagDescriptions),
 			ConfirmedTaskMergePlan: confirmedPlan,
 			StartImmediately:       true,
-		}), m.spinner.Tick)
+		}, m.operationGeneration), m.spinner.Tick)
 
 	case modal.ConfirmMergeMsg:
 		if m.pendingMerge == nil || m.pendingMerge.TaskID != msg.TaskID || m.pendingMerge.ReleaseID != msg.ReleaseID || m.pendingMerge.ServiceName != msg.ServiceName {
@@ -998,51 +1072,88 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = nil
 		m.pendingMerge = nil
 		m.opRunning = true
+		m.operationGeneration++
 		if msg.ServiceName != "" {
 			m.outputPanel.AppendLine("Merging ready MR for service " + msg.ServiceName + "...")
 			if msg.Number > 0 {
-				return m, tea.Batch(mergeServiceMRCmd(m.mgr, msg.TaskID, msg.ServiceName, task.MRSelection{Number: msg.Number, TargetBranch: msg.TargetBranch, HeadSHA: msg.HeadSHA}), m.spinner.Tick)
+				return m, tea.Batch(mergeServiceMRCmd(m.mgr, msg.TaskID, msg.ServiceName, m.operationGeneration, task.MRSelection{Number: msg.Number, TargetBranch: msg.TargetBranch, HeadSHA: msg.HeadSHA}), m.spinner.Tick)
 			}
-			return m, tea.Batch(mergeServiceMRCmd(m.mgr, msg.TaskID, msg.ServiceName), m.spinner.Tick)
+			return m, tea.Batch(mergeServiceMRCmd(m.mgr, msg.TaskID, msg.ServiceName, m.operationGeneration), m.spinner.Tick)
 		}
 		if msg.TaskID != "" {
 			m.outputPanel.AppendLine("Merging ready MRs for task " + msg.TaskID + "...")
-			return m, tea.Batch(mergeTaskMRsCmd(m.mgr, msg.TaskID), m.spinner.Tick)
+			return m, tea.Batch(mergeTaskMRsCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
 		}
 		m.outputPanel.AppendLine("Merging ready MRs for release " + msg.ReleaseID + "...")
-		return m, tea.Batch(mergeReleaseMRsCmd(m.mgr, msg.ReleaseID), m.spinner.Tick)
+		return m, tea.Batch(mergeReleaseMRsCmd(m.mgr, msg.ReleaseID, m.operationGeneration), m.spinner.Tick)
 
 	case modal.RequestReleaseVersionsMsg:
 		if len(msg.TaskIDs) == 0 {
 			return m, nil
 		}
-		return m, loadReleaseVersionsCmd(m.mgr, msg.TaskIDs)
+		return m, loadReleaseVersionsCmd(m.mgr, msg.TaskIDs, m.operationGeneration)
 
-	case modal.SubmitPruneMsg:
-		m.modal = nil
-		if len(msg.SelectedTaskIDs) == 0 {
-			m.outputPanel.AppendLine("Prune cancelled: no tasks selected.")
+	case modal.SubmitCleanupMsg:
+		selector, selectorActive := m.modal.(*modal.CleanupCandidatesModal)
+		if !selectorActive || selector.Generation() != msg.Generation || msg.Generation != m.cleanupScanModalGen || m.cleanupQueueActive() {
+			m.outputPanel.AppendLine("Cleanup selection ignored: stale scan.")
 			return m, nil
 		}
+		tasks := m.verifyCleanupSelection(modal.CleanupKindTask, msg.Tasks)
+		releases := m.verifyCleanupSelection(modal.CleanupKindRelease, msg.Releases)
+		if len(tasks)+len(releases) != len(msg.Tasks)+len(msg.Releases) || len(tasks)+len(releases) == 0 {
+			m.outputPanel.AppendLine("Cleanup selection ignored: selection no longer matches the scan.")
+			return m, nil
+		}
+		m.modal = nil
+		m.cleanupQueue = make([]cleanupQueueItem, 0, len(tasks)+len(releases))
+		for _, id := range tasks {
+			m.cleanupQueue = append(m.cleanupQueue, cleanupQueueItem{kind: modal.CleanupKindTask, id: id})
+		}
+		for _, id := range releases {
+			m.cleanupQueue = append(m.cleanupQueue, cleanupQueueItem{kind: modal.CleanupKindRelease, id: id})
+		}
+		return m.advanceCleanupQueue()
+
+	case modal.ConfirmTaskCleanupMsg:
+		if m.cleanupQueueCurrent == nil || m.cleanupQueueCurrent.kind != modal.CleanupKindTask || m.cleanupQueueCurrent.id != msg.TaskID {
+			return m, nil
+		}
+		if m.pendingTaskCleanupPlan == nil || m.pendingTaskCleanupPlan.Fingerprint() != msg.Fingerprint || msg.Generation != m.taskCleanupGeneration {
+			return m, nil
+		}
+		dialog, ok := m.modal.(*modal.TaskCleanupConfirmModal)
+		if !ok || dialog.TaskID() != msg.TaskID || dialog.Generation() != msg.Generation || dialog.Fingerprint() != msg.Fingerprint {
+			return m, nil
+		}
+		m.modal = nil
+		plan := m.pendingTaskCleanupPlan
+		m.pendingTaskCleanupPlan = nil
+		m.pendingTaskCleanupPreview = task.TaskCleanupPreview{}
 		m.opRunning = true
-		m.outputPanel.AppendLine("Pruning selected tasks...")
-		return m, tea.Batch(pruneTasksCmd(m.mgr, msg.SelectedTaskIDs), m.spinner.Tick)
+		m.operationGeneration++
+		m.taskCleanupExecuting = m.taskCleanupGeneration
+		m.taskCleanupExecutingID = msg.TaskID
+		m.outputPanel.AppendLine("Executing cleanup plan for " + plan.Preview().TaskID + "...")
+		return m, tea.Batch(executeTaskCleanupCmd(m.mgr, *plan, msg.TaskID, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
 
 	case modal.ForgeCreateMRMsg:
 		m.modal = nil
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Creating missing review requests for " + msg.TaskID + "...")
 		return m, tea.Batch(
-			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", forgeCreateMRParams{Title: msg.Title}),
+			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", forgeCreateMRParams{Title: msg.Title}, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
 	case modal.ForgeConfirmCreateMRMsg:
 		m.modal = nil
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Creating confirmed review requests for " + msg.TaskID + "...")
 		return m, tea.Batch(
-			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", forgeCreateMRParams{Title: msg.Title, Force: true}),
+			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", forgeCreateMRParams{Title: msg.Title, Force: true}, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
@@ -1068,7 +1179,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = true
 		m.outputPanel.AppendLine("Loading pipeline status for " + msg.ServiceName + "...")
 		return m, tea.Batch(
-			forgeOpCmd(m.mgr, "pipeline_status", msg.TaskID, msg.ServiceName, forgePipelineStatusParams{Branch: svc.Branch, Provider: msg.Provider}),
+			forgeOpCmd(m.mgr, "pipeline_status", msg.TaskID, msg.ServiceName, forgePipelineStatusParams{Branch: svc.Branch, Provider: msg.Provider}, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
@@ -1082,7 +1193,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = true
 		m.outputPanel.AppendLine("Loading issues for " + msg.ServiceName + "...")
 		return m, tea.Batch(
-			forgeOpCmd(m.mgr, "list_issues", msg.TaskID, msg.ServiceName, forge.ListIssuesParams{WorktreePath: svc.WorktreePath, State: "open"}),
+			forgeOpCmd(m.mgr, "list_issues", msg.TaskID, msg.ServiceName, forge.ListIssuesParams{WorktreePath: svc.WorktreePath, State: "open"}, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
@@ -1095,12 +1206,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		selected := m.tasksPanel.SelectedTask()
 		if selected == nil {
 			m.setServicesWorkflow(nil)
+			m.servicesPanel.SetServices("", nil)
+			m.recalculateDimensions()
 			return m, nil
 		}
-		return m, m.loadTaskSelectionCmd(selected.ID)
+		selectionCmd := m.loadTaskSelectionCmd(selected.ID)
+		m.recalculateDimensions()
+		return m, selectionCmd
 
 	case ServicesLoadedMsg:
+		selected := m.tasksPanel.SelectedTask()
+		if msg.Generation != m.taskWorkflowGeneration || selected == nil || selected.ID != msg.TaskID {
+			return m, nil
+		}
 		m.servicesPanel.SetServices(msg.TaskID, msg.Services)
+		m.recalculateDimensions()
 		return m, nil
 
 	case ReleasesLoadedMsg:
@@ -1111,40 +1231,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.releasesPanel.SetReleases(msg.Releases)
 		m.invalidateReleaseCleanupDrift()
 		m.invalidateReleaseTaskMergeDrift()
+		var cancelCmd tea.Cmd
+		m, cancelCmd = m.cancelCleanupQueueIfReleaseGone(msg.Releases)
 		m.setSelectedReleaseWorkflow()
+		m.recalculateDimensions()
 		if m.refreshing {
 			m.outputPanel.AppendLine("Releases refreshed.")
 		}
-		return m, nil
+		return m, cancelCmd
 
 	case ReleaseCleanupPlanReadyMsg:
 		request := m.releaseCleanupRequest
-		if request == nil || request.generation != msg.Generation || msg.Preview.ReleaseID != request.releaseID || msg.Preview.Selection != request.selection || !m.releaseCleanupRequestCurrent(*request) {
+		if request == nil || request.generation != msg.Generation {
 			return m, nil
 		}
 		m.opRunning = false
 		m.releaseCleanupRequest = nil
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Plan release cleanup failed: " + msg.Err.Error())
+			if m.cleanupQueueActive() {
+				return m.stopCleanupQueue("")
+			}
+			return m, nil
+		}
+		preview := msg.Plan.Preview()
+		if preview.ReleaseID == "" || preview.ReleaseID != request.releaseID || preview.Selection != request.selection || !m.releaseCleanupRequestCurrent(*request) {
+			if m.cleanupQueueActive() {
+				return m.stopCleanupQueue("Cleanup queue stopped: release cleanup plan mismatch.")
+			}
 			return m, nil
 		}
 		if !request.confirm {
-			m.modal = modal.NewReleaseCleanupChecklistModal(msg.Preview)
+			m.modal = modal.NewReleaseCleanupChecklistModal(preview)
 			m.modal.SetTerminalSize(m.width, m.height)
 			return m, nil
 		}
-		if len(msg.Preview.Blockers) > 0 {
+		if len(preview.Blockers) > 0 {
 			m.pendingReleaseCleanupPlan = nil
 			m.pendingReleaseCleanupPreview = task.ReleaseCleanupPreview{}
-			m.modal = modal.NewReleaseCleanupChecklistModal(msg.Preview)
+			m.modal = modal.NewReleaseCleanupChecklistModal(preview)
 			m.modal.SetTerminalSize(m.width, m.height)
-			m.outputPanel.AppendLine("Release cleanup blocked for " + msg.Preview.ReleaseID + ".")
+			m.outputPanel.AppendLine("Release cleanup blocked for " + preview.ReleaseID + ".")
 			return m, nil
 		}
 		plan := msg.Plan
 		m.pendingReleaseCleanupPlan = &plan
-		m.pendingReleaseCleanupPreview = msg.Preview
-		m.modal = modal.NewReleaseCleanupConfirmModal(msg.Preview, msg.Generation)
+		m.pendingReleaseCleanupPreview = preview
+		m.modal = modal.NewReleaseCleanupConfirmModal(preview, msg.Generation)
 		m.modal.SetTerminalSize(m.width, m.height)
 		return m, nil
 
@@ -1153,13 +1286,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Generation != m.taskWorkflowGeneration || selected == nil || selected.ID != msg.TaskID {
 			return m, nil
 		}
+		m.taskWorkflowPending = false
 		if msg.Err != nil {
 			m.setServicesWorkflow(nil)
 			m.logger.Error("Load task workflow failed", slog.String("task_id", msg.TaskID), slog.String("err", msg.Err.Error()))
 			m.outputPanel.AppendLine("Load task workflow failed: " + msg.Err.Error())
+			m.recalculateDimensions()
 			return m, nil
 		}
 		m.setServicesWorkflow(&msg.Workflow)
+		m.recalculateDimensions()
 		return m, nil
 
 	case TaskMergeInspectionMsg:
@@ -1229,27 +1365,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case TaskMergeDoneMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		for _, line := range msg.Result.Steps {
 			m.outputPanel.AppendLine(line)
 		}
-		if msg.Err != nil {
+		switch {
+		case msg.Err != nil:
 			m.outputPanel.AppendLine("Merge task MRs failed: " + msg.Err.Error())
-		} else {
+		case len(msg.Result.Errs) > 0:
+			for _, service := range slices.Sorted(maps.Keys(msg.Result.Errs)) {
+				m.outputPanel.AppendLine(service + ": " + msg.Result.Errs[service].Error())
+			}
+			m.outputPanel.AppendLine("Merge task MRs finished with errors.")
+		default:
 			m.outputPanel.AppendLine("Merge task MRs done.")
 		}
-		return m, loadTasksCmd(m.mgr)
+		return m, loadTasksCmd(m.mgr, m.operationGeneration)
 
 	case ReleaseMergeDoneMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Merge release MRs failed: " + msg.Err.Error())
 		} else {
-			m.outputPanel.AppendLine("Merge release MRs done: " + msg.Release.ID)
+			if failed := msg.Result.Failed; len(failed) > 0 {
+				m.outputPanel.AppendLine("Merge release MRs failed for: " + strings.Join(failed, ", "))
+			}
+			if skipped := msg.Result.Skipped; len(skipped) > 0 {
+				m.outputPanel.AppendLine("Merge release MRs skipped: " + strings.Join(skipped, ", "))
+			}
+			if len(msg.Result.Failed) == 0 && len(msg.Result.Skipped) == 0 {
+				m.outputPanel.AppendLine("Merge release MRs done: " + msg.Release.ID)
+			}
 		}
 		return m, loadReleasesCmd(m.mgr)
 
 	case ReleaseActionDoneMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		if msg.Err != nil {
 			m.outputPanel.AppendLine(strings.ToUpper(msg.Action[:1]) + msg.Action[1:] + " release failed: " + msg.Err.Error())
@@ -1262,7 +1421,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Generation == 0 || msg.Generation != m.releaseCleanupExecuting {
 			return m, nil
 		}
+		if msg.Result.ReleaseID != m.releaseCleanupExecutingID {
+			return m, nil
+		}
+		if current := m.cleanupQueueCurrent; current != nil && (current.kind != modal.CleanupKindRelease || current.id != m.releaseCleanupExecutingID) {
+			return m, nil
+		}
 		m.releaseCleanupExecuting = 0
+		m.releaseCleanupExecutingID = ""
 		m.opRunning = false
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Release cleanup failed: " + msg.Err.Error())
@@ -1274,7 +1440,89 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outputPanel.AppendLine("Release cleanup done: " + releaseID)
 		}
 		m.refreshing = true
-		return m, tea.Batch(loadTasksCmd(m.mgr), loadReleasesCmd(m.mgr), loadReposCmd(m.mgr, true))
+		if m.cleanupQueueActive() {
+			if msg.Err != nil {
+				return m.stopCleanupQueue("Cleanup queue stopped: release cleanup failed.")
+			}
+			return m.advanceCleanupQueue()
+		}
+		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), loadReleasesCmd(m.mgr), loadReposCmd(m.mgr, true))
+
+	case TaskCleanupPlanReadyMsg:
+		request := m.taskCleanupRequest
+		if request == nil || request.generation != msg.Generation || msg.OperationGeneration == 0 || request.operationGeneration != msg.OperationGeneration || msg.OperationGeneration != m.operationGeneration || request.taskID != msg.TaskID {
+			return m, nil
+		}
+		m.taskCleanupRequest = nil
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Plan task cleanup failed for " + msg.TaskID + ": " + msg.Err.Error())
+			if m.cleanupQueueActive() {
+				return m.stopCleanupQueue("")
+			}
+			return m, nil
+		}
+		preview := msg.Plan.Preview()
+		if preview.TaskID == "" || preview.TaskID != msg.TaskID {
+			if m.cleanupQueueActive() {
+				return m.stopCleanupQueue("Cleanup queue stopped: task cleanup plan mismatch.")
+			}
+			return m, nil
+		}
+		if len(preview.Blockers) > 0 {
+			m.outputPanel.AppendLine("Task cleanup skipped for " + msg.TaskID + ": " + strings.Join(preview.Blockers, "; "))
+			if m.cleanupQueueActive() {
+				return m.stopCleanupQueue("")
+			}
+			return m, nil
+		}
+		if len(preview.Services) == 0 {
+			if m.cleanupQueueActive() {
+				return m.stopCleanupQueue("")
+			}
+			return m, nil
+		}
+		current := m.cleanupQueueCurrent
+		if current == nil || current.kind != modal.CleanupKindTask || current.id != msg.TaskID {
+			m.outputPanel.AppendLine("Ignoring cleanup plan for " + msg.TaskID + ": no matching cleanup request.")
+			return m, nil
+		}
+		m.pendingTaskCleanupPlan = &msg.Plan
+		m.pendingTaskCleanupPreview = preview
+		confirmModal := modal.NewTaskCleanupConfirmModal(preview, msg.Generation, msg.Plan.Fingerprint())
+		confirmModal.SetTerminalSize(m.width, m.height)
+		m.modal = confirmModal
+		return m, nil
+
+	case TaskCleanupDoneMsg:
+		if msg.Generation == 0 || msg.Generation != m.taskCleanupExecuting || msg.OperationGeneration != m.operationGeneration || msg.TaskID != m.taskCleanupExecutingID || msg.Result.TaskID != m.taskCleanupExecutingID {
+			return m, nil
+		}
+		if current := m.cleanupQueueCurrent; current != nil && (current.kind != modal.CleanupKindTask || current.id != msg.TaskID) {
+			return m, nil
+		}
+		m.taskCleanupExecuting = 0
+		m.taskCleanupExecutingID = ""
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Task cleanup failed for " + msg.TaskID + ": " + msg.Err.Error())
+		} else {
+			m.outputPanel.AppendLine("Task cleanup done: " + msg.TaskID)
+			for _, line := range msg.Result.Deferred {
+				m.outputPanel.AppendLine(line)
+			}
+		}
+		if len(msg.Result.Remote) > 0 {
+			m.outputPanel.AppendLine("Remote branches for " + msg.TaskID + " retained; review manually.")
+		}
+		m.refreshing = true
+		if m.cleanupQueueActive() {
+			if msg.Err != nil {
+				return m.stopCleanupQueue("")
+			}
+			return m.advanceCleanupQueue()
+		}
+		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), loadReleasesCmd(m.mgr), loadReposCmd(m.mgr, true))
 
 	case CloneSourceServicesLoadedMsg:
 		if msg.Err != nil {
@@ -1332,6 +1580,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, msg.Next
 
 	case ValidationResultMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		if msg.Validation.Blocking {
 			m.pendingSyncTask = nil
@@ -1342,14 +1593,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pending := *m.pendingSyncTask
 			m.pendingSyncTask = nil
 			m.opRunning = true
+			m.operationGeneration++
 			m.beginOpProgress(pending.TaskID, "SYNC")
 			m.outputPanel.AppendLine("Syncing task " + pending.TaskID + " with " + pending.Strategy.String() + " strategy...")
-			return m, tea.Batch(syncTaskCmd(m.mgr, pending.TaskID, pending.Strategy), m.spinner.Tick)
+			return m, tea.Batch(syncTaskCmd(m.mgr, pending.TaskID, pending.Strategy, m.operationGeneration), m.spinner.Tick)
 		}
 		m.outputPanel.AppendLine("All services clean.")
 		return m, nil
 
 	case ClosePlanReadyMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Plan close task failed: " + msg.Err.Error())
@@ -1364,6 +1619,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case CloseTaskFinishedMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		if m.opProgress != nil {
 			for _, step := range msg.Result.Steps {
@@ -1388,28 +1646,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		closeTask := m.resolveCloseTask(msg.Result.TaskID)
 		m.modal = modal.NewCloseTaskSummaryModal(closeTask, msg.Result, m.width, m.height)
 		m.pendingCloseTask = nil
-		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
+		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())
 
-	case PrunePlanReadyMsg:
-		m.opRunning = false
-		if msg.Err != nil {
-			m.outputPanel.AppendLine("Prune scan failed: " + msg.Err.Error())
+	case CleanupScanReadyMsg:
+		if msg.Generation != m.cleanupScanGeneration || !m.cleanupScanning {
 			return m, nil
 		}
-		m.modal = modal.NewPruneConfirmModal(msg.Candidates, m.width, m.height)
+		m.cleanupScanning = false
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Cleanup scan failed: " + msg.Err.Error())
+			return m, nil
+		}
+		m.cleanupScanCandidates = append([]modal.CleanupCandidate(nil), msg.Candidates...)
+		m.cleanupScanModalGen++
+		m.modal = modal.NewCleanupCandidatesModal(msg.Candidates, m.cleanupScanModalGen)
+		m.outputPanel.AppendLine(fmt.Sprintf("Cleanup scan ready: %d candidates.", len(msg.Candidates)))
 		return m, nil
 
-	case PruneFinishedMsg:
-		m.opRunning = false
-		m.outputPanel.AppendLine(fmt.Sprintf("Prune summary: removed=%d, errors=%d", len(msg.Removed), len(msg.Errors)))
-		for _, err := range msg.Errors {
-			if err != nil {
-				m.outputPanel.AppendLine("Prune error: " + err.Error())
-			}
-		}
-		return m, loadTasksCmd(m.mgr)
-
 	case TagListMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("List tags failed: " + msg.Err.Error())
@@ -1419,6 +1677,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ForgeResultMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		if msg.Op == "create_missing_mrs" {
 			if msg.Err != nil {
@@ -1481,6 +1742,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case CreateReleaseDoneMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Create release failed: " + msg.Err.Error())
@@ -1494,6 +1758,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadReleasesCmd(m.mgr)
 
 	case LazygitDoneMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Open lazygit for " + msg.ServiceName + " failed: " + msg.Err.Error())
@@ -1504,9 +1771,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outputPanel.AppendLine("Open lazygit for " + msg.ServiceName + " done.")
 		}
 
-		return m, tea.Batch(loadTasksCmd(m.mgr), loadServicesCmd(m.mgr, msg.TaskID))
+		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), loadServicesCmd(m.mgr, msg.TaskID, m.taskWorkflowGeneration, m.operationGeneration))
 
 	case CommandDoneMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		m.finishOpProgress(msg.Err)
 		if msg.Err != nil {
@@ -1537,9 +1807,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingAddParams = nil
 		}
 
-		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
+		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())
+
+	case LoadFailedMsg:
+		m.outputPanel.AppendLine(msg.Op + " failed: " + msg.Err.Error())
+		return m, nil
 
 	case ConvertHotfixDoneMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		m.conversionRunning = false
 		op := "Convert hotfix " + msg.SourceTaskID + " to feature task " + msg.TargetTaskID
@@ -1549,9 +1826,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.outputPanel.AppendLine(op + " done.")
 		}
-		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
+		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())
 
 	case PartialInitDoneMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		m.outputPanel.AppendLine(msg.Op + " partially done.")
 		for _, line := range partialFailureLines(msg.Result) {
@@ -1571,9 +1851,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingInitParams = nil
 		m.pendingAddParams = nil
-		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
+		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())
 
 	case PartialAddDoneMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
 		m.opRunning = false
 		m.outputPanel.AppendLine(msg.Op + " partially done.")
 		for _, line := range partialFailureLines(msg.Result) {
@@ -1593,7 +1876,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingInitParams = nil
 		m.pendingAddParams = nil
-		return m, tea.Batch(loadTasksCmd(m.mgr), m.maybeLoadServicesCmd())
+		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())
 
 	case channelDrainedMsg:
 
@@ -1618,14 +1901,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case FocusTasks:
 			newPanel, cmd := m.tasksPanel.Update(msg)
 			m.tasksPanel = newPanel
+			m.recalculateDimensions()
 			return m, cmd
 		case FocusServices:
 			newPanel, cmd := m.servicesPanel.Update(msg)
 			m.servicesPanel = newPanel
+			m.recalculateDimensions()
 			return m, cmd
 		case FocusReleases:
 			newPanel, cmd := m.releasesPanel.Update(msg)
 			m.releasesPanel = newPanel
+			m.recalculateDimensions()
 			return m, cmd
 		}
 		return m, nil
@@ -1655,6 +1941,11 @@ func (m Model) View() string {
 
 	header := renderHeader(m)
 	footer := renderFooter(m)
+	workflowView := panels.RenderWorkflowPanel(m.workflowPanelInput())
+	workflowHeight := 0
+	if workflowView != "" {
+		workflowHeight = lipgloss.Height(workflowView)
+	}
 
 	tasksView := m.tasksPanel.View()
 	var rightView string
@@ -1663,10 +1954,23 @@ func (m Model) View() string {
 	} else {
 		rightView = m.servicesPanel.View()
 	}
-	layout := calculateLayout(m.width, m.height, m.preferredOutputHeight())
+	layout := calculateLayout(m.width, m.height, m.preferredOutputHeight(), workflowHeight)
 	var mainRow string
 	if layout.tier == layoutNarrow {
-		mainRow = lipgloss.JoinVertical(lipgloss.Left, tasksView, "", rightView)
+		var blocks []string
+		if tasksView != "" {
+			blocks = append(blocks, tasksView)
+		}
+		if rightView != "" {
+			if len(blocks) > 0 {
+				blocks = append(blocks, "")
+			}
+			blocks = append(blocks, rightView)
+		}
+		mainRow = lipgloss.JoinVertical(lipgloss.Left, blocks...)
+		if layout.mainHeight > 0 {
+			mainRow = lipgloss.NewStyle().Height(layout.mainHeight).Render(mainRow)
+		}
 	} else {
 		gutter := lipgloss.NewStyle().
 			Width(layout.gutter).
@@ -1675,11 +1979,31 @@ func (m Model) View() string {
 		mainRow = lipgloss.JoinHorizontal(lipgloss.Top, tasksView, gutter, rightView)
 	}
 	outputView := m.outputPanel.View()
-	var fullView string
-	if layout.tier == layoutNarrow {
-		fullView = lipgloss.JoinVertical(lipgloss.Left, header, mainRow, "", outputView, footer)
-	} else {
-		fullView = lipgloss.JoinVertical(lipgloss.Left, header, "", mainRow, "", outputView, "", footer)
+	sections := []string{header}
+	if workflowView != "" {
+		sections = append(sections, workflowView)
+	}
+	// Zero-allocation blocks render nothing and are skipped; the fixed gutter
+	// lines keep the composition at the exact budgeted height.
+	if layout.tier != layoutNarrow {
+		sections = append(sections, "")
+	}
+	if mainRow != "" {
+		sections = append(sections, mainRow)
+	}
+	sections = append(sections, "")
+	if outputView != "" {
+		sections = append(sections, outputView)
+	}
+	if layout.tier != layoutNarrow {
+		sections = append(sections, "")
+	}
+	sections = append(sections, footer)
+	fullView := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	if m.height > 0 {
+		// Below the panels' feasible minimum height the composition exceeds the
+		// terminal; crop trailing lines instead of overflowing the redraw region.
+		fullView = lipgloss.NewStyle().MaxHeight(m.height).Render(fullView)
 	}
 
 	if m.logOverlay != nil {
@@ -1695,8 +2019,9 @@ func (m Model) View() string {
 
 	return fullView
 }
+
 func (m *Model) recalculateDimensions() {
-	layout := calculateLayout(m.width, m.height, m.preferredOutputHeight())
+	layout := calculateLayout(m.width, m.height, m.preferredOutputHeight(), m.workflowStripHeight())
 	if layout.tier == layoutNarrow {
 		available := max(0, layout.mainHeight-1)
 		tasksHeight := min(7, available)
@@ -1722,6 +2047,43 @@ func (m Model) preferredOutputHeight() int {
 	configured := max(3, m.cfg.OutputPanelLines+2)
 	proportional := max(3, m.height*22/100)
 	return min(configured, proportional)
+}
+
+// workflowPanelInput snapshots everything the stateless workflow strip needs
+// for the current selection. The strip itself stores no model state.
+func (m Model) workflowPanelInput() panels.WorkflowPanelInput {
+	in := panels.WorkflowPanelInput{Width: m.width, ShortTerminal: m.height < 12}
+	if m.rightPane == FocusReleases {
+		release := m.releasesPanel.SelectedRelease()
+		if release == nil {
+			return in
+		}
+		in.Kind = panels.WorkflowPanelRelease
+		in.Identity = release.ID
+		in.Version = release.Version
+		in.Workflow = m.releaseWorkflow
+	} else {
+		selected := m.tasksPanel.SelectedTask()
+		if selected == nil {
+			return in
+		}
+		in.Kind = panels.WorkflowPanelTask
+		in.Identity = selected.ID
+		in.Workflow = m.taskWorkflow
+		in.Loading = m.taskWorkflowPending
+		if service := m.servicesPanel.SelectedService(); service != nil {
+			in.Service = service.Name
+		}
+	}
+	return in
+}
+
+func (m Model) workflowStripHeight() int {
+	strip := panels.RenderWorkflowPanel(m.workflowPanelInput())
+	if strip == "" {
+		return 0
+	}
+	return lipgloss.Height(strip)
 }
 
 func (m Model) cycleFocusForward() Model {
@@ -1753,6 +2115,9 @@ func (m *Model) setFocus(focus FocusPanel) {
 	m.servicesPanel.SetFocused(focus == FocusServices)
 	m.outputPanel.SetFocused(focus == FocusOutput)
 	m.releasesPanel.SetFocused(focus == FocusReleases)
+	if m.ready {
+		m.recalculateDimensions()
+	}
 }
 
 func (m *Model) invalidateReleaseCleanupRequest() {
@@ -1769,11 +2134,11 @@ func (m Model) maybeLoadServicesCmd() tea.Cmd {
 	if t == nil {
 		return nil
 	}
-	return loadServicesCmd(m.mgr, t.ID)
+	return loadServicesCmd(m.mgr, t.ID, m.taskWorkflowGeneration, m.operationGeneration)
 }
 
 func (m Model) startMergeInspection() (Model, tea.Cmd) {
-	if m.releaseCleanupWorktreeLocked() {
+	if m.opRunning || m.releaseCleanupWorktreeLocked() {
 		return m, nil
 	}
 	switch m.focus {
@@ -1818,13 +2183,14 @@ func (m Model) startReleaseAction() (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.opRunning = true
+	m.operationGeneration++
 	switch release.Status {
 	case domain.ReleaseStatusPrepared:
 		m.outputPanel.AppendLine("Promoting release " + release.ID + "...")
-		return m, tea.Batch(promoteReleaseCmd(m.mgr, release.ID), m.spinner.Tick)
+		return m, tea.Batch(promoteReleaseCmd(m.mgr, release.ID, m.operationGeneration), m.spinner.Tick)
 	case domain.ReleaseStatusMasterMerged:
 		m.outputPanel.AppendLine("Finalizing release " + release.ID + "...")
-		return m, tea.Batch(finalizeReleaseCmd(m.mgr, release.ID), m.spinner.Tick)
+		return m, tea.Batch(finalizeReleaseCmd(m.mgr, release.ID, m.operationGeneration), m.spinner.Tick)
 	default:
 		m.opRunning = false
 		m.outputPanel.AppendLine("Release action unavailable for status " + string(release.Status) + ".")
@@ -1856,8 +2222,9 @@ func (m Model) startReleaseRetry() (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.opRunning = true
+	m.operationGeneration++
 	m.outputPanel.AppendLine("Retrying release " + release.ID + "...")
-	return m, tea.Batch(retryReleaseCmd(m.mgr, release.ID), m.spinner.Tick)
+	return m, tea.Batch(retryReleaseCmd(m.mgr, release.ID, m.operationGeneration), m.spinner.Tick)
 }
 
 func releaseTaskMergeRetryable(status domain.ReleaseStatus) bool {
@@ -1945,21 +2312,26 @@ func (m Model) startReleaseCleanupExecution(generation uint64) (Model, tea.Cmd) 
 	m.pendingReleaseCleanupPreview = task.ReleaseCleanupPreview{}
 	m.modal = nil
 	m.releaseCleanupExecuting = generation
+	m.releaseCleanupExecutingID = releaseID
 	m.opRunning = true
 	m.outputPanel.AppendLine("Cleaning release " + releaseID + "...")
-	return m, tea.Batch(executeReleaseCleanupCmd(m.mgr, plan, generation), m.spinner.Tick)
-}
-
-func (m Model) releaseCleanupAvailable() bool {
-	if m.focus != FocusReleases {
-		return false
-	}
-	selected := m.releasesPanel.SelectedRelease()
-	return selected != nil && selected.Status == domain.ReleaseStatusReleased
+	return m, tea.Batch(executeReleaseCleanupCmd(m.mgr, plan, releaseID, generation), m.spinner.Tick)
 }
 
 func releaseCleanupHasRemoteSelection(selection task.ReleaseCleanupSelection) bool {
 	return selection.DeleteRemoteTaskBranches || selection.DeleteRemoteReleaseBranches
+}
+
+// startTaskCleanupInspection runs an asynchronous, read-only cleanup
+// inspection for taskID. The planner authorizes from its durable on-disk
+// proof; the caller decides what happens with an unblocked plan.
+func (m Model) startTaskCleanupInspection(taskID string) (Model, tea.Cmd) {
+	m.taskCleanupGeneration++
+	m.operationGeneration++
+	m.taskCleanupRequest = &taskCleanupRequest{generation: m.taskCleanupGeneration, operationGeneration: m.operationGeneration, taskID: taskID}
+	m.opRunning = true
+	m.outputPanel.AppendLine("Inspecting cleanup for task " + taskID + "...")
+	return m, tea.Batch(planTaskCleanupCmd(m.mgr, taskID, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
 }
 
 func (m Model) openReleaseFolder(executable, releaseID, dir string) (Model, tea.Cmd) {
@@ -1969,8 +2341,9 @@ func (m Model) openReleaseFolder(executable, releaseID, dir string) (Model, tea.
 		return m, nil
 	}
 	m.opRunning = true
+	m.operationGeneration++
 	m.outputPanel.AppendLine(fmt.Sprintf("Opening release %s folder %q in %s...", releaseID, dir, executable))
-	return m, tea.Batch(openReleaseFolderCmd(executable, releaseID, dir), m.spinner.Tick)
+	return m, tea.Batch(openReleaseFolderCmd(executable, releaseID, dir, m.operationGeneration), m.spinner.Tick)
 }
 
 func (m Model) releaseMutationBlocked() bool {
@@ -2018,7 +2391,7 @@ func (m *Model) invalidateReleaseCleanupDrift() {
 }
 
 func (m Model) releaseCleanupWorktreeLocked() bool {
-	return m.releaseCleanupExecuting != 0 || m.pendingReleaseCleanupPlan != nil
+	return m.releaseCleanupExecuting != 0 || m.pendingReleaseCleanupPlan != nil || m.taskCleanupExecuting != 0
 }
 
 func releaseCleanupMutatingMessage(msg tea.Msg) bool {
@@ -2032,6 +2405,9 @@ func releaseCleanupMutatingMessage(msg tea.Msg) bool {
 		panels.OpenSyncServiceStrategyDialogMsg,
 		panels.OpenLazygitServiceMsg,
 		panels.PlanCloseTaskMsg,
+		panels.OpenCleanupDialogMsg,
+		panels.ValidateTaskMsg,
+		panels.OpenTagBrowserMsg,
 		panels.PushTaskMsg,
 		panels.PushServiceMsg,
 		panels.StashServiceMsg,
@@ -2054,10 +2430,13 @@ func releaseCleanupMutatingMessage(msg tea.Msg) bool {
 		modal.ConfirmReleaseExecuteMsg,
 		modal.ConfirmReleaseTaskMergeRetryMsg,
 		modal.ConfirmMergeMsg,
-		modal.SubmitPruneMsg,
+		modal.SubmitCleanupMsg,
+		modal.ConfirmTaskCleanupMsg,
 		modal.ForgeCreateMRMsg,
 		modal.ForgeConfirmCreateMRMsg,
-		modal.ForgeMergeMRMsg:
+		modal.ForgeMergeMRMsg,
+		modal.ForgePipelineStatusMsg,
+		modal.ForgeListIssuesMsg:
 		return true
 	default:
 		return false
@@ -2162,9 +2541,11 @@ func (m *Model) setSelectedReleaseWorkflow() {
 
 func (m *Model) loadTaskSelectionCmd(taskID string) tea.Cmd {
 	m.taskWorkflowGeneration++
+	m.taskWorkflowPending = true
 	m.setServicesWorkflow(nil)
+	m.servicesPanel.SetServices("", nil)
 	return tea.Batch(
-		loadServicesCmd(m.mgr, taskID),
+		loadServicesCmd(m.mgr, taskID, m.taskWorkflowGeneration, m.operationGeneration),
 		loadTaskWorkflowCmd(m.mgr, taskID, m.taskWorkflowGeneration),
 	)
 }
@@ -2235,8 +2616,9 @@ func (m Model) handleOpenLazygitServiceMsg(msg panels.OpenLazygitServiceMsg) (Mo
 	}
 
 	m.opRunning = true
+	m.operationGeneration++
 	m.outputPanel.AppendLine("Opening lazygit for service " + msg.ServiceName + " from " + msg.WorktreePath + "...")
-	return m, tea.Batch(lazygitServiceCmd(msg.TaskID, msg.ServiceName, msg.WorktreePath), m.spinner.Tick)
+	return m, tea.Batch(lazygitServiceCmd(msg.TaskID, msg.ServiceName, msg.WorktreePath, m.operationGeneration), m.spinner.Tick)
 }
 
 func (m Model) resolveCloseTask(taskID string) domain.Task {
@@ -2358,7 +2740,7 @@ func (m Model) updateShellInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		command, dir := m.shellInput.input, m.shellInput.taskDir
 		m.shellInput = nil
 		m.outputPanel.AppendLine("Running shell command in " + dir + ": " + command)
-		return m, execShellCmd(command, dir)
+		return m, execShellCmd(command, dir, m.operationGeneration)
 	case "backspace", "ctrl+h":
 		if m.shellInput.cursor > 0 {
 			runes := []rune(m.shellInput.input)

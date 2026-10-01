@@ -26,7 +26,7 @@ func TestPlanReleaseTaskMergeRetry_ProvenFrontier(t *testing.T) {
 			var branches []domain.ReleaseFeatureBranch
 			for n := 1; n <= 3; n++ {
 				id := fmt.Sprintf("APP-%d", n)
-				f.readiness[n] = forge.MRReadiness{Number: n, State: "open", SourceBranch: "feature/" + id, TargetBranch: "develop", HeadSHA: fmt.Sprintf("head-%d", n), Ready: true, SupportsSHAPin: true}
+				f.readiness[n] = forge.MRReadiness{Number: n, State: "open", SourceBranch: "feature/" + id, TargetBranch: "develop", HeadSHA: fmt.Sprintf("head-%d", n), Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 				branches = append(branches, domain.ReleaseFeatureBranch{TaskID: id, ServiceName: "api", Branch: "feature/" + id, WorktreePath: filepath.Join(m.cfg.TasksRoot, id, "api"), TaskMergeStatus: taskMergeStatusPending, TaskMergeMRNumber: n, TaskMergeHeadSHA: fmt.Sprintf("head-%d", n), TaskMergeTargetSHA: "d0", TaskMergeExpectedTarget: "d0"})
 			}
 			branches[0].TaskMergeStatus = taskMergeStatusUnknown

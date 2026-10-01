@@ -353,27 +353,21 @@ func TestServicesPanel_View_ContainsTitle(t *testing.T) {
 	}
 }
 
-func TestServicesPanel_View_ShowsWorkflowAboveServices(t *testing.T) {
+func TestServicesPanel_View_DoesNotDuplicateWorkflow(t *testing.T) {
 	p := NewServicesPanel(70, 20)
 	p.SetServices("IN-001", []domain.Service{{Name: "collection"}})
 	p.SetWorkflow(&domain.WorkflowSummary{
 		Steps:      []domain.WorkflowStep{{Label: "code", State: "done"}, {Label: "MR", State: "now"}},
 		NextAction: "request review",
+		Services:   []domain.ServiceWorkflow{{ServiceName: "collection", Status: "next"}},
 	})
 
 	view := stripAnsi(p.View())
-	workflowAt := strings.Index(view, "✓ code")
-	serviceAt := strings.Index(view, "collection")
-	if workflowAt < 0 || serviceAt < 0 || workflowAt >= serviceAt {
-		t.Fatalf("workflow should precede service list: %q", view)
+	if strings.Contains(view, "✓ code") || strings.Contains(view, "ⓘ request review") {
+		t.Fatalf("services pane must not duplicate workflow output: %q", view)
 	}
-	if !strings.Contains(view, "ⓘ request review") {
-		t.Fatalf("view missing next action: %q", view)
-	}
-
-	p.SetWorkflow(nil)
-	if strings.Contains(stripAnsi(p.View()), "✓ code") {
-		t.Fatal("SetWorkflow(nil) should clear workflow")
+	if !strings.Contains(view, "next") {
+		t.Fatalf("services pane must keep the workflow badge: %q", view)
 	}
 }
 
@@ -388,7 +382,7 @@ func TestServicesPanel_View_ItemCount(t *testing.T) {
 	}
 }
 
-func TestServicesPanel_View_BlockedServiceShowsDetail(t *testing.T) {
+func TestServicesPanel_View_BlockedServiceShowsBadgeOnly(t *testing.T) {
 	p := NewServicesPanel(120, 20)
 	p.SetServices("IN-001", []domain.Service{{Name: "collection"}})
 	p.SetWorkflow(&domain.WorkflowSummary{
@@ -402,8 +396,8 @@ func TestServicesPanel_View_BlockedServiceShowsDetail(t *testing.T) {
 	if !strings.Contains(view, "blocked") {
 		t.Fatalf("view missing blocked badge: %q", view)
 	}
-	if !strings.Contains(view, "merge blocked: need rebase") {
-		t.Fatalf("view missing blocker detail: %q", view)
+	if strings.Contains(view, "merge blocked: need rebase") {
+		t.Fatalf("view duplicates workflow detail already shown by workflow panel: %q", view)
 	}
 }
 

@@ -33,7 +33,8 @@ func (s SyncStrategy) String() string {
 }
 
 func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStrategy, lineCh chan<- string) error {
-	defer close(lineCh)
+	lineCh, closeLineCh := nilSafeLineCh(lineCh)
+	defer closeLineCh()
 
 	if err := validateTaskID(taskID); err != nil {
 		return err

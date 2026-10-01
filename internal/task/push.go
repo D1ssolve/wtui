@@ -8,6 +8,9 @@ import (
 )
 
 func (m *manager) PushService(ctx context.Context, taskID, serviceName string, lineCh chan<- string) error {
+	lineCh, closeLineCh := nilSafeLineCh(lineCh)
+	defer closeLineCh()
+
 	if err := validateTaskID(taskID); err != nil {
 		return err
 	}

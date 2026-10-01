@@ -13,21 +13,50 @@ import (
 
 const tagListDelimiter = "|"
 
+// tagRef validates tag as a plain refs/tags/<tag> name via the shared
+// check-ref-format wrapper; "refs/"-prefixed or option-like input is rejected.
+func tagRef(tag string) (string, error) {
+	ref := "refs/tags/" + tag
+	if tag == "" || strings.HasPrefix(tag, "refs/") || strings.Contains(tag, "^{") || !validRemoteRef(ref) {
+		return "", fmt.Errorf("invalid tag %q", tag)
+	}
+	return ref, nil
+}
+
 func (c *CommandClient) CreateLightweightTag(ctx context.Context, repoPath, tag, ref string) error {
+	if _, err := tagRef(tag); err != nil {
+		return err
+	}
 	_, err := c.execGit(ctx, "-C", repoPath, "tag", "--", tag, ref)
 	return err
 }
 
 func (c *CommandClient) CreateTag(ctx context.Context, repoPath, tag, ref, message string) error {
-	_, err := c.execGit(ctx, "-C", repoPath, "tag", "-a", tag, ref, "-m", message)
+	if _, err := tagRef(tag); err != nil {
+		return err
+	}
+	_, err := c.execGit(ctx, "-C", repoPath, "tag", "-a", "-m", message, "--", tag, ref)
 	if err != nil && ctx.Err() != nil {
 		return ctx.Err()
 	}
 	return err
 }
 
-func (c *CommandClient) PushTag(ctx context.Context, worktreePath, tag string) error {
-	_, err := c.execGit(ctx, "-C", worktreePath, "push", "origin", tag)
+// PushTag publishes the captured unpeeled tag object OID to refs/tags/<tag>
+// on the captured remote URL (never the mutable remote name) without force;
+// a tag that moved after verification is rejected by the remote.
+func (c *CommandClient) PushTag(ctx context.Context, worktreePath, capturedRemoteURL, tag, tagObjectOID string) error {
+	if !validPushRemoteURL(capturedRemoteURL) {
+		return fmt.Errorf("invalid push remote URL %q", capturedRemoteURL)
+	}
+	ref, err := tagRef(tag)
+	if err != nil {
+		return err
+	}
+	if !validObjectID(tagObjectOID) {
+		return fmt.Errorf("invalid tag object OID %q", tagObjectOID)
+	}
+	_, err = c.execGit(ctx, "-C", worktreePath, "push", "--", capturedRemoteURL, tagObjectOID+":"+ref)
 	if err != nil && ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -35,10 +64,27 @@ func (c *CommandClient) PushTag(ctx context.Context, worktreePath, tag string) e
 }
 
 func (c *CommandClient) DeleteTag(ctx context.Context, repoPath, tag string) error {
-	_, err := c.execGit(ctx, "-C", repoPath, "tag", "-d", tag)
+	if _, err := tagRef(tag); err != nil {
+		return err
+	}
+	_, err := c.execGit(ctx, "-C", repoPath, "tag", "-d", "--", tag)
 	if err != nil && ctx.Err() != nil {
 		return ctx.Err()
 	}
+	return err
+}
+
+// DeleteTagIfUnchanged deletes refs/tags/<tag> only when it still points at
+// expectedOID, so a concurrent replacement of the tag is never removed.
+func (c *CommandClient) DeleteTagIfUnchanged(ctx context.Context, repoPath, tag, expectedOID string) error {
+	ref, err := tagRef(tag)
+	if err != nil {
+		return err
+	}
+	if !validObjectID(expectedOID) {
+		return fmt.Errorf("invalid expected tag OID %q", expectedOID)
+	}
+	_, err = c.execGit(ctx, "-C", repoPath, "update-ref", "-d", ref, expectedOID)
 	return err
 }
 
@@ -52,7 +98,11 @@ func (c *CommandClient) ListTags(ctx context.Context, repoPath string) ([]domain
 }
 
 func (c *CommandClient) TagExists(ctx context.Context, repoPath, tag string) (bool, error) {
-	_, err := c.execGit(ctx, "-C", repoPath, "show-ref", "--tags", "--verify", "--quiet", "refs/tags/"+tag)
+	ref, err := tagRef(tag)
+	if err != nil {
+		return false, err
+	}
+	_, err = c.execGit(ctx, "-C", repoPath, "show-ref", "--tags", "--verify", "--quiet", ref)
 	if err == nil {
 		return true, nil
 	}

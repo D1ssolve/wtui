@@ -104,17 +104,12 @@ func (p OutputPanel) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary)
 	title := titleStyle.Render("▣  OUTPUT")
 
-	inner := innerDimensions(p.width, p.height)
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		p.viewport.View(),
 	)
 
-	borderStyle := panelBorderStyle(p.focused)
-	return borderStyle.
-		Width(inner.w).
-		Height(inner.h).
-		Render(content)
+	return renderPanelFrame(p.focused, p.width, p.height, title, content)
 }
 
 func outputSymbol(line string) (string, lipgloss.Color) {

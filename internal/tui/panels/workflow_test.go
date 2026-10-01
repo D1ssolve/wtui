@@ -78,6 +78,60 @@ func TestRenderWorkflow_Width40WrapsWithoutTruncation(t *testing.T) {
 	}
 }
 
+func TestRenderWorkflow_OversizedStepTruncated(t *testing.T) {
+	long := "this-label-is-far-too-long-for-the-row"
+	for name, steps := range map[string][]domain.WorkflowStep{
+		"first":  {{Label: long, State: "done"}, {Label: "MR", State: "next"}},
+		"middle": {{Label: "code", State: "done"}, {Label: long, State: "now"}, {Label: "merge", State: "next"}},
+		"last":   {{Label: "code", State: "done"}, {Label: long, State: "next"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := renderWorkflow(&domain.WorkflowSummary{Steps: steps}, 20)
+			for i, line := range strings.Split(got, "\n") {
+				if width := lipgloss.Width(line); width > 20 {
+					t.Errorf("line %d width = %d: %q", i, width, stripAnsi(line))
+				}
+			}
+		})
+	}
+}
+
+func TestRenderWorkflow_OversizedCJKStepTruncated(t *testing.T) {
+	wf := &domain.WorkflowSummary{Steps: []domain.WorkflowStep{
+		{Label: "レビューと継続的インテグレーション", State: "now"},
+	}}
+
+	got := renderWorkflow(wf, 10)
+	for i, line := range strings.Split(got, "\n") {
+		if width := lipgloss.Width(line); width > 10 {
+			t.Errorf("line %d width = %d: %q", i, width, stripAnsi(line))
+		}
+	}
+	if !strings.Contains(stripAnsi(got), "…") {
+		t.Fatalf("oversized CJK step must be truncated with ellipsis: %q", stripAnsi(got))
+	}
+}
+
+func TestRenderWorkflow_WidthSafeSweep(t *testing.T) {
+	wf := &domain.WorkflowSummary{
+		Steps: []domain.WorkflowStep{
+			{Label: "code", State: "done"},
+			{Label: "レビュー CI", State: "now"},
+			{Label: "merge", State: "blocked"},
+		},
+		NextAction: "request review",
+	}
+
+	for width := 1; width <= 100; width++ {
+		got := renderWorkflow(wf, width)
+		for i, line := range strings.Split(got, "\n") {
+			if w := lipgloss.Width(line); w > width {
+				t.Fatalf("width %d: line %d width = %d: %q", width, i, w, stripAnsi(line))
+			}
+		}
+	}
+}
+
 func TestRenderPaneTitle_RightAlignsPeerTab(t *testing.T) {
 	got := stripAnsi(renderPaneTitle("SERVICES - ITPR-1  [1/2]", "RELEASES  [3]  ›", 60))
 	if !strings.Contains(got, "SERVICES - ITPR-1") || !strings.Contains(got, "RELEASES") {

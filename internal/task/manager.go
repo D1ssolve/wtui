@@ -152,6 +152,13 @@ type Manager interface {
 	PlanReleaseCleanup(ctx context.Context, releaseID string, selection ReleaseCleanupSelection) (ReleaseCleanupPlan, error)
 	ExecuteReleaseCleanup(ctx context.Context, plan ReleaseCleanupPlan, statusCh chan<- string) (ReleaseCleanupResult, error)
 
+	// PlanTaskCleanup builds a read-only cleanup plan for a completed task.
+	// Blocked plans carry reasons and authorize nothing.
+	PlanTaskCleanup(ctx context.Context, request TaskCleanupRequest) (TaskCleanupPlan, error)
+	// ExecuteTaskCleanup revalidates and executes the local steps of a planned
+	// task cleanup; the result reports local and remote branches as retained.
+	ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, statusCh chan<- string) (TaskCleanupResult, error)
+
 	ScanPrunableTasks(ctx context.Context) ([]domain.PruneCandidate, error)
 
 	ListTags(ctx context.Context, taskID string) ([]domain.TagInfo, error)

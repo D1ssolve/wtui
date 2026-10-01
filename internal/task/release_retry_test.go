@@ -265,8 +265,11 @@ func TestRetryRelease_V2FinalizeFailure_RetriesThroughFinalize(t *testing.T) {
 	gitMock.tagExistsRes = true
 	gitMock.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
 	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
-		if ref == "origin/master" || ref == "v1.2.3^{}" {
+		if ref == "origin/master" || ref == "v1.2.3^{}" || ref == "tag-object-sha^{commit}" {
 			return "accepted-sha", nil
+		}
+		if ref == "refs/tags/v1.2.3" {
+			return "tag-object-sha", nil
 		}
 		return ref + "-sha", nil
 	}
@@ -413,8 +416,11 @@ func TestRetryRelease_PreparedAtDispatch(t *testing.T) {
 		gitMock.tagExistsRes = true
 		gitMock.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
 		gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
-			if ref == "origin/master" || ref == "v1.2.3^{}" {
+			if ref == "origin/master" || ref == "v1.2.3^{}" || ref == "tag-object-sha^{commit}" {
 				return "accepted-sha", nil
+			}
+			if ref == "refs/tags/v1.2.3" {
+				return "tag-object-sha", nil
 			}
 			return ref + "-sha", nil
 		}

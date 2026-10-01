@@ -83,7 +83,7 @@ func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Rel
 		if !open || wrongTarget || mr.Number == 0 {
 			continue
 		}
-		svc.ProductionMR = &domain.ProductionMRRef{Number: mr.Number, URL: mr.URL, SourceSHA: sourceSHA, State: "open"}
+		svc.ProductionMR = newProductionMRRef(mr.Number, mr.URL, sourceSHA, remoteURL)
 		svc.Status = domain.ReleaseStatusAwaitingMasterMerge
 		if err := m.persistCheckpoint(release, "production_mr", nil); err != nil {
 			return err
@@ -104,11 +104,25 @@ func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Rel
 		return fmt.Errorf("release promote: create production MR for service %s: %w", svc.Name, err)
 	}
 
-	svc.ProductionMR = &domain.ProductionMRRef{Number: mr.Number, URL: mr.URL, SourceSHA: sourceSHA, State: "open"}
+	svc.ProductionMR = newProductionMRRef(mr.Number, mr.URL, sourceSHA, remoteURL)
 	svc.Status = domain.ReleaseStatusAwaitingMasterMerge
 	if err := m.persistCheckpoint(release, "production_mr", nil); err != nil {
 		return err
 	}
 	sendStatus(statusCh, fmt.Sprintf("[%s][promote] production MR open: %s", svc.Name, mr.URL))
 	return nil
+}
+
+// newProductionMRRef binds a production MR proof to the repository identity
+// it was created against, so a later origin retarget can never reuse the MR
+// number/SHA pair against a different repository.
+func newProductionMRRef(number int, url, sourceSHA, remoteURL string) *domain.ProductionMRRef {
+	return &domain.ProductionMRRef{
+		Number:       number,
+		URL:          url,
+		SourceSHA:    sourceSHA,
+		State:        "open",
+		Repo:         forge.ExtractRepoPath(remoteURL),
+		ProviderHost: forge.RemoteHost(remoteURL),
+	}
 }

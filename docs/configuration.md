@@ -90,7 +90,6 @@ git_flow:
       requires_clean: true
       tag_on_close: false
       tag_source: master
-      delete_source_branch_after_merge: false
       trigger_pipeline_on_close: false
 
 forge:
@@ -227,7 +226,7 @@ Branch detection chooses the longest matching prefix. Equal-length matches from 
 
 With `timing: release_prepare`, release preparation instead merges the selected tasks' existing open MRs into the integration branch itself, sequentially and in a deterministic order, before creating release branches from the resulting accepted integration SHA. wtui does not create, update, or rebase the MR source branches in this flow; each task branch must already have a single ready MR into the integration branch, created beforehand by task Close. The confirmed merge plan is bound to the exact preview and to the release/task-merge configuration; changing `timing` or the release push/worktree settings between preview and confirmation invalidates the plan.
 
-Preview performs a fetch per service to refresh remote-tracking refs but creates, merges, and pushes nothing. Each task worktree `HEAD` must exactly equal its MR head SHA at preview and again at confirmation; a mismatch blocks the merge until the branch is synchronized and previewed again. Merging requires forge support for expected-head SHA pinning; a forge or MR without pinning support blocks the task merge. The confirmed plan is persisted in the release manifest per branch (MR number, head SHA, target SHA), and release branches are created from the persisted final accepted merge SHA, not from a later live integration tip: any integration movement after acceptance blocks preparation. Incomplete historical task-MR metadata fails closed and requires a fresh preview or a recreated release. Retry from `awaiting_task_merge`, `task_merge_blocked`, `task_merge_partial`, or `integrating_tasks` goes through a fresh preview and a new explicit confirmation; a recoverable `failed` release whose selected MRs are externally proven merged resumes only preparation from the persisted accepted SHA, without merging MRs again or pushing integration. See `docs/workflows.md` for the operational flow, retry behavior, and status sequence.
+Preview performs a fetch per service to refresh remote-tracking refs but creates, merges, and pushes nothing. Each task worktree `HEAD` must exactly equal its MR head SHA at preview and again at confirmation; a mismatch blocks the merge until the branch is synchronized and previewed again. Merging requires forge support for expected-head SHA pinning, an exact target branch, and a fresh atomic target SHA binding; a forge or MR without all of these guarantees blocks the task merge. The current `gh`/`glab` adapters support MR creation, inspection, and wtui-initiated merges; `M` rechecks readiness before merge and records the verified result. The confirmed plan is persisted in the release manifest per branch (MR number, head SHA, target SHA), and release branches are created from the persisted final accepted merge SHA, not from a later live integration tip: any integration movement after acceptance blocks preparation. Incomplete historical task-MR metadata fails closed and requires a fresh preview or a recreated release. Retry from `awaiting_task_merge`, `task_merge_blocked`, `task_merge_partial`, or `integrating_tasks` goes through a fresh preview and a new explicit confirmation; a recoverable `failed` release whose selected MRs are externally proven merged resumes only preparation from the persisted accepted SHA, without merging MRs again or pushing integration. See `docs/workflows.md` for the operational flow, retry behavior, and status sequence.
 
 ### Branch Rules
 
@@ -240,12 +239,13 @@ Keys live under `git_flow.branch_types.<name>`.
 | `merge_targets` | string list | for `direct_merge` | Local merge targets, processed in order. |
 | `review_targets` | string list | for `review_request` | PR/MR target branches. |
 | `close_strategy` | string | yes | `direct_merge`, `review_request`, or `none`. |
-| `merge_strategy` | string | yes | `merge_commit`, `squash`, `rebase`, or `ff_only`. Forge merging currently maps `merge_commit` to merge and other values to squash. |
+| `merge_strategy` | string | yes | `merge_commit`, `squash`, `rebase`, or `ff_only`. Where forge merging applies, `merge_commit` maps to merge and other values to squash. |
 | `requires_clean` | bool | no | Parsed and included in resolved rules, but currently not enforced by close execution. |
 | `tag_on_close` | bool | no | Create a tag during branch close. Releases use their own finalization flow. |
 | `tag_source` | string | when `tag_on_close` is true | Ref used for tag lookup and creation. |
-| `delete_source_branch_after_merge` | bool | no | Delete the local source branch after a successful close merge. Hotfix review continuation retains source branches; cleanup is separate. |
 | `trigger_pipeline_on_close` | bool | no | Ask the selected forge client to trigger a pipeline after close. |
+
+Close never deletes branches and never asks the forge to auto-delete a source branch. Cleanup is explicit and manual: `D` (alias `P`) opens a read-only scan of all tasks and released releases, and each selected candidate is replanned and confirmed before execution. Cleanup removes worktrees, generated task metadata, and directories while retaining local and remote branches; delete branches on the forge when needed.
 
 ## Forge
 
@@ -309,6 +309,14 @@ Rendered IDs are trimmed, limited to 80 characters, and reject absolute paths, `
 
 Release version proposals are calculated independently from each service repository's local semver tags. The create-release dialog also accepts an optional one-line tag description per service; when provided, it becomes that service's annotated Git tag message.
 
+### Release Cleanup
+
+Release cleanup removes release/task worktrees, directories, and the release manifest; tags are never deleted. Local branches are always retained, because the authoritative merge targets live on the remote and cannot be atomically guarded. Selecting remote branch deletion fails closed before any mutation; deselect remote deletion to run a local-only cleanup. Manual task removal with the remote branch option likewise fails before any mutation: remove worktrees and local branches only, or delete the remote branch on the forge.
+
+Directories are deleted only when every entry is plan-known. Unknown files or directories are preserved and named in the returned error, so user content never dies with a recursive delete. The same rule applies to task cleanup via `D` and to manual task removal: a task directory with leftover entries is kept and reported as an error instead of being removed.
+
+Task cleanup also inspects every release that involves the task. An active in-flight status, a recoverable failure, and a malformed or unknown status block cleanup; malformed manifests fail closed the same way. A `released` manifest supplies integration proof. A `rejected` release or a nonrecoverable failure neither blocks cleanup nor proves integration: the task must still be proven merged through live or forge-provided ancestry.
+
 ## Validation
 
 | Key | Type | Absent-block default | Runtime status |
@@ -321,7 +329,6 @@ Release version proposals are calculated independently from each service reposit
 | `validation.concurrency` | integer | `8` | Parallel validation workers. Values `<= 0` become `8`. |
 
 In a present block, omitted boolean fields remain `false`.
-
 ## Close
 
 | Key | Type | Absent-block default | Runtime status |
@@ -346,16 +353,23 @@ must be split, even when `allow_mixed_branch_types_on_close` is enabled.
    for every configured `review_targets` entry. Existing merged requests
    are recognized even if they were merged outside wtui.
 2. Confirm the plan to create missing requests. Open or merged requests
-   are not recreated. Source branches are retained for subsequent targets.
-3. Use **Services → select service → m → Merge MR** to choose a target with
-   `j/k` and merge its ready request. Readiness and the inspected head SHA
-   are checked again before merging.
+   are not recreated. A request closed without merge is not a blocker:
+   the plan shows a warning in the same dialog, and confirming creates a
+   new request for that target. Source branches are retained for
+   subsequent targets.
+3. Use **Services → select service → m** to inspect readiness per target
+   (`j/k` switches targets). Readiness and the inspected head SHA are
+   checked again before wtui merges a ready request and records the verified
+   result.
 4. Return to **Tasks → C**. Only after all required targets of all services
    are merged does wtui offer tag versions and the exact commit SHA.
    Versions are entered per service (`Tab` switches fields), or together
    when `tag.shared_version` is enabled.
-5. Confirm to create/push tags. Worktree cleanup remains a separate
-   **Tasks → P** operation.
+5. Confirm to create/push tags. Cleanup is never automatic afterwards:
+    **Tasks → D** opens a read-only scan where qualifying local cleanup can be
+    selected and confirmed explicitly. Local and remote branches are retained;
+    delete remote branches manually in the forge when needed. **Tasks → P** is
+    an alias for the same cleanup review.
 
 With `review_targets: [master, develop]`, an already merged master request
 is skipped and only the missing develop request is created. Active release
@@ -373,13 +387,30 @@ source/config identity. Review-stage changes require a fresh preview; after
 tag confirmation, the saved identity is locked. Keep the checkpoint until
 cleanup: retries reuse those versions,
 skip matching published tags and retry an unfinished push. Existing tags
-at another commit, changed source identity, closed-unmerged requests and
-ambiguous request history block continuation rather than silently changing
-the release. An uncertain pipeline-trigger response also blocks automatic
+at another commit, changed source identity and ambiguous request history
+block continuation rather than silently changing the release. A request
+closed without merge only produces the recreation warning described above.
+An uncertain pipeline-trigger response also blocks automatic
 retriggering; inspect its result in the forge.
 
-Prune currently checks hotfix ancestry against `origin/<production_branch>`
-only. Finish the remaining targets and tagging before pruning the task.
+Manual cleanup verifies hotfix integration against every configured review
+target — live ancestry or merged-request evidence per target — and requires
+proof of the required close post-actions (tagging, pipeline trigger).
+Cleanup is blocked until all targets and the tag proof are verified.
+
+### Hotfix conversion to feature
+
+For a hotfix-only task, **Tasks → select hotfix → F** converts the task to a
+feature task. The dialog accepts a target task ID and defaults to the source
+ID. Each service worktree must be clean, and a published local source must
+contain its remote tip. wtui creates `feature/<TARGET>` branches from the
+confirmed source SHA, pushes them with a lease, removes the hotfix
+worktrees, and deletes only unchanged local hotfix branches. A marker file
+makes an interrupted conversion resumable without re-planning.
+
+The remote source branch is never deleted. It is reported as retained, even
+when it moved during conversion, so a concurrent push cannot lose work:
+delete it on the forge after the feature target is merged.
 
 ## Prune
 

@@ -22,6 +22,7 @@ func TestCreateRelease_StopsAtPrepared(t *testing.T) {
 		},
 	}
 	m, _ := newReleasePlanTestManager(t, gitMock)
+	wireMockOwnedWorktreeCleanup(gitMock, mockHeadFromWorktreeHEAD)
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-2", ServiceName: "svc-api", Branch: "feature/APP-2", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "svc-api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
@@ -140,6 +141,7 @@ func TestCreateRelease_FastForwardFailure_Fails(t *testing.T) {
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "svc-api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
 	)
 	gitMock.mergeFFOnlyErr = errors.New("not possible to fast-forward")
+	wireMockOwnedWorktreeCleanup(gitMock, mockHeadFromCreateRef)
 
 	_, err := m.CreateRelease(ctx, CreateReleaseParams{
 		TaskIDs:          []string{"APP-1"},
@@ -172,6 +174,7 @@ func TestCreateRelease_FastForwardFailure_Fails(t *testing.T) {
 func TestExecutePrepareService_RemoteEligibilityDriftBeforeBranchingFails(t *testing.T) {
 	gitMock := &mockGitClient{commonDirResult: "/git/common", isAncestorFn: func(_, _, _ string) (bool, error) { return false, nil }}
 	m, _ := newReleasePlanTestManager(t, gitMock)
+	wireMockOwnedWorktreeCleanup(gitMock, mockHeadFromCreateRef)
 	release := domain.Release{ID: "rel-drift", Dir: t.TempDir(), Status: domain.ReleaseStatusMerging}
 	svc := domain.ReleaseService{
 		Name: "api", RepoPath: "/repos/api", IntegrationBranch: "develop", ReleaseBranch: "release/1.2.3",
@@ -187,6 +190,7 @@ func TestExecutePrepareService_RemoteEligibilityDriftBeforeBranchingFails(t *tes
 func TestExecutePrepareService_ResolveFailureAfterAddWorktreeCleansWorktree(t *testing.T) {
 	gitMock := &mockGitClient{commonDirResult: "/git/common", resolveRefErr: errors.New("resolve failed")}
 	m, _ := newReleasePlanTestManager(t, gitMock)
+	wireMockOwnedWorktreeCleanup(gitMock, mockHeadFromCreateRef)
 	release := domain.Release{ID: "rel-cleanup", Dir: t.TempDir(), Status: domain.ReleaseStatusMerging}
 	svc := domain.ReleaseService{Name: "api", RepoPath: "/repos/api", IntegrationBranch: "develop"}
 
@@ -241,6 +245,7 @@ func TestCreateRelease_PushBranchFailure_RecordsPartialPushedFlags(t *testing.T)
 		return nil
 	}}
 	m, _ := newReleasePlanTestManager(t, gitMock)
+	wireMockOwnedWorktreeCleanup(gitMock, mockHeadFromWorktreeHEAD)
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "svc-api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
 	)
@@ -285,6 +290,7 @@ func TestCreateRelease_StopsAtPrepared_TwoServices(t *testing.T) {
 	gitMock := &mockGitClient{}
 	m, _ := newReleasePlanTestManager(t, gitMock)
 	m.cfg.Release.IDFormat = "rel-{{.Version}}-{{.Timestamp}}"
+	wireMockOwnedWorktreeCleanup(gitMock, mockHeadFromWorktreeHEAD)
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "svc-api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "svc-worker", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-worker")},
@@ -403,6 +409,7 @@ func TestCreateRelease_NoPush_ReachesPrepared(t *testing.T) {
 	*m.cfg.Release.PushIntegration = false
 	*m.cfg.Release.PushReleaseBranches = false
 	*m.cfg.Release.PushTags = false
+	wireMockOwnedWorktreeCleanup(gitMock, mockHeadFromWorktreeHEAD)
 
 	rel, err := m.CreateRelease(ctx, CreateReleaseParams{
 		TaskIDs:          []string{"APP-1"},

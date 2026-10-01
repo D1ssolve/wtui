@@ -27,27 +27,48 @@ func (f *workflowForgeClient) IsAvailable(context.Context) bool { return true }
 func (f *workflowForgeClient) CreateMR(context.Context, forge.CreateMRParams) (forge.MRInfo, error) {
 	return forge.MRInfo{}, nil
 }
+
 func (f *workflowForgeClient) MRStatus(context.Context, string, string) ([]forge.MRInfo, error) {
 	return nil, nil
 }
+
 func (f *workflowForgeClient) MRReadiness(_ context.Context, branch, _, _ string) (forge.MRReadiness, error) {
 	f.reads.Add(1)
 	return f.readiness[branch], f.readErrs[branch]
 }
+
 func (f *workflowForgeClient) MRReadinessByNumber(context.Context, int, string, string) (forge.MRReadiness, error) {
 	return forge.MRReadiness{}, nil
 }
+
 func (f *workflowForgeClient) MergeMR(context.Context, forge.MergeMRParams) (forge.MRMergeResult, error) {
 	return forge.MRMergeResult{}, nil
 }
+
 func (f *workflowForgeClient) PipelineStatus(context.Context, string, string) ([]forge.PipelineStatus, error) {
 	return nil, nil
 }
+
 func (f *workflowForgeClient) TriggerPipeline(context.Context, forge.TriggerPipelineParams) error {
 	return nil
 }
+
 func (f *workflowForgeClient) ListIssues(context.Context, forge.ListIssuesParams) ([]forge.IssueInfo, error) {
 	return nil, nil
+}
+
+type workflowHistoryForgeClient struct {
+	workflowForgeClient
+	history  map[string][]forge.MRInfo
+	byNumber map[int]forge.MRReadiness
+}
+
+func (f *workflowHistoryForgeClient) MRHistory(_ context.Context, branch, _ string) ([]forge.MRInfo, error) {
+	return f.history[branch], nil
+}
+
+func (f *workflowHistoryForgeClient) MRReadinessByNumber(_ context.Context, number int, _, _ string) (forge.MRReadiness, error) {
+	return f.byNumber[number], nil
 }
 
 func TestTaskWorkflow_PhaseTransitions(t *testing.T) {
@@ -83,7 +104,7 @@ func TestTaskWorkflow_PhaseTransitions(t *testing.T) {
 				"feature/b": {Number: 2, State: "open", Blockers: []string{"checks pending"}},
 			},
 			want:       domain.TaskWorkflowReviewCI,
-			wantNext:   "wait for review/CI, then M",
+			wantNext:   "wait for review/CI, then merge in forge and press M to reconcile",
 			wantBlock:  "2 services waiting for approval/CI",
 			wantMRRead: 2,
 		},
@@ -94,7 +115,7 @@ func TestTaskWorkflow_PhaseTransitions(t *testing.T) {
 				"feature/b": {Number: 2, State: "open", Blockers: []string{"checks pending"}},
 			},
 			want:       domain.TaskWorkflowMerge,
-			wantNext:   "press M to merge ready MRs",
+			wantNext:   "merge ready MRs in forge, then press M to reconcile",
 			wantMRRead: 2,
 		},
 		{
@@ -138,8 +159,19 @@ func TestTaskWorkflow_IncludesPerServiceInspectionRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []domain.ServiceWorkflow{
-		{ServiceName: "a", Status: "ready"},
-		{ServiceName: "b", Status: "waiting", Detail: "checks pending"},
+		{
+			ServiceName: "a",
+			Status:      "ready",
+			Current:     domain.TaskWorkflowMerge,
+			NextAction:  "merge ready MRs in forge, then press M to reconcile",
+		},
+		{
+			ServiceName: "b",
+			Status:      "waiting",
+			Detail:      "checks pending",
+			Current:     domain.TaskWorkflowReviewCI,
+			NextAction:  "wait for review/CI, then merge in forge and press M to reconcile",
+		},
 	}
 	if !reflect.DeepEqual(summary.Services, want) {
 		t.Fatalf("Services = %#v, want %#v", summary.Services, want)
@@ -154,7 +186,7 @@ func TestTaskWorkflow_ForgeFailureDoesNotReportMissingMR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "fix blockers, then M" {
+	if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "fix blockers, then merge in forge and press M to reconcile" {
 		t.Fatalf("summary = %#v, want blocked review workflow", summary)
 	}
 	if !strings.Contains(summary.Blocker, "a: forge unknown: ERROR") {
@@ -205,8 +237,8 @@ func TestTaskWorkflow_BlockedService_ShowsBlockerDetail(t *testing.T) {
 	if summary.Current != domain.TaskWorkflowReviewCI {
 		t.Fatalf("Current = %q, want %q", summary.Current, domain.TaskWorkflowReviewCI)
 	}
-	if summary.NextAction != "fix blockers, then M" {
-		t.Fatalf("NextAction = %q, want %q", summary.NextAction, "fix blockers, then M")
+	if summary.NextAction != "fix blockers, then merge in forge and press M to reconcile" {
+		t.Fatalf("NextAction = %q, want %q", summary.NextAction, "fix blockers, then merge in forge and press M to reconcile")
 	}
 	wantBlocker := "a: merge blocked: need rebase"
 	if summary.Blocker != wantBlocker {
@@ -247,7 +279,7 @@ func TestReleaseWorkflow_StatusMapping(t *testing.T) {
 		{domain.ReleaseStatusBranching, domain.ReleaseWorkflowReleaseBranch, "creating release branches", ""},
 		{domain.ReleaseStatusPushing, domain.ReleaseWorkflowReleaseBranch, "pushing release branches", ""},
 		{domain.ReleaseStatusPrepared, domain.ReleaseWorkflowRegression, "press F to create master MRs", ""},
-		{domain.ReleaseStatusAwaitingMasterMerge, domain.ReleaseWorkflowMasterMR, "press M to merge ready MRs", ""},
+		{domain.ReleaseStatusAwaitingMasterMerge, domain.ReleaseWorkflowMasterMR, "merge ready MRs in forge, then press M to reconcile", ""},
 		{domain.ReleaseStatusMasterMerged, domain.ReleaseWorkflowTag, "press F to sync develop and tag", ""},
 		{domain.ReleaseStatusSyncingDevelop, domain.ReleaseWorkflowTag, "syncing develop", ""},
 		{domain.ReleaseStatusTagging, domain.ReleaseWorkflowTag, "tagging release", ""},
@@ -318,8 +350,21 @@ func TestReleaseWorkflow_IncludesPerServiceRows(t *testing.T) {
 
 	summary := ReleaseWorkflow(release)
 	want := []domain.ServiceWorkflow{
-		{ServiceName: "api", Status: "awaiting_master_merge", Detail: "MR #42: open"},
-		{ServiceName: "worker", Status: "failed", Detail: "CI failed"},
+		{
+			ServiceName: "api",
+			Status:      "awaiting_master_merge",
+			Detail:      "MR #42: open",
+			Current:     domain.ReleaseWorkflowMasterMR,
+			NextAction:  "merge ready MRs in forge, then press M to reconcile",
+		},
+		{
+			ServiceName: "worker",
+			Status:      "failed",
+			Detail:      "CI failed",
+			Current:     domain.ReleaseWorkflowDevelop,
+			NextAction:  "release failed",
+			Blocker:     "CI failed",
+		},
 	}
 	if !reflect.DeepEqual(summary.Services, want) {
 		t.Fatalf("Services = %#v, want %#v", summary.Services, want)
@@ -361,6 +406,124 @@ func newWorkflowTestManager(t *testing.T, readiness map[string]forge.MRReadiness
 		forge.ForgeProviderGitLab: client,
 	})
 	return mgr, client
+}
+
+func newWorkflowMergedTestManager(t *testing.T) (Manager, *workflowHistoryForgeClient) {
+	t.Helper()
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	taskDir := filepath.Join(tasksRoot, "TASK-1")
+	worktrees := make(map[string]git.WorktreeEntry, 2)
+	for _, name := range []string{"a", "b"} {
+		path := filepath.Join(taskDir, name)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		worktrees[filepath.Join(rootDir, "repos", name)] = git.WorktreeEntry{Path: path, Branch: "refs/heads/feature/" + name}
+	}
+	gitMock := &mockGitClient{
+		commonDirFn: func(path string) (string, error) {
+			return filepath.Join(rootDir, "repos", filepath.Base(path), ".git"), nil
+		},
+		listWorktreesFn: func(repoPath string) ([]git.WorktreeEntry, error) {
+			return []git.WorktreeEntry{worktrees[repoPath]}, nil
+		},
+		remoteURLRes: "git@gitlab.com:group/repo.git",
+		resolveRefFn: func(_ string, ref string) (string, error) {
+			if ref == "feature/a" {
+				return "a-head", nil
+			}
+			if ref == "feature/b" {
+				return "b-head", nil
+			}
+			return "origin/develop-sha", nil
+		},
+		remoteRefSHAFn: func(_ string, ref string) (string, error) {
+			switch ref {
+			case "refs/heads/feature/a":
+				return "a-head", nil
+			case "refs/heads/feature/b":
+				return "b-head", nil
+			}
+			return "", nil
+		},
+		// Squash/rebase merge: the merged SHA is contained in the target,
+		// but the source branch is never an ancestor of it.
+		isAncestorFn: func(_, ancestor, _ string) (bool, error) {
+			return strings.HasPrefix(ancestor, "squash-"), nil
+		},
+	}
+	client := &workflowHistoryForgeClient{
+		workflowForgeClient: workflowForgeClient{readiness: map[string]forge.MRReadiness{
+			"feature/a": {SourceBranch: "feature/a", Blockers: []string{"merge request not found"}},
+			"feature/b": {SourceBranch: "feature/b", Blockers: []string{"merge request not found"}},
+		}},
+		history: map[string][]forge.MRInfo{
+			"feature/a": {{Number: 11, State: "merged", SourceBranch: "feature/a", TargetBranch: "develop"}},
+			"feature/b": {{Number: 12, State: "merged", SourceBranch: "feature/b", TargetBranch: "develop"}},
+		},
+		byNumber: map[int]forge.MRReadiness{
+			11: {Number: 11, State: "merged", SourceBranch: "feature/a", TargetBranch: "develop", HeadSHA: "a-head", MergedSHA: "squash-a"},
+			12: {Number: 12, State: "merged", SourceBranch: "feature/b", TargetBranch: "develop", HeadSHA: "b-head", MergedSHA: "squash-b"},
+		},
+	}
+	flow := &gitflow.ResolvedGitFlow{IntegrationBranch: "develop"}
+	mgr := newTestManagerWithDeps(t, newCloseTestConfig(rootDir, tasksRoot), gitMock, flow, map[forge.ForgeProvider]forge.ForgeClient{
+		forge.ForgeProviderGitLab: client,
+	})
+	return mgr, client
+}
+
+func TestTaskWorkflow_ExternallyMergedSquashShowsCompleteWithoutSourceAncestry(t *testing.T) {
+	mgr, _ := newWorkflowMergedTestManager(t)
+
+	summary, err := mgr.TaskWorkflow(t.Context(), "TASK-1")
+	if err != nil {
+		t.Fatalf("TaskWorkflow() err = %v", err)
+	}
+	if summary.Current != domain.TaskWorkflowReleaseEligible {
+		t.Fatalf("Current = %q, want %q: %#v", summary.Current, domain.TaskWorkflowReleaseEligible, summary)
+	}
+	if summary.NextAction != "select in release (N)" {
+		t.Fatalf("NextAction = %q, want %q", summary.NextAction, "select in release (N)")
+	}
+	for _, row := range summary.Services {
+		if row.Status != "merged" {
+			t.Fatalf("row = %#v, want merged", row)
+		}
+	}
+	assertWorkflowStates(t, summary)
+}
+
+func TestTaskWorkflow_ExternallyMergedServiceDoesNotBlockReadySibling(t *testing.T) {
+	mgr, client := newWorkflowMergedTestManager(t)
+	client.readiness["feature/b"] = forge.MRReadiness{Number: 12, State: "open", SourceBranch: "feature/b", TargetBranch: "develop", HeadSHA: "b-head", Ready: true}
+
+	summary, err := mgr.TaskWorkflow(t.Context(), "TASK-1")
+	if err != nil {
+		t.Fatalf("TaskWorkflow() err = %v", err)
+	}
+	if summary.Current != domain.TaskWorkflowMerge {
+		t.Fatalf("Current = %q, want %q: %#v", summary.Current, domain.TaskWorkflowMerge, summary)
+	}
+	if summary.NextAction != "merge ready MRs in forge, then press M to reconcile" {
+		t.Fatalf("NextAction = %q, want ready-merge guidance", summary.NextAction)
+	}
+	var aRow, bRow *domain.ServiceWorkflow
+	for i := range summary.Services {
+		switch summary.Services[i].ServiceName {
+		case "a":
+			aRow = &summary.Services[i]
+		case "b":
+			bRow = &summary.Services[i]
+		}
+	}
+	if aRow == nil || aRow.Status != "merged" {
+		t.Fatalf("a row = %#v, want merged", aRow)
+	}
+	if bRow == nil || bRow.Status != "ready" {
+		t.Fatalf("b row = %#v, want ready", bRow)
+	}
 }
 
 func assertWorkflowStates(t *testing.T, summary domain.WorkflowSummary) {

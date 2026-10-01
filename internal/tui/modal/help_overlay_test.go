@@ -140,7 +140,6 @@ func TestHelpOverlay_WorkflowContext_StepsEmptyStillShowsIdentityAndNextAction(t
 
 func TestHelpOverlay_FullView_FitsOverlayWidthAtNarrowTerminal(t *testing.T) {
 	h := NewHelpOverlayWithOptions(true)
-	h.SetReleaseCleanupAvailable(true)
 	h.SetTerminalSize(50, 200)
 	h.SetWorkflow("Task PROJ-101", &domain.WorkflowSummary{
 		Steps: []domain.WorkflowStep{

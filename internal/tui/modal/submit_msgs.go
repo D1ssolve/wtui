@@ -5,8 +5,16 @@ import (
 	"github.com/D1ssolve/wtui/internal/task"
 )
 
-type SubmitPruneMsg struct {
-	SelectedTaskIDs []string
+type SubmitCleanupMsg struct {
+	Generation uint64
+	Tasks      []string
+	Releases   []string
+}
+
+type ConfirmTaskCleanupMsg struct {
+	TaskID      string
+	Generation  uint64
+	Fingerprint [32]byte
 }
 
 type ForgeCreateMRMsg struct {

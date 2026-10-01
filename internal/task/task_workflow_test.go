@@ -309,7 +309,12 @@ func TestTaskWorkflow_NoneStrategy_NoForgeNoAction(t *testing.T) {
 	if summary.NextAction != "no close action configured" {
 		t.Fatalf("NextAction = %q, want %q", summary.NextAction, "no close action configured")
 	}
-	want := []domain.ServiceWorkflow{{ServiceName: "a", Status: "none", Detail: "no close action"}}
+	want := []domain.ServiceWorkflow{{
+		ServiceName: "a",
+		Status:      "none",
+		Detail:      "no close action",
+		Current:     domain.TaskWorkflowReleaseEligible,
+	}}
 	if !reflect.DeepEqual(summary.Services, want) {
 		t.Fatalf("Services = %#v, want %#v", summary.Services, want)
 	}
@@ -334,13 +339,13 @@ func TestTaskWorkflow_ReviewFeature_RejectsWrongTargetReadyMR(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "fix blockers, then M" {
+		if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "fix blockers, then merge in forge and press M to reconcile" {
 			t.Fatalf("summary = %#v, want blocked review phase without merge guidance", summary)
 		}
 		if !strings.Contains(summary.Blocker, "develop") || !strings.Contains(summary.Blocker, "staging") {
 			t.Fatalf("Blocker = %q, want target mismatch detail", summary.Blocker)
 		}
-		if strings.Contains(summary.NextAction, "press M") {
+		if strings.Contains(summary.NextAction, "press M to merge") {
 			t.Fatalf("NextAction = %q, must not offer merge for wrong-target MR", summary.NextAction)
 		}
 	})
@@ -357,7 +362,7 @@ func TestTaskWorkflow_ReviewFeature_RejectsWrongTargetReadyMR(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "fix blockers, then M" {
+		if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "fix blockers, then merge in forge and press M to reconcile" {
 			t.Fatalf("summary = %#v, want blocked review phase", summary)
 		}
 		if !strings.Contains(summary.Blocker, "feature/other") {
@@ -377,7 +382,7 @@ func TestTaskWorkflow_ReviewFeature_RejectsWrongTargetReadyMR(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if summary.Current != domain.TaskWorkflowMerge || summary.NextAction != "press M to merge ready MRs" {
+		if summary.Current != domain.TaskWorkflowMerge || summary.NextAction != "merge ready MRs in forge, then press M to reconcile" {
 			t.Fatalf("summary = %#v, want merge phase", summary)
 		}
 	})
@@ -398,7 +403,13 @@ func TestTaskWorkflow_NoneStrategy_WithPostActions_GuidesClose(t *testing.T) {
 				return r
 			},
 			wantNext: "press C to create tag",
-			wantRow:  domain.ServiceWorkflow{ServiceName: "a", Status: "tag", Detail: "create tag"},
+			wantRow: domain.ServiceWorkflow{
+				ServiceName: "a",
+				Status:      "tag",
+				Detail:      "create tag",
+				Current:     domain.TaskWorkflowReleaseEligible,
+				NextAction:  "press C to create tag",
+			},
 		},
 		{
 			name: "pipeline on close",
@@ -407,7 +418,13 @@ func TestTaskWorkflow_NoneStrategy_WithPostActions_GuidesClose(t *testing.T) {
 				return r
 			},
 			wantNext: "press C to trigger pipeline",
-			wantRow:  domain.ServiceWorkflow{ServiceName: "a", Status: "pipeline", Detail: "trigger pipeline"},
+			wantRow: domain.ServiceWorkflow{
+				ServiceName: "a",
+				Status:      "pipeline",
+				Detail:      "trigger pipeline",
+				Current:     domain.TaskWorkflowReleaseEligible,
+				NextAction:  "press C to trigger pipeline",
+			},
 		},
 		{
 			name: "tag and pipeline on close",
@@ -418,7 +435,13 @@ func TestTaskWorkflow_NoneStrategy_WithPostActions_GuidesClose(t *testing.T) {
 				return r
 			},
 			wantNext: "press C to tag and trigger pipeline",
-			wantRow:  domain.ServiceWorkflow{ServiceName: "a", Status: "tag+pipeline", Detail: "tag and trigger pipeline"},
+			wantRow: domain.ServiceWorkflow{
+				ServiceName: "a",
+				Status:      "tag+pipeline",
+				Detail:      "tag and trigger pipeline",
+				Current:     domain.TaskWorkflowReleaseEligible,
+				NextAction:  "press C to tag and trigger pipeline",
+			},
 		},
 	}
 
@@ -478,8 +501,20 @@ func TestTaskWorkflow_MixedNoneWithPostActionAndDirect_RowMatchesGuidance(t *tes
 		t.Fatalf("NextAction = %q, want direct-merge guidance", summary.NextAction)
 	}
 	want := []domain.ServiceWorkflow{
-		{ServiceName: "c", Status: "tag", Detail: "create tag"},
-		{ServiceName: "h", Status: "pending", Detail: "pending: origin/master, origin/develop"},
+		{
+			ServiceName: "c",
+			Status:      "tag",
+			Detail:      "create tag",
+			Current:     domain.TaskWorkflowReleaseEligible,
+			NextAction:  "press C to create tag",
+		},
+		{
+			ServiceName: "h",
+			Status:      "pending",
+			Detail:      "pending: origin/master, origin/develop",
+			Current:     domain.TaskWorkflowMerge,
+			NextAction:  "press C to merge into master, develop",
+		},
 	}
 	if !reflect.DeepEqual(summary.Services, want) {
 		t.Fatalf("Services = %#v, want %#v", summary.Services, want)

@@ -52,6 +52,8 @@ type mockManager struct {
 	syncTaskCalls    int
 	syncTaskTaskID   string
 	syncTaskStrategy task.SyncStrategy
+	syncTaskErr      error
+	syncServiceErr   error
 	convertParams    task.ConvertHotfixParams
 	convertCalls     int
 	convertErr       error
@@ -75,6 +77,7 @@ type mockManager struct {
 
 	pushTaskCalls       int
 	pushTaskID          string
+	pushTaskErr         error
 	pushServiceCalls    int
 	pushServiceTask     string
 	pushServiceName     string
@@ -98,6 +101,15 @@ type mockManager struct {
 	cleanupExecuteErr      error
 	cleanupExecuteStatuses []string
 
+	taskCleanupPlanCalls    int
+	taskCleanupPlanTaskIDs  []string
+	taskCleanupPlanResult   task.TaskCleanupPlan
+	taskCleanupPlanErr      error
+	taskCleanupExecCalls    int
+	taskCleanupExecResult   task.TaskCleanupResult
+	taskCleanupExecErr      error
+	taskCleanupExecStatuses []string
+
 	planTaskMergeCalls          int
 	planTaskMergeParams         task.CreateReleaseParams
 	planTaskMergeResult         task.ReleaseTaskMergePlan
@@ -119,9 +131,11 @@ var _ task.Manager = (*mockManager)(nil)
 func (m *mockManager) Init(_ context.Context, _ task.InitParams) (task.PartialFailureResult, error) {
 	return task.PartialFailureResult{}, nil
 }
+
 func (m *mockManager) Add(_ context.Context, _ task.AddParams) (task.PartialFailureResult, error) {
 	return task.PartialFailureResult{}, nil
 }
+
 func (m *mockManager) ConvertHotfixToFeature(_ context.Context, params task.ConvertHotfixParams) error {
 	m.convertParams = params
 	m.convertCalls++
@@ -148,24 +162,21 @@ func (m *mockManager) Repos(_ context.Context, refresh bool) ([]domain.Repo, err
 	return m.reposResult, m.reposErr
 }
 
-func (m *mockManager) SyncTask(_ context.Context, taskID string, strategy task.SyncStrategy, lineCh chan<- string) error {
+func (m *mockManager) SyncTask(_ context.Context, taskID string, strategy task.SyncStrategy, _ chan<- string) error {
 	m.syncTaskCalls++
 	m.syncTaskTaskID = taskID
 	m.syncTaskStrategy = strategy
-	close(lineCh)
-	return nil
+	return m.syncTaskErr
 }
 
-func (m *mockManager) SyncService(_ context.Context, _, _ string, _ task.SyncStrategy, lineCh chan<- string) error {
-	close(lineCh)
-	return nil
+func (m *mockManager) SyncService(_ context.Context, _, _ string, _ task.SyncStrategy, _ chan<- string) error {
+	return m.syncServiceErr
 }
 
-func (m *mockManager) PushTask(_ context.Context, taskID string, lineCh chan<- string) error {
+func (m *mockManager) PushTask(_ context.Context, taskID string, _ chan<- string) error {
 	m.pushTaskCalls++
 	m.pushTaskID = taskID
-	close(lineCh)
-	return nil
+	return m.pushTaskErr
 }
 
 func (m *mockManager) PushService(_ context.Context, taskID, serviceName string, _ chan<- string) error {
@@ -333,12 +344,27 @@ func (m *mockManager) PlanReleaseCleanup(_ context.Context, releaseID string, se
 	m.cleanupPlanSelection = selection
 	return m.cleanupPlanResult, m.cleanupPlanErr
 }
+
 func (m *mockManager) ExecuteReleaseCleanup(_ context.Context, _ task.ReleaseCleanupPlan, statusCh chan<- string) (task.ReleaseCleanupResult, error) {
 	m.cleanupExecuteCalls++
 	for _, line := range m.cleanupExecuteStatuses {
 		statusCh <- line
 	}
 	return m.cleanupExecuteResult, m.cleanupExecuteErr
+}
+
+func (m *mockManager) PlanTaskCleanup(_ context.Context, request task.TaskCleanupRequest) (task.TaskCleanupPlan, error) {
+	m.taskCleanupPlanCalls++
+	m.taskCleanupPlanTaskIDs = append(m.taskCleanupPlanTaskIDs, request.TaskID)
+	return m.taskCleanupPlanResult, m.taskCleanupPlanErr
+}
+
+func (m *mockManager) ExecuteTaskCleanup(_ context.Context, _ task.TaskCleanupPlan, statusCh chan<- string) (task.TaskCleanupResult, error) {
+	m.taskCleanupExecCalls++
+	for _, line := range m.taskCleanupExecStatuses {
+		statusCh <- line
+	}
+	return m.taskCleanupExecResult, m.taskCleanupExecErr
 }
 
 func newTestConfig() *config.Config {
@@ -490,7 +516,6 @@ func TestUpdate_WindowSizeMsg_SetsReady(t *testing.T) {
 	if m.height != 40 {
 		t.Errorf("height: expected 40, got %d", m.height)
 	}
-
 }
 
 func TestView_AfterWindowSize_NotLoading(t *testing.T) {
@@ -1539,6 +1564,7 @@ func TestUpdate_SubmitCreateRelease_OpensExecuteConfirmModal(t *testing.T) {
 		t.Fatalf("confirm modal missing release metadata: %s", view)
 	}
 }
+
 func TestUpdate_ConfirmReleaseExecute_StartsOperation(t *testing.T) {
 	mgr := &mockManager{
 		createReleaseResult: domain.Release{ID: "rel-1", CreatedAt: time.Now().UTC()},
@@ -1765,6 +1791,64 @@ func TestUpdate_ServicesLoadedMsg_DoesNotAppendCompletionLog(t *testing.T) {
 	}
 }
 
+func TestUpdate_ServicesLoadedMsg_IgnoresStaleTaskAndGeneration(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "TASK-2"}})
+	m.servicesPanel.SetServices("TASK-2", []domain.Service{{Name: "api"}})
+	m.taskWorkflowGeneration = 2
+
+	updated, _ := m.Update(ServicesLoadedMsg{TaskID: "TASK-1", Generation: 1, Services: []domain.Service{{Name: "stale"}}})
+	m = updated.(Model)
+	if svc := m.servicesPanel.SelectedService(); svc != nil && svc.Name == "stale" {
+		t.Fatal("stale task services must not overwrite current services")
+	}
+
+	updated, _ = m.Update(ServicesLoadedMsg{TaskID: "TASK-2", Generation: 1, Services: []domain.Service{{Name: "old-gen"}}})
+	m = updated.(Model)
+	if svc := m.servicesPanel.SelectedService(); svc != nil && svc.Name == "old-gen" {
+		t.Fatal("old generation services for current task must not overwrite current services")
+	}
+
+	updated, _ = m.Update(ServicesLoadedMsg{TaskID: "TASK-2", Generation: 2, Services: []domain.Service{{Name: "current"}}})
+	m = updated.(Model)
+	if svc := m.servicesPanel.SelectedService(); svc == nil || svc.Name != "current" {
+		t.Fatalf("current generation services must be applied, got %#v", svc)
+	}
+}
+
+func TestUpdate_ServicesLoadedMsg_ClearSelectionClearsServices(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "TASK-1"}})
+	m.servicesPanel.SetServices("TASK-1", []domain.Service{{Name: "api"}})
+
+	m.tasksPanel.SetTasks([]domain.Task{})
+	updated, _ := m.Update(TasksLoadedMsg{Tasks: []domain.Task{}})
+	m = updated.(Model)
+	if m.servicesPanel.TaskID() != "" || len(m.servicesPanel.Services()) != 0 {
+		t.Fatalf("empty selection must clear services, got taskID=%q services=%d", m.servicesPanel.TaskID(), len(m.servicesPanel.Services()))
+	}
+}
+
+func TestUpdate_TaskSelectionChangedMsg_ClearsServicesImmediately(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.tasksPanel.SetTasks([]domain.Task{{ID: "TASK-1"}, {ID: "TASK-2"}})
+	m.servicesPanel.SetServices("TASK-1", []domain.Service{{Name: "api"}})
+
+	updated, _ := m.Update(panels.TaskSelectionChangedMsg{TaskID: "TASK-1"})
+	m = updated.(Model)
+	if m.servicesPanel.TaskID() != "" || len(m.servicesPanel.Services()) != 0 {
+		t.Fatalf("stale selection change must keep current services, got taskID=%q services=%d", m.servicesPanel.TaskID(), len(m.servicesPanel.Services()))
+	}
+
+	updated, _ = m.Update(sendKey("j"))
+	m = updated.(Model)
+	updated, _ = m.Update(panels.TaskSelectionChangedMsg{TaskID: "TASK-2"})
+	m = updated.(Model)
+	if m.servicesPanel.TaskID() != "" || len(m.servicesPanel.Services()) != 0 {
+		t.Fatalf("selection change must clear services immediately, got taskID=%q services=%d", m.servicesPanel.TaskID(), len(m.servicesPanel.Services()))
+	}
+}
+
 func TestUpdate_TaskWorkflowLoadedMsg_IgnoresStaleTask(t *testing.T) {
 	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
 	m.tasksPanel.SetTasks([]domain.Task{{ID: "TASK-2"}})
@@ -1773,14 +1857,14 @@ func TestUpdate_TaskWorkflowLoadedMsg_IgnoresStaleTask(t *testing.T) {
 	m.taskWorkflowGeneration = 2
 	updated, _ := m.Update(TaskWorkflowLoadedMsg{TaskID: "TASK-1", Generation: 1, Workflow: domain.WorkflowSummary{NextAction: "stale action"}})
 	m = updated.(Model)
-	if strings.Contains(m.servicesPanel.View(), "stale action") {
-		t.Fatal("stale workflow must not reach services panel")
+	if strings.Contains(m.View(), "stale action") {
+		t.Fatal("stale workflow must not reach the view")
 	}
 
 	updated, _ = m.Update(TaskWorkflowLoadedMsg{TaskID: "TASK-2", Generation: 2, Workflow: domain.WorkflowSummary{NextAction: "merge now"}})
 	m = updated.(Model)
-	if !strings.Contains(m.servicesPanel.View(), "merge now") {
-		t.Fatal("selected task workflow must reach services panel")
+	if !strings.Contains(m.View(), "merge now") {
+		t.Fatal("selected task workflow must reach the workflow strip")
 	}
 }
 
@@ -1897,7 +1981,7 @@ func TestUpdate_ReleaseSelectionChange_RecomputesWorkflow(t *testing.T) {
 
 	updated, _ := m.Update(sendKey("j"))
 	m = updated.(Model)
-	if !strings.Contains(m.releasesPanel.View(), "press F to create master MRs") {
+	if !strings.Contains(m.View(), "press F to create master MRs") {
 		t.Fatal("release selection change must update workflow")
 	}
 }
@@ -2080,7 +2164,6 @@ func TestFocusPanel_String(t *testing.T) {
 }
 
 func TestFocusPanel_NextPrev(t *testing.T) {
-
 	if got := FocusTasks.Next(); got != FocusServices {
 		t.Errorf("FocusTasks.Next(): expected FocusServices, got %v", got)
 	}
@@ -2749,17 +2832,6 @@ func TestUpdate_CloseTaskFinishedMsg_OpensSummaryAndReloads(t *testing.T) {
 	}
 }
 
-func TestUpdate_PrunePlanReadyMsg_OpensPruneModal(t *testing.T) {
-	m := newTestModel(t, &mockManager{})
-	m = sendWindowSize(m, 120, 40)
-
-	updated, _ := m.Update(PrunePlanReadyMsg{Candidates: []domain.PruneCandidate{{TaskID: "IN-1", Prunable: true}}})
-	m = updated.(Model)
-	if _, ok := m.modal.(*modal.PruneConfirmModal); !ok {
-		t.Fatalf("expected PruneConfirmModal, got %T", m.modal)
-	}
-}
-
 func TestUpdate_TagListMsg_OpensTagBrowserModal(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m = sendWindowSize(m, 120, 40)
@@ -2975,7 +3047,7 @@ func TestModel_SyncService_OpProgressLifecycle(t *testing.T) {
 		t.Fatalf("a state = %d, want done", got)
 	}
 
-	updated, _ = m.Update(CommandDoneMsg{Op: "Sync service a"})
+	updated, _ = m.Update(CommandDoneMsg{Generation: m.operationGeneration, Op: "Sync service a"})
 	m = updated.(Model)
 	if m.opProgress == nil {
 		t.Fatal("opProgress must be retained after command completion")
@@ -3004,7 +3076,7 @@ func TestModel_CloseTask_OpProgressUsesTypedSteps(t *testing.T) {
 	updated, _ = m.Update(OutputLineMsg{Line: "[b:fetch] fetched origin"})
 	m = updated.(Model)
 
-	updated, _ = m.Update(CloseTaskFinishedMsg{Result: task.CloseTaskResult{
+	updated, _ = m.Update(CloseTaskFinishedMsg{Generation: m.operationGeneration, Result: task.CloseTaskResult{
 		TaskID: "IN-001",
 		Steps: []task.CloseTaskStep{
 			{Name: "a:fetch", Status: task.StepStatusOK},

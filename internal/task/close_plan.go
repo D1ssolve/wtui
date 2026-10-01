@@ -44,7 +44,6 @@ type ReviewRequestPlan struct {
 	TargetBranch string
 	Title        string
 	Description  string
-	RemoveSource bool
 }
 
 type PipelinePlan struct {

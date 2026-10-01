@@ -15,12 +15,14 @@ func enableReleasePrepareTaskMerge(t *testing.T, m *manager) {
 }
 
 type releaseTaskMergeForge struct {
-	readiness          map[int]forge.MRReadiness
-	mergeCalls         int
-	mergeNumbers       []int
-	mergeExpectedHeads []string
-	afterMerge         func(number int)
-	mergeErr           error
+	readiness               map[int]forge.MRReadiness
+	mergeCalls              int
+	mergeNumbers            []int
+	mergeExpectedHeads      []string
+	mergeExpectedTargets    []string
+	mergeExpectedTargetSHAs []string
+	afterMerge              func(number int)
+	mergeErr                error
 }
 
 func newReleaseTaskMergeForge() *releaseTaskMergeForge {
@@ -51,6 +53,8 @@ func (f *releaseTaskMergeForge) MergeMR(_ context.Context, params forge.MergeMRP
 	f.mergeCalls++
 	f.mergeNumbers = append(f.mergeNumbers, params.Number)
 	f.mergeExpectedHeads = append(f.mergeExpectedHeads, params.ExpectedHeadSHA)
+	f.mergeExpectedTargets = append(f.mergeExpectedTargets, params.ExpectedTargetBranch)
+	f.mergeExpectedTargetSHAs = append(f.mergeExpectedTargetSHAs, params.ExpectedTargetSHA)
 	if f.afterMerge != nil {
 		f.afterMerge(params.Number)
 	}

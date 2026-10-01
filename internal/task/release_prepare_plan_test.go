@@ -16,7 +16,7 @@ func TestPlanReleaseTaskMerges_BlockedMRPreventsCreateMutation(t *testing.T) {
 	setTaskWorktreeHeads(gitMock, map[string]string{filepath.Join(m.cfg.TasksRoot, "APP-1", "api"): "head-a"})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-a", Ready: false, Blockers: []string{"not approved"}, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-a", Ready: false, Blockers: []string{"not approved"}, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
@@ -45,7 +45,7 @@ func TestCreateRelease_ConfirmedPlanRowsAreDisplayOnly(t *testing.T) {
 	setTaskWorktreeHeads(gitMock, map[string]string{filepath.Join(m.cfg.TasksRoot, "APP-1", "api"): "head-a"})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-a", Ready: false, Blockers: []string{"not approved"}, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-a", Ready: false, Blockers: []string{"not approved"}, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
@@ -76,7 +76,7 @@ func TestCreateRelease_ConfirmedPlanForDifferentParamsFailsBeforeManifest(t *tes
 	setTaskWorktreeHeads(gitMock, map[string]string{filepath.Join(m.cfg.TasksRoot, "APP-1", "api"): "head-a"})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-a", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-a", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
@@ -112,7 +112,7 @@ func TestCreateRelease_ConfirmedPlanConfigDriftFailsBeforeManifest(t *testing.T)
 	setTaskWorktreeHeads(gitMock, map[string]string{filepath.Join(m.cfg.TasksRoot, "APP-1", "api"): "head-a"})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-a", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-a", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
@@ -155,10 +155,10 @@ func TestCreateRelease_ReleasePrepareMergesTwoMRsSequentially(t *testing.T) {
 	})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true}
-	f.readiness[2] = forge.MRReadiness{Number: 2, State: "open", SourceBranch: "feature/APP-2", TargetBranch: "develop", HeadSHA: "head-2", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
+	f.readiness[2] = forge.MRReadiness{Number: 2, State: "open", SourceBranch: "feature/APP-2", TargetBranch: "develop", HeadSHA: "head-2", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	f.afterMerge = func(number int) {
-		f.readiness[number] = forge.MRReadiness{Number: number, State: "merged", SourceBranch: f.readiness[number].SourceBranch, TargetBranch: "develop", HeadSHA: f.readiness[number].HeadSHA, MergedSHA: targetTips[1], Ready: true, SupportsSHAPin: true}
+		f.readiness[number] = forge.MRReadiness{Number: number, State: "merged", SourceBranch: f.readiness[number].SourceBranch, TargetBranch: "develop", HeadSHA: f.readiness[number].HeadSHA, MergedSHA: targetTips[1], Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 		targetTips = targetTips[1:]
 	}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
@@ -211,13 +211,13 @@ func TestCreateRelease_ReleasePrepareStopsWhenSecondMRLosesReadiness(t *testing.
 	})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true}
-	f.readiness[2] = forge.MRReadiness{Number: 2, State: "open", SourceBranch: "feature/APP-2", TargetBranch: "develop", HeadSHA: "head-2", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
+	f.readiness[2] = forge.MRReadiness{Number: 2, State: "open", SourceBranch: "feature/APP-2", TargetBranch: "develop", HeadSHA: "head-2", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	f.afterMerge = func(number int) {
 		if number == 1 {
 			targetTip = "d1"
-			f.readiness[1] = forge.MRReadiness{Number: 1, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", MergedSHA: "d1", Ready: true, SupportsSHAPin: true}
-			f.readiness[2] = forge.MRReadiness{Number: 2, State: "open", SourceBranch: "feature/APP-2", TargetBranch: "develop", HeadSHA: "head-2", Ready: false, Blockers: []string{"checks pending"}, SupportsSHAPin: true}
+			f.readiness[1] = forge.MRReadiness{Number: 1, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", MergedSHA: "d1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
+			f.readiness[2] = forge.MRReadiness{Number: 2, State: "open", SourceBranch: "feature/APP-2", TargetBranch: "develop", HeadSHA: "head-2", Ready: false, Blockers: []string{"checks pending"}, SupportsSHAPin: true, SupportsTargetBinding: true}
 		}
 	}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
@@ -259,7 +259,7 @@ func TestCreateRelease_ReleasePrepareFreshGateBlocksSourceDriftBeforeManifest(t 
 	setTaskWorktreeHeads(gitMock, map[string]string{filepath.Join(m.cfg.TasksRoot, "APP-1", "api"): "head-a"})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-a", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-a", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, gitMock,
 		releasePlanTaskService{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")},
@@ -268,7 +268,7 @@ func TestCreateRelease_ReleasePrepareFreshGateBlocksSourceDriftBeforeManifest(t 
 	if err != nil {
 		t.Fatalf("PlanReleaseTaskMerges() error = %v", err)
 	}
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-b", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-b", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 
 	// When
 	_, err = m.CreateRelease(context.Background(), CreateReleaseParams{TaskIDs: []string{"APP-1"}, ServiceVersions: map[string]string{"api": "1.2.3"}, StartImmediately: true, ConfirmedTaskMergePlan: &plan})

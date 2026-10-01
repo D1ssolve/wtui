@@ -6,18 +6,31 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/git"
 )
 
 func newFinishTestManager(t *testing.T) (*manager, *mockGitClient) {
 	t.Helper()
-	gitMock := &mockGitClient{branchExistsRes: true, commonDirResult: "/git/common"}
+	gitMock := &mockGitClient{branchExistsRes: true}
 	m, _ := newReleasePlanTestManager(t, gitMock)
 	m.flow.ProductionBranch = "master"
 	gitMock.isAncestorFn = func(_, _, _ string) (bool, error) { return false, nil }
+	svcRepo := filepath.Join(m.cfg.RootDir, "repo-api")
+	gitMock.commonDirFn = func(string) (string, error) {
+		return filepath.Join(svcRepo, ".git"), nil
+	}
+	gitMock.listWorktreesFn = func(repoPath string) ([]git.WorktreeEntry, error) {
+		if repoPath != svcRepo {
+			return nil, nil
+		}
+		entryPath := filepath.Join(m.releasesRootDir(), "rel-1.2.3-20260616T120000", ".work", "svc-api-finalize-integration")
+		return []git.WorktreeEntry{{Path: entryPath, Branch: "(detached)", HEAD: "HEAD-sha"}}, nil
+	}
 	return m, gitMock
 }
 
@@ -70,8 +83,10 @@ func finalizeService(m *manager) domain.ReleaseService {
 func matchingMaster(gitMock *mockGitClient) {
 	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
 		switch ref {
-		case "origin/master", "v1.2.3^{}":
+		case "origin/master", "v1.2.3^{}", "tag-object-sha^{commit}":
 			return "accepted-sha", nil
+		case "refs/tags/v1.2.3":
+			return "tag-object-sha", nil
 		default:
 			return ref + "-sha", nil
 		}
@@ -102,6 +117,9 @@ func TestFinalizeRelease_HappyPath_MergesDevelopAndTagsAcceptedMasterSHA(t *test
 	if len(gitMock.pushBranchExplicitCalls) != 1 || gitMock.pushTagCalls != 1 {
 		t.Fatalf("push integration = %#v, push tags = %d", gitMock.pushBranchExplicitCalls, gitMock.pushTagCalls)
 	}
+	if got := gitMock.pushTagCallList[0].ObjectOID; got != "tag-object-sha" {
+		t.Fatalf("PushTag OID = %q, want captured unpeeled tag object tag-object-sha", got)
+	}
 }
 
 func TestFinalizeRelease_UsesServiceTagDescription(t *testing.T) {
@@ -121,6 +139,12 @@ func TestFinalizeRelease_UsesServiceTagDescription(t *testing.T) {
 
 func TestRunFinishService_UsesPersistedTagDescription(t *testing.T) {
 	m, gitMock := newFinishTestManager(t)
+	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+		if ref == "tag-object-sha^{commit}" {
+			return "accepted-sha", nil
+		}
+		return "tag-object-sha", nil
+	}
 	release := domain.Release{ID: "rel-20260826T120000"}
 	svc := domain.ReleaseService{
 		Tag:              "v1.2.3",
@@ -133,6 +157,40 @@ func TestRunFinishService_UsesPersistedTagDescription(t *testing.T) {
 	}
 	if got := gitMock.createTagCallList[0].Message; got != svc.TagDescription {
 		t.Fatalf("tag message = %q, want %q", got, svc.TagDescription)
+	}
+}
+
+func TestFinalizeRelease_PushURLMismatchBlocksIntegrationPush(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	gitMock.pushURLRes = "git@gitlab.com:group/someone-else.git"
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
+
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil || !strings.Contains(err.Error(), "push URL") {
+		t.Fatalf("FinalizeRelease() error = %v, want push URL mismatch", err)
+	}
+	if got.Status != domain.ReleaseStatusFailed {
+		t.Fatalf("release status = %q, want failed", got.Status)
+	}
+	if len(gitMock.pushBranchExplicitCalls) != 0 || gitMock.pushTagCalls != 0 {
+		t.Fatalf("pushed with mismatched push destination: integration=%v tags=%d", gitMock.pushBranchExplicitCalls, gitMock.pushTagCalls)
+	}
+}
+
+func TestFinalizeRelease_PushURLMismatchBlocksTagPush(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	*m.cfg.Release.PushIntegration = false
+	gitMock.pushURLRes = "git@gitlab.com:group/someone-else.git"
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
+
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil || !strings.Contains(err.Error(), "push URL") {
+		t.Fatalf("FinalizeRelease() error = %v, want push URL mismatch", err)
+	}
+	if got.Status != domain.ReleaseStatusFailed || gitMock.pushTagCalls != 0 {
+		t.Fatalf("release = %#v, pushTagCalls = %d: tag must not publish to a mismatched push destination", got, gitMock.pushTagCalls)
 	}
 }
 
@@ -189,7 +247,7 @@ func TestFinalizeRelease_RetainedWorktreeRemovalFailureStops(t *testing.T) {
 	removeErr := errors.New("remove retained worktree")
 	gitMock.removeWorktreeErr = removeErr
 	svc := finalizeService(m)
-	svc.IntegrationWorktreePath = "/old/integration-worktree"
+	svc.IntegrationWorktreePath = filepath.Join(m.releasesRootDir(), "rel-1.2.3-20260616T120000", ".work", "svc-api-finalize-integration")
 	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
 
 	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
@@ -198,6 +256,29 @@ func TestFinalizeRelease_RetainedWorktreeRemovalFailureStops(t *testing.T) {
 	}
 	if got.Status != domain.ReleaseStatusFailed || len(gitMock.addWorktreeCalls) != 0 {
 		t.Fatalf("release status = %q, add worktree calls = %#v", got.Status, gitMock.addWorktreeCalls)
+	}
+}
+
+func TestFinalizeRelease_TagMovedBeforePush_NotPublished(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+		switch ref {
+		case "origin/master", "v1.2.3^{}":
+			return "accepted-sha", nil
+		case "tag-object-sha^{commit}":
+			return "sha-moved", nil
+		default:
+			return "tag-object-sha", nil
+		}
+	}
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
+
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil {
+		t.Fatal("FinalizeRelease() error = nil, want tag moved error")
+	}
+	if got.Status != domain.ReleaseStatusFailed || gitMock.pushTagCalls != 0 {
+		t.Fatalf("release = %#v, pushTagCalls = %d: moved tag must not publish", got, gitMock.pushTagCalls)
 	}
 }
 
@@ -210,6 +291,57 @@ func TestFinalizeRelease_ExistingTagAtAcceptedSHA_IsIdempotent(t *testing.T) {
 	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
 	if err != nil || gitMock.createTagCalls != 0 || gitMock.pushTagCalls != 1 || got.Services[0].TagSHA != "accepted-sha" {
 		t.Fatalf("error = %v, release = %#v, create = %d, push = %d", err, got, gitMock.createTagCalls, gitMock.pushTagCalls)
+	}
+}
+
+func TestRunFinishService_ExistingTagNotRecreated_PushesCapturedOID(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	gitMock.tagExistsRes = true
+	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+		if ref == "tag-object-sha^{commit}" {
+			return "accepted-sha", nil
+		}
+		return "tag-object-sha", nil
+	}
+	release := domain.Release{ID: "rel-20260826T120000"}
+	svc := domain.ReleaseService{
+		Tag:              "v1.2.3",
+		AcceptedMergeSHA: "accepted-sha",
+	}
+
+	if err := m.runFinishService(t.Context(), &release, &svc, nil); err != nil {
+		t.Fatalf("runFinishService() error = %v", err)
+	}
+	if gitMock.createTagCalls != 0 {
+		t.Fatalf("CreateTag calls = %d, want 0: existing matching tag must not move", gitMock.createTagCalls)
+	}
+	if gitMock.pushTagCalls != 1 || gitMock.pushTagCallList[0].ObjectOID != "tag-object-sha" {
+		t.Fatalf("PushTag calls = %#v, want 1 push with captured OID", gitMock.pushTagCallList)
+	}
+	if svc.TagSHA != "accepted-sha" {
+		t.Fatalf("TagSHA = %q, want peeled commit accepted-sha", svc.TagSHA)
+	}
+}
+
+func TestRunFinishService_TagPeelMismatchFailsWithoutPush(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+		if ref == "tag-object-sha^{commit}" {
+			return "sha-wrong", nil
+		}
+		return "tag-object-sha", nil
+	}
+	release := domain.Release{ID: "rel-20260826T120000"}
+	svc := domain.ReleaseService{
+		Tag:              "v1.2.3",
+		AcceptedMergeSHA: "accepted-sha",
+	}
+
+	if err := m.runFinishService(t.Context(), &release, &svc, nil); err == nil {
+		t.Fatal("runFinishService() error = nil, want peel mismatch error")
+	}
+	if gitMock.pushTagCalls != 0 || svc.PushedTag {
+		t.Fatalf("pushTagCalls = %d, PushedTag = %v: mismatched tag must not publish", gitMock.pushTagCalls, svc.PushedTag)
 	}
 }
 
@@ -269,5 +401,210 @@ func TestFinalizeRelease_WrongStatusRejected(t *testing.T) {
 	_, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
 	if !errors.Is(err, ErrReleaseInvalidStatusTransition) || len(gitMock.fetchCalls) != 0 {
 		t.Fatalf("error = %v, fetch calls = %#v", err, gitMock.fetchCalls)
+	}
+}
+
+func ownedIntegrationPath(m *manager, svc domain.ReleaseService) string {
+	return filepath.Join(m.releasesRootDir(), "rel-1.2.3-20260616T120000", ".work", svc.Name+"-finalize-integration")
+}
+
+func TestFinalizeRelease_RetainedWorktreeOutsideOwnedRootBlocks(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	svc := finalizeService(m)
+	svc.IntegrationWorktreePath = filepath.Join(m.cfg.RootDir, "elsewhere", "integration")
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil || !strings.Contains(err.Error(), "outside the release-owned directory") {
+		t.Fatalf("FinalizeRelease() error = %v, want outside owned root rejection", err)
+	}
+	_ = got
+	if len(gitMock.removeWorktreeCalls) != 0 || len(gitMock.addWorktreeCalls) != 0 {
+		t.Fatalf("remove calls = %#v, add calls = %#v: unowned path must not be touched", gitMock.removeWorktreeCalls, gitMock.addWorktreeCalls)
+	}
+	stored, getErr := m.GetRelease(context.Background(), release.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if stored.Services[0].IntegrationWorktreePath != svc.IntegrationWorktreePath {
+		t.Fatalf("manifest path = %q, want preserved %q", stored.Services[0].IntegrationWorktreePath, svc.IntegrationWorktreePath)
+	}
+}
+
+func TestFinalizeRelease_RetainedWorktreeUnexpectedNameBlocks(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	svc := finalizeService(m)
+	svc.IntegrationWorktreePath = filepath.Join(m.releasesRootDir(), "rel-1.2.3-20260616T120000", ".work", "other-service-finalize-integration")
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+
+	_, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil || !strings.Contains(err.Error(), "does not name an owned worktree") {
+		t.Fatalf("FinalizeRelease() error = %v, want owned-name rejection", err)
+	}
+	if len(gitMock.removeWorktreeCalls) != 0 {
+		t.Fatalf("remove calls = %#v: misnamed path must not be touched", gitMock.removeWorktreeCalls)
+	}
+}
+
+func TestFinalizeRelease_RetainedWorktreeNotRegisteredBlocks(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	gitMock.listWorktreesFn = func(string) ([]git.WorktreeEntry, error) { return nil, nil }
+	svc := finalizeService(m)
+	svc.IntegrationWorktreePath = ownedIntegrationPath(m, svc)
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+
+	_, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil || !strings.Contains(err.Error(), "exactly one registered worktree") {
+		t.Fatalf("FinalizeRelease() error = %v, want registration rejection", err)
+	}
+	if len(gitMock.removeWorktreeCalls) != 0 {
+		t.Fatalf("remove calls = %#v: unregistered path must not be touched", gitMock.removeWorktreeCalls)
+	}
+}
+
+func TestFinalizeRelease_RetainedWorktreeLockedBlocks(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	svc := finalizeService(m)
+	lockedPath := ownedIntegrationPath(m, svc)
+	gitMock.listWorktreesFn = func(repoPath string) ([]git.WorktreeEntry, error) {
+		if repoPath != svc.RepoPath {
+			return nil, nil
+		}
+		return []git.WorktreeEntry{{Path: lockedPath, Branch: "(detached)", HEAD: "HEAD-sha", Locked: true}}, nil
+	}
+	svc.IntegrationWorktreePath = lockedPath
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+
+	_, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil || !strings.Contains(err.Error(), "is locked") {
+		t.Fatalf("FinalizeRelease() error = %v, want locked rejection", err)
+	}
+	if len(gitMock.removeWorktreeCalls) != 0 {
+		t.Fatalf("remove calls = %#v: locked worktree must not be removed", gitMock.removeWorktreeCalls)
+	}
+}
+
+func TestFinalizeRelease_RetainedWorktreeWrongRepositoryBlocks(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	gitMock.commonDirFn = func(string) (string, error) {
+		return filepath.Join(m.cfg.RootDir, "someone-else", ".git"), nil
+	}
+	svc := finalizeService(m)
+	svc.IntegrationWorktreePath = ownedIntegrationPath(m, svc)
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+
+	_, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil || !strings.Contains(err.Error(), "different repository") {
+		t.Fatalf("FinalizeRelease() error = %v, want repository rejection", err)
+	}
+	if len(gitMock.removeWorktreeCalls) != 0 {
+		t.Fatalf("remove calls = %#v: foreign worktree must not be removed", gitMock.removeWorktreeCalls)
+	}
+}
+
+func TestFinalizeRelease_RetainedWorktreeHeadMismatchBlocks(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	svc := finalizeService(m)
+	svc.PostIntegrationSHA = "manifest-head"
+	mismatchedPath := ownedIntegrationPath(m, svc)
+	gitMock.listWorktreesFn = func(repoPath string) ([]git.WorktreeEntry, error) {
+		if repoPath != svc.RepoPath {
+			return nil, nil
+		}
+		return []git.WorktreeEntry{{Path: mismatchedPath, Branch: "(detached)", HEAD: "surprise-head"}}, nil
+	}
+	svc.IntegrationWorktreePath = mismatchedPath
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+
+	_, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil || !strings.Contains(err.Error(), "want manifest-head") {
+		t.Fatalf("FinalizeRelease() error = %v, want HEAD mismatch rejection", err)
+	}
+	if len(gitMock.removeWorktreeCalls) != 0 {
+		t.Fatalf("remove calls = %#v: moved worktree must not be removed", gitMock.removeWorktreeCalls)
+	}
+}
+
+func TestFinalizeRelease_RetainedWorktreeDirtyBlocks(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	gitMock.repoStatusFn = func(string) (git.RawStatus, error) {
+		return git.RawStatus{UntrackedPaths: []string{"wip.txt"}}, nil
+	}
+	svc := finalizeService(m)
+	svc.IntegrationWorktreePath = ownedIntegrationPath(m, svc)
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+
+	_, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil || !strings.Contains(err.Error(), "is dirty") {
+		t.Fatalf("FinalizeRelease() error = %v, want dirty rejection", err)
+	}
+	if len(gitMock.removeWorktreeCalls) != 0 {
+		t.Fatalf("remove calls = %#v: dirty worktree must not be removed", gitMock.removeWorktreeCalls)
+	}
+}
+
+func TestFinalizeRelease_RetainedWorktreeRemovedNonForce(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	svc := finalizeService(m)
+	svc.IntegrationWorktreePath = ownedIntegrationPath(m, svc)
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+
+	got, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err != nil {
+		t.Fatalf("FinalizeRelease() error = %v", err)
+	}
+	if len(gitMock.removeWorktreeCalls) != 2 {
+		t.Fatalf("remove calls = %#v, want retained + fresh worktree removals", gitMock.removeWorktreeCalls)
+	}
+	for _, call := range gitMock.removeWorktreeCalls {
+		if call.Force {
+			t.Fatalf("remove call = %#v: force removal is forbidden", call)
+		}
+	}
+	if got.Services[0].IntegrationWorktreePath != "" {
+		t.Fatalf("IntegrationWorktreePath = %q, want cleaned after validated removal", got.Services[0].IntegrationWorktreePath)
+	}
+	if len(gitMock.addWorktreeCalls) != 1 {
+		t.Fatalf("AddWorktree calls = %#v, want fresh integration worktree after removal", gitMock.addWorktreeCalls)
+	}
+}
+
+func TestFinalizeRelease_RemovalLeavesPathBehindBlocks(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	svc := finalizeService(m)
+	leftoverPath := ownedIntegrationPath(m, svc)
+	svc.IntegrationWorktreePath = leftoverPath
+	if err := os.MkdirAll(leftoverPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leftoverPath, "replacement.txt"), []byte("user data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Removal succeeds at the git layer but the path is repopulated behind us.
+	gitMock.removeWorktreeFn = func(_, _ string, _ bool) error { return nil }
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+
+	_, err := m.FinalizeRelease(context.Background(), FinishReleaseParams{ReleaseID: release.ID})
+	if err == nil || !strings.Contains(err.Error(), "still present after removal") {
+		t.Fatalf("FinalizeRelease() error = %v, want leftover rejection", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(leftoverPath, "replacement.txt")); statErr != nil {
+		t.Fatalf("replacement content lost: %v", statErr)
+	}
+	stored, getErr := m.GetRelease(context.Background(), release.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if stored.Services[0].IntegrationWorktreePath != leftoverPath {
+		t.Fatalf("manifest path = %q, want preserved leftover path", stored.Services[0].IntegrationWorktreePath)
 	}
 }

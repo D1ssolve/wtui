@@ -353,16 +353,17 @@ func (m *manager) retryPrepareService(ctx context.Context, release *domain.Relea
 	}
 
 	keepIntegration := m.cfg.Release != nil && m.cfg.Release.KeepIntegrationWorktrees != nil && *m.cfg.Release.KeepIntegrationWorktrees
-	cleanupIntegration := func() {
+	cleanupIntegration := func() error {
 		if svc.IntegrationWorktreePath == "" {
-			return
+			return nil
 		}
-		commonDir, err := m.git.CommonDir(ctx, svc.IntegrationWorktreePath)
-		if err == nil {
-			_ = m.git.RemoveWorktree(ctx, commonDir, svc.IntegrationWorktreePath, true)
+		// A validation failure retains IntegrationWorktreePath so the
+		// manifest stays truthful and the next retry reuses the worktree.
+		if err := m.removeOwnedIntegrationWorktree(ctx, release, svc, svc.IntegrationWorktreePath, svc.PostIntegrationSHA); err != nil {
+			return err
 		}
-		_ = os.RemoveAll(svc.IntegrationWorktreePath)
 		svc.IntegrationWorktreePath = ""
+		return nil
 	}
 
 	if err := m.git.MergeFFOnly(ctx, integrationPath, "origin/"+svc.IntegrationBranch); err != nil {
@@ -469,8 +470,12 @@ func (m *manager) retryPrepareService(ctx context.Context, release *domain.Relea
 	}
 
 	if !keepIntegration {
-		cleanupIntegration()
-		_ = m.persistCheckpoint(release, "cleanup_prepare", nil)
+		if err := cleanupIntegration(); err != nil {
+			return err
+		}
+		if err := m.persistCheckpoint(release, "cleanup_prepare", nil); err != nil {
+			return err
+		}
 	}
 
 	svc.Status = domain.ReleaseStatusPrepared

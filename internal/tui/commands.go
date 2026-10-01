@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,6 +16,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/logutil"
 	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
 )
 
@@ -26,8 +28,9 @@ type ReposLoadedMsg struct {
 }
 
 type ServicesLoadedMsg struct {
-	TaskID   string
-	Services []domain.Service
+	TaskID     string
+	Generation uint64
+	Services   []domain.Service
 }
 
 type CloneSourceServicesLoadedMsg struct {
@@ -42,23 +45,27 @@ type OutputLineMsg struct {
 }
 
 type CommandDoneMsg struct {
-	Err error
-	Op  string
+	Generation uint64
+	Err        error
+	Op         string
 }
 
 type PartialInitDoneMsg struct {
-	Result task.PartialFailureResult
-	Err    error
-	Op     string
+	Generation uint64
+	Result     task.PartialFailureResult
+	Err        error
+	Op         string
 }
 
 type PartialAddDoneMsg struct {
-	Result task.PartialFailureResult
-	Err    error
-	Op     string
+	Generation uint64
+	Result     task.PartialFailureResult
+	Err        error
+	Op         string
 }
 
 type LazygitDoneMsg struct {
+	Generation   uint64
 	TaskID       string
 	ServiceName  string
 	WorktreePath string
@@ -67,24 +74,29 @@ type LazygitDoneMsg struct {
 
 type channelDrainedMsg struct{}
 
+type LoadFailedMsg struct {
+	Err error
+	Op  string
+}
+
 type DirtyServicesLoadedMsg struct {
 	ServiceCount  int
 	DirtyServices []string
 }
 
-func loadTasksCmd(mgr task.Manager) tea.Cmd {
+func loadTasksCmd(mgr task.Manager, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		tasks, err := mgr.List(ctx)
 		if err != nil {
-			return CommandDoneMsg{Err: err, Op: "Load tasks"}
+			return LoadFailedMsg{Err: err, Op: "Load tasks"}
 		}
 		return TasksLoadedMsg{Tasks: tasks}
 	}
 }
 
-func loadServicesCmd(mgr task.Manager, taskID string) tea.Cmd {
+func loadServicesCmd(mgr task.Manager, taskID string, generation, opGeneration uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
 		defer cancel()
@@ -92,11 +104,11 @@ func loadServicesCmd(mgr task.Manager, taskID string) tea.Cmd {
 		if err != nil {
 
 			if errors.Is(err, task.ErrTaskNotFound) {
-				return ServicesLoadedMsg{TaskID: taskID, Services: nil}
+				return ServicesLoadedMsg{TaskID: taskID, Generation: generation, Services: nil}
 			}
-			return CommandDoneMsg{Err: err, Op: "Load services for task " + taskID}
+			return LoadFailedMsg{Err: err, Op: "Load services for task " + taskID}
 		}
-		return ServicesLoadedMsg{TaskID: taskID, Services: services}
+		return ServicesLoadedMsg{TaskID: taskID, Generation: generation, Services: services}
 	}
 }
 
@@ -142,7 +154,7 @@ func loadDirtyServicesCmd(mgr task.Manager, taskID string) tea.Cmd {
 	}
 }
 
-func initTaskCmd(mgr task.Manager, params task.InitParams) tea.Cmd {
+func initTaskCmd(mgr task.Manager, params task.InitParams, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	params.StatusCh = statusCh
 	return tea.Batch(
@@ -152,15 +164,15 @@ func initTaskCmd(mgr task.Manager, params task.InitParams) tea.Cmd {
 			partial, err := mgr.Init(ctx, params)
 			close(statusCh)
 			if err != nil && len(partial.SucceededServices) > 0 && len(partial.FailedServices) > 0 {
-				return PartialInitDoneMsg{Result: partial, Err: err, Op: "Init task " + params.TaskID}
+				return PartialInitDoneMsg{Generation: generation, Result: partial, Err: err, Op: "Init task " + params.TaskID}
 			}
-			return CommandDoneMsg{Err: err, Op: "Init task " + params.TaskID}
+			return CommandDoneMsg{Generation: generation, Err: err, Op: "Init task " + params.TaskID}
 		},
 		readNextLine(statusCh),
 	)
 }
 
-func addServiceCmd(mgr task.Manager, params task.AddParams) tea.Cmd {
+func addServiceCmd(mgr task.Manager, params task.AddParams, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	params.StatusCh = statusCh
 	return tea.Batch(
@@ -170,23 +182,23 @@ func addServiceCmd(mgr task.Manager, params task.AddParams) tea.Cmd {
 			partial, err := mgr.Add(ctx, params)
 			close(statusCh)
 			if err != nil && len(partial.SucceededServices) > 0 && len(partial.FailedServices) > 0 {
-				return PartialAddDoneMsg{Result: partial, Err: err, Op: "Add services to " + params.TaskID}
+				return PartialAddDoneMsg{Generation: generation, Result: partial, Err: err, Op: "Add services to " + params.TaskID}
 			}
-			return CommandDoneMsg{Err: err, Op: "Add services to " + params.TaskID}
+			return CommandDoneMsg{Generation: generation, Err: err, Op: "Add services to " + params.TaskID}
 		},
 		readNextLine(statusCh),
 	)
 }
 
-func removeTaskCmd(mgr task.Manager, taskID string, opts task.RemoveOptions) tea.Cmd {
+func removeTaskCmd(mgr task.Manager, taskID string, opts task.RemoveOptions, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
 		defer cancel()
-		return CommandDoneMsg{Err: mgr.Remove(ctx, taskID, opts), Op: "Remove task " + taskID}
+		return CommandDoneMsg{Generation: generation, Err: mgr.Remove(ctx, taskID, opts), Op: "Remove task " + taskID}
 	}
 }
 
-func convertHotfixCmd(mgr task.Manager, params task.ConvertHotfixParams) tea.Cmd {
+func convertHotfixCmd(mgr task.Manager, params task.ConvertHotfixParams, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	params.StatusCh = statusCh
 	return tea.Batch(
@@ -195,33 +207,35 @@ func convertHotfixCmd(mgr task.Manager, params task.ConvertHotfixParams) tea.Cmd
 			defer cancel()
 			err := mgr.ConvertHotfixToFeature(ctx, params)
 			close(statusCh)
-			return ConvertHotfixDoneMsg{SourceTaskID: params.SourceTaskID, TargetTaskID: params.TargetTaskID, Err: err}
+			return ConvertHotfixDoneMsg{Generation: generation, SourceTaskID: params.SourceTaskID, TargetTaskID: params.TargetTaskID, Err: err}
 		},
 		readNextLine(statusCh),
 	)
 }
 
-func syncTaskCmd(mgr task.Manager, taskID string, strategy task.SyncStrategy) tea.Cmd {
+func syncTaskCmd(mgr task.Manager, taskID string, strategy task.SyncStrategy, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	return tea.Batch(
 		func() tea.Msg {
 			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
 			defer cancel()
-			return CommandDoneMsg{Err: mgr.SyncTask(ctx, taskID, strategy, statusCh), Op: "Sync task " + taskID}
+			err := mgr.SyncTask(ctx, taskID, strategy, statusCh)
+			close(statusCh)
+			return CommandDoneMsg{Generation: generation, Err: err, Op: "Sync task " + taskID}
 		},
 		readNextLine(statusCh),
 	)
 }
 
-func riderTaskCmd(taskID, dir string) tea.Cmd {
-	return execProcessCmd("rider", []string{taskID + ".sln"}, dir, "Open Rider for "+taskID)
+func riderTaskCmd(taskID, dir string, generation uint64) tea.Cmd {
+	return execProcessCmd("rider", []string{taskID + ".sln"}, dir, "Open Rider for "+taskID, generation)
 }
 
-func codeWorkspaceTaskCmd(editor, taskID, dir string) tea.Cmd {
-	return execProcessCmd(editor, []string{taskID + ".code-workspace"}, dir, "Open "+editor+" for "+taskID)
+func codeWorkspaceTaskCmd(editor, taskID, dir string, generation uint64) tea.Cmd {
+	return execProcessCmd(editor, []string{taskID + ".code-workspace"}, dir, "Open "+editor+" for "+taskID, generation)
 }
 
-func openReleaseFolderCmd(executable, releaseID, dir string) tea.Cmd {
+func openReleaseFolderCmd(executable, releaseID, dir string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		path := dir
 		var err error
@@ -241,16 +255,17 @@ func openReleaseFolderCmd(executable, releaseID, dir string) tea.Cmd {
 		}
 		op := fmt.Sprintf("Open %s for release %s folder %q", executable, releaseID, path)
 		if err != nil {
-			return execProcessDoneMsg(op, fmt.Errorf("%s: %w", op, err))
+			return execProcessDoneMsg(op, fmt.Errorf("%s: %w", op, err), generation)
 		}
-		return execProcessCmd(executable, []string{path}, path, op)()
+		return execProcessCmd(executable, []string{path}, path, op, generation)()
 	}
 }
 
-func lazygitServiceCmd(taskID, serviceName, worktreePath string) tea.Cmd {
+func lazygitServiceCmd(taskID, serviceName, worktreePath string, generation uint64) tea.Cmd {
 	c := lazygitServiceExecCmd(worktreePath)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return LazygitDoneMsg{
+			Generation:   generation,
 			TaskID:       taskID,
 			ServiceName:  serviceName,
 			WorktreePath: worktreePath,
@@ -265,19 +280,21 @@ func lazygitServiceExecCmd(worktreePath string) *exec.Cmd {
 	return c
 }
 
-func pushTaskCmd(mgr task.Manager, taskID string) tea.Cmd {
+func pushTaskCmd(mgr task.Manager, taskID string, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	return tea.Batch(
 		func() tea.Msg {
 			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
 			defer cancel()
-			return CommandDoneMsg{Err: mgr.PushTask(ctx, taskID, statusCh), Op: "Push task " + taskID}
+			err := mgr.PushTask(ctx, taskID, statusCh)
+			close(statusCh)
+			return CommandDoneMsg{Generation: generation, Err: err, Op: "Push task " + taskID}
 		},
 		readNextLine(statusCh),
 	)
 }
 
-func pushServiceCmd(mgr task.Manager, taskID, serviceName string) tea.Cmd {
+func pushServiceCmd(mgr task.Manager, taskID, serviceName string, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	return tea.Batch(
 		func() tea.Msg {
@@ -285,25 +302,27 @@ func pushServiceCmd(mgr task.Manager, taskID, serviceName string) tea.Cmd {
 			defer cancel()
 			err := mgr.PushService(ctx, taskID, serviceName, statusCh)
 			close(statusCh)
-			return CommandDoneMsg{Err: err, Op: "Push service " + serviceName}
+			return CommandDoneMsg{Generation: generation, Err: err, Op: "Push service " + serviceName}
 		},
 		readNextLine(statusCh),
 	)
 }
 
-func syncServiceCmd(mgr task.Manager, taskID, serviceName string, strategy task.SyncStrategy) tea.Cmd {
+func syncServiceCmd(mgr task.Manager, taskID, serviceName string, strategy task.SyncStrategy, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	return tea.Batch(
 		func() tea.Msg {
 			ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
 			defer cancel()
-			return CommandDoneMsg{Err: mgr.SyncService(ctx, taskID, serviceName, strategy, statusCh), Op: "Sync service " + serviceName}
+			err := mgr.SyncService(ctx, taskID, serviceName, strategy, statusCh)
+			close(statusCh)
+			return CommandDoneMsg{Generation: generation, Err: err, Op: "Sync service " + serviceName}
 		},
 		readNextLine(statusCh),
 	)
 }
 
-func stashServiceCmd(mgr task.Manager, taskID, serviceName string, pop bool, includeUntracked bool) tea.Cmd {
+func stashServiceCmd(mgr task.Manager, taskID, serviceName string, pop bool, includeUntracked bool, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
 		defer cancel()
@@ -311,43 +330,43 @@ func stashServiceCmd(mgr task.Manager, taskID, serviceName string, pop bool, inc
 		if pop {
 			op = "Unstashing service " + serviceName
 		}
-		return CommandDoneMsg{Err: mgr.StashService(ctx, taskID, serviceName, pop, includeUntracked), Op: op}
+		return CommandDoneMsg{Generation: generation, Err: mgr.StashService(ctx, taskID, serviceName, pop, includeUntracked), Op: op}
 	}
 }
 
-func removeServiceCmd(mgr task.Manager, taskID, serviceName string, removeBranch bool) tea.Cmd {
+func removeServiceCmd(mgr task.Manager, taskID, serviceName string, removeBranch bool, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
 		defer cancel()
-		return CommandDoneMsg{Err: mgr.RemoveService(ctx, taskID, serviceName, removeBranch), Op: "Remove service " + serviceName}
+		return CommandDoneMsg{Generation: generation, Err: mgr.RemoveService(ctx, taskID, serviceName, removeBranch), Op: "Remove service " + serviceName}
 	}
 }
 
-func validateTaskCmd(mgr task.Manager, taskID string) tea.Cmd {
+func validateTaskCmd(mgr task.Manager, taskID string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
 		defer cancel()
 
 		validation, err := mgr.ValidateTask(ctx, taskID)
 		if err != nil {
-			return CommandDoneMsg{Err: err, Op: "Validate task " + taskID}
+			return CommandDoneMsg{Generation: generation, Err: err, Op: "Validate task " + taskID}
 		}
 
-		return ValidationResultMsg{Validation: validation}
+		return ValidationResultMsg{Generation: generation, Validation: validation}
 	}
 }
 
-func planCloseTaskCmd(mgr task.Manager, taskID string) tea.Cmd {
+func planCloseTaskCmd(mgr task.Manager, taskID string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
 		defer cancel()
 
 		plan, err := mgr.PlanCloseTask(ctx, taskID)
-		return ClosePlanReadyMsg{Plan: plan, Err: err}
+		return ClosePlanReadyMsg{Generation: generation, Plan: plan, Err: err}
 	}
 }
 
-func closeTaskCmd(mgr task.Manager, params task.CloseTaskParams) tea.Cmd {
+func closeTaskCmd(mgr task.Manager, params task.CloseTaskParams, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan CloseTaskFinishedMsg, 1)
 	params.StatusCh = statusCh
@@ -356,65 +375,95 @@ func closeTaskCmd(mgr task.Manager, params task.CloseTaskParams) tea.Cmd {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), params.TaskID), 10*time.Minute)
 		defer cancel()
 		result, err := mgr.CloseTask(ctx, params)
-		doneCh <- CloseTaskFinishedMsg{Result: result, Err: err}
+		doneCh <- CloseTaskFinishedMsg{Generation: generation, Result: result, DryRun: params.DryRun, Err: err}
 		close(doneCh)
 	}()
 
 	return readStatusOrDone(statusCh, doneCh)
 }
 
-func scanPrunableTasksCmd(mgr task.Manager) tea.Cmd {
+// scanCleanupCandidatesCmd runs a read-only scan over every task and every
+// released release, planning cleanup for each so the dialog can show readiness
+// and block reasons. Planning never mutates; per-item plan failures block that
+// item instead of failing the scan.
+func scanCleanupCandidatesCmd(mgr task.Manager, generation uint64) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
-		candidates, err := mgr.ScanPrunableTasks(ctx)
-		return PrunePlanReadyMsg{Candidates: candidates, Err: err}
+		tasks, err := mgr.List(ctx)
+		if err != nil {
+			return CleanupScanReadyMsg{Generation: generation, Err: fmt.Errorf("list tasks: %w", err)}
+		}
+		releases, err := mgr.ListReleases(ctx)
+		if err != nil {
+			return CleanupScanReadyMsg{Generation: generation, Err: fmt.Errorf("list releases: %w", err)}
+		}
+
+		candidates := make([]modal.CleanupCandidate, 0, len(tasks)+len(releases))
+		for _, taskInfo := range tasks {
+			candidate := modal.CleanupCandidate{Kind: modal.CleanupKindTask, ID: taskInfo.ID}
+			plan, planErr := mgr.PlanTaskCleanup(ctx, task.TaskCleanupRequest{TaskID: taskInfo.ID})
+			switch {
+			case planErr != nil:
+				candidate.Reason = "plan failed: " + planErr.Error()
+			default:
+				preview := plan.Preview()
+				candidate.Services = len(preview.Services)
+				for _, service := range preview.Services {
+					if service.WorktreePath != "" {
+						candidate.Resources++
+					}
+				}
+				switch {
+				case len(preview.Blockers) > 0:
+					candidate.Reason = strings.Join(preview.Blockers, "; ")
+				case len(preview.Services) == 0:
+					candidate.Reason = "no cleanup steps planned"
+				default:
+					candidate.Ready = true
+				}
+			}
+			candidates = append(candidates, candidate)
+			if ctx.Err() != nil {
+				return CleanupScanReadyMsg{Generation: generation, Err: ctx.Err()}
+			}
+		}
+		for _, release := range releases {
+			if release.Status != domain.ReleaseStatusReleased {
+				continue
+			}
+			candidate := modal.CleanupCandidate{Kind: modal.CleanupKindRelease, ID: release.ID}
+			plan, planErr := mgr.PlanReleaseCleanup(ctx, release.ID, task.ReleaseCleanupSelection{RemoveRelease: true})
+			switch {
+			case planErr != nil:
+				candidate.Reason = "plan failed: " + planErr.Error()
+			default:
+				preview := plan.Preview()
+				candidate.Services = len(preview.Services)
+				candidate.Resources = len(preview.Tasks)
+				if len(preview.Blockers) > 0 {
+					candidate.Reason = strings.Join(preview.Blockers, "; ")
+				} else {
+					candidate.Ready = true
+				}
+			}
+			candidates = append(candidates, candidate)
+			if ctx.Err() != nil {
+				return CleanupScanReadyMsg{Generation: generation, Err: ctx.Err()}
+			}
+		}
+		return CleanupScanReadyMsg{Generation: generation, Candidates: candidates}
 	}
 }
 
-func pruneTasksCmd(mgr task.Manager, taskIDs []string) tea.Cmd {
-	statusCh := make(chan string, 32)
-	doneCh := make(chan PruneFinishedMsg, 1)
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-
-		removed := make([]string, 0, len(taskIDs))
-		errList := make([]error, 0)
-
-		for _, taskID := range taskIDs {
-			if taskID == "" {
-				continue
-			}
-
-			statusCh <- "Pruning task " + taskID + "..."
-			if err := mgr.Remove(logutil.WithTaskID(ctx, taskID), taskID, task.RemoveOptions{RemoveWorktrees: true, Force: true}); err != nil {
-				errList = append(errList, err)
-				statusCh <- "Prune task " + taskID + " failed: " + err.Error()
-				continue
-			}
-
-			removed = append(removed, taskID)
-			statusCh <- "Prune task " + taskID + " done."
-		}
-
-		close(statusCh)
-		doneCh <- PruneFinishedMsg{Removed: removed, Errors: errList}
-		close(doneCh)
-	}()
-
-	return readStatusOrDone(statusCh, doneCh)
-}
-
-func listTagsCmd(mgr task.Manager, taskID string) tea.Cmd {
+func listTagsCmd(mgr task.Manager, taskID string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
 		defer cancel()
 
 		tags, err := mgr.ListTags(ctx, taskID)
-		return TagListMsg{TaskID: taskID, Tags: tags, Err: err}
+		return TagListMsg{Generation: generation, TaskID: taskID, Tags: tags, Err: err}
 	}
 }
 
@@ -433,17 +482,20 @@ func planReleaseCleanupCmd(mgr task.Manager, releaseID string, selection task.Re
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		plan, err := mgr.PlanReleaseCleanup(ctx, releaseID, selection)
-		return ReleaseCleanupPlanReadyMsg{Generation: generation, Plan: plan, Preview: plan.Preview(), Err: err}
+		return ReleaseCleanupPlanReadyMsg{Generation: generation, Plan: plan, Err: err}
 	}
 }
 
-func executeReleaseCleanupCmd(mgr task.Manager, plan task.ReleaseCleanupPlan, generation uint64) tea.Cmd {
+func executeReleaseCleanupCmd(mgr task.Manager, plan task.ReleaseCleanupPlan, releaseID string, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan ReleaseCleanupDoneMsg, 1)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		result, err := mgr.ExecuteReleaseCleanup(ctx, plan, statusCh)
+		if result.ReleaseID == "" {
+			result.ReleaseID = releaseID
+		}
 		close(statusCh)
 		doneCh <- ReleaseCleanupDoneMsg{Generation: generation, Result: result, Err: err}
 		close(doneCh)
@@ -451,7 +503,39 @@ func executeReleaseCleanupCmd(mgr task.Manager, plan task.ReleaseCleanupPlan, ge
 	return readStatusOrDone(statusCh, doneCh)
 }
 
-func createReleaseCmd(mgr task.Manager, params task.CreateReleaseParams) tea.Cmd {
+func planTaskCleanupCmd(mgr task.Manager, taskID string, generation, operationGeneration uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 2*time.Minute)
+		defer cancel()
+		plan, err := mgr.PlanTaskCleanup(ctx, task.TaskCleanupRequest{TaskID: taskID})
+		return TaskCleanupPlanReadyMsg{TaskID: taskID, Generation: generation, OperationGeneration: operationGeneration, Plan: plan, Err: err}
+	}
+}
+
+func executeTaskCleanupCmd(mgr task.Manager, plan task.TaskCleanupPlan, taskID string, generation, operationGeneration uint64) tea.Cmd {
+	statusCh := make(chan string, 32)
+	doneCh := make(chan TaskCleanupDoneMsg, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 10*time.Minute)
+		defer cancel()
+		result, err := mgr.ExecuteTaskCleanup(ctx, plan, statusCh)
+		if result.TaskID == "" {
+			result.TaskID = taskID
+		}
+		close(statusCh)
+		doneCh <- TaskCleanupDoneMsg{
+			TaskID:              taskID,
+			Generation:          generation,
+			OperationGeneration: operationGeneration,
+			Result:              result,
+			Err:                 err,
+		}
+		close(doneCh)
+	}()
+	return readStatusOrDone(statusCh, doneCh)
+}
+
+func createReleaseCmd(mgr task.Manager, params task.CreateReleaseParams, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan CreateReleaseDoneMsg, 1)
 	params.StatusCh = statusCh
@@ -462,7 +546,7 @@ func createReleaseCmd(mgr task.Manager, params task.CreateReleaseParams) tea.Cmd
 
 		release, err := mgr.CreateRelease(ctx, params)
 		close(statusCh)
-		doneCh <- CreateReleaseDoneMsg{Release: release, Err: err}
+		doneCh <- CreateReleaseDoneMsg{Generation: generation, Release: release, Err: err}
 		close(doneCh)
 	}()
 
@@ -487,25 +571,25 @@ func inspectReleaseMergeCmd(mgr task.Manager, releaseID string, generation uint6
 	}
 }
 
-func mergeTaskMRsCmd(mgr task.Manager, taskID string) tea.Cmd {
+func mergeTaskMRsCmd(mgr task.Manager, taskID string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 10*time.Minute)
 		defer cancel()
 		result, err := mgr.MergeTaskMRs(ctx, taskID)
-		return TaskMergeDoneMsg{Result: result, Err: err}
+		return TaskMergeDoneMsg{Generation: generation, Result: result, Err: err}
 	}
 }
 
-func mergeServiceMRCmd(mgr task.Manager, taskID, serviceName string, selection ...task.MRSelection) tea.Cmd {
+func mergeServiceMRCmd(mgr task.Manager, taskID, serviceName string, generation uint64, selection ...task.MRSelection) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 10*time.Minute)
 		defer cancel()
 		result, err := mgr.MergeServiceMR(ctx, taskID, serviceName, selection...)
-		return TaskMergeDoneMsg{Result: result, Err: err}
+		return TaskMergeDoneMsg{Generation: generation, Result: result, Err: err}
 	}
 }
 
-func mergeReleaseMRsCmd(mgr task.Manager, releaseID string) tea.Cmd {
+func mergeReleaseMRsCmd(mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan ReleaseMergeDoneMsg, 1)
 
@@ -514,27 +598,27 @@ func mergeReleaseMRsCmd(mgr task.Manager, releaseID string) tea.Cmd {
 		defer cancel()
 		release, result, err := mgr.MergeReleaseMRs(ctx, releaseID, statusCh)
 		close(statusCh)
-		doneCh <- ReleaseMergeDoneMsg{Release: release, Result: result, Err: err}
+		doneCh <- ReleaseMergeDoneMsg{Generation: generation, Release: release, Result: result, Err: err}
 		close(doneCh)
 	}()
 
 	return readStatusOrDone(statusCh, doneCh)
 }
 
-func promoteReleaseCmd(mgr task.Manager, releaseID string) tea.Cmd {
-	return releaseActionCmd(mgr, "promote", releaseID)
+func promoteReleaseCmd(mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
+	return releaseActionCmd(mgr, "promote", releaseID, generation)
 }
 
-func finalizeReleaseCmd(mgr task.Manager, releaseID string) tea.Cmd {
-	return releaseActionCmd(mgr, "finalize", releaseID)
+func finalizeReleaseCmd(mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
+	return releaseActionCmd(mgr, "finalize", releaseID, generation)
 }
 
-func retryReleaseCmd(mgr task.Manager, releaseID string) tea.Cmd {
+func retryReleaseCmd(mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		release, err := mgr.RetryRelease(ctx, releaseID)
-		return ReleaseActionDoneMsg{Action: "retry", Release: release, Err: err}
+		return ReleaseActionDoneMsg{Generation: generation, Action: "retry", Release: release, Err: err}
 	}
 }
 
@@ -556,16 +640,16 @@ func planReleaseTaskMergeRetryCmd(mgr task.Manager, releaseID string, generation
 	}
 }
 
-func retryReleaseTaskMergesCmd(mgr task.Manager, releaseID string, plan *task.ReleaseTaskMergePlan) tea.Cmd {
+func retryReleaseTaskMergesCmd(mgr task.Manager, releaseID string, plan *task.ReleaseTaskMergePlan, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		release, err := mgr.RetryReleaseTaskMerges(ctx, releaseID, plan)
-		return ReleaseActionDoneMsg{Action: "retry", Release: release, Err: err}
+		return ReleaseActionDoneMsg{Generation: generation, Action: "retry", Release: release, Err: err}
 	}
 }
 
-func releaseActionCmd(mgr task.Manager, action, releaseID string) tea.Cmd {
+func releaseActionCmd(mgr task.Manager, action, releaseID string, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan ReleaseActionDoneMsg, 1)
 	go func() {
@@ -579,7 +663,7 @@ func releaseActionCmd(mgr task.Manager, action, releaseID string) tea.Cmd {
 			release, err = mgr.FinalizeRelease(ctx, task.FinishReleaseParams{ReleaseID: releaseID, StatusCh: statusCh})
 		}
 		close(statusCh)
-		doneCh <- ReleaseActionDoneMsg{Action: action, Release: release, Err: err}
+		doneCh <- ReleaseActionDoneMsg{Generation: generation, Action: action, Release: release, Err: err}
 		close(doneCh)
 	}()
 	return readStatusOrDone(statusCh, doneCh)
@@ -594,14 +678,14 @@ func loadTaskWorkflowCmd(mgr task.Manager, taskID string, generation uint64) tea
 	}
 }
 
-func loadReleaseVersionsCmd(mgr task.Manager, taskIDs []string) tea.Cmd {
+func loadReleaseVersionsCmd(mgr task.Manager, taskIDs []string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		versions, err := mgr.ProposeReleaseVersions(ctx, taskIDs)
 		if err != nil {
-			return CommandDoneMsg{Err: err, Op: "Load release versions"}
+			return CommandDoneMsg{Generation: generation, Err: err, Op: "Load release versions"}
 		}
 
 		return panels.ReleaseVersionsLoadedMsg{Versions: versions}
@@ -618,7 +702,7 @@ type forgeCreateMRParams struct {
 	Force bool
 }
 
-func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, params any) tea.Cmd {
+func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, params any, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctxBase := context.Background()
 		if taskID != "" {
@@ -631,29 +715,29 @@ func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, 
 		case "create_missing_mrs":
 			p, ok := params.(forgeCreateMRParams)
 			if !ok {
-				return ForgeResultMsg{TaskID: taskID, Op: op, Err: errors.New("invalid params for create_missing_mrs")}
+				return ForgeResultMsg{Generation: generation, TaskID: taskID, Op: op, Err: errors.New("invalid params for create_missing_mrs")}
 			}
 			result, err := mgr.ForgeCreateMissingMRs(ctx, taskID, p.Title, p.Force)
-			return ForgeResultMsg{TaskID: taskID, Op: op, Data: result, Err: err}
+			return ForgeResultMsg{Generation: generation, TaskID: taskID, Op: op, Data: result, Err: err}
 
 		case "pipeline_status":
 			p, ok := params.(forgePipelineStatusParams)
 			if !ok {
-				return ForgeResultMsg{ServiceName: serviceName, Op: op, Err: errors.New("invalid params for pipeline_status")}
+				return ForgeResultMsg{Generation: generation, ServiceName: serviceName, Op: op, Err: errors.New("invalid params for pipeline_status")}
 			}
 			result, err := mgr.ForgePipelineStatus(ctx, taskID, serviceName, p.Branch)
-			return ForgeResultMsg{ServiceName: serviceName, Op: op, Provider: p.Provider, Data: result, Err: err}
+			return ForgeResultMsg{Generation: generation, ServiceName: serviceName, Op: op, Provider: p.Provider, Data: result, Err: err}
 
 		case "list_issues":
 			p, ok := params.(forge.ListIssuesParams)
 			if !ok {
-				return ForgeResultMsg{ServiceName: serviceName, Op: op, Err: errors.New("invalid params for list_issues")}
+				return ForgeResultMsg{Generation: generation, ServiceName: serviceName, Op: op, Err: errors.New("invalid params for list_issues")}
 			}
 			result, err := mgr.ForgeListIssues(ctx, taskID, serviceName, p)
-			return ForgeResultMsg{ServiceName: serviceName, Op: op, Data: result, Err: err}
+			return ForgeResultMsg{Generation: generation, ServiceName: serviceName, Op: op, Data: result, Err: err}
 
 		default:
-			return ForgeResultMsg{ServiceName: serviceName, Op: op, Err: errors.New("unsupported forge operation: " + op)}
+			return ForgeResultMsg{Generation: generation, ServiceName: serviceName, Op: op, Err: errors.New("unsupported forge operation: " + op)}
 		}
 	}
 }
@@ -707,22 +791,22 @@ func shellExecCommand(command, dir string) *exec.Cmd {
 	return c
 }
 
-func execShellCmd(command, dir string) tea.Cmd {
-	return execTeaProcess(shellExecCommand(command, dir), "Run shell command")
+func execShellCmd(command, dir string, generation uint64) tea.Cmd {
+	return execTeaProcess(shellExecCommand(command, dir), "Run shell command", generation)
 }
 
-func execProcessCmd(name string, args []string, dir string, op string) tea.Cmd {
+func execProcessCmd(name string, args []string, dir string, op string, generation uint64) tea.Cmd {
 	c := exec.Command(name, args...)
 	c.Dir = dir
-	return execTeaProcess(c, op)
+	return execTeaProcess(c, op, generation)
 }
 
-func execTeaProcess(c *exec.Cmd, op string) tea.Cmd {
+func execTeaProcess(c *exec.Cmd, op string, generation uint64) tea.Cmd {
 	return tea.ExecProcess(c, func(err error) tea.Msg {
-		return execProcessDoneMsg(op, err)
+		return execProcessDoneMsg(op, err, generation)
 	})
 }
 
-func execProcessDoneMsg(op string, err error) tea.Msg {
-	return CommandDoneMsg{Err: err, Op: op}
+func execProcessDoneMsg(op string, err error, generation uint64) tea.Msg {
+	return CommandDoneMsg{Generation: generation, Err: err, Op: op}
 }

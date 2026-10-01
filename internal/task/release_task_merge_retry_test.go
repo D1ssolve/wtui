@@ -17,7 +17,7 @@ func TestPlanReleaseTaskMergeRetry_RejectsForgedMergedWhenMROpen(t *testing.T) {
 	m, _ := newReleasePlanTestManager(t, gitMock)
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	release := writeTaskMergeRetryRelease(t, m, domain.ReleaseStatusTaskMergePartial, domain.ReleaseFeatureBranch{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", WorktreePath: filepath.Join(m.cfg.TasksRoot, "APP-1", "api"), TaskMergeStatus: taskMergeStatusMerged, TaskMergeMRNumber: 1, TaskMergeHeadSHA: "head-1", MergeRef: "d1"})
 
@@ -46,12 +46,12 @@ func TestRetryReleaseTaskMerges_SkipsProvenMergedAndMergesNext(t *testing.T) {
 	})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", MergedSHA: "d1", Ready: true, SupportsSHAPin: true}
-	f.readiness[2] = forge.MRReadiness{Number: 2, State: "open", SourceBranch: "feature/APP-2", TargetBranch: "develop", HeadSHA: "head-2", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", MergedSHA: "d1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
+	f.readiness[2] = forge.MRReadiness{Number: 2, State: "open", SourceBranch: "feature/APP-2", TargetBranch: "develop", HeadSHA: "head-2", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	f.afterMerge = func(number int) {
 		if number == 2 {
 			targetTip = "d2"
-			f.readiness[2] = forge.MRReadiness{Number: 2, State: "merged", SourceBranch: "feature/APP-2", TargetBranch: "develop", HeadSHA: "head-2", MergedSHA: "d2", Ready: true, SupportsSHAPin: true}
+			f.readiness[2] = forge.MRReadiness{Number: 2, State: "merged", SourceBranch: "feature/APP-2", TargetBranch: "develop", HeadSHA: "head-2", MergedSHA: "d2", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 		}
 	}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
@@ -92,7 +92,7 @@ func TestRetryReleaseTaskMerges_ReconcilesUnknownRemoteMergedWithoutDuplicate(t 
 	setTaskWorktreeHeads(gitMock, map[string]string{filepath.Join(m.cfg.TasksRoot, "APP-1", "api"): "head-1"})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", MergedSHA: "d1", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", MergedSHA: "d1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	release := writeTaskMergeRetryRelease(t, m, domain.ReleaseStatusTaskMergePartial,
 		domain.ReleaseFeatureBranch{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", WorktreePath: filepath.Join(m.cfg.TasksRoot, "APP-1", "api"), TaskMergeStatus: taskMergeStatusUnknown, TaskMergeMRNumber: 1, TaskMergeHeadSHA: "head-1", TaskMergeExpectedTarget: "d0"},
@@ -129,7 +129,7 @@ func TestPlanReleaseTaskMergeRetry_BlocksUnknownOpenWhenTargetMoved(t *testing.T
 	setTaskWorktreeHeads(gitMock, map[string]string{filepath.Join(m.cfg.TasksRoot, "APP-1", "api"): "head-1"})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	release := writeTaskMergeRetryRelease(t, m, domain.ReleaseStatusTaskMergePartial,
 		domain.ReleaseFeatureBranch{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", WorktreePath: filepath.Join(m.cfg.TasksRoot, "APP-1", "api"), TaskMergeStatus: taskMergeStatusUnknown, TaskMergeMRNumber: 1, TaskMergeHeadSHA: "head-1", TaskMergeExpectedTarget: "d1"},
@@ -159,7 +159,7 @@ func TestPlanReleaseTaskMergeRetry_AwaitingCompleteMetadata_PreviewsFromPersiste
 	setTaskWorktreeHeads(gitMock, map[string]string{filepath.Join(m.cfg.TasksRoot, "APP-1", "api"): "head-1"})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	release := writeTaskMergeRetryRelease(t, m, domain.ReleaseStatusAwaitingTaskMerge,
 		domain.ReleaseFeatureBranch{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", WorktreePath: filepath.Join(m.cfg.TasksRoot, "APP-1", "api"), TaskMergeStatus: taskMergeStatusPending, TaskMergeMRNumber: 1, TaskMergeHeadSHA: "head-1", TaskMergeTargetSHA: "d1"},
@@ -189,7 +189,7 @@ func TestPlanReleaseTaskMergeRetry_AwaitingWithoutMetadata_ReplansFromFreshForge
 	setTaskWorktreeHeads(gitMock, map[string]string{filepath.Join(m.cfg.TasksRoot, "APP-1", "api"): "fresh-head"})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[7] = forge.MRReadiness{Number: 7, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "fresh-head", Ready: true, SupportsSHAPin: true}
+	f.readiness[7] = forge.MRReadiness{Number: 7, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "fresh-head", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	release := writeTaskMergeRetryRelease(t, m, domain.ReleaseStatusAwaitingTaskMerge,
 		domain.ReleaseFeatureBranch{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", WorktreePath: filepath.Join(m.cfg.TasksRoot, "APP-1", "api")},
@@ -229,7 +229,7 @@ func TestPlanReleaseTaskMergeRetry_AwaitingIncompleteMetadata_FailsClosed(t *tes
 			m, _ := newReleasePlanTestManager(t, gitMock)
 			enableReleasePrepareTaskMerge(t, m)
 			f := newReleaseTaskMergeForge()
-			f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true}
+			f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 			m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 			release := writeTaskMergeRetryRelease(t, m, domain.ReleaseStatusAwaitingTaskMerge, tc.branches...)
 
@@ -257,11 +257,11 @@ func TestRetryReleaseTaskMerges_AwaitingFreshPlan_ExecutesAfterConfirmation(t *t
 	setTaskWorktreeHeads(gitMock, map[string]string{filepath.Join(m.cfg.TasksRoot, "APP-1", "api"): "fresh-head"})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[7] = forge.MRReadiness{Number: 7, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "fresh-head", Ready: true, SupportsSHAPin: true}
+	f.readiness[7] = forge.MRReadiness{Number: 7, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "fresh-head", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	f.afterMerge = func(number int) {
 		if number == 7 {
 			targetTip = "d1"
-			f.readiness[7] = forge.MRReadiness{Number: 7, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "fresh-head", MergedSHA: "d1", Ready: true, SupportsSHAPin: true}
+			f.readiness[7] = forge.MRReadiness{Number: 7, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "fresh-head", MergedSHA: "d1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 		}
 	}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
@@ -307,7 +307,7 @@ func TestRetryReleaseTaskMerges_SuccessfulRetry_ClearsStaleFailureState(t *testi
 	setTaskWorktreeHeads(gitMock, map[string]string{filepath.Join(m.cfg.TasksRoot, "APP-1", "api"): "head-1"})
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", MergedSHA: "d1", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "merged", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "head-1", MergedSHA: "d1", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 
 	createdAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)

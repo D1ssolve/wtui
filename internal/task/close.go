@@ -124,18 +124,17 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 				return ClosePlan{}, fmt.Errorf("plan close task: check tag %s for service %s: %w", tagName, svc.Name, tagExistsErr)
 			}
 			if tagExists {
-				plan.Warnings = append(plan.Warnings, fmt.Sprintf("[%s] tag %s already exists; skip tag creation", svc.Name, tagName))
-			} else {
-				servicePlan.TagPlan = &TagPlan{
-					TagName:   tagName,
-					Version:   version,
-					SourceRef: svcRule.TagSource,
-					Annotated: m.cfg.Tag == nil || m.cfg.Tag.Annotated,
-					Message:   m.renderTagMessage(tagName, taskID),
-					Push:      m.cfg.Tag == nil || m.cfg.Tag.Push,
-				}
-				plan.RequiresTag = true
+				plan.Warnings = append(plan.Warnings, fmt.Sprintf("[%s] tag %s already exists; verification pending at close", svc.Name, tagName))
 			}
+			servicePlan.TagPlan = &TagPlan{
+				TagName:   tagName,
+				Version:   version,
+				SourceRef: svcRule.TagSource,
+				Annotated: m.cfg.Tag == nil || m.cfg.Tag.Annotated,
+				Message:   m.renderTagMessage(tagName, taskID),
+				Push:      m.cfg.Tag == nil || m.cfg.Tag.Push,
+			}
+			plan.RequiresTag = true
 		}
 
 		if svcRule.CloseStrategy == gitflow.CloseStrategyReviewRequest {
@@ -147,7 +146,6 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 				TargetBranch: target,
 				Title:        fmt.Sprintf("Close %s/%s", taskID, svc.Name),
 				Description:  fmt.Sprintf("Auto close task %s for service %s", taskID, svc.Name),
-				RemoveSource: svcRule.DeleteSourceBranchAfterMerge,
 			}
 			plan.RequiresForge = true
 		}
@@ -169,16 +167,16 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 
 func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseTaskResult, error) {
 	result := CloseTaskResult{TaskID: params.TaskID}
+	anyFailed := false
 
 	step := func(name string, status StepStatus, message string) {
 		result.Steps = append(result.Steps, CloseTaskStep{Name: name, Status: status, Message: message})
+		if status == StepStatusFailed {
+			anyFailed = true
+		}
 		if params.StatusCh != nil {
 			sendLine(ctx, params.StatusCh, fmt.Sprintf("[%s] %s", name, message))
 		}
-	}
-
-	if params.StatusCh != nil {
-		defer close(params.StatusCh)
 	}
 
 	plan, err := m.PlanCloseTask(ctx, params.TaskID)
@@ -228,7 +226,6 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 	}
 
 	continueOnError := m.cfg.Close != nil && m.cfg.Close.ContinueOnError
-	anyFailed := false
 
 	for _, svcPlan := range services {
 		svc, svcErr := m.findService(ctx, params.TaskID, svcPlan.ServiceName)
@@ -250,6 +247,8 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 		step(svc.Name+":fetch", StepStatusOK, "fetched origin")
 
 		svcFailed := false
+		reviewVerified := false
+		reviewMergeSHA := ""
 
 		switch svcPlan.CloseStrategy {
 		case gitflow.CloseStrategyDirectMerge:
@@ -272,65 +271,142 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 			}
 
 			for _, target := range svcPlan.TargetBranches {
-				merged, mergeErr := m.git.IsAncestor(ctx, svc.RepoPath, svcPlan.SourceBranch, target)
-				if mergeErr != nil {
-					step(svc.Name+":merge:"+target, StepStatusFailed, mergeErr.Error())
+				targetRef := "refs/heads/" + target
+
+				// Lease base: exact pre-merge remote target OID, resolved
+				// fresh after the fetch above. A concurrent remote move
+				// between this resolution and the lease push fails the push
+				// instead of overwriting foreign work.
+				remoteSHA, resolveErr := m.git.ResolveRef(ctx, svc.RepoPath, "origin/"+target)
+				if resolveErr != nil || remoteSHA == "" {
+					if resolveErr == nil {
+						resolveErr = fmt.Errorf("resolve remote target %s: empty SHA", target)
+					}
+					step(svc.Name+":merge:"+target, StepStatusFailed, resolveErr.Error())
 					svcFailed = true
 					break
 				}
-				if merged {
+
+				// Skip only when the fresh remote target already contains the
+				// source; local target ancestry alone cannot prove the merge
+				// was published.
+				onRemote, ancestorErr := m.git.IsAncestor(ctx, svc.RepoPath, svcPlan.SourceBranch, "origin/"+target)
+				if ancestorErr != nil {
+					step(svc.Name+":merge:"+target, StepStatusFailed, ancestorErr.Error())
+					svcFailed = true
+					break
+				}
+				if onRemote {
 					step(svc.Name+":merge:"+target, StepStatusSkipped, "already merged")
 					continue
 				}
 
-				if checkoutErr := m.git.Checkout(ctx, svc.WorktreePath, target); checkoutErr != nil {
-					step(svc.Name+":checkout:"+target, StepStatusFailed, checkoutErr.Error())
+				var mergedOID string
+				mergedLocal, ancestorErr := m.git.IsAncestor(ctx, svc.RepoPath, svcPlan.SourceBranch, target)
+				if ancestorErr != nil {
+					step(svc.Name+":merge:"+target, StepStatusFailed, ancestorErr.Error())
 					svcFailed = true
 					break
 				}
-				step(svc.Name+":checkout:"+target, StepStatusOK, "checked out "+target)
+				if mergedLocal {
+					// Local merge exists but the remote target lacks the
+					// source (checked above): publish it. Skipping here would
+					// report success for an unpushed merge.
+					mergedOID, resolveErr = m.git.ResolveRef(ctx, svc.RepoPath, targetRef)
+					if resolveErr != nil || mergedOID == "" {
+						if resolveErr == nil {
+							resolveErr = fmt.Errorf("resolve local target %s: empty SHA", target)
+						}
+						step(svc.Name+":push:"+target, StepStatusFailed, resolveErr.Error())
+						svcFailed = true
+						break
+					}
+					step(svc.Name+":merge:"+target, StepStatusSkipped, "already merged locally; publishing")
+				} else {
+					if checkoutErr := m.git.Checkout(ctx, svc.WorktreePath, target); checkoutErr != nil {
+						step(svc.Name+":checkout:"+target, StepStatusFailed, checkoutErr.Error())
+						svcFailed = true
+						break
+					}
+					step(svc.Name+":checkout:"+target, StepStatusOK, "checked out "+target)
 
-				mergeRunErr := m.git.Merge(ctx, svc.WorktreePath, svcPlan.SourceBranch)
-				if mergeRunErr != nil {
-					step(svc.Name+":merge:"+target, StepStatusFailed, mergeRunErr.Error())
+					mergeRunErr := m.git.Merge(ctx, svc.WorktreePath, svcPlan.SourceBranch)
+					if mergeRunErr != nil {
+						step(svc.Name+":merge:"+target, StepStatusFailed, mergeRunErr.Error())
 
-					recoveryErrs := make([]error, 0, 2)
-					states, stateErr := m.git.OperationState(ctx, svc.WorktreePath)
-					if stateErr != nil {
-						recoveryErrs = append(recoveryErrs, fmt.Errorf("inspect operation state: %w", stateErr))
-					} else {
-						sort.Slice(states, func(i, j int) bool { return states[i] < states[j] })
-						if slices.Contains(states, domain.RepoStateMerging) || slices.Contains(states, domain.RepoStateConflicted) {
-							if abortErr := m.git.MergeAbort(ctx, svc.WorktreePath); abortErr != nil {
-								recoveryErrs = append(recoveryErrs, fmt.Errorf("abort merge: %w", abortErr))
+						recoveryErrs := make([]error, 0, 2)
+						states, stateErr := m.git.OperationState(ctx, svc.WorktreePath)
+						if stateErr != nil {
+							recoveryErrs = append(recoveryErrs, fmt.Errorf("inspect operation state: %w", stateErr))
+						} else {
+							sort.Slice(states, func(i, j int) bool { return states[i] < states[j] })
+							if slices.Contains(states, domain.RepoStateMerging) || slices.Contains(states, domain.RepoStateConflicted) {
+								if abortErr := m.git.MergeAbort(ctx, svc.WorktreePath); abortErr != nil {
+									recoveryErrs = append(recoveryErrs, fmt.Errorf("abort merge: %w", abortErr))
+								}
 							}
 						}
+
+						if restoreErr := restoreBranch(); restoreErr != nil {
+							recoveryErrs = append(recoveryErrs, fmt.Errorf("restore branch: %w", restoreErr))
+						}
+
+						if len(recoveryErrs) > 0 {
+							mergeRunErr = fmt.Errorf("merge %s into %s failed: %w", svcPlan.SourceBranch, target, errors.Join(append([]error{mergeRunErr}, recoveryErrs...)...))
+						}
+						svcFailed = true
+						if !continueOnError {
+							return result, mergeRunErr
+						}
+						break
 					}
 
-					if restoreErr := restoreBranch(); restoreErr != nil {
-						recoveryErrs = append(recoveryErrs, fmt.Errorf("restore branch: %w", restoreErr))
+					mergedOID, resolveErr = m.git.ResolveRef(ctx, svc.RepoPath, targetRef)
+					if resolveErr != nil || mergedOID == "" {
+						if resolveErr == nil {
+							resolveErr = fmt.Errorf("resolve merged target %s: empty SHA", target)
+						}
+						step(svc.Name+":merge:"+target, StepStatusFailed, resolveErr.Error())
+						svcFailed = true
+						break
 					}
+					step(svc.Name+":merge:"+target, StepStatusOK, "merged into "+target)
+				}
 
-					if len(recoveryErrs) > 0 {
-						mergeRunErr = fmt.Errorf("merge %s into %s failed: %w", svcPlan.SourceBranch, target, errors.Join(append([]error{mergeRunErr}, recoveryErrs...)...))
-					}
+				// Prove the merged result builds on the fresh remote target
+				// before any push: a local target that is stale or diverged
+				// from origin/<target> would publish history that discards
+				// remote work the lease alone cannot detect. Fail closed; the
+				// user must reset the local target to origin/<target> and
+				// retry.
+				descends, ancestorErr := m.git.IsAncestor(ctx, svc.RepoPath, remoteSHA, mergedOID)
+				if ancestorErr != nil {
+					step(svc.Name+":push:"+target, StepStatusFailed, ancestorErr.Error())
 					svcFailed = true
-					if !continueOnError {
-						return result, mergeRunErr
-					}
 					break
 				}
-				step(svc.Name+":merge:"+target, StepStatusOK, "merged into "+target)
-
-				ensureErr := m.ensurePushBranchAllowed(ctx, svc.WorktreePath)
-				if ensureErr != nil {
-					step(svc.Name+":push:"+target, StepStatusFailed, ensureErr.Error())
+				if !descends {
+					divergedErr := fmt.Errorf("local target %s diverged from origin/%s: %s does not contain remote %s; reset the local target to origin/%s and retry", target, target, mergedOID, remoteSHA, target)
+					step(svc.Name+":push:"+target, StepStatusFailed, divergedErr.Error())
 					svcFailed = true
 					break
 				}
 
-				pushErr := m.pushBranch(ctx, svc.WorktreePath)
-				if pushErr != nil {
+				// Prove the push destination before mutating the remote, then
+				// publish the exact merged OID under a lease on the fresh
+				// pre-merge remote target OID to the captured URL, never the
+				// mutable remote name: a concurrent pushurl/origin retarget
+				// cannot redirect the push. The lease is the safety guard, so
+				// the generic protected-branch push check stays out of this
+				// workflow-owned target push.
+				pushURL, err := m.verifiedPushURL(ctx, svc)
+				if err != nil {
+					step(svc.Name+":push:"+target, StepStatusFailed, err.Error())
+					svcFailed = true
+					break
+				}
+
+				if pushErr := m.git.PushRefWithLease(ctx, svc.RepoPath, pushURL, targetRef, mergedOID, targetRef, remoteSHA); pushErr != nil {
 					step(svc.Name+":push:"+target, StepStatusFailed, pushErr.Error())
 					svcFailed = true
 					break
@@ -374,22 +450,35 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				svcFailed = true
 				break
 			}
-			mr, createErr := forgeClient.CreateMR(ctx, forge.CreateMRParams{
-				WorktreePath: svc.WorktreePath,
-				SourceBranch: svcPlan.SourceBranch,
-				TargetBranch: target,
-				Title:        svcPlan.ForgePlan.Title,
-				Description:  svcPlan.ForgePlan.Description,
-				RemoveSource: svcPlan.ForgePlan.RemoveSource,
-				Repo:         repo,
-			})
-			if createErr != nil {
-				step(svc.Name+":review-request", StepStatusFailed, createErr.Error())
+			state, mergeSHA, reconcileErr := m.reconcileReviewClose(ctx, svc, target, repo, forgeClient)
+			if reconcileErr != nil {
+				step(svc.Name+":review-request", StepStatusFailed, reconcileErr.Error())
 				svcFailed = true
 				break
 			}
-			result.MRURLs = append(result.MRURLs, mr.URL)
-			step(svc.Name+":review-request", StepStatusOK, "created "+mr.URL)
+			switch state {
+			case reviewCloseWaiting:
+				step(svc.Name+":review-request", StepStatusSkipped, "waiting for merge")
+			case reviewCloseVerified:
+				reviewVerified, reviewMergeSHA = true, mergeSHA
+				step(svc.Name+":review-request", StepStatusOK, "merged MR verified at "+mergeSHA)
+			default:
+				mr, createErr := forgeClient.CreateMR(ctx, forge.CreateMRParams{
+					WorktreePath: svc.WorktreePath,
+					SourceBranch: svcPlan.SourceBranch,
+					TargetBranch: target,
+					Title:        svcPlan.ForgePlan.Title,
+					Description:  svcPlan.ForgePlan.Description,
+					Repo:         repo,
+				})
+				if createErr != nil {
+					step(svc.Name+":review-request", StepStatusFailed, createErr.Error())
+					svcFailed = true
+					break
+				}
+				result.MRURLs = append(result.MRURLs, mr.URL)
+				step(svc.Name+":review-request", StepStatusOK, "created "+mr.URL)
+			}
 		}
 
 		if svcFailed {
@@ -400,7 +489,46 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 			continue
 		}
 
+		// Close post-actions (tag/pipeline/proof) run only against freshly
+		// verified merged code. A review_request service whose MR was created
+		// or is still open waits: merging happens in the forge, and tagging or
+		// triggering pipelines before the merge would act on unmerged code.
+		if svcPlan.CloseStrategy == gitflow.CloseStrategyReviewRequest && !reviewVerified && (svcPlan.TagPlan != nil || svcPlan.PipelinePlan != nil) {
+			result.Waiting = true
+			continue
+		}
+
 		if svcPlan.TagPlan != nil {
+			pushURL, err := m.verifiedPushURL(ctx, svc)
+			if err != nil {
+				step(svc.Name+":tag", StepStatusFailed, err.Error())
+				if !continueOnError {
+					return result, err
+				}
+				anyFailed = true
+				continue
+			}
+
+			// Bind the tag proof to the branch head as it stands immediately
+			// before the tag mutations; proveClosePostAction re-resolves and
+			// rejects any movement between here and the proof.
+			actionSHA, resolveErr := m.git.ResolveRef(ctx, svc.RepoPath, "refs/heads/"+svc.Branch)
+			if resolveErr != nil || actionSHA == "" {
+				reason := fmt.Sprintf("resolve close action source %s: empty SHA", svc.Branch)
+				if resolveErr != nil {
+					reason = fmt.Sprintf("resolve close action source %s: %v", svc.Branch, resolveErr)
+				}
+				step(svc.Name+":tag", StepStatusFailed, reason)
+				if !continueOnError {
+					if resolveErr != nil {
+						return result, fmt.Errorf("service %s: %w", svc.Name, resolveErr)
+					}
+					return result, errors.New(reason)
+				}
+				anyFailed = true
+				continue
+			}
+
 			tagCreated := false
 			version, tagName, tagErr := m.proposeTag(ctx, params.TaskID, svc, gitflow.BranchTypeRule{TagSource: svcPlan.TagPlan.SourceRef}, svcPlan.SourceBranch, params.TagVersion)
 			if tagErr != nil {
@@ -411,6 +539,29 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				continue
 			}
 
+			// A verified review merge tags the accepted merge SHA; the
+			// configured source ref stays the fallback for direct closes.
+			sourceSHA := reviewMergeSHA
+			if sourceSHA == "" {
+				var resolveErr error
+				sourceSHA, resolveErr = m.git.ResolveRef(ctx, svc.RepoPath, svcPlan.TagPlan.SourceRef)
+				if resolveErr != nil || sourceSHA == "" {
+					reason := fmt.Sprintf("resolve tag source %s: empty SHA", svcPlan.TagPlan.SourceRef)
+					if resolveErr != nil {
+						reason = fmt.Sprintf("resolve tag source %s: %v", svcPlan.TagPlan.SourceRef, resolveErr)
+					}
+					step(svc.Name+":tag", StepStatusFailed, reason)
+					if !continueOnError {
+						if resolveErr != nil {
+							return result, fmt.Errorf("service %s: %w", svc.Name, resolveErr)
+						}
+						return result, errors.New(reason)
+					}
+					anyFailed = true
+					continue
+				}
+			}
+
 			tagExists, tagExistsErr := m.git.TagExists(ctx, svc.RepoPath, tagName)
 			if tagExistsErr != nil {
 				step(svc.Name+":tag", StepStatusFailed, tagExistsErr.Error())
@@ -419,10 +570,8 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				}
 				continue
 			}
-			if tagExists {
-				step(svc.Name+":tag", StepStatusSkipped, fmt.Sprintf("tag %s already exists", tagName))
-			} else {
-				if createErr := m.git.CreateTag(ctx, svc.RepoPath, tagName, svcPlan.TagPlan.SourceRef, m.renderTagMessage(tagName, params.TaskID)); createErr != nil {
+			if !tagExists {
+				if createErr := m.git.CreateTag(ctx, svc.RepoPath, tagName, sourceSHA, m.renderTagMessage(tagName, params.TaskID)); createErr != nil {
 					step(svc.Name+":tag", StepStatusFailed, createErr.Error())
 					if !continueOnError {
 						return result, createErr
@@ -434,10 +583,23 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				step(svc.Name+":tag", StepStatusOK, fmt.Sprintf("created %s (%s)", tagName, version))
 			}
 
+			tagObjectSHA, tagObjErr := m.resolveTagObjectSHA(ctx, svc.RepoPath, tagName, sourceSHA)
+			if tagObjErr != nil {
+				step(svc.Name+":tag", StepStatusFailed, tagObjErr.Error())
+				if !continueOnError {
+					return result, tagObjErr
+				}
+				anyFailed = true
+				continue
+			}
+			if tagExists {
+				step(svc.Name+":tag", StepStatusSkipped, fmt.Sprintf("tag %s verified at %s", tagName, sourceSHA))
+			}
+
 			if svcPlan.TagPlan.Push {
-				if pushTagErr := m.git.PushTag(ctx, svc.WorktreePath, tagName); pushTagErr != nil {
+				if pushTagErr := m.git.PushTag(ctx, svc.WorktreePath, pushURL, tagName, tagObjectSHA); pushTagErr != nil {
 					if tagCreated {
-						if deleteTagErr := m.git.DeleteTag(ctx, svc.RepoPath, tagName); deleteTagErr != nil {
+						if deleteTagErr := m.git.DeleteTagIfUnchanged(ctx, svc.RepoPath, tagName, tagObjectSHA); deleteTagErr != nil {
 							if m.logger != nil {
 								m.logger.WarnContext(ctx, "failed to delete local tag after push failure",
 									slog.String("service", svc.Name),
@@ -455,6 +617,14 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				}
 				step(svc.Name+":push-tag", StepStatusOK, "pushed "+tagName)
 			}
+			if proveErr := m.proveClosePostAction(ctx, params.TaskID, svc, closePostActionTag, actionSHA); proveErr != nil {
+				step(svc.Name+":tag-proof", StepStatusFailed, proveErr.Error())
+				if !continueOnError {
+					return result, proveErr
+				}
+				anyFailed = true
+				continue
+			}
 		}
 
 		if svcPlan.PipelinePlan != nil {
@@ -463,6 +633,24 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				step(svc.Name+":pipeline", StepStatusFailed, clientErr.Error())
 				if !continueOnError {
 					return result, clientErr
+				}
+				continue
+			}
+
+			// Bind the pipeline proof to the branch head immediately before
+			// the trigger, matching the tag path's action-source binding.
+			pipelineSHA, resolveErr := m.git.ResolveRef(ctx, svc.RepoPath, "refs/heads/"+svc.Branch)
+			if resolveErr != nil || pipelineSHA == "" {
+				reason := fmt.Sprintf("resolve close action source %s: empty SHA", svc.Branch)
+				if resolveErr != nil {
+					reason = fmt.Sprintf("resolve close action source %s: %v", svc.Branch, resolveErr)
+				}
+				step(svc.Name+":pipeline", StepStatusFailed, reason)
+				if !continueOnError {
+					if resolveErr != nil {
+						return result, fmt.Errorf("service %s: %w", svc.Name, resolveErr)
+					}
+					return result, errors.New(reason)
 				}
 				continue
 			}
@@ -480,21 +668,18 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				continue
 			}
 			step(svc.Name+":pipeline", StepStatusOK, "triggered")
-		}
-
-		if svcRule, ok := m.flow.BranchTypes[result.BranchType]; ok && svcRule.DeleteSourceBranchAfterMerge {
-			if deleteErr := m.git.DeleteBranch(ctx, svc.RepoPath, svcPlan.SourceBranch); deleteErr != nil {
-				step(svc.Name+":delete-source", StepStatusFailed, deleteErr.Error())
+			if proveErr := m.proveClosePostAction(ctx, params.TaskID, svc, closePostActionPipeline, pipelineSHA); proveErr != nil {
+				step(svc.Name+":pipeline-proof", StepStatusFailed, proveErr.Error())
 				if !continueOnError {
-					return result, deleteErr
+					return result, proveErr
 				}
+				anyFailed = true
 				continue
 			}
-			step(svc.Name+":delete-source", StepStatusOK, "deleted local branch "+svcPlan.SourceBranch)
 		}
 	}
 
-	result.Success = !anyFailed
+	result.Success = !anyFailed && !result.Waiting
 	return result, nil
 }
 

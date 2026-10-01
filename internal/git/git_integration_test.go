@@ -88,6 +88,91 @@ func TestReleaseCleanupPrimitives_Integration(t *testing.T) {
 	}
 }
 
+func TestDeleteBranchIfUnchanged_GuardedTransaction_Integration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not in PATH, skipping integration test")
+	}
+	root := t.TempDir()
+	remote := filepath.Join(root, "origin.git")
+	repo := filepath.Join(root, "repo")
+	mustGit(t, root, "init", "--bare", remote)
+	mustGit(t, root, "clone", remote, repo)
+	mustGit(t, repo, "config", "user.email", "test@example.com")
+	mustGit(t, repo, "config", "user.name", "Test User")
+	writeFile(t, filepath.Join(repo, "file"), "one")
+	mustGit(t, repo, "add", "file")
+	mustGit(t, repo, "commit", "-m", "one")
+	mustGit(t, repo, "push", "origin", "master")
+	mustGit(t, repo, "checkout", "-b", "feature/delete")
+	writeFile(t, filepath.Join(repo, "file"), "two")
+	mustGit(t, repo, "commit", "-am", "two")
+	mustGit(t, repo, "push", "origin", "feature/delete", "master")
+
+	client := NewCommandClient(slog.Default())
+	sourceSHA, err := client.ResolveRef(t.Context(), repo, "refs/heads/feature/delete")
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetSHA, err := client.ResolveRef(t.Context(), repo, "refs/remotes/origin/master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sourceSHA == targetSHA {
+		t.Fatal("fixture source and target OIDs must differ")
+	}
+	guard := RefGuard{Ref: "refs/remotes/origin/master", OID: targetSHA}
+
+	// Target mirror moved: transaction aborts and the source branch survives.
+	mustGit(t, repo, "update-ref", "refs/remotes/origin/master", sourceSHA)
+	if err := client.DeleteBranchIfUnchanged(t.Context(), repo, "feature/delete", sourceSHA, guard); err == nil {
+		t.Fatal("source deleted after target identity changed")
+	}
+	if sha, err := client.ResolveRef(t.Context(), repo, "refs/heads/feature/delete"); err != nil || sha != sourceSHA {
+		t.Fatalf("source ref after aborted delete = %q, %v", sha, err)
+	}
+	mustGit(t, repo, "update-ref", "refs/remotes/origin/master", targetSHA)
+
+	// Source moved: leased delete fails even with unchanged target.
+	mustGit(t, repo, "branch", "feature/other", "master")
+	otherSHA, err := client.ResolveRef(t.Context(), repo, "refs/heads/feature/other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherSHA == sourceSHA {
+		t.Fatal("fixture other OID must differ from source OID")
+	}
+	if err := client.DeleteBranchIfUnchanged(t.Context(), repo, "feature/delete", otherSHA, guard); err == nil {
+		t.Fatal("source deleted under stale source lease")
+	}
+
+	// Missing guard ref fails closed instead of deleting.
+	if err := client.DeleteBranchIfUnchanged(t.Context(), repo, "feature/delete", sourceSHA,
+		RefGuard{Ref: "refs/remotes/origin/missing", OID: targetSHA}); err == nil {
+		t.Fatal("source deleted with missing guard ref")
+	}
+
+	// Unchanged target and source: one transaction verifies and deletes.
+	if err := client.DeleteBranchIfUnchanged(t.Context(), repo, "feature/delete", sourceSHA, guard); err != nil {
+		t.Fatal(err)
+	}
+	if sha, err := client.ResolveRef(t.Context(), repo, "refs/heads/feature/delete"); err == nil || sha != "" {
+		t.Fatalf("source ref after guarded delete = %q, %v", sha, err)
+	}
+	if sha, err := client.ResolveRef(t.Context(), repo, "refs/remotes/origin/master"); err != nil || sha != targetSHA {
+		t.Fatalf("guard ref moved: %q, %v", sha, err)
+	}
+
+	// Symbolic guard refs are rejected outright.
+	mustGit(t, repo, "symbolic-ref", "refs/remotes/origin/sym", "refs/remotes/origin/master")
+	if err := client.DeleteBranchIfUnchanged(t.Context(), repo, "feature/other", otherSHA,
+		RefGuard{Ref: "refs/remotes/origin/sym", OID: targetSHA}); err == nil {
+		t.Fatal("symbolic guard ref accepted")
+	}
+	if sha, err := client.ResolveRef(t.Context(), repo, "refs/heads/feature/other"); err != nil || sha != otherSHA {
+		t.Fatalf("source ref after symbolic guard rejection = %q, %v", sha, err)
+	}
+}
+
 func TestCommandClient_Integration(t *testing.T) {
 
 	if _, err := exec.LookPath("git"); err != nil {
@@ -451,13 +536,35 @@ func TestCommandClient_Integration(t *testing.T) {
 			t.Fatalf("tag object type = %q, want tag", strings.TrimSpace(string(objTypeOut)))
 		}
 
-		if err := client.PushTag(ctx, repoDir, "v1.2.0"); err != nil {
+		tagObjSHA, err := client.ResolveRef(ctx, repoDir, "refs/tags/v1.2.0")
+		if err != nil {
+			t.Fatalf("ResolveRef(refs/tags/v1.2.0) error: %v", err)
+		}
+
+		if err := client.PushTag(ctx, repoDir, remoteDir, "v1.2.0", tagObjSHA); err != nil {
 			t.Fatalf("PushTag() error: %v", err)
 		}
 		remoteTagOut, err := exec.Command("git", "-C", remoteDir, "show-ref", "--tags", "v1.2.0").CombinedOutput()
 		if err != nil {
 			t.Fatalf("remote show-ref for tag failed: %v\n%s", err, remoteTagOut)
 		}
+
+		t.Run("PushTag_with_wrong_OID_rejected_and_remote_unchanged", func(t *testing.T) {
+			wrongSHA, err := client.ResolveRef(ctx, repoDir, baseBranch)
+			if err != nil {
+				t.Fatalf("ResolveRef(baseBranch) error: %v", err)
+			}
+			if err := client.PushTag(ctx, repoDir, remoteDir, "v1.2.0", wrongSHA); err == nil {
+				t.Fatal("PushTag with mismatched OID error = nil, want rejection")
+			}
+			remoteAfter, err := exec.Command("git", "-C", remoteDir, "rev-parse", "refs/tags/v1.2.0").Output()
+			if err != nil {
+				t.Fatalf("rev-parse remote tag after rejected push: %v", err)
+			}
+			if strings.TrimSpace(string(remoteAfter)) != tagObjSHA {
+				t.Fatalf("remote tag moved after rejected push: got %s want %s", strings.TrimSpace(string(remoteAfter)), tagObjSHA)
+			}
+		})
 
 		if err := client.CreateTag(ctx, repoDir, "v1.3.0", baseBranch, "Release v1.3.0"); err != nil {
 			t.Fatalf("CreateTag v1.3.0 error: %v", err)

@@ -413,6 +413,9 @@ fi
 	if got.SupportsSHAPin {
 		t.Fatalf("SupportsSHAPin = true, want false")
 	}
+	if got.SupportsTargetBinding {
+		t.Fatalf("SupportsTargetBinding = true, want false: glab pins head only")
+	}
 }
 
 func TestGlabMRReadinessByNumber_ViewsMRAndMapsFreshHeadSHA(t *testing.T) {
@@ -552,6 +555,46 @@ fi
 	}
 	if !strings.Contains(string(args), "mr merge 7 --auto-merge=false --yes --repo group/proj --sha abc123") {
 		t.Fatalf("merge argv = %q, want SHA pin", args)
+	}
+}
+
+func TestGlabMergeMR_RejectsTargetBinding(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args")
+	fake := filepath.Join(binDir, "glab")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$ARGS_FILE"
+if [ "$1 $2 $3" = "mr merge --help" ]; then
+  printf '%s' '--sha'
+fi
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake glab: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("ARGS_FILE", argsFile)
+
+	for _, tc := range []struct {
+		name   string
+		params MergeMRParams
+	}{
+		{name: "target branch", params: MergeMRParams{Repo: "group/proj", Number: 7, ExpectedHeadSHA: "abc123", ExpectedTargetBranch: "main"}},
+		{name: "target SHA", params: MergeMRParams{Repo: "group/proj", Number: 7, ExpectedHeadSHA: "abc123", ExpectedTargetSHA: "base456"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewGlabClient(t.TempDir()).MergeMR(t.Context(), tc.params)
+			var ferr *ForgeError
+			if err == nil || !errors.As(err, &ferr) {
+				t.Fatalf("MergeMR() err = %v, want *ForgeError", err)
+			}
+			args, readErr := os.ReadFile(argsFile)
+			if readErr != nil && !os.IsNotExist(readErr) {
+				t.Fatalf("read args: %v", readErr)
+			}
+			if strings.Contains(string(args), "mr merge 7") {
+				t.Fatalf("glab executed merge despite unsupported target binding: %q", args)
+			}
+		})
 	}
 }
 

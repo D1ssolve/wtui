@@ -110,7 +110,7 @@ func localHeadTestManager(t *testing.T) (*manager, *mockGitClient, *releaseTaskM
 	m, _ := newReleasePlanTestManager(t, g)
 	enableReleasePrepareTaskMerge(t, m)
 	f := newReleaseTaskMergeForge()
-	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "remote-head", Ready: true, SupportsSHAPin: true}
+	f.readiness[1] = forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/APP-1", TargetBranch: "develop", HeadSHA: "remote-head", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}
 	seedReleasePlanTasks(t, m.cfg.TasksRoot, g, releasePlanTaskService{TaskID: "APP-1", ServiceName: "api", Branch: "feature/APP-1", RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")})
 	g.resolveRefFn = func(path, ref string) (string, error) {

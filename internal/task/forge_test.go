@@ -13,9 +13,14 @@ import (
 )
 
 type mockForgeClient struct {
-	createMRFn       func(ctx context.Context, params forge.CreateMRParams) (forge.MRInfo, error)
-	mrStatusFn       func(ctx context.Context, sourceBranch, repo string) ([]forge.MRInfo, error)
-	pipelineStatusFn func(ctx context.Context, branch, repo string) ([]forge.PipelineStatus, error)
+	createMRFn            func(ctx context.Context, params forge.CreateMRParams) (forge.MRInfo, error)
+	mrStatusFn            func(ctx context.Context, sourceBranch, repo string) ([]forge.MRInfo, error)
+	mrHistoryFn           func(ctx context.Context, sourceBranch, repo string) ([]forge.MRInfo, error)
+	mrReadinessByNumberFn func(ctx context.Context, number int, repo, worktreePath string) (forge.MRReadiness, error)
+	pipelineStatusFn      func(ctx context.Context, branch, repo string) ([]forge.PipelineStatus, error)
+	triggerPipelineFn     func(ctx context.Context, params forge.TriggerPipelineParams) error
+
+	createdCount *int
 }
 
 func (m *mockForgeClient) Provider() forge.ForgeProvider { return forge.ForgeProviderGitLab }
@@ -24,10 +29,20 @@ func (m *mockForgeClient) IsAvailable(_ context.Context) bool {
 }
 
 func (m *mockForgeClient) CreateMR(ctx context.Context, params forge.CreateMRParams) (forge.MRInfo, error) {
+	if m.createdCount != nil {
+		*m.createdCount++
+	}
 	if m.createMRFn != nil {
 		return m.createMRFn(ctx, params)
 	}
 	return forge.MRInfo{}, nil
+}
+
+func (m *mockForgeClient) MRHistory(ctx context.Context, sourceBranch, repo string) ([]forge.MRInfo, error) {
+	if m.mrHistoryFn != nil {
+		return m.mrHistoryFn(ctx, sourceBranch, repo)
+	}
+	return nil, nil
 }
 
 func (m *mockForgeClient) MRStatus(ctx context.Context, sourceBranch, repo string) ([]forge.MRInfo, error) {
@@ -42,7 +57,10 @@ func (m *mockForgeClient) PipelineStatus(ctx context.Context, branch, repo strin
 	}
 	return nil, nil
 }
-func (m *mockForgeClient) TriggerPipeline(_ context.Context, _ forge.TriggerPipelineParams) error {
+func (m *mockForgeClient) TriggerPipeline(ctx context.Context, params forge.TriggerPipelineParams) error {
+	if m.triggerPipelineFn != nil {
+		return m.triggerPipelineFn(ctx, params)
+	}
 	return nil
 }
 func (m *mockForgeClient) ListIssues(_ context.Context, _ forge.ListIssuesParams) ([]forge.IssueInfo, error) {

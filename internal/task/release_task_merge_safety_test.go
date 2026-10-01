@@ -38,7 +38,7 @@ func newTaskMergeSafetyFixture(t *testing.T, targets []string) *taskMergeSafetyF
 			ReleaseBranch: "release/1.2.3", Version: "1.2.3", Tag: "v1.2.3",
 			FeatureBranches: []domain.ReleaseFeatureBranch{{TaskID: id, ServiceName: name, Branch: "feature/" + id, WorktreePath: filepath.Join(x.m.cfg.TasksRoot, id, name)}},
 		})
-		x.forge.readiness[n] = forge.MRReadiness{Number: n, State: "open", SourceBranch: "feature/" + id, TargetBranch: target, HeadSHA: fmt.Sprintf("head-%d", n), Ready: true, SupportsSHAPin: true}
+		x.forge.readiness[n] = forge.MRReadiness{Number: n, State: "open", SourceBranch: "feature/" + id, TargetBranch: target, HeadSHA: fmt.Sprintf("head-%d", n), Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 	}
 	var err error
 	heads := map[string]string{}
@@ -84,6 +84,32 @@ func TestIntegrateReleaseTaskMRs_RequiresSHAPinning(t *testing.T) {
 	}
 	if stored.Status != domain.ReleaseStatusTaskMergeBlocked || stored.Services[0].FeatureBranches[0].TaskMergeStatus != taskMergeStatusPending {
 		t.Fatalf("unpinned release was not blocked before attempting: %+v", stored)
+	}
+}
+
+func TestIntegrateReleaseTaskMRs_RequiresTargetBinding(t *testing.T) {
+	// Given
+	x := newTaskMergeSafetyFixture(t, []string{"develop"})
+	mr := x.forge.readiness[1]
+	mr.SupportsTargetBinding = false
+	x.forge.readiness[1] = mr
+
+	// When
+	err := x.m.integrateReleaseTaskMRs(t.Context(), &x.release, &x.plan, nil)
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "target binding") {
+		t.Errorf("error = %v, want explicit target binding rejection", err)
+	}
+	if x.forge.mergeCalls != 0 {
+		t.Errorf("merge calls = %d, want zero", x.forge.mergeCalls)
+	}
+	stored, err := x.m.GetRelease(t.Context(), x.release.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != domain.ReleaseStatusTaskMergeBlocked || stored.Services[0].FeatureBranches[0].TaskMergeStatus != taskMergeStatusPending {
+		t.Fatalf("target-unbound release was not blocked before attempting: %+v", stored)
 	}
 }
 

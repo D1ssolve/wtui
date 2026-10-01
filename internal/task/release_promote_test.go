@@ -71,6 +71,9 @@ func TestPromoteRelease_CreatesProductionMRsAndPersists(t *testing.T) {
 		if svc.ProductionMR == nil || svc.ProductionMR.Number == 0 || svc.ProductionMR.SourceSHA != svc.ReleaseBranch+"-sha" || svc.ProductionMR.State != "open" {
 			t.Fatalf("service[%d].ProductionMR = %#v", i, svc.ProductionMR)
 		}
+		if svc.ProductionMR.Repo != "gitlab.com/group/repo" || svc.ProductionMR.ProviderHost != "gitlab.com" {
+			t.Fatalf("service[%d].ProductionMR repository identity = %q/%q, want gitlab.com/group/repo/gitlab.com", i, svc.ProductionMR.Repo, svc.ProductionMR.ProviderHost)
+		}
 		params := client.creates[i]
 		if params.SourceBranch != svc.ReleaseBranch || params.TargetBranch != "master" || params.Repo != "gitlab.com/group/repo" {
 			t.Fatalf("create[%d] = %#v", i, params)

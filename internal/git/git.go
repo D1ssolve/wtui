@@ -18,6 +18,13 @@ import (
 
 const subprocessTimeout = 30 * time.Second
 
+// RefGuard pins one full local ref to an exact OID so a ref-store
+// transaction can verify it atomically alongside another ref update.
+type RefGuard struct {
+	Ref string
+	OID string
+}
+
 type Client interface {
 	IsValidRepo(ctx context.Context, repoPath string) error
 
@@ -71,7 +78,18 @@ type Client interface {
 
 	Fetch(ctx context.Context, worktreePath string) error
 
+	// EnsureCommit guarantees commit sha is readable from repoPath, fetching
+	// only that object from origin when missing. No local or remote refs are
+	// moved; a fetch failure is returned so callers fail closed.
+	EnsureCommit(ctx context.Context, repoPath, sha string) error
+
 	RemoteURL(ctx context.Context, worktreePath, remote string) (string, error)
+
+	// PushURL returns the destination `git push` uses for the remote: the
+	// configured pushurl when present, the fetch URL otherwise. Callers that
+	// bind proofs to a remote identity must verify this matches RemoteURL
+	// before pushing.
+	PushURL(ctx context.Context, worktreePath, remote string) (string, error)
 
 	Checkout(ctx context.Context, worktreePath, branch string) error
 
@@ -95,9 +113,16 @@ type Client interface {
 
 	CreateTag(ctx context.Context, repoPath, tag, ref, message string) error
 
-	PushTag(ctx context.Context, worktreePath, tag string) error
+	// PushTag publishes tagObjectOID to refs/tags/<tag> on the captured
+	// remote URL (never a mutable remote name) without force; a tag that
+	// moved after verification is rejected by the remote.
+	PushTag(ctx context.Context, worktreePath, capturedRemoteURL, tag, tagObjectOID string) error
 
 	DeleteTag(ctx context.Context, repoPath, tag string) error
+
+	// DeleteTagIfUnchanged deletes refs/tags/<tag> only when it still points at
+	// expectedOID, so a concurrent replacement is never removed.
+	DeleteTagIfUnchanged(ctx context.Context, repoPath, tag, expectedOID string) error
 
 	ListTags(ctx context.Context, repoPath string) ([]domain.TagInfo, error)
 
@@ -106,9 +131,22 @@ type Client interface {
 	LatestSemverTag(ctx context.Context, repoPath, branch string) (string, error)
 
 	DeleteBranch(ctx context.Context, repoPath, branch string) error
-	DeleteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error
+	// DeleteBranchIfUnchanged deletes refs/heads/<branch> only when it still
+	// points at expectedSHA. When guards is non-empty, every guard ref is
+	// verified against its exact OID in the same update-ref --stdin
+	// transaction as the source deletion, so a target identity change aborts
+	// the delete atomically. Guard refs must be full refs in the same local
+	// ref store as the source branch; symbolic refs are rejected.
+	DeleteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string, guards ...RefGuard) error
 	DeleteRemoteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error
-	MoveRemoteBranchIfUnchanged(ctx context.Context, repoPath, sourceBranch, targetBranch, sourceSHA, targetSHA string) error
+
+	// PushRefWithLease pushes exactOID to the full remote targetRef on the
+	// captured remote URL (never a mutable remote name) only when the lease
+	// holds: an empty leaseOID requires leaseRef to be absent, a non-empty
+	// leaseOID requires leaseRef to point at it exactly. A failed lease
+	// fails the whole push, so a conflicting or moved target is never
+	// overwritten.
+	PushRefWithLease(ctx context.Context, repoPath, capturedRemoteURL, targetRef, exactOID, leaseRef, leaseOID string) error
 }
 
 type CommandClient struct {
@@ -450,6 +488,34 @@ func (c *CommandClient) RemoteURL(ctx context.Context, worktreePath, remote stri
 	return strings.TrimSpace(out), nil
 }
 
+// PushURL resolves the actual push destination. `git remote get-url --push
+// --all` prints every configured push URL (one per line); a remote with
+// several push destinations has no single verifiable identity, so it fails
+// closed.
+func (c *CommandClient) PushURL(ctx context.Context, worktreePath, remote string) (string, error) {
+	if strings.TrimSpace(remote) == "" {
+		remote = "origin"
+	}
+	out, err := c.execGit(ctx, "-C", worktreePath, "remote", "get-url", "--push", "--all", remote)
+	if err != nil {
+		return "", err
+	}
+	var urls []string
+	for line := range strings.SplitSeq(out, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			urls = append(urls, trimmed)
+		}
+	}
+	switch len(urls) {
+	case 0:
+		return "", errors.New("resolve push URL: empty output")
+	case 1:
+		return urls[0], nil
+	default:
+		return "", fmt.Errorf("resolve push URL: remote %s has multiple push URLs %v", remote, urls)
+	}
+}
+
 func (c *CommandClient) Checkout(ctx context.Context, worktreePath, branch string) error {
 	_, err := c.execGit(ctx, "-C", worktreePath, "checkout", branch)
 	return err
@@ -575,7 +641,7 @@ func (c *CommandClient) DeleteBranch(ctx context.Context, repoPath, branch strin
 	return err
 }
 
-func (c *CommandClient) DeleteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error {
+func (c *CommandClient) DeleteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string, guards ...RefGuard) error {
 	ref, err := branchRef(branch)
 	if err != nil {
 		return err
@@ -583,8 +649,63 @@ func (c *CommandClient) DeleteBranchIfUnchanged(ctx context.Context, repoPath, b
 	if !validObjectID(expectedSHA) {
 		return fmt.Errorf("invalid expected SHA %q", expectedSHA)
 	}
-	_, err = c.execGit(ctx, "-C", repoPath, "update-ref", "-d", ref, expectedSHA)
-	return err
+	if len(guards) == 0 {
+		_, err = c.execGit(ctx, "-C", repoPath, "update-ref", "-d", ref, expectedSHA)
+		return err
+	}
+	if err := c.rejectSymbolicGuardRefs(ctx, repoPath, guards); err != nil {
+		return err
+	}
+	script := guardedDeleteScript(ref, expectedSHA, guards)
+	return c.execGitStdin(ctx, repoPath, script, "update-ref", "--stdin")
+}
+
+func guardedDeleteScript(sourceRef, expectedSHA string, guards []RefGuard) string {
+	var b strings.Builder
+	for _, g := range guards {
+		fmt.Fprintf(&b, "verify %s %s\n", g.Ref, g.OID)
+	}
+	fmt.Fprintf(&b, "delete %s %s\n", sourceRef, expectedSHA)
+	return b.String()
+}
+
+func (c *CommandClient) rejectSymbolicGuardRefs(ctx context.Context, repoPath string, guards []RefGuard) error {
+	for _, g := range guards {
+		if !validFullRef(g.Ref) {
+			return fmt.Errorf("invalid guard ref %q", g.Ref)
+		}
+		if !validObjectID(g.OID) {
+			return fmt.Errorf("invalid guard OID %q", g.OID)
+		}
+		if _, err := c.execGit(ctx, "-C", repoPath, "symbolic-ref", "-q", g.Ref); err == nil {
+			return fmt.Errorf("guard ref %s is symbolic", g.Ref)
+		}
+	}
+	return nil
+}
+
+func (c *CommandClient) execGitStdin(ctx context.Context, repoPath, stdin string, args ...string) error {
+	ctx, cancel := context.WithTimeout(ctx, subprocessTimeout)
+	defer cancel()
+
+	full := append([]string{"-C", repoPath}, args...)
+	argv := append([]string{"git"}, full...)
+
+	c.logger.InfoContext(ctx, "exec git", slog.Any("argv", argv))
+
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.Stdin = strings.NewReader(stdin)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		exitCode := 1
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		}
+		return &ExecError{Argv: argv, ExitCode: exitCode, Stderr: stderr.String()}
+	}
+	return nil
 }
 
 func (c *CommandClient) DeleteRemoteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error {
@@ -599,31 +720,38 @@ func (c *CommandClient) DeleteRemoteBranchIfUnchanged(ctx context.Context, repoP
 	return err
 }
 
-func (c *CommandClient) MoveRemoteBranchIfUnchanged(ctx context.Context, repoPath, sourceBranch, targetBranch, sourceSHA, targetSHA string) error {
-	sourceRef, err := branchRef(sourceBranch)
-	if err != nil {
-		return err
+func (c *CommandClient) PushRefWithLease(ctx context.Context, repoPath, capturedRemoteURL, targetRef, exactOID, leaseRef, leaseOID string) error {
+	if !validPushRemoteURL(capturedRemoteURL) {
+		return fmt.Errorf("invalid push remote URL %q", capturedRemoteURL)
 	}
-	targetRef, err := branchRef(targetBranch)
-	if err != nil {
-		return err
+	if !validRemoteRef(targetRef) {
+		return fmt.Errorf("invalid target ref %q", targetRef)
 	}
-	if !validObjectID(sourceSHA) {
-		return fmt.Errorf("invalid source SHA %q", sourceSHA)
+	if !validFullRef(leaseRef) {
+		return fmt.Errorf("invalid lease ref %q", leaseRef)
 	}
-	if !validObjectID(targetSHA) {
-		return fmt.Errorf("invalid target SHA %q", targetSHA)
+	if !validObjectID(exactOID) {
+		return fmt.Errorf("invalid OID %q", exactOID)
 	}
-	_, err = c.execGit(ctx,
+	if leaseOID != "" && !validObjectID(leaseOID) {
+		return fmt.Errorf("invalid lease OID %q", leaseOID)
+	}
+	_, err := c.execGit(ctx,
 		"-C", repoPath,
-		"push", "--atomic",
-		"--force-with-lease="+sourceRef+":"+sourceSHA,
-		"--force-with-lease="+targetRef+":"+targetSHA,
-		"origin",
-		targetSHA+":"+targetRef,
-		":"+sourceRef,
+		"push",
+		"--force-with-lease="+leaseRef+":"+leaseOID,
+		"--", capturedRemoteURL,
+		exactOID+":"+targetRef,
 	)
 	return err
+}
+
+// validPushRemoteURL reports whether captured is safe to use as an explicit
+// push destination: nonempty after trimming and not option-like, so it can
+// never be reinterpreted as a git flag.
+func validPushRemoteURL(captured string) bool {
+	trimmed := strings.TrimSpace(captured)
+	return trimmed != "" && !strings.HasPrefix(trimmed, "-")
 }
 
 func branchRef(branch string) (string, error) {
@@ -632,6 +760,26 @@ func branchRef(branch string) (string, error) {
 		return "", fmt.Errorf("invalid branch %q", branch)
 	}
 	return ref, nil
+}
+
+func validFullRef(ref string) bool {
+	if !strings.HasPrefix(ref, "refs/") || strings.HasSuffix(ref, "/") {
+		return false
+	}
+	if strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.ContainsAny(ref, " ~^:?*[\\") {
+		return false
+	}
+	for _, seg := range strings.Split(ref, "/") {
+		if seg == "" || strings.HasPrefix(seg, ".") || strings.HasSuffix(seg, ".") || strings.HasPrefix(seg, "-") {
+			return false
+		}
+		for _, ch := range seg {
+			if ch < 0x20 || ch == 0x7f {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validObjectID(sha string) bool {

@@ -152,17 +152,18 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 	}
 	svc.IntegrationWorktreePath = integrationPath
 	keepIntegration := m.cfg.Release != nil && m.cfg.Release.KeepIntegrationWorktrees != nil && *m.cfg.Release.KeepIntegrationWorktrees
-	cleanupIntegration := func() {
-		commonDir, cleanupErr := m.git.CommonDir(ctx, integrationPath)
-		if cleanupErr == nil {
-			_ = m.git.RemoveWorktree(ctx, commonDir, integrationPath, true)
+	cleanupIntegration := func() error {
+		if err := m.removeOwnedIntegrationWorktree(ctx, release, svc, integrationPath, svc.PostIntegrationSHA); err != nil {
+			return err
 		}
-		_ = os.RemoveAll(integrationPath)
 		svc.IntegrationWorktreePath = ""
+		return nil
 	}
 	defer func() {
 		if svc.IntegrationWorktreePath != "" && !keepIntegration {
-			cleanupIntegration()
+			// Failure keeps IntegrationWorktreePath set so the manifest
+			// stays truthful for retry instead of losing the path.
+			_ = cleanupIntegration()
 		}
 	}()
 
@@ -284,10 +285,12 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 
 	if !keepIntegration {
 		if err := m.persistCheckpoint(release, "cleanup_prepare", nil); err != nil {
-			cleanupIntegration()
+			_ = cleanupIntegration()
 			return err
 		}
-		cleanupIntegration()
+		if err := cleanupIntegration(); err != nil {
+			return err
+		}
 	}
 
 	svc.Status = domain.ReleaseStatusPrepared

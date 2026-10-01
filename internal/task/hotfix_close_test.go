@@ -3,7 +3,9 @@ package task
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,12 +26,15 @@ func TestHotfixClose_TagRetryPinsVersionAndMergeSHA(t *testing.T) {
 		return nil
 	}
 	g.remoteRefSHAFn = func(_, ref string) (string, error) {
+		if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+			return "source", nil
+		}
 		if remote {
 			return "merge", nil
 		}
 		return "", nil
 	}
-	g.pushTagFn = func(string, string) error { return errors.New("network failure") }
+	g.pushTagFn = func(_, _, _, _ string) error { return errors.New("network failure") }
 	p, err := m.PlanCloseTask(t.Context(), "H")
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +50,7 @@ func TestHotfixClose_TagRetryPinsVersionAndMergeSHA(t *testing.T) {
 	if p.Services[0].TagPlan.Version != "1.2.4" || !p.Services[0].TagPlan.Locked {
 		t.Fatalf("retry lost tag: %+v", p.Services[0].TagPlan)
 	}
-	g.pushTagFn = func(string, string) error { remote = true; return nil }
+	g.pushTagFn = func(_, _, _, _ string) error { remote = true; return nil }
 	r, err := m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", Fingerprint: p.Fingerprint})
 	if err != nil || !r.Success {
 		t.Fatalf("retry: %+v %v", r, err)
@@ -56,6 +61,193 @@ func TestHotfixClose_TagRetryPinsVersionAndMergeSHA(t *testing.T) {
 	}
 	if g.createTagCalls != 1 || g.pushTagCalls != 2 || g.deleteTagCalls != 0 {
 		t.Fatalf("create/push/delete=%d/%d/%d", g.createTagCalls, g.pushTagCalls, g.deleteTagCalls)
+	}
+}
+
+func TestHotfixClose_SuccessProvesClosePostActions(t *testing.T) {
+	m, g, f := hotfixManager(t)
+	f.requests = append(f.requests, forge.MRReadiness{Number: 2, State: "merged", SourceBranch: "hotfix/H", TargetBranch: "develop", HeadSHA: "source", MergedSHA: "develop-merge"})
+	g.createTagFn = func(_ string, _, _, _ string) error {
+		g.tagExistsRes = true
+		return nil
+	}
+	g.remoteRefSHAFn = func(_, ref string) (string, error) {
+		if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+			return "source", nil
+		}
+		return "merge", nil
+	}
+
+	p, err := m.PlanCloseTask(t.Context(), "H")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", Fingerprint: p.Fingerprint, TagVersion: "1.2.4"})
+	if err != nil || !r.Success {
+		t.Fatalf("close: %+v %v", r, err)
+	}
+
+	proof, err := m.loadClosePostActionProof("H")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proof.Services) != 1 || proof.Services[0].Service != "svc" || proof.Services[0].Branch != "hotfix/H" || proof.Services[0].SourceSHA != "source" {
+		t.Fatalf("proof = %+v", proof.Services)
+	}
+	if len(proof.Services[0].Actions) != 1 || proof.Services[0].Actions[0] != closePostActionTag {
+		t.Fatalf("actions = %v, want [tag]", proof.Services[0].Actions)
+	}
+	if _, err := m.loadHotfixCheckpoint("H"); err != nil {
+		t.Fatalf("hotfix checkpoint semantics changed: %v", err)
+	}
+}
+
+func TestHotfixClose_WaitingCloseNeverProvesClosePostActions(t *testing.T) {
+	m, _, f := hotfixManager(t)
+	f.requests[0].State = "open"
+
+	p, err := m.PlanCloseTask(t.Context(), "H")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", Fingerprint: p.Fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Waiting || r.Success {
+		t.Fatalf("result = %+v", r)
+	}
+
+	proof, err := m.loadClosePostActionProof("H")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proof.Services) != 0 {
+		t.Fatalf("waiting close persisted proof: %+v", proof.Services)
+	}
+}
+
+func TestHotfixClose_DonePipelineRetryRecoversProofWithoutRetrigger(t *testing.T) {
+	m, g, f := hotfixManager(t)
+	rule := m.flow.BranchTypes[gitflow.BranchTypeHotfix]
+	rule.TriggerPipelineOnClose = true
+	m.flow.BranchTypes[gitflow.BranchTypeHotfix] = rule
+	f.requests = append(f.requests, forge.MRReadiness{Number: 2, State: "merged", SourceBranch: "hotfix/H", TargetBranch: "develop", HeadSHA: "source", MergedSHA: "develop-merge"})
+	g.createTagFn = func(_ string, _, _, _ string) error {
+		g.tagExistsRes = true
+		return nil
+	}
+	g.remoteRefSHAFn = func(_, ref string) (string, error) {
+		if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+			return "source", nil
+		}
+		return "merge", nil
+	}
+	triggered := 0
+	f.triggerPipelineFn = func(_ context.Context, _ forge.TriggerPipelineParams) error {
+		triggered++
+		return nil
+	}
+
+	p, err := m.PlanCloseTask(t.Context(), "H")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", Fingerprint: p.Fingerprint, TagVersion: "1.2.4"})
+	if err != nil || !r.Success {
+		t.Fatalf("close: %+v %v", r, err)
+	}
+	if triggered != 1 {
+		t.Fatalf("pipeline triggered %d times, want 1", triggered)
+	}
+	proof, err := m.loadClosePostActionProof("H")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actions := proofActions(t, proof, "svc"); !slices.Contains(actions, closePostActionPipeline) {
+		t.Fatalf("actions = %v, want pipeline proof after done", actions)
+	}
+
+	// Proof lost (e.g. crash after checkpoint save): a previously completed
+	// pipeline must recreate it on retry without launching another run.
+	if err := os.Remove(m.closePostActionsProofPath("H")); err != nil {
+		t.Fatal(err)
+	}
+	r, err = m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", TagVersion: "1.2.4"})
+	if err != nil || !r.Success {
+		t.Fatalf("retry: %+v %v", r, err)
+	}
+	if triggered != 1 {
+		t.Fatalf("pipeline retriggered on retry: %d triggers", triggered)
+	}
+	proof, err = m.loadClosePostActionProof("H")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actions := proofActions(t, proof, "svc"); !slices.Contains(actions, closePostActionPipeline) || !slices.Contains(actions, closePostActionTag) {
+		t.Fatalf("recovered actions = %v, want tag and pipeline", actions)
+	}
+}
+
+func TestHotfixClose_DonePipelineProofPersistenceFailureFails(t *testing.T) {
+	m, g, f := hotfixManager(t)
+	rule := m.flow.BranchTypes[gitflow.BranchTypeHotfix]
+	rule.TriggerPipelineOnClose = true
+	m.flow.BranchTypes[gitflow.BranchTypeHotfix] = rule
+	f.requests = append(f.requests, forge.MRReadiness{Number: 2, State: "merged", SourceBranch: "hotfix/H", TargetBranch: "develop", HeadSHA: "source", MergedSHA: "develop-merge"})
+	g.createTagFn = func(_ string, _, _, _ string) error {
+		g.tagExistsRes = true
+		return nil
+	}
+	g.remoteRefSHAFn = func(_, ref string) (string, error) {
+		if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+			return "source", nil
+		}
+		return "merge", nil
+	}
+	triggered := 0
+	f.triggerPipelineFn = func(_ context.Context, _ forge.TriggerPipelineParams) error {
+		triggered++
+		return nil
+	}
+
+	p, err := m.PlanCloseTask(t.Context(), "H")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", Fingerprint: p.Fingerprint, TagVersion: "1.2.4"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Corrupt proof: the done pipeline cannot prove persistence, so the retry
+	// must fail instead of silently skipping the durable record.
+	if err := os.WriteFile(m.closePostActionsProofPath("H"), []byte("{corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", TagVersion: "1.2.4"}); err == nil {
+		t.Fatal("corrupt proof accepted on done-pipeline retry")
+	}
+	if triggered != 1 {
+		t.Fatalf("pipeline retriggered after persistence failure: %d triggers", triggered)
+	}
+
+	// Removing the corrupt record lets the retry recreate proof cleanly.
+	if err := os.Remove(m.closePostActionsProofPath("H")); err != nil {
+		t.Fatal(err)
+	}
+	r, err := m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", TagVersion: "1.2.4"})
+	if err != nil || !r.Success {
+		t.Fatalf("recovery retry: %+v %v", r, err)
+	}
+	if triggered != 1 {
+		t.Fatalf("pipeline retriggered during recovery: %d triggers", triggered)
+	}
+	proof, err := m.loadClosePostActionProof("H")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actions := proofActions(t, proof, "svc"); !slices.Contains(actions, closePostActionPipeline) {
+		t.Fatalf("recovered actions = %v, want pipeline", actions)
 	}
 }
 
@@ -102,6 +294,27 @@ func TestHotfixClose_ClosedDuplicateMRDoesNotBlock(t *testing.T) {
 	}
 }
 
+func TestHotfixClose_PlanWarnsCleanupIsManualAndPruneSeparate(t *testing.T) {
+	m, _, _ := hotfixManager(t)
+	p, err := m.PlanCloseTask(t.Context(), "H")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var warned bool
+	for _, w := range p.Warnings {
+		if strings.Contains(w, "Cleanup is manual") &&
+			strings.Contains(w, "press D") &&
+			strings.Contains(w, "Prune is separate") &&
+			strings.Contains(w, "origin/master") &&
+			strings.Contains(w, "remote branch deletion remains unsupported") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("missing manual-cleanup warning: %v", p.Warnings)
+	}
+}
+
 func TestHotfixClose_ClosedMRIsRecreatedWithWarning(t *testing.T) {
 	m, _, f := hotfixManager(t)
 	f.requests[0].State = "closed"
@@ -127,29 +340,140 @@ func TestHotfixClose_ClosedMRIsRecreatedWithWarning(t *testing.T) {
 	}
 }
 
-func TestHotfixClose_MergedHistoricalHeadAcceptedWhenAncestor(t *testing.T) {
+func TestHotfixClose_MergedHistoricalHeadBehindSourceRejected(t *testing.T) {
 	m, g, f := hotfixManager(t)
+	rule := m.flow.BranchTypes[gitflow.BranchTypeHotfix]
+	rule.TriggerPipelineOnClose = true
+	m.flow.BranchTypes[gitflow.BranchTypeHotfix] = rule
+	// MR merged at H1; the source later advanced to H2 with unmerged commits.
+	// Ancestor acceptance would tag/deploy H1 while H2 stays unmerged.
 	f.requests[0].HeadSHA = "old"
-	g.isAncestorFn = func(_, ancestor, descendant string) (bool, error) {
-		if descendant == "source" {
-			return ancestor == "old", nil
-		}
-		return true, nil // merge containment in origin target
+	triggered := 0
+	f.triggerPipelineFn = func(_ context.Context, _ forge.TriggerPipelineParams) error {
+		triggered++
+		return nil
 	}
-	p, err := m.PlanCloseTask(t.Context(), "H")
-	if err != nil {
-		t.Fatalf("ancestor historical head rejected: %v", err)
+	if _, err := m.PlanCloseTask(t.Context(), "H"); err == nil {
+		t.Fatal("ancestor-only merged head accepted")
 	}
-	if p.Services[0].Reviews[0].State != "merged" || p.Services[0].Reviews[0].MergeSHA != "merge" {
-		t.Fatalf("master review not merged: %+v", p.Services[0].Reviews)
+	r, err := m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", TagVersion: "1.2.4"})
+	if err == nil || r.Success {
+		t.Fatalf("stale close: %+v %v", r, err)
 	}
-	r, err := m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", Fingerprint: p.Fingerprint})
+	if g.createTagCalls != 0 || g.pushTagCalls != 0 || triggered != 0 || len(f.created) != 0 {
+		t.Fatalf("mutations on stale source: tags=%d pushed=%d pipelines=%d created=%v", g.createTagCalls, g.pushTagCalls, triggered, f.created)
+	}
+	proof, err := m.loadClosePostActionProof("H")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !r.Waiting || len(f.created) != 1 || f.created[0] != "develop" {
-		t.Fatalf("only missing develop MR expected: created=%v result=%+v", f.created, r)
+	if len(proof.Services) != 0 {
+		t.Fatalf("proof persisted for stale source: %+v", proof.Services)
 	}
+}
+
+func TestHotfixClose_RequiresFreshRemoteSource(t *testing.T) {
+	assertBlocked := func(t *testing.T, m *manager, g *mockGitClient, f *hotfixForge) {
+		t.Helper()
+		if _, err := m.PlanCloseTask(t.Context(), "H"); err == nil {
+			t.Fatal("stale remote source accepted at planning")
+		}
+		if _, err := m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", TagVersion: "1.2.4"}); err == nil {
+			t.Fatal("stale remote source accepted at close")
+		}
+		if g.createTagCalls != 0 || g.pushTagCalls != 0 || len(f.created) != 0 {
+			t.Fatal("mutations on stale remote source")
+		}
+	}
+
+	t.Run("remote source absent", func(t *testing.T) {
+		m, g, f := hotfixManager(t)
+		fetched := false
+		g.fetchFn = func(string) error { fetched = true; return nil }
+		g.remoteRefSHAFn = func(_ string, ref string) (string, error) {
+			if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+				if !fetched {
+					t.Error("RemoteRefSHA called before fetch")
+				}
+				return "", nil
+			}
+			return "", nil
+		}
+		assertBlocked(t, m, g, f)
+	})
+
+	t.Run("remote source moved past local", func(t *testing.T) {
+		m, g, f := hotfixManager(t)
+		fetched := false
+		g.fetchFn = func(string) error { fetched = true; return nil }
+		g.remoteRefSHAFn = func(_ string, ref string) (string, error) {
+			if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+				if !fetched {
+					t.Error("RemoteRefSHA called before fetch")
+				}
+				return "h2-remote", nil
+			}
+			return "", nil
+		}
+		assertBlocked(t, m, g, f)
+	})
+
+	t.Run("exact match plans tag from verified merge", func(t *testing.T) {
+		m, g, f := hotfixManager(t)
+		fetched := false
+		g.fetchFn = func(string) error { fetched = true; return nil }
+		g.remoteRefSHAFn = func(_ string, ref string) (string, error) {
+			if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+				if !fetched {
+					t.Error("RemoteRefSHA called before fetch")
+				}
+				return "source", nil
+			}
+			return "", nil
+		}
+		f.requests = append(f.requests, forge.MRReadiness{Number: 2, State: "merged", SourceBranch: "hotfix/H", TargetBranch: "develop", HeadSHA: "source", MergedSHA: "merge"})
+		p, err := m.PlanCloseTask(t.Context(), "H")
+		if err != nil {
+			t.Fatalf("in-sync source rejected: %v", err)
+		}
+		if !p.RequiresTag || p.Services[0].Reviews[0].State != "merged" {
+			t.Fatalf("in-sync source not planned: %+v", p.Services[0])
+		}
+		if len(g.remoteRefSHACalls) == 0 || g.remoteRefSHACalls[0].Ref != "refs/heads/hotfix/H" {
+			t.Fatalf("remoteRefSHACalls = %#v, want fresh source ref", g.remoteRefSHACalls)
+		}
+	})
+}
+
+func TestHotfixMerge_InspectRejectsStaleOrDivergedSource(t *testing.T) {
+	t.Run("merged head behind source", func(t *testing.T) {
+		m, _, f := hotfixManager(t)
+		f.requests[0].HeadSHA = "h1"
+		inspection, err := m.InspectTaskMerge(t.Context(), "H")
+		if err != nil || inspection.Services[0].Status != "failed" {
+			t.Fatalf("stale merged head accepted: %v %+v", err, inspection.Services[0])
+		}
+	})
+	t.Run("local behind remote source", func(t *testing.T) {
+		m, g, _ := hotfixManager(t)
+		g.remoteRefSHAFn = func(_ string, ref string) (string, error) {
+			if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+				return "h2-remote", nil
+			}
+			return "", nil
+		}
+		inspection, err := m.InspectTaskMerge(t.Context(), "H")
+		if err != nil || inspection.Services[0].Status != "failed" {
+			t.Fatalf("diverged source accepted: %v %+v", err, inspection.Services[0])
+		}
+	})
+	t.Run("exact in sync stays merged", func(t *testing.T) {
+		m, _, _ := hotfixManager(t)
+		inspection, err := m.InspectTaskMerge(t.Context(), "H")
+		if err != nil || inspection.Services[0].Status != "merged" {
+			t.Fatalf("in-sync source rejected: %v %+v", err, inspection.Services[0])
+		}
+	})
 }
 
 func TestHotfixClose_MergedUnrelatedHistoricalHeadRejected(t *testing.T) {
@@ -166,6 +490,41 @@ func TestHotfixClose_MergedUnrelatedHistoricalHeadRejected(t *testing.T) {
 	}
 }
 
+func TestHotfixClose_MissingMergeSHAFetchesBeforeTipInference(t *testing.T) {
+	m, g, f := hotfixManager(t)
+	f.requests[0].HeadSHA = "fresh"
+	f.requests[0].MergedSHA = ""
+	fetched := false
+	g.fetchFn = func(string) error {
+		fetched = true
+		return nil
+	}
+	g.resolveRefFn = func(_ string, ref string) (string, error) {
+		if ref == "hotfix/H" || ref == "refs/heads/hotfix/H" {
+			return "fresh", nil
+		}
+		if !fetched {
+			return "stale", nil
+		}
+		return "fresh", nil
+	}
+	g.remoteRefSHAFn = func(_ string, ref string) (string, error) {
+		if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+			return "fresh", nil
+		}
+		return "", nil
+	}
+	g.isAncestorFn = func(string, string, string) (bool, error) { return true, nil }
+
+	p, err := m.PlanCloseTask(t.Context(), "H")
+	if err != nil {
+		t.Fatalf("fast-forward merge not inferred from fresh tip: %v", err)
+	}
+	if p.Services[0].Reviews[0].MergeSHA != "fresh" {
+		t.Fatalf("merge SHA = %q, want historical head matched against fresh tip", p.Services[0].Reviews[0].MergeSHA)
+	}
+}
+
 func TestHotfixClose_OpenMRRequiresCurrentHeadSHA(t *testing.T) {
 	m, g, f := hotfixManager(t)
 	f.requests[0].State = "open"
@@ -179,14 +538,8 @@ func TestHotfixClose_OpenMRRequiresCurrentHeadSHA(t *testing.T) {
 func TestHotfixClose_MissingMergeSHAInfersOnlyExactTargetHeadMatch(t *testing.T) {
 	newManager := func(t *testing.T, targetTip string) (*manager, *mockGitClient, *hotfixForge) {
 		m, g, f := hotfixManager(t)
-		f.requests[0].HeadSHA = "old"
 		f.requests[0].MergedSHA = ""
-		g.isAncestorFn = func(_, ancestor, descendant string) (bool, error) {
-			if descendant == "source" || descendant == targetTip {
-				return ancestor == "old", nil
-			}
-			return true, nil // merge containment in origin target
-		}
+		g.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
 		g.resolveRefFn = func(_ string, ref string) (string, error) {
 			if ref == "hotfix/H" {
 				return "source", nil
@@ -196,18 +549,18 @@ func TestHotfixClose_MissingMergeSHAInfersOnlyExactTargetHeadMatch(t *testing.T)
 		return m, g, f
 	}
 
-	t.Run("target tip equals historical head", func(t *testing.T) {
-		m, _, _ := newManager(t, "old")
+	t.Run("target tip equals head", func(t *testing.T) {
+		m, _, _ := newManager(t, "source")
 		p, err := m.PlanCloseTask(t.Context(), "H")
 		if err != nil {
 			t.Fatalf("fast-forward merge not inferred: %v", err)
 		}
-		if p.Services[0].Reviews[0].MergeSHA != "old" {
-			t.Fatalf("merge SHA = %q, want historical head", p.Services[0].Reviews[0].MergeSHA)
+		if p.Services[0].Reviews[0].MergeSHA != "source" {
+			t.Fatalf("merge SHA = %q, want head matched against fresh tip", p.Services[0].Reviews[0].MergeSHA)
 		}
 	})
 
-	t.Run("target advanced past historical head", func(t *testing.T) {
+	t.Run("target advanced past head", func(t *testing.T) {
 		m, _, _ := newManager(t, "advanced")
 		if _, err := m.PlanCloseTask(t.Context(), "H"); err == nil {
 			t.Fatal("merge SHA inferred from ancestry after target advanced")
@@ -222,7 +575,7 @@ func TestHotfixMerge_InspectMergedHistoricalHead(t *testing.T) {
 		wantStatus string
 		wantErr    bool
 	}{
-		{name: "ancestor", head: "old", wantStatus: "merged"},
+		{name: "ancestor behind source", head: "old", wantErr: true},
 		{name: "unrelated", head: "unrelated", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -275,7 +628,7 @@ func TestHotfixMerge_InspectVerifiesMergedResultAgainstTarget(t *testing.T) {
 				return tc.targetTip, nil
 			}
 			g.isAncestorFn = func(_, _, descendant string) (bool, error) {
-				if descendant == "origin/master" {
+				if descendant == tc.targetTip {
 					return tc.contained, nil
 				}
 				return true, nil
@@ -291,6 +644,31 @@ func TestHotfixMerge_InspectVerifiesMergedResultAgainstTarget(t *testing.T) {
 				t.Fatalf("MergedSHA = %q, want %q", inspection.Services[0].MR.MergedSHA, tc.wantMerge)
 			}
 		})
+	}
+}
+
+func TestHotfixMerge_MergedVerificationUsesFreshTargetRefs(t *testing.T) {
+	m, g, _ := hotfixManager(t)
+	if _, err := m.InspectTaskMerge(t.Context(), "H"); err != nil {
+		t.Fatalf("InspectTaskMerge() err = %v", err)
+	}
+	if len(g.ensureCommitCalls) != 1 || g.ensureCommitCalls[0].SHA != "merge" {
+		t.Fatalf("ensureCommitCalls = %#v, want merged SHA ensured", g.ensureCommitCalls)
+	}
+	if len(g.fetchCalls) == 0 {
+		t.Fatal("merged verification did not fetch fresh refs")
+	}
+	foundTip := false
+	for _, c := range g.resolveRefCalls {
+		if c.Ref == "origin/master" {
+			foundTip = true
+		}
+	}
+	if !foundTip {
+		t.Fatalf("resolveRefCalls = %#v, want fresh origin/master tip", g.resolveRefCalls)
+	}
+	if len(g.isAncestorCalls) != 1 || g.isAncestorCalls[0].Ancestor != "merge" || g.isAncestorCalls[0].Descendant != "merge" {
+		t.Fatalf("isAncestorCalls = %#v, want ancestry check against fresh tip", g.isAncestorCalls)
 	}
 }
 
@@ -322,6 +700,16 @@ type hotfixForge struct {
 
 func (f *hotfixForge) MergeMR(_ context.Context, p forge.MergeMRParams) (forge.MRMergeResult, error) {
 	f.merged = append(f.merged, p.Number)
+	for i := range f.requests {
+		if f.requests[i].Number != p.Number {
+			continue
+		}
+		f.requests[i].State = "merged"
+		if f.requests[i].MergedSHA == "" {
+			f.requests[i].MergedSHA = f.requests[i].HeadSHA
+		}
+		return forge.MRMergeResult{Merged: true, MergeCommitSHA: f.requests[i].MergedSHA}, nil
+	}
 	return forge.MRMergeResult{Merged: true}, nil
 }
 
@@ -330,7 +718,8 @@ func TestHotfixMerge_SelectsTargetAndRejectsDrift(t *testing.T) {
 	f.requests[0].State = "open"
 	f.requests[0].Ready = true
 	f.requests[0].SupportsSHAPin = true
-	f.requests = append(f.requests, forge.MRReadiness{Number: 2, State: "open", SourceBranch: "hotfix/H", TargetBranch: "develop", HeadSHA: "source", Ready: true, SupportsSHAPin: true})
+	f.requests[0].SupportsTargetBinding = true
+	f.requests = append(f.requests, forge.MRReadiness{Number: 2, State: "open", SourceBranch: "hotfix/H", TargetBranch: "develop", HeadSHA: "source", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true})
 	inspection, err := m.InspectTaskMerge(t.Context(), "H")
 	if err != nil {
 		t.Fatal(err)
@@ -390,10 +779,15 @@ func hotfixManager(t *testing.T) (*manager, *mockGitClient, *hotfixForge) {
 		t.Fatal(err)
 	}
 	g := &mockGitClient{commonDirFn: func(string) (string, error) { return common, nil }, listWorktreesRes: []git.WorktreeEntry{{Path: svc, Branch: "refs/heads/hotfix/H"}}, repoStatusFn: func(string) (git.RawStatus, error) { return git.RawStatus{Branch: "hotfix/H"}, nil }, remoteURLRes: "git@gitlab.com:group/svc.git", resolveRefFn: func(_ string, ref string) (string, error) {
-		if ref == "hotfix/H" {
+		if ref == "hotfix/H" || ref == "refs/heads/hotfix/H" {
 			return "source", nil
 		}
 		return "merge", nil
+	}, remoteRefSHAFn: func(_ string, ref string) (string, error) {
+		if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+			return "source", nil
+		}
+		return "", nil
 	}, isAncestorFn: func(string, string, string) (bool, error) { return true, nil }}
 	cfg := newCloseTestConfig(root, tasks)
 	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
@@ -525,6 +919,12 @@ func TestHotfixClose_ReviewUpdatesRequireFreshPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.resolveRefFn = func(string, string) (string, error) { return "updated", nil }
+	g.remoteRefSHAFn = func(_ string, ref string) (string, error) {
+		if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+			return "updated", nil
+		}
+		return "", nil
+	}
 	for i := range f.requests {
 		f.requests[i].HeadSHA = "updated"
 	}
@@ -558,7 +958,12 @@ func TestHotfixClose_ConflictingVersionDoesNotLockCheckpoint(t *testing.T) {
 	if len(cp.Tags) != 0 {
 		t.Fatal("unusable version locked before any tag mutation")
 	}
-	g.remoteRefSHAFn = nil
+	g.remoteRefSHAFn = func(_ string, ref string) (string, error) {
+		if strings.HasPrefix(ref, "refs/heads/hotfix/") {
+			return "source", nil
+		}
+		return "", nil
+	}
 	r, err := m.CloseTask(t.Context(), CloseTaskParams{TaskID: "H", TagVersion: "1.2.5"})
 	if err != nil || !r.Success {
 		t.Fatalf("corrected version: %+v %v", r, err)

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 // RemoveOptions selects which task resources Remove deletes.
@@ -18,15 +20,47 @@ type RemoveOptions struct {
 	DeleteRemoteBranches bool
 }
 
-func (m *manager) deleteRemoteBranch(ctx context.Context, repoPath, branch string) error {
-	sha, err := m.git.RemoteRefSHA(ctx, repoPath, "refs/heads/"+branch)
-	if err != nil {
-		return fmt.Errorf("fetch remote SHA: %w", err)
+// taskBranchCandidates returns the exact branch names owned by taskID under
+// the resolved git-flow rules: every registered prefix joined with the task
+// ID. Names outside this set are not task-owned and must not be deleted.
+func (m *manager) taskBranchCandidates(taskID string) map[string]gitflow.BranchType {
+	candidates := make(map[string]gitflow.BranchType)
+	if m.flow == nil || taskID == "" {
+		return candidates
 	}
-	if sha == "" {
-		return nil
+	for bt, rule := range m.flow.BranchTypes {
+		for _, p := range rule.Prefixes {
+			if p == "" {
+				continue
+			}
+			candidates[p+taskID] = bt
+		}
 	}
-	return m.git.DeleteRemoteBranchIfUnchanged(ctx, repoPath, branch, sha)
+	return candidates
+}
+
+func (m *manager) isRemoveProtectedBranch(ctx context.Context, branch, taskID string) bool {
+	branch = strings.TrimSpace(branch)
+	if branch == "" || branch == "HEAD" || (strings.HasPrefix(branch, "(") && strings.HasSuffix(branch, ")")) {
+		return true
+	}
+	exact, _ := m.protectedBranchPolicy()
+	for _, b := range exact {
+		if b == branch {
+			return true
+		}
+	}
+	if m.flow != nil {
+		if rule, ok := m.flow.BranchTypes[gitflow.BranchTypeRelease]; ok {
+			for _, p := range rule.Prefixes {
+				if p != "" && strings.HasPrefix(branch, p) {
+					return true
+				}
+			}
+		}
+	}
+	_, owned := m.taskBranchCandidates(taskID)[branch]
+	return !owned
 }
 
 func (m *manager) Remove(ctx context.Context, taskID string, opts RemoveOptions) error {
@@ -41,6 +75,13 @@ func (m *manager) Remove(ctx context.Context, taskID string, opts RemoveOptions)
 		if !opts.DeleteRemoteBranches {
 			return fmt.Errorf("remove: no removal options selected for task %s", taskID)
 		}
+	}
+
+	// Remote source deletion has no atomic target guard (git push may omit
+	// no-op ref updates), so it fails closed before any mutation; retry
+	// without the remote branch option.
+	if opts.DeleteRemoteBranches {
+		return fmt.Errorf("%w: task %s: remove worktrees/local branches only, or delete the remote branch on the forge", ErrRemoteAtomicGuardUnsupported, taskID)
 	}
 
 	taskDir := m.taskDir(taskID)
@@ -87,10 +128,24 @@ func (m *manager) Remove(ctx context.Context, taskID string, opts RemoveOptions)
 				opErrors = append(opErrors, fmt.Errorf("resolve branch for %s: empty branch name", entry.Name()))
 				continue
 			}
-			if m.IsProtectedBranch(ctx, branchName) {
+			if m.isRemoveProtectedBranch(ctx, branchName, taskID) {
 				opErrors = append(opErrors, fmt.Errorf("refusing to delete protected branch %s for %s", branchName, entry.Name()))
 				continue
 			}
+		}
+
+		var localBranchSHA string
+		if opts.DeleteLocalBranches {
+			sha, shaErr := m.git.ResolveRef(ctx, commonDir, "refs/heads/"+branchName)
+			if shaErr != nil {
+				opErrors = append(opErrors, fmt.Errorf("resolve local SHA for %s: %w", entry.Name(), shaErr))
+				continue
+			}
+			if sha == "" {
+				opErrors = append(opErrors, fmt.Errorf("resolve local SHA for %s: empty SHA for branch %s", entry.Name(), branchName))
+				continue
+			}
+			localBranchSHA = sha
 		}
 
 		worktreeRemoved := false
@@ -110,7 +165,7 @@ func (m *manager) Remove(ctx context.Context, taskID string, opts RemoveOptions)
 		}
 
 		if opts.DeleteLocalBranches && worktreeRemoved {
-			if delErr := m.git.DeleteBranch(ctx, commonDir, branchName); delErr != nil {
+			if delErr := m.git.DeleteBranchIfUnchanged(ctx, commonDir, branchName, localBranchSHA); delErr != nil {
 				m.logger.WarnContext(ctx, "failed to delete branch",
 					slog.String("service", entry.Name()),
 					slog.String("branch", branchName),
@@ -125,16 +180,6 @@ func (m *manager) Remove(ctx context.Context, taskID string, opts RemoveOptions)
 			}
 		}
 
-		if opts.DeleteRemoteBranches {
-			if remErr := m.deleteRemoteBranch(ctx, commonDir, branchName); remErr != nil {
-				m.logger.WarnContext(ctx, "failed to delete remote branch",
-					slog.String("service", entry.Name()),
-					slog.String("branch", branchName),
-					slog.String("error", remErr.Error()),
-				)
-				opErrors = append(opErrors, fmt.Errorf("delete remote branch %s: %w", branchName, remErr))
-			}
-		}
 	}
 
 	if len(opErrors) > 0 {
@@ -145,7 +190,27 @@ func (m *manager) Remove(ctx context.Context, taskID string, opts RemoveOptions)
 		return nil
 	}
 
-	if err := os.RemoveAll(taskDir); err != nil {
+	if err := removeGeneratedTaskFiles(taskDir, taskID); err != nil {
+		return err
+	}
+
+	remaining, err := os.ReadDir(taskDir)
+	if err != nil {
+		return fmt.Errorf("remove: read task dir %s: %w", taskDir, err)
+	}
+	if len(remaining) > 0 {
+		names := make([]string, 0, len(remaining))
+		for _, entry := range remaining {
+			names = append(names, entry.Name())
+		}
+		m.logger.WarnContext(ctx, "preserving unknown task entries",
+			slog.String("task_id", taskID),
+			slog.Any("entries", names),
+		)
+		return fmt.Errorf("remove: task %s preserved unknown entries: %s", taskID, strings.Join(names, ", "))
+	}
+
+	if err := os.Remove(taskDir); err != nil {
 		return fmt.Errorf("remove: delete task directory %s: %w", taskDir, err)
 	}
 

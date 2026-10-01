@@ -155,13 +155,12 @@ func TestReleasesPanel_KeyN_Unfocused_Noop(t *testing.T) {
 	}
 }
 
-func TestReleasesPanel_KeyD_EmitsCleanupOnlyForReleasedSelection(t *testing.T) {
+func TestReleasesPanel_KeyD_EmitsOpenCleanupDialogMsg(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		status domain.ReleaseStatus
-		want   bool
 	}{
-		{name: "released", status: domain.ReleaseStatusReleased, want: true},
+		{name: "released", status: domain.ReleaseStatusReleased},
 		{name: "draft", status: domain.ReleaseStatusDraft},
 		{name: "failed", status: domain.ReleaseStatusFailed},
 		{name: "prepared", status: domain.ReleaseStatusPrepared},
@@ -172,20 +171,51 @@ func TestReleasesPanel_KeyD_EmitsCleanupOnlyForReleasedSelection(t *testing.T) {
 			p.SetReleases([]domain.Release{{ID: "rel-1", Status: tc.status}})
 
 			_, cmd := p.Update(sendKey("D"))
-			if !tc.want {
-				if cmd != nil {
-					t.Fatalf("D on %s returned command", tc.status)
-				}
-				return
-			}
 			if cmd == nil {
-				t.Fatal("D on released selection returned nil command")
+				t.Fatalf("D on %s returned nil command", tc.status)
 			}
-			msg, ok := cmd().(PlanReleaseCleanupMsg)
-			if !ok || msg.ReleaseID != "rel-1" {
+			if _, ok := cmd().(OpenCleanupDialogMsg); !ok {
 				t.Fatalf("cleanup message = %#v", cmd())
 			}
 		})
+	}
+}
+
+func TestReleasesPanel_KeyP_EmitsOpenCleanupDialogMsg(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status domain.ReleaseStatus
+	}{
+		{name: "released", status: domain.ReleaseStatusReleased},
+		{name: "draft", status: domain.ReleaseStatusDraft},
+		{name: "failed", status: domain.ReleaseStatusFailed},
+		{name: "prepared", status: domain.ReleaseStatusPrepared},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewReleasesPanel(60, 20)
+			p.SetFocused(true)
+			p.SetReleases([]domain.Release{{ID: "rel-1", Status: tc.status}})
+
+			_, cmd := p.Update(sendKey("P"))
+			if cmd == nil {
+				t.Fatalf("P on %s returned nil command", tc.status)
+			}
+			if _, ok := cmd().(OpenCleanupDialogMsg); !ok {
+				t.Fatalf("cleanup message = %#v", cmd())
+			}
+		})
+	}
+}
+
+func TestReleasesPanel_KeyD_Unfocused_Noop(t *testing.T) {
+	p := NewReleasesPanel(60, 20)
+	p.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
+
+	for _, key := range []string{"D", "P"} {
+		_, cmd := p.Update(sendKey(key))
+		if cmd != nil {
+			t.Fatalf("expected nil cmd for %s key when unfocused", key)
+		}
 	}
 }
 
@@ -235,14 +265,11 @@ func TestReleasesPanel_View_RendersCompactListAndSelectedDetail(t *testing.T) {
 	if !containsAll(view,
 		"rel-1.2.3", "awaiting_master_merge", "2026-06-16", "1 service",
 		"Version: 1.2.3", "svc-api", "version: 1.2.3", "tag: v1.2.3", "status: prepared",
-		"✓ develop", "● master MR", "ⓘ merge production MR",
 	) {
 		t.Fatalf("release list/detail incomplete: %q", view)
 	}
-
-	p.SetWorkflow(nil)
-	if strings.Contains(stripAnsi(p.View()), "✓ develop") {
-		t.Fatal("SetWorkflow(nil) should clear workflow")
+	if strings.Contains(view, "✓ develop") || strings.Contains(view, "ⓘ merge production MR") {
+		t.Fatalf("releases pane must not duplicate workflow output: %q", view)
 	}
 }
 

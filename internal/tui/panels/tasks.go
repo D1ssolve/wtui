@@ -340,12 +340,8 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 				id := task.ID
 				return p, func() tea.Msg { return OpenSyncStrategyDialogMsg{TaskID: id} }
 
-			case "P":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				return p, func() tea.Msg { return ScanPrunableTasksMsg{} }
+			case "D", "P":
+				return p, func() tea.Msg { return OpenCleanupDialogMsg{} }
 
 			case ";":
 				task := p.SelectedTask()
@@ -500,12 +496,8 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 			id := task.ID
 			return p, func() tea.Msg { return OpenSyncStrategyDialogMsg{TaskID: id} }
 
-		case "P":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			return p, func() tea.Msg { return ScanPrunableTasksMsg{} }
+		case "D", "P":
+			return p, func() tea.Msg { return OpenCleanupDialogMsg{} }
 
 		case ";":
 			task := p.SelectedTask()
@@ -621,17 +613,11 @@ func (p TasksPanel) View() string {
 		Bold(true).
 		Foreground(panelColorPrimary)
 
-	inner := innerDimensions(p.width, p.height)
-
 	parts := []string{titleStyle.Render(title), p.list.View()}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
-	borderStyle := panelBorderStyle(p.focused)
-	return borderStyle.
-		Width(inner.w).
-		Height(inner.h).
-		Render(content)
+	return renderPanelFrame(p.focused, p.width, p.height, titleStyle.Render(title), content)
 }
 
 func (p TasksPanel) treeView() string {
@@ -679,11 +665,7 @@ func (p TasksPanel) treeView() string {
 	parts = append(parts, body, pagination)
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
-	borderStyle := panelBorderStyle(p.focused)
-	return borderStyle.
-		Width(inner.w).
-		Height(inner.h).
-		Render(content)
+	return renderPanelFrame(p.focused, p.width, p.height, titleStyle.Render(title), content)
 }
 
 func (p *TasksPanel) rebuildRows() {
@@ -1065,4 +1047,41 @@ func panelBorderStyle(focused bool) lipgloss.Style {
 		return uitheme.FocusedGlassBorder(panelColorPrimary)
 	}
 	return uitheme.GlassBorder(uitheme.GlassHighlight)
+}
+
+// renderPanelFrame draws content at exactly width×height including the panel
+// border. Zero allocation renders nothing; when a complete border cannot fit,
+// only the title renders, borderless and clamped to the allocation. Content
+// taller than the inner area is clamped so the frame never exceeds height.
+func renderPanelFrame(focused bool, width, height int, title, content string) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	inner := innerDimensions(width, height)
+	if inner.w < 1 || inner.h < 1 {
+		return clampLines(title, width, height)
+	}
+	return panelBorderStyle(focused).
+		Width(inner.w).
+		Height(inner.h).
+		Render(clampLines(content, inner.w, inner.h))
+}
+
+func clampLines(s string, width, height int) string {
+	if s == "" || width <= 0 || height <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	for i, line := range lines {
+		if lipgloss.Width(line) > width {
+			lines[i] = ansi.Truncate(line, width, "…")
+		}
+	}
+	return strings.Join(lines, "\n")
 }

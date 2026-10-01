@@ -446,7 +446,7 @@ func TestTasksPanel_KeyC_EmptyList_NoOp(t *testing.T) {
 	}
 }
 
-func TestTasksPanel_KeyP_EmitsScanPrunableTasksMsg(t *testing.T) {
+func TestTasksPanel_KeyP_EmitsOpenCleanupDialogMsg(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetTasks(makeTasks("IN-001"))
 	p.SetFocused(true)
@@ -455,8 +455,22 @@ func TestTasksPanel_KeyP_EmitsScanPrunableTasksMsg(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("P key should return a cmd")
 	}
-	if _, ok := cmd().(ScanPrunableTasksMsg); !ok {
-		t.Fatalf("expected ScanPrunableTasksMsg, got %T", cmd())
+	if _, ok := cmd().(OpenCleanupDialogMsg); !ok {
+		t.Fatalf("expected OpenCleanupDialogMsg, got %T", cmd())
+	}
+}
+
+func TestTasksPanel_KeyD_EmitsOpenCleanupDialogMsg(t *testing.T) {
+	p := NewTasksPanel(40, 20)
+	p.SetTasks(makeTasks("IN-001"))
+	p.SetFocused(true)
+
+	_, cmd := p.Update(sendKey("D"))
+	if cmd == nil {
+		t.Fatal("D key should return a cmd")
+	}
+	if _, ok := cmd().(OpenCleanupDialogMsg); !ok {
+		t.Fatalf("expected OpenCleanupDialogMsg, got %T", cmd())
 	}
 }
 

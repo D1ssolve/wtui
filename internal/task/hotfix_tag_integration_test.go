@@ -38,7 +38,7 @@ func TestHotfixTag_RealGitPinsCommitAndRetries(t *testing.T) {
 	sha := run(repo, "rev-parse", "HEAD")
 	run(repo, "push", "origin", "HEAD:master")
 	m := &manager{git: git.NewCommandClient(slog.Default())}
-	svc := domain.Service{RepoPath: repo, WorktreePath: repo}
+	svc := domain.Service{RepoPath: repo, WorktreePath: repo, RemoteURL: origin}
 	tag := TagPlan{TagName: "v1.2.4", SourceRef: sha, Annotated: true, Push: true, Message: "Hotfix"}
 	for range 2 {
 		if err := m.ensureHotfixTag(t.Context(), svc, tag); err != nil {

@@ -25,7 +25,6 @@ type serviceItem struct {
 	service       domain.Service
 	forgeProvider forge.ForgeProvider
 	wfStatus      string
-	wfDetail      string
 	opActive      bool
 	progress      ServiceProgress
 }
@@ -74,9 +73,6 @@ func renderServiceCard(si serviceItem, selected bool, width int) string {
 		lipgloss.NewStyle().Foreground(stateColor).Render(icon+" "+state))
 	if si.wfStatus != "" {
 		line += "   " + workflowBadge(si.wfStatus)
-	}
-	if si.wfDetail != "" && (si.wfStatus == "blocked" || si.wfStatus == "failed") {
-		line += "   " + lipgloss.NewStyle().Foreground(uitheme.Danger).Render(si.wfDetail)
 	}
 	if svc.Branch != "" {
 		line += "   " + lipgloss.NewStyle().Foreground(uitheme.Primary).Render("⎇ "+svc.Branch)
@@ -215,7 +211,6 @@ func (p *ServicesPanel) refreshItems() {
 		}
 		if sw, ok := wfByName[s.Name]; ok {
 			item.wfStatus = sw.Status
-			item.wfDetail = sw.Detail
 		}
 		if p.progress != nil && p.progress.TaskID == p.taskID {
 			item.opActive = true
@@ -420,12 +415,8 @@ func (p ServicesPanel) View() string {
 	inner := innerDimensions(p.width, p.height)
 	title := renderPaneTitle(titleText, "RELEASES  ›", inner.w)
 
-	workflow := renderWorkflow(p.workflow, inner.w)
 	progressRow := p.renderOperationProgress(inner.w)
 	bodyHeight := max(0, inner.h-1)
-	if workflow != "" {
-		bodyHeight = max(0, bodyHeight-lipgloss.Height(workflow)-1)
-	}
 	if progressRow != "" {
 		bodyHeight = max(0, bodyHeight-2)
 	}
@@ -448,15 +439,8 @@ func (p ServicesPanel) View() string {
 		listCopy.SetSize(inner.w, bodyHeight)
 		body = listCopy.View()
 	}
-	var head []string
-	if workflow != "" {
-		head = append(head, workflow, "")
-	}
 	if progressRow != "" {
-		head = append(head, progressRow, "")
-	}
-	if len(head) > 0 {
-		body = lipgloss.JoinVertical(lipgloss.Left, append(head, body)...)
+		body = lipgloss.JoinVertical(lipgloss.Left, progressRow, "", body)
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
@@ -464,11 +448,7 @@ func (p ServicesPanel) View() string {
 		body,
 	)
 
-	borderStyle := panelBorderStyle(p.focused)
-	return borderStyle.
-		Width(inner.w).
-		Height(inner.h).
-		Render(content)
+	return renderPanelFrame(p.focused, p.width, p.height, title, content)
 }
 
 // renderOperationProgress renders the overall operation row:

@@ -541,6 +541,7 @@ func TestSyncTask_BoundedConcurrencyHonorsConfig(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("SyncTask returned error: %v", err)
 	}
+	close(lineCh)
 	for range lineCh {
 	}
 

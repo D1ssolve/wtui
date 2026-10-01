@@ -302,20 +302,21 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 	}
 
 	return MRReadiness{
-		Number:               number,
-		State:                state,
-		URL:                  url,
-		SourceBranch:         detail.SourceBranch,
-		TargetBranch:         detail.TargetBranch,
-		HeadSHA:              headSHA,
-		MergedSHA:            mergedSHA,
-		Approved:             approved,
-		CIState:              ciState,
-		Mergeable:            mergeable,
-		Ready:                len(blockers) == 0,
-		Blockers:             blockers,
-		SupportsSHAPin:       supportsSHAPin,
-		StatusChecksBlocking: mergeStatus == "status_checks_must_pass",
+		Number:                number,
+		State:                 state,
+		URL:                   url,
+		SourceBranch:          detail.SourceBranch,
+		TargetBranch:          detail.TargetBranch,
+		HeadSHA:               headSHA,
+		MergedSHA:             mergedSHA,
+		Approved:              approved,
+		CIState:               ciState,
+		Mergeable:             mergeable,
+		Ready:                 len(blockers) == 0,
+		Blockers:              blockers,
+		SupportsSHAPin:        supportsSHAPin,
+		SupportsTargetBinding: false, // glab mr merge --sha pins the source head only
+		StatusChecksBlocking:  mergeStatus == "status_checks_must_pass",
 	}, nil
 }
 
@@ -361,6 +362,13 @@ func (c *GlabClient) statusCheckBlockers(ctx context.Context, worktreePath, repo
 }
 
 func (c *GlabClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMergeResult, error) {
+	if params.ExpectedTargetBranch != "" || params.ExpectedTargetSHA != "" {
+		return MRMergeResult{}, &ForgeError{
+			Category: ErrCategoryUnknown,
+			Cause:    errors.New("glab merge: requested target binding cannot be enforced: glab mr merge pins the source head only"),
+			Stderr:   "glab mr merge does not support target branch/SHA pinning",
+		}
+	}
 	worktreePath := pickWorktree(c.worktreePath, params.WorktreePath)
 	number := strconv.Itoa(params.Number)
 	args := []string{"mr", "merge", number, "--auto-merge=false", "--yes", "--repo", params.Repo}

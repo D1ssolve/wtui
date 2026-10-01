@@ -193,6 +193,9 @@ func (d *RemoveTaskDialog) checklistView() string {
 		if i == 2 && !d.selection.RemoveWorktrees {
 			dependency = " (requires worktrees)"
 		}
+		if i == 3 {
+			dependency = " (unsupported)"
+		}
 		sb.WriteString(normalStyle.Render(cursor + indent + checked + " " + row.label + dependency))
 		sb.WriteString("\n")
 	}
@@ -235,7 +238,7 @@ func (d *RemoveTaskDialog) previewView() string {
 
 	if d.selection.DeleteRemoteBranches {
 		sb.WriteString("\n")
-		sb.WriteString(warnStyle.Render("Remote branch deletion requires one more confirmation."))
+		sb.WriteString(warnStyle.Render("Remote branch deletion is not supported: removal fails before any mutation, remote branches are kept."))
 		sb.WriteString("\n")
 	}
 
@@ -253,7 +256,9 @@ func (d *RemoveTaskDialog) remoteConfirmView() string {
 	var sb strings.Builder
 	sb.WriteString(titleStyle.Render(fmt.Sprintf("Remove task %q?", d.taskID)))
 	sb.WriteString("\n\n")
-	sb.WriteString(dangerStyle.Render("REMOTE BRANCHES WILL BE DELETED FROM ORIGIN."))
+	sb.WriteString(dangerStyle.Render("REMOTE BRANCH DELETION IS NOT SUPPORTED."))
+	sb.WriteString("\n")
+	sb.WriteString(normalStyle.Render("Removal fails before any mutation; remote branches stay. Delete them on the forge."))
 	sb.WriteString("\n\n")
 	sb.WriteString(normalStyle.Bold(true).Render("Selected groups"))
 	sb.WriteString("\n")
@@ -262,7 +267,7 @@ func (d *RemoveTaskDialog) remoteConfirmView() string {
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")
-	sb.WriteString(dimStyle.Render("[Enter/y] delete remote branches  [Esc/n] back"))
+	sb.WriteString(dimStyle.Render("[Enter/y] proceed (no remote changes)  [Esc/n] back"))
 	return sb.String()
 }
 
@@ -278,7 +283,7 @@ func (d *RemoveTaskDialog) selectedGroups() []string {
 		groups = append(groups, "Local task branches")
 	}
 	if d.selection.DeleteRemoteBranches {
-		groups = append(groups, "Remote task branches")
+		groups = append(groups, "Remote task branches (unsupported: kept)")
 	}
 	return groups
 }

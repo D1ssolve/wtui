@@ -15,6 +15,9 @@ import (
 	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
+// ReleaseCleanupSelection selects release cleanup scope. Branch deletion
+// selections are honored as retention: authoritative targets are remote and
+// no atomic guard exists, so branches are never deleted by cleanup.
 type ReleaseCleanupSelection struct {
 	RemoveTasks                 bool
 	DeleteLocalTaskBranches     bool
@@ -69,12 +72,30 @@ type releaseCleanupStep struct {
 	branch      string
 	expectedSHA string
 	noop        bool
-	targets     []releaseCleanupTarget
+	// integratedSHA is the manifest-proven merged result (MergeRef) that
+	// authorizes ancestry rechecks for squash/rebase-merged branches whose
+	// source SHA never entered target history. Empty means the branch lease
+	// SHA (expectedSHA) is itself the ancestry identity.
+	integratedSHA string
+	targets       []releaseCleanupTarget
 }
 
 type releaseCleanupTarget struct {
-	ref        string
+	// ref is the authoritative origin ref used as ancestry evidence.
+	ref string
+	// plannedSHA is the origin ref OID captured at planning time.
 	plannedSHA string
+	// storeRef is the local same-store mirror of ref (for example
+	// refs/remotes/origin/main for refs/heads/main). It is verified against
+	// plannedSHA in the same ref-store transaction as the source deletion so
+	// a target identity change aborts the delete; empty means no atomic
+	// guard exists for that target.
+	storeRef string
+	// integratedSHA is the authoritative merged result SHA reconstructed for
+	// this target when the exact source head never entered its history
+	// (squash/rebase); empty means the source SHA itself is the ancestry
+	// identity for this target.
+	integratedSHA string
 }
 
 func DefaultReleaseCleanupSelection() ReleaseCleanupSelection {
@@ -203,6 +224,10 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 			return strings.Compare(a.Branch, b.Branch)
 		})
 		for _, fb := range features {
+			if !m.cleanupBranchOwnedByTask(fb.TaskID, fb.Branch) {
+				plan.block("task %s service %s branch %s is outside task branch ownership", fb.TaskID, svc.Name, fb.Branch)
+				continue
+			}
 			preview.TaskBranches = append(preview.TaskBranches, fb.Branch)
 			if selection.RemoveTasks {
 				expectedPath := filepath.Join(m.cfg.TasksRoot, fb.TaskID, svc.Name)
@@ -210,7 +235,7 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 					plan.block("task %s service %s worktree path mismatch", fb.TaskID, svc.Name)
 				} else {
 					preview.Worktrees = append(preview.Worktrees, expectedPath)
-					step := releaseCleanupStep{kind: cleanupTaskWorktree, description: "remove task worktree " + expectedPath, repoPath: svc.RepoPath, path: expectedPath, branch: fb.Branch, expectedSHA: fb.MergeRef}
+					step := releaseCleanupStep{kind: cleanupTaskWorktree, description: "remove task worktree " + expectedPath, repoPath: svc.RepoPath, path: expectedPath, branch: fb.Branch, expectedSHA: featureBranchSourceIdentity(fb)}
 					step.noop = m.validateCleanupWorktree(ctx, &plan, entries, step)
 					plan.steps = append(plan.steps, step)
 				}
@@ -253,7 +278,7 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 	return plan, nil
 }
 
-func validateCleanupMappings(plan *ReleaseCleanupPlan, tasksRoot string, release domain.Release) ([]string, map[string]map[string]bool) {
+func validateCleanupMappings(plan cleanupPlanBlocker, tasksRoot string, release domain.Release) ([]string, map[string]map[string]bool) {
 	taskIDs := slices.Clone(release.TaskIDs)
 	slices.Sort(taskIDs)
 	seen := make(map[string]bool, len(taskIDs))
@@ -310,7 +335,7 @@ func validateCleanupMappings(plan *ReleaseCleanupPlan, tasksRoot string, release
 	return taskIDs, taskServices
 }
 
-func (m *manager) validateCleanupReleaseSafety(ctx context.Context, plan *ReleaseCleanupPlan, svc domain.ReleaseService) error {
+func (m *manager) validateCleanupReleaseSafety(ctx context.Context, plan cleanupPlanBlocker, svc domain.ReleaseService) error {
 	if svc.ReleaseSHA == "" || svc.AcceptedMergeSHA == "" || svc.Tag == "" {
 		plan.block("service %s missing release identities", svc.Name)
 		return nil
@@ -344,6 +369,9 @@ func (m *manager) validateCleanupReleaseSafety(ctx context.Context, plan *Releas
 			plan.block("service %s remote %s branch missing", svc.Name, check.label)
 			continue
 		}
+		if err := m.git.EnsureCommit(ctx, svc.RepoPath, check.descendant); err != nil {
+			return fmt.Errorf("service %s remote %s object unavailable: %w", svc.Name, check.label, err)
+		}
 		ok, ancestorErr := m.git.IsAncestor(ctx, svc.RepoPath, check.ancestor, check.descendant)
 		if ancestorErr != nil {
 			return ancestorErr
@@ -355,14 +383,29 @@ func (m *manager) validateCleanupReleaseSafety(ctx context.Context, plan *Releas
 	return nil
 }
 
+// cleanupBranchOwnedByTask applies the shared exact task ownership rules used
+// by task removal: the branch must equal a configured branch-type prefix
+// joined with the task ID. Release-namespace names take precedence and are
+// never task-owned, so a release branch embedding the task ID stays blocked.
+func (m *manager) cleanupBranchOwnedByTask(taskID, branch string) bool {
+	for candidate, bt := range m.taskBranchCandidates(taskID) {
+		if candidate == branch && bt != gitflow.BranchTypeRelease {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *manager) validateCleanupTaskBranch(ctx context.Context, plan *ReleaseCleanupPlan, svc domain.ReleaseService, fb domain.ReleaseFeatureBranch, selection ReleaseCleanupSelection) error {
-	if fb.MergeRef == "" || !fb.Merged {
-		plan.block("task branch %s lacks merge identity", fb.Branch)
+	blockersBefore := len(plan.preview.Blockers)
+	validateFeatureBranchMRCompleteness(plan, plan.preview.ReleaseID, fb)
+	if len(plan.preview.Blockers) > blockersBefore {
 		return nil
 	}
 	if m.IsProtectedBranch(ctx, fb.Branch) {
 		plan.block("task branch %s is protected", fb.Branch)
 	}
+	leaseSHA := featureBranchSourceIdentity(fb)
 	targets, err := m.resolveCleanupTargets(ctx, plan, svc.RepoPath, m.cleanupTaskMergeTargetRefs(fb.Branch), fb.MergeRef, "task branch "+fb.Branch)
 	if err != nil {
 		return err
@@ -376,7 +419,7 @@ func (m *manager) validateCleanupTaskBranch(ctx context.Context, plan *ReleaseCl
 		if resolveErr != nil {
 			return resolveErr
 		}
-		if sha != fb.MergeRef {
+		if sha != leaseSHA {
 			plan.block("local task branch %s moved", fb.Branch)
 		}
 	}
@@ -384,14 +427,14 @@ func (m *manager) validateCleanupTaskBranch(ctx context.Context, plan *ReleaseCl
 	if err != nil {
 		return err
 	}
-	if remoteSHA != "" && remoteSHA != fb.MergeRef {
+	if remoteSHA != "" && remoteSHA != leaseSHA {
 		plan.block("remote task branch %s moved", fb.Branch)
 	}
 	if selection.DeleteLocalTaskBranches {
-		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalTaskBranch, description: "delete local task branch " + fb.Branch, repoPath: svc.RepoPath, branch: fb.Branch, expectedSHA: fb.MergeRef, noop: !local, targets: targets})
+		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalTaskBranch, description: retainLocalBranchReason("local task", fb.Branch), repoPath: svc.RepoPath, branch: fb.Branch, expectedSHA: leaseSHA, integratedSHA: fb.MergeRef, noop: !local, targets: targets})
 	}
 	if selection.DeleteRemoteTaskBranches {
-		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupRemoteTaskBranch, description: "delete remote task branch " + fb.Branch, repoPath: svc.RepoPath, branch: fb.Branch, expectedSHA: fb.MergeRef, noop: remoteSHA == "", targets: targets})
+		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupRemoteTaskBranch, description: "delete remote task branch " + fb.Branch, repoPath: svc.RepoPath, branch: fb.Branch, expectedSHA: leaseSHA, integratedSHA: fb.MergeRef, noop: remoteSHA == "", targets: targets})
 	}
 	return nil
 }
@@ -411,8 +454,9 @@ func (m *manager) cleanupTaskMergeTargetRefs(branch string) []string {
 }
 
 func (m *manager) validateCleanupReleaseBranch(ctx context.Context, plan *ReleaseCleanupPlan, svc domain.ReleaseService, selection ReleaseCleanupSelection) error {
-	if gitflow.DetectBranchType(svc.ReleaseBranch, m.flow) != gitflow.BranchTypeRelease || m.cleanupReleaseBranchProtected(svc.ReleaseBranch) {
-		plan.block("release branch %s is protected", svc.ReleaseBranch)
+	wantReleaseBranch := releaseBranchName(m.flow, svc.Version)
+	if svc.ReleaseBranch != wantReleaseBranch || m.cleanupReleaseBranchProtected(svc.ReleaseBranch) {
+		plan.block("release branch %s does not match resolved release branch %s", svc.ReleaseBranch, wantReleaseBranch)
 	}
 	local, err := m.git.BranchExists(ctx, svc.RepoPath, svc.ReleaseBranch)
 	if err != nil {
@@ -439,7 +483,7 @@ func (m *manager) validateCleanupReleaseBranch(ctx context.Context, plan *Releas
 		return err
 	}
 	if selection.DeleteLocalReleaseBranches {
-		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalReleaseBranch, description: "delete local release branch " + svc.ReleaseBranch, repoPath: svc.RepoPath, branch: svc.ReleaseBranch, expectedSHA: svc.ReleaseSHA, noop: !local, targets: targets})
+		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalReleaseBranch, description: retainLocalBranchReason("local release", svc.ReleaseBranch), repoPath: svc.RepoPath, branch: svc.ReleaseBranch, expectedSHA: svc.ReleaseSHA, noop: !local, targets: targets})
 	}
 	if selection.DeleteRemoteReleaseBranches {
 		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupRemoteReleaseBranch, description: "delete remote release branch " + svc.ReleaseBranch, repoPath: svc.RepoPath, branch: svc.ReleaseBranch, expectedSHA: svc.ReleaseSHA, noop: remoteSHA == "", targets: targets})
@@ -447,7 +491,7 @@ func (m *manager) validateCleanupReleaseBranch(ctx context.Context, plan *Releas
 	return nil
 }
 
-func (m *manager) resolveCleanupTargets(ctx context.Context, plan *ReleaseCleanupPlan, repoPath string, refs []string, sourceSHA, label string) ([]releaseCleanupTarget, error) {
+func (m *manager) resolveCleanupTargets(ctx context.Context, plan cleanupPlanBlocker, repoPath string, refs []string, sourceSHA, label string) ([]releaseCleanupTarget, error) {
 	if len(refs) == 0 {
 		plan.block("%s has no valid merge targets", label)
 		return nil, nil
@@ -466,6 +510,9 @@ func (m *manager) resolveCleanupTargets(ctx context.Context, plan *ReleaseCleanu
 			plan.block("%s merge target %s is missing", label, ref)
 			continue
 		}
+		if err := m.git.EnsureCommit(ctx, repoPath, sha); err != nil {
+			return nil, fmt.Errorf("%s merge target %s object unavailable: %w", label, ref, err)
+		}
 		merged, err := m.git.IsAncestor(ctx, repoPath, sourceSHA, sha)
 		if err != nil {
 			return nil, err
@@ -473,9 +520,19 @@ func (m *manager) resolveCleanupTargets(ctx context.Context, plan *ReleaseCleanu
 		if !merged {
 			plan.block("%s is not contained in fresh merge target %s", label, ref)
 		}
-		targets = append(targets, releaseCleanupTarget{ref: ref, plannedSHA: sha})
+		targets = append(targets, releaseCleanupTarget{ref: ref, plannedSHA: sha, storeRef: localStoreMirrorRef(ref)})
 	}
 	return targets, nil
+}
+
+// localStoreMirrorRef maps an authoritative origin branch ref to the local
+// ref-store mirror that shares the store with refs/heads branches.
+func localStoreMirrorRef(ref string) string {
+	branch, ok := strings.CutPrefix(ref, "refs/heads/")
+	if !ok || branch == "" {
+		return ""
+	}
+	return "refs/remotes/origin/" + branch
 }
 
 func cleanupRemoteBranchRef(branch string) string {
@@ -504,7 +561,7 @@ func (m *manager) cleanupReleaseBranchProtected(branch string) bool {
 	return slices.Contains(exact, branch)
 }
 
-func (m *manager) validateCleanupWorktree(ctx context.Context, plan *ReleaseCleanupPlan, entries []git.WorktreeEntry, step releaseCleanupStep) bool {
+func (m *manager) validateCleanupWorktree(ctx context.Context, plan cleanupPlanBlocker, entries []git.WorktreeEntry, step releaseCleanupStep) bool {
 	matches := make([]git.WorktreeEntry, 0, 1)
 	for _, entry := range entries {
 		if samePath(entry.Path, step.path) {
@@ -558,4 +615,12 @@ func (p *ReleaseCleanupPlan) block(format string, args ...any) {
 }
 func (p *ReleaseCleanupPlan) finishFingerprint() {
 	p.fingerprint = sha256.Sum256([]byte(fmt.Sprintf("%x|%#v|%#v|%#v", p.manifestDigest, p.preview.Selection, p.steps, p.repoPaths)))
+}
+
+// fingerprintAuthentic recomputes the digest from plan content so a caller
+// that mutates an approved in-memory plan after planning is rejected.
+func (p ReleaseCleanupPlan) fingerprintAuthentic() bool {
+	clone := p
+	clone.finishFingerprint()
+	return clone.fingerprint == p.fingerprint
 }

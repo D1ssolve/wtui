@@ -110,6 +110,9 @@ func (m *manager) integrateReleaseTaskMR(ctx context.Context, release *domain.Re
 	if !mr.SupportsSHAPin {
 		return fmt.Errorf("release task merge: MR !%d does not support required head SHA pinning", step.MRNumber)
 	}
+	if !mr.SupportsTargetBinding {
+		return fmt.Errorf("release task merge: MR !%d does not support required target binding", step.MRNumber)
+	}
 	if strings.TrimSpace(step.HeadSHA) == "" {
 		return errors.New("release task merge: confirmed head SHA is empty")
 	}
@@ -118,7 +121,7 @@ func (m *manager) integrateReleaseTaskMR(ctx context.Context, release *domain.Re
 	if err := m.persistCheckpoint(release, "task_merge_attempting", nil); err != nil {
 		return err
 	}
-	params := forge.MergeMRParams{WorktreePath: step.WorktreePath, Repo: step.Repo, Number: step.MRNumber, Method: step.MergeMethod, ExpectedHeadSHA: step.HeadSHA}
+	params := forge.MergeMRParams{WorktreePath: step.WorktreePath, Repo: step.Repo, Number: step.MRNumber, Method: step.MergeMethod, ExpectedHeadSHA: step.HeadSHA, ExpectedTargetBranch: step.TargetBranch, ExpectedTargetSHA: expected}
 	sendStatus(statusCh, fmt.Sprintf("[%s][task-merge] merging !%d", step.ServiceName, step.MRNumber))
 	if _, err := client.MergeMR(ctx, params); err != nil {
 		if ctx.Err() == nil {

@@ -261,9 +261,6 @@ func mergeRule(base BranchTypeRule, override config.BranchTypeRule) BranchTypeRu
 	if override.TagSource != "" {
 		merged.TagSource = override.TagSource
 	}
-	if override.DeleteSourceBranchAfterMerge {
-		merged.DeleteSourceBranchAfterMerge = true
-	}
 	if override.TriggerPipelineOnClose {
 		merged.TriggerPipelineOnClose = true
 	}
@@ -273,16 +270,15 @@ func mergeRule(base BranchTypeRule, override config.BranchTypeRule) BranchTypeRu
 
 func mapRule(rule config.BranchTypeRule) BranchTypeRule {
 	return BranchTypeRule{
-		Prefixes:                     append([]string(nil), rule.Prefixes...),
-		BaseBranch:                   rule.BaseBranch,
-		MergeTargets:                 append([]string(nil), rule.MergeTargets...),
-		ReviewTargets:                append([]string(nil), rule.ReviewTargets...),
-		CloseStrategy:                CloseStrategy(rule.CloseStrategy),
-		MergeStrategy:                MergeStrategy(rule.MergeStrategy),
-		RequiresClean:                rule.RequiresClean,
-		TagOnClose:                   rule.TagOnClose,
-		TagSource:                    rule.TagSource,
-		DeleteSourceBranchAfterMerge: rule.DeleteSourceBranchAfterMerge,
-		TriggerPipelineOnClose:       rule.TriggerPipelineOnClose,
+		Prefixes:               append([]string(nil), rule.Prefixes...),
+		BaseBranch:             rule.BaseBranch,
+		MergeTargets:           append([]string(nil), rule.MergeTargets...),
+		ReviewTargets:          append([]string(nil), rule.ReviewTargets...),
+		CloseStrategy:          CloseStrategy(rule.CloseStrategy),
+		MergeStrategy:          MergeStrategy(rule.MergeStrategy),
+		RequiresClean:          rule.RequiresClean,
+		TagOnClose:             rule.TagOnClose,
+		TagSource:              rule.TagSource,
+		TriggerPipelineOnClose: rule.TriggerPipelineOnClose,
 	}
 }

@@ -27,7 +27,7 @@ func TestCreateRelease_TaskMergeRecoveryAfterReload(t *testing.T) {
 	var specs []releasePlanTaskService
 	for n := 1; n <= 3; n++ {
 		id := fmt.Sprintf("APP-%d", n)
-		f.readiness[n] = forge.MRReadiness{Number: n, URL: fmt.Sprintf("https://github.com/org/repo/pull/%d", n), State: "open", SourceBranch: "feature/" + id, TargetBranch: "develop", HeadSHA: fmt.Sprintf("head-%d", n), Ready: true, SupportsSHAPin: true}
+		f.readiness[n] = forge.MRReadiness{Number: n, URL: fmt.Sprintf("https://github.com/org/repo/pull/%d", n), State: "open", SourceBranch: "feature/" + id, TargetBranch: "develop", HeadSHA: fmt.Sprintf("head-%d", n), Ready: true, SupportsSHAPin: true, SupportsTargetBinding: true}
 		specs = append(specs, releasePlanTaskService{TaskID: id, ServiceName: "api", Branch: "feature/" + id, RepoPath: filepath.Join(m.cfg.RootDir, "repo-api")})
 	}
 	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitHub: f}

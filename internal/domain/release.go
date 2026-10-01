@@ -84,6 +84,13 @@ type ProductionMRRef struct {
 	URL       string `json:"url"`
 	SourceSHA string `json:"source_sha"`
 	State     string `json:"state"`
+	// Repo is the canonical forge repository path (host/owner/repo) the MR
+	// proof was created against; ProviderHost is the remote host when known.
+	// Consumers must require both to match the service's current origin, and
+	// fail closed when Repo is empty: an MR number/SHA pair from another
+	// repository must never authorize a production merge.
+	Repo         string `json:"repo,omitempty"`
+	ProviderHost string `json:"provider_host,omitempty"`
 }
 
 type ReleaseFeatureBranch struct {

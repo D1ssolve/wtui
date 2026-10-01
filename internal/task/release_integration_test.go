@@ -133,6 +133,7 @@ func TestConvertHotfixToFeature_Integration_StagedTaskSwap(t *testing.T) {
 			mustGit(t, sourcePath, "add", "fix.txt")
 			mustGit(t, sourcePath, "commit", "-m", "fix: staged conversion")
 			mustGit(t, sourcePath, "push", "-u", "origin", "hotfix/"+sourceID)
+			sourceOID := gitOutput(t, sourcePath, "rev-parse", "HEAD")
 
 			if err := env.manager.ConvertHotfixToFeature(context.Background(), ConvertHotfixParams{
 				SourceTaskID: sourceID,
@@ -153,8 +154,12 @@ func TestConvertHotfixToFeature_Integration_StagedTaskSwap(t *testing.T) {
 					t.Fatalf("source task still exists: %v", err)
 				}
 			}
-			if got := gitOutput(t, env.repoPath, "ls-remote", "--heads", "origin", "hotfix/"+sourceID); got != "" {
-				t.Fatalf("remote hotfix still exists: %q", got)
+			remote := gitOutput(t, env.repoPath, "ls-remote", "--heads", "origin", "hotfix/"+sourceID)
+			if remote == "" {
+				t.Fatal("remote hotfix branch must be retained after conversion")
+			}
+			if got := strings.Fields(remote)[0]; got != sourceOID {
+				t.Fatalf("retained remote hotfix = %q, want source %q", got, sourceOID)
 			}
 			if got := gitOutput(t, env.repoPath, "ls-remote", "--heads", "origin", "feature/"+targetID); got == "" {
 				t.Fatal("remote feature branch missing")
@@ -407,20 +412,20 @@ func containsRepoState(states []domain.RepoState, target domain.RepoState) bool 
 type failingPushTagClient struct {
 	git.Client
 	failCount int
-	onFail    func(worktreePath, tag string) error
+	onFail    func(worktreePath, capturedRemoteURL, tag, tagObjectOID string) error
 }
 
-func (c *failingPushTagClient) PushTag(ctx context.Context, worktreePath, tag string) error {
+func (c *failingPushTagClient) PushTag(ctx context.Context, worktreePath, capturedRemoteURL, tag, tagObjectOID string) error {
 	if c.failCount > 0 {
 		c.failCount--
 		if c.onFail != nil {
-			if err := c.onFail(worktreePath, tag); err != nil {
+			if err := c.onFail(worktreePath, capturedRemoteURL, tag, tagObjectOID); err != nil {
 				return err
 			}
 		}
 		return fmt.Errorf("%w: simulated tag push failure", ErrReleaseTagPushFailed)
 	}
-	return c.Client.PushTag(ctx, worktreePath, tag)
+	return c.Client.PushTag(ctx, worktreePath, capturedRemoteURL, tag, tagObjectOID)
 }
 
 type failingCreateBranchClient struct {
@@ -455,17 +460,17 @@ type failingCreateTagClient struct {
 	onFail    func(repoPath, tag, target, message string) error
 }
 
-type failingCleanupBranchClient struct {
+type failingCleanupWorktreeClient struct {
 	git.Client
 	failCount int
 }
 
-func (c *failingCleanupBranchClient) DeleteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error {
-	if c.failCount > 0 && strings.HasPrefix(branch, "feature/") {
+func (c *failingCleanupWorktreeClient) RemoveWorktree(ctx context.Context, commonDir, worktreePath string, force bool) error {
+	if c.failCount > 0 {
 		c.failCount--
-		return errors.New("simulated cleanup branch failure")
+		return errors.New("simulated cleanup worktree failure")
 	}
-	return c.Client.DeleteBranchIfUnchanged(ctx, repoPath, branch, expectedSHA)
+	return c.Client.RemoveWorktree(ctx, commonDir, worktreePath, force)
 }
 
 func (c *failingCreateTagClient) CreateTag(ctx context.Context, repoPath, tag, target, message string) error {
@@ -710,7 +715,7 @@ func TestIntegration_FinalizeRelease_TagPushFailure_ReachedPushingCheckpoint(t *
 		forgeClients: env.manager.forgeClients,
 		logger:       env.manager.logger,
 	}
-	failingGit.onFail = func(worktreePath, tag string) error {
+	failingGit.onFail = func(worktreePath, capturedRemoteURL, tag, tagObjectOID string) error {
 		loaded, loadErr := finishMgr.loadReleaseManifest(release.ID)
 		if loadErr != nil {
 			return fmt.Errorf("load manifest during PushTag: %w", loadErr)
@@ -756,7 +761,7 @@ func TestReleaseCleanup_Integration_DevelopCheckedOutAndRetryAfterPartialFailure
 	}
 	mustGit(t, env.repoPath, "checkout", "develop")
 
-	failing := &failingCleanupBranchClient{Client: env.manager.git, failCount: 1}
+	failing := &failingCleanupWorktreeClient{Client: env.manager.git, failCount: 1}
 	mgr := *env.manager
 	mgr.git = failing
 	plan, err := mgr.PlanReleaseCleanup(context.Background(), release.ID, DefaultReleaseCleanupSelection())
@@ -766,8 +771,8 @@ func TestReleaseCleanup_Integration_DevelopCheckedOutAndRetryAfterPartialFailure
 	if _, err = mgr.ExecuteReleaseCleanup(context.Background(), plan, nil); err == nil {
 		t.Fatal("expected injected failure")
 	}
-	if _, err := os.Stat(filepath.Join(env.tasksRoot, "APP-60")); !os.IsNotExist(err) {
-		t.Fatalf("task directory remains: %v", err)
+	if _, err := os.Stat(filepath.Join(env.tasksRoot, "APP-60")); err != nil {
+		t.Fatalf("task directory removed after partial failure: %v", err)
 	}
 	if _, err := os.Stat(mgr.releaseManifestPath(release.ID)); err != nil {
 		t.Fatalf("manifest removed after failure: %v", err)

@@ -10,17 +10,12 @@ import (
 )
 
 type HelpOverlay struct {
-	lazygitAvailable        bool
-	releaseCleanupAvailable bool
-	workflowTitle           string
-	workflow                *domain.WorkflowSummary
-	scrollOffset            int
-	terminalWidth           int
-	terminalHeight          int
-}
-
-func (h *HelpOverlay) SetReleaseCleanupAvailable(available bool) {
-	h.releaseCleanupAvailable = available
+	lazygitAvailable bool
+	workflowTitle    string
+	workflow         *domain.WorkflowSummary
+	scrollOffset     int
+	terminalWidth    int
+	terminalHeight   int
 }
 
 func NewHelpOverlayWithOptions(lazygitAvailable bool) *HelpOverlay {
@@ -134,7 +129,7 @@ func (h *HelpOverlay) contentLines() []string {
 	sb.WriteString("\n")
 	sb.WriteString(h.shortcutRow("C", "Plan close selected task"))
 	sb.WriteString("\n")
-	sb.WriteString(h.shortcutRow("P", "Scan prunable tasks"))
+	sb.WriteString(h.shortcutRow("D / P", "Open cleanup review (scan, select, confirm)"))
 	sb.WriteString("\n")
 	sb.WriteString(h.shortcutRow("V", "Validate selected task"))
 	sb.WriteString("\n")
@@ -193,10 +188,8 @@ func (h *HelpOverlay) contentLines() []string {
 	sb.WriteString(h.shortcutRow("I", "Open selected release folder in Rider"))
 	sb.WriteString("\n")
 	sb.WriteString(h.shortcutRow("M", "Merge selected release MRs when available"))
-	if h.releaseCleanupAvailable {
-		sb.WriteString("\n")
-		sb.WriteString(h.shortcutRow("D", "Cleanup selected released release"))
-	}
+	sb.WriteString("\n")
+	sb.WriteString(h.shortcutRow("D", "Open cleanup review (scan, select, confirm)"))
 	sb.WriteString("\n\n")
 	sb.WriteString(sectionStyle.Render("Release Confirmation:"))
 	sb.WriteString("\n")

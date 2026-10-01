@@ -62,6 +62,10 @@ func isBinaryAvailable(ctx context.Context, binary string) bool {
 	return cmd.Run() == nil
 }
 
+// RemoteHost extracts the lowercase provider host from a remote URL, for
+// both URL and scp-like syntax; empty when unparseable.
+func RemoteHost(remoteURL string) string { return remoteHost(remoteURL) }
+
 func remoteHost(remoteURL string) string {
 	trimmed := strings.TrimSpace(remoteURL)
 	if trimmed == "" {

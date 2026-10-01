@@ -386,6 +386,11 @@ func newReleasePlanTestManager(t *testing.T, gitMock *mockGitClient) (*manager, 
 	if gitMock.isAncestorFn == nil {
 		gitMock.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
 	}
+	if gitMock.remoteURLRes == "" && gitMock.remoteURLErr == nil {
+		// Mirror real git: a repo whose origin fetch URL is readable pushes
+		// there too unless a pushurl overrides it.
+		gitMock.remoteURLRes = "git@github.com:org/repo.git"
+	}
 
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
