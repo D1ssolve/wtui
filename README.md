@@ -98,6 +98,8 @@ To clean up:
 3. Select the items you want to remove.
 4. Each selected item is replanned and confirmed individually before anything is deleted.
 
+When the full scan is too slow or you already know the target, press `d` in the Tasks panel to clean up only the selected task, or in the Releases panel to clean up only the selected released release. This skips the scan and goes straight to the per-item plan and confirmation; everything else works the same. Note that `d` no longer removes a task — task removal lives on the `Delete` key.
+
 Cleanup removes worktrees, generated metadata, and task/release directories. Local and remote branches and tags are always retained; delete branches on the forge when you no longer need them. Directories containing unknown files are preserved and reported instead of being removed.
 
 ![Manual cleanup review](docs/images/manual-cleanup.png)

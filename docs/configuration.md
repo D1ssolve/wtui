@@ -369,7 +369,9 @@ must be split, even when `allow_mixed_branch_types_on_close` is enabled.
     **Tasks → D** opens a read-only scan where qualifying local cleanup can be
     selected and confirmed explicitly. Local and remote branches are retained;
     delete remote branches manually in the forge when needed. **Tasks → P** is
-    an alias for the same cleanup review.
+    an alias for the same cleanup review. **Tasks → d** cleans up only the
+    selected task, skipping the scan; the same per-item plan and confirmation
+    still apply.
 
 With `review_targets: [master, develop]`, an already merged master request
 is skipped and only the missing develop request is created. Active release
