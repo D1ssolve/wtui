@@ -311,9 +311,9 @@ Release version proposals are calculated independently from each service reposit
 
 ### Release Cleanup
 
-Release cleanup removes release/task worktrees, directories, and the release manifest; tags are never deleted. Local branches are always retained, because the authoritative merge targets live on the remote and cannot be atomically guarded. Selecting remote branch deletion fails closed before any mutation; deselect remote deletion to run a local-only cleanup. Manual task removal with the remote branch option likewise fails before any mutation: remove worktrees and local branches only, or delete the remote branch on the forge.
+Release cleanup removes release/task worktrees, directories, and the release manifest; tags are never deleted. Local branches are always retained, because the authoritative merge targets live on the remote and cannot be atomically guarded. Selecting remote branch deletion fails closed before any mutation; deselect remote deletion to run a local-only cleanup.
 
-Directories are deleted only when every entry is plan-known. Unknown files or directories are preserved and named in the returned error, so user content never dies with a recursive delete. The same rule applies to task cleanup via `D` and to manual task removal: a task directory with leftover entries is kept and reported as an error instead of being removed.
+Directories are deleted only when every entry is plan-known. Unknown files or directories are preserved and named in the returned error, so user content never dies with a recursive delete. The same rule applies to task cleanup via `D`.
 
 Task cleanup also inspects every release that involves the task. An active in-flight status, a recoverable failure, and a malformed or unknown status block cleanup; malformed manifests fail closed the same way. A `released` manifest supplies integration proof. A `rejected` release or a nonrecoverable failure neither blocks cleanup nor proves integration: the task must still be proven merged through live or forge-provided ancestry.
 

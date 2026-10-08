@@ -103,8 +103,10 @@ type mockManager struct {
 
 	taskCleanupPlanCalls    int
 	taskCleanupPlanTaskIDs  []string
+	taskCleanupPlanRequests []task.TaskCleanupRequest
 	taskCleanupPlanResult   task.TaskCleanupPlan
 	taskCleanupPlanErr      error
+	taskCleanupPlanHook     func(context.Context, task.TaskCleanupRequest)
 	taskCleanupExecCalls    int
 	taskCleanupExecResult   task.TaskCleanupResult
 	taskCleanupExecErr      error
@@ -144,8 +146,6 @@ func (m *mockManager) ConvertHotfixToFeature(_ context.Context, params task.Conv
 	}
 	return m.convertErr
 }
-func (m *mockManager) Remove(_ context.Context, _ string, _ task.RemoveOptions) error { return nil }
-
 func (m *mockManager) List(_ context.Context) ([]domain.Task, error) {
 	m.listTasksCalls++
 	return m.listTasksResult, m.listTasksErr
@@ -339,6 +339,8 @@ func (m *mockManager) RejectRelease(_ context.Context, _ string) (domain.Release
 
 func (m *mockManager) RemoveRelease(_ context.Context, _ string) error { return nil }
 func (m *mockManager) PlanReleaseCleanup(_ context.Context, releaseID string, selection task.ReleaseCleanupSelection) (task.ReleaseCleanupPlan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.cleanupPlanCalls++
 	m.cleanupPlanReleaseID = releaseID
 	m.cleanupPlanSelection = selection
@@ -353,13 +355,19 @@ func (m *mockManager) ExecuteReleaseCleanup(_ context.Context, _ task.ReleaseCle
 	return m.cleanupExecuteResult, m.cleanupExecuteErr
 }
 
-func (m *mockManager) PlanTaskCleanup(_ context.Context, request task.TaskCleanupRequest) (task.TaskCleanupPlan, error) {
+func (m *mockManager) PlanTaskCleanup(ctx context.Context, request task.TaskCleanupRequest) (task.TaskCleanupPlan, error) {
+	if m.taskCleanupPlanHook != nil {
+		m.taskCleanupPlanHook(ctx, request)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.taskCleanupPlanCalls++
 	m.taskCleanupPlanTaskIDs = append(m.taskCleanupPlanTaskIDs, request.TaskID)
+	m.taskCleanupPlanRequests = append(m.taskCleanupPlanRequests, request)
 	return m.taskCleanupPlanResult, m.taskCleanupPlanErr
 }
 
-func (m *mockManager) ExecuteTaskCleanup(_ context.Context, _ task.TaskCleanupPlan, statusCh chan<- string) (task.TaskCleanupResult, error) {
+func (m *mockManager) ExecuteTaskCleanup(_ context.Context, _ task.TaskCleanupPlan, statusCh chan<- string, _ ...task.TaskCleanupExecutionSelection) (task.TaskCleanupResult, error) {
 	m.taskCleanupExecCalls++
 	for _, line := range m.taskCleanupExecStatuses {
 		statusCh <- line
@@ -2021,26 +2029,6 @@ func TestUpdate_SubmitInitMsg_StartsOperation(t *testing.T) {
 	}
 }
 
-func TestUpdate_SubmitRemoveMsg_StartsOperation(t *testing.T) {
-	m := newTestModel(t, &mockManager{})
-
-	updated, cmd := m.Update(modal.SubmitRemoveTaskMsg{
-		TaskID:  "IN-4444",
-		Options: task.RemoveOptions{RemoveWorktrees: true},
-	})
-	m = updated.(Model)
-
-	if !m.opRunning {
-		t.Error("opRunning must be true after SubmitRemoveMsg")
-	}
-	if m.modal != nil {
-		t.Error("modal must be closed after SubmitRemoveMsg")
-	}
-	if cmd == nil {
-		t.Error("SubmitRemoveMsg must return a non-nil cmd")
-	}
-}
-
 func TestUpdate_OpenConvertHotfixDialogMsg_OpensModal(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 
@@ -2098,7 +2086,7 @@ func TestUpdate_ConversionRunningBlocksTaskMutation(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m.conversionRunning = true
 
-	updated, cmd := m.Update(panels.OpenRemoveDialogMsg{TaskID: "IN-4444"})
+	updated, cmd := m.Update(panels.OpenInitDialogMsg{})
 	m = updated.(Model)
 
 	if cmd != nil || m.modal != nil {
@@ -2110,7 +2098,7 @@ func TestUpdate_PendingConversionBlocksMutationButAllowsRetry(t *testing.T) {
 	m := newTestModel(t, &mockManager{})
 	m.tasks = []domain.Task{{ID: "IN-4444", PendingConversionTargetID: "IN-9000"}}
 
-	updated, cmd := m.Update(panels.OpenRemoveDialogMsg{TaskID: "IN-4444"})
+	updated, cmd := m.Update(panels.OpenInitDialogMsg{})
 	m = updated.(Model)
 	if cmd != nil || m.modal != nil {
 		t.Fatalf("pending mutation was not blocked: cmd=%v modal=%T", cmd, m.modal)

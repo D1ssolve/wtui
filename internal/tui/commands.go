@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -79,11 +80,6 @@ type LoadFailedMsg struct {
 	Op  string
 }
 
-type DirtyServicesLoadedMsg struct {
-	ServiceCount  int
-	DirtyServices []string
-}
-
 func loadTasksCmd(mgr task.Manager, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -133,27 +129,6 @@ func loadReposCmd(mgr task.Manager, force bool) tea.Cmd {
 	}
 }
 
-func loadDirtyServicesCmd(mgr task.Manager, taskID string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
-		defer cancel()
-		services, err := mgr.ListServices(ctx, taskID)
-		if err != nil {
-			return DirtyServicesLoadedMsg{}
-		}
-		var dirtyNames []string
-		for _, s := range services {
-			if s.IsDirty {
-				dirtyNames = append(dirtyNames, s.Name)
-			}
-		}
-		return DirtyServicesLoadedMsg{
-			ServiceCount:  len(services),
-			DirtyServices: dirtyNames,
-		}
-	}
-}
-
 func initTaskCmd(mgr task.Manager, params task.InitParams, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	params.StatusCh = statusCh
@@ -188,14 +163,6 @@ func addServiceCmd(mgr task.Manager, params task.AddParams, generation uint64) t
 		},
 		readNextLine(statusCh),
 	)
-}
-
-func removeTaskCmd(mgr task.Manager, taskID string, opts task.RemoveOptions, generation uint64) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 5*time.Minute)
-		defer cancel()
-		return CommandDoneMsg{Generation: generation, Err: mgr.Remove(ctx, taskID, opts), Op: "Remove task " + taskID}
-	}
 }
 
 func convertHotfixCmd(mgr task.Manager, params task.ConvertHotfixParams, generation uint64) tea.Cmd {
@@ -388,8 +355,7 @@ func closeTaskCmd(mgr task.Manager, params task.CloseTaskParams, generation uint
 // item instead of failing the scan.
 func scanCleanupCandidatesCmd(mgr task.Manager, generation uint64) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
+		ctx := context.Background()
 
 		tasks, err := mgr.List(ctx)
 		if err != nil {
@@ -401,58 +367,70 @@ func scanCleanupCandidatesCmd(mgr task.Manager, generation uint64) tea.Cmd {
 		}
 
 		candidates := make([]modal.CleanupCandidate, 0, len(tasks)+len(releases))
+
+		const cleanupScanConcurrency = 10
+		sem := make(chan struct{}, cleanupScanConcurrency)
+		var wg sync.WaitGroup
+		plan := func(index int, candidate modal.CleanupCandidate, run func() (int, int, bool, string)) {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					candidate.Reason = ctx.Err().Error()
+					candidates[index] = candidate
+					return
+				}
+				defer func() { <-sem }()
+				candidate.Services, candidate.Resources, candidate.Ready, candidate.Reason = run()
+				candidates[index] = candidate
+			}()
+		}
+
 		for _, taskInfo := range tasks {
-			candidate := modal.CleanupCandidate{Kind: modal.CleanupKindTask, ID: taskInfo.ID}
-			plan, planErr := mgr.PlanTaskCleanup(ctx, task.TaskCleanupRequest{TaskID: taskInfo.ID})
-			switch {
-			case planErr != nil:
-				candidate.Reason = "plan failed: " + planErr.Error()
-			default:
-				preview := plan.Preview()
-				candidate.Services = len(preview.Services)
+			index, taskInfo := len(candidates), taskInfo
+			candidates = append(candidates, modal.CleanupCandidate{})
+			plan(index, modal.CleanupCandidate{Kind: modal.CleanupKindTask, ID: taskInfo.ID}, func() (int, int, bool, string) {
+				cleanupPlan, planErr := mgr.PlanTaskCleanup(ctx, task.TaskCleanupRequest{TaskID: taskInfo.ID})
+				if planErr != nil {
+					return 0, 0, false, "plan failed: " + planErr.Error()
+				}
+				preview := cleanupPlan.Preview()
+				resources := 0
 				for _, service := range preview.Services {
 					if service.WorktreePath != "" {
-						candidate.Resources++
+						resources++
 					}
 				}
-				switch {
-				case len(preview.Blockers) > 0:
-					candidate.Reason = strings.Join(preview.Blockers, "; ")
-				case len(preview.Services) == 0:
-					candidate.Reason = "no cleanup steps planned"
-				default:
-					candidate.Ready = true
+				if len(preview.Blockers) > 0 {
+					return len(preview.Services), resources, false, strings.Join(preview.Blockers, "; ")
 				}
-			}
-			candidates = append(candidates, candidate)
-			if ctx.Err() != nil {
-				return CleanupScanReadyMsg{Generation: generation, Err: ctx.Err()}
-			}
+				if len(preview.Services) == 0 {
+					resources = 1 // The planner removes the orphan task directory.
+				}
+				return len(preview.Services), resources, true, ""
+			})
 		}
 		for _, release := range releases {
 			if release.Status != domain.ReleaseStatusReleased {
 				continue
 			}
-			candidate := modal.CleanupCandidate{Kind: modal.CleanupKindRelease, ID: release.ID}
-			plan, planErr := mgr.PlanReleaseCleanup(ctx, release.ID, task.ReleaseCleanupSelection{RemoveRelease: true})
-			switch {
-			case planErr != nil:
-				candidate.Reason = "plan failed: " + planErr.Error()
-			default:
-				preview := plan.Preview()
-				candidate.Services = len(preview.Services)
-				candidate.Resources = len(preview.Tasks)
-				if len(preview.Blockers) > 0 {
-					candidate.Reason = strings.Join(preview.Blockers, "; ")
-				} else {
-					candidate.Ready = true
+			index := len(candidates)
+			candidates = append(candidates, modal.CleanupCandidate{})
+			plan(index, modal.CleanupCandidate{Kind: modal.CleanupKindRelease, ID: release.ID}, func() (int, int, bool, string) {
+				cleanupPlan, planErr := mgr.PlanReleaseCleanup(ctx, release.ID, task.ReleaseCleanupSelection{RemoveRelease: true, DeleteLocalReleaseBranches: true})
+				if planErr != nil {
+					return 0, 0, false, "plan failed: " + planErr.Error()
 				}
-			}
-			candidates = append(candidates, candidate)
-			if ctx.Err() != nil {
-				return CleanupScanReadyMsg{Generation: generation, Err: ctx.Err()}
-			}
+				preview := cleanupPlan.Preview()
+				if len(preview.Blockers) > 0 {
+					return len(preview.Services), len(preview.Tasks), false, strings.Join(preview.Blockers, "; ")
+				}
+				return len(preview.Services), len(preview.Tasks), true, ""
+			})
 		}
+		wg.Wait()
 		return CleanupScanReadyMsg{Generation: generation, Candidates: candidates}
 	}
 }
@@ -503,22 +481,22 @@ func executeReleaseCleanupCmd(mgr task.Manager, plan task.ReleaseCleanupPlan, re
 	return readStatusOrDone(statusCh, doneCh)
 }
 
-func planTaskCleanupCmd(mgr task.Manager, taskID string, generation, operationGeneration uint64) tea.Cmd {
+func planTaskCleanupCmd(mgr task.Manager, taskID string, deleteRemoteBranches bool, generation, operationGeneration uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 2*time.Minute)
 		defer cancel()
-		plan, err := mgr.PlanTaskCleanup(ctx, task.TaskCleanupRequest{TaskID: taskID})
+		plan, err := mgr.PlanTaskCleanup(ctx, task.TaskCleanupRequest{TaskID: taskID, DeleteRemoteTaskBranches: deleteRemoteBranches})
 		return TaskCleanupPlanReadyMsg{TaskID: taskID, Generation: generation, OperationGeneration: operationGeneration, Plan: plan, Err: err}
 	}
 }
 
-func executeTaskCleanupCmd(mgr task.Manager, plan task.TaskCleanupPlan, taskID string, generation, operationGeneration uint64) tea.Cmd {
+func executeTaskCleanupCmd(mgr task.Manager, plan task.TaskCleanupPlan, taskID string, selection task.TaskCleanupExecutionSelection, generation, operationGeneration uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan TaskCleanupDoneMsg, 1)
 	go func() {
 		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 10*time.Minute)
 		defer cancel()
-		result, err := mgr.ExecuteTaskCleanup(ctx, plan, statusCh)
+		result, err := mgr.ExecuteTaskCleanup(ctx, plan, statusCh, selection)
 		if result.TaskID == "" {
 			result.TaskID = taskID
 		}

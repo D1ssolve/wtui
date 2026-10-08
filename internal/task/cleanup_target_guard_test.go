@@ -2,18 +2,19 @@ package task
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
-// Tracking-ref guards are never used as remote locks: local branches are
-// always retained and DeleteBranchIfUnchanged is never consulted.
-func TestExecuteTaskCleanup_RetainsLocalBranchWithoutConsultingTrackingRefs(t *testing.T) {
+func TestExecuteTaskCleanup_DeletesLocalBranchWithTrackingRefGuard(t *testing.T) {
 	mgr, gitMock, plan := setupExecutableTaskCleanup(t)
-	gitMock.deleteBranchIfUnchangedFn = func(_, _, _ string) error {
-		t.Fatal("DeleteBranchIfUnchanged called without an atomic remote target guard")
+	gitMock.deleteBranchIfUnchangedFn = func(_, branch, expectedSHA string) error {
+		if branch != "feature/APP-1" || expectedSHA != taskCleanupTaskSHA {
+			t.Fatalf("delete branch = %q @ %q", branch, expectedSHA)
+		}
 		return nil
 	}
 
@@ -21,26 +22,24 @@ func TestExecuteTaskCleanup_RetainsLocalBranchWithoutConsultingTrackingRefs(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(gitMock.deleteBranchIfUnchangedGuardCalls) != 0 {
-		t.Fatalf("tracking-ref guards used as remote lock: %+v", gitMock.deleteBranchIfUnchangedGuardCalls)
+	if len(gitMock.deleteBranchIfUnchangedGuardCalls) != 1 {
+		t.Fatalf("guard calls = %+v", gitMock.deleteBranchIfUnchangedGuardCalls)
 	}
-	if len(result.Retained) != 1 || !strings.Contains(result.Retained[0], "retain local task branch feature/APP-1") {
-		t.Fatalf("retained = %q", result.Retained)
+	if guards := gitMock.deleteBranchIfUnchangedGuardCalls[0]; len(guards) != 1 || guards[0].Ref != "refs/remotes/origin/master" || guards[0].OID != taskCleanupMasterSHA {
+		t.Fatalf("guards = %+v", guards)
+	}
+	if len(result.Completed) < 2 || !strings.Contains(result.Completed[1], "delete local task branch feature/APP-1") {
+		t.Fatalf("completed = %q", result.Completed)
 	}
 }
 
-func TestExecuteTaskCleanup_MultipleTargetsStillRetainBranch(t *testing.T) {
+func TestExecuteTaskCleanup_MultipleTargetsGuardLocalBranchDeletion(t *testing.T) {
 	mgr, gitMock, _ := setupExecutableTaskCleanup(t)
 	mgr.flow.BranchTypes[gitflow.BranchTypeFeature] = gitflow.BranchTypeRule{
 		Prefixes:      []string{"feature/"},
 		MergeTargets:  []string{"master", "develop"},
 		CloseStrategy: gitflow.CloseStrategyDirectMerge,
 	}
-	gitMock.deleteBranchIfUnchangedFn = func(_, _, _ string) error {
-		t.Fatal("DeleteBranchIfUnchanged called without an atomic remote target guard")
-		return nil
-	}
-
 	plan, err := mgr.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1"})
 	if err != nil {
 		t.Fatal(err)
@@ -48,18 +47,16 @@ func TestExecuteTaskCleanup_MultipleTargetsStillRetainBranch(t *testing.T) {
 	if plan.Blocked() {
 		t.Fatalf("plan blocked: %q", plan.Preview().Blockers)
 	}
-	result, err := mgr.ExecuteTaskCleanup(t.Context(), plan, nil)
+	_, err = mgr.ExecuteTaskCleanup(t.Context(), plan, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Retained) != 1 || !strings.Contains(result.Retained[0], "retain local task branch feature/APP-1") {
-		t.Fatalf("retained = %q", result.Retained)
+	if len(gitMock.deleteBranchIfUnchangedGuardCalls) != 1 || len(gitMock.deleteBranchIfUnchangedGuardCalls[0]) != 2 {
+		t.Fatalf("guard calls = %+v", gitMock.deleteBranchIfUnchangedGuardCalls)
 	}
 }
 
-// A target without a local mirror can no longer be "guarded"; retention does
-// not depend on tracking refs, so the branch is still only reported retained.
-func TestExecuteTaskCleanup_MissingStoreRefStillRetainsBranch(t *testing.T) {
+func TestExecuteTaskCleanup_MissingStoreRefBlocksLocalBranchDeletion(t *testing.T) {
 	mgr, gitMock, plan := setupExecutableTaskCleanup(t)
 	deletes := 0
 	gitMock.deleteBranchIfUnchangedFn = func(_, _, _ string) error {
@@ -78,13 +75,11 @@ func TestExecuteTaskCleanup_MissingStoreRefStillRetainsBranch(t *testing.T) {
 	}
 	branchStep.targets[0].storeRef = ""
 
-	noop, err := mgr.executeTaskCleanupStep(t.Context(), plan, *branchStep)
-	if err != nil {
-		t.Fatalf("retention step failed: %v", err)
+	noop, err := mgr.executeTaskCleanupStep(t.Context(), plan, TaskCleanupExecutionSelection{}, *branchStep)
+	if err == nil {
+		t.Fatal("local branch deletion without atomic guard succeeded")
 	}
-	if !noop {
-		t.Fatal("retention step must not report a mutation")
-	}
+	_ = noop
 	if deletes != 0 {
 		t.Fatalf("local delete called %d times without atomic guard", deletes)
 	}
@@ -103,10 +98,24 @@ func TestExecuteTaskCleanup_TargetStoreRefTamperBlocksAsStale(t *testing.T) {
 	}
 }
 
-func TestExecuteReleaseCleanup_RemoteSelectionBlockedBeforeAnyMutation(t *testing.T) {
+func TestExecuteReleaseCleanup_RemoteSelectionDeletesWithLease(t *testing.T) {
 	mgr, gitMock := cleanupTestManager(t, "released")
 	selection := DefaultReleaseCleanupSelection()
 	selection.DeleteRemoteTaskBranches = true
+	remoteDeletes := 0
+	gitMock.deleteRemoteBranchIfUnchangedFn = func(_, _, _ string) error {
+		remoteDeletes++
+		return nil
+	}
+	gitMock.removeWorktreeFn = func(_, path string, _ bool) error {
+		for i, entry := range gitMock.listWorktreesRes {
+			if entry.Path == path {
+				gitMock.listWorktreesRes = append(gitMock.listWorktreesRes[:i], gitMock.listWorktreesRes[i+1:]...)
+				break
+			}
+		}
+		return os.RemoveAll(path)
+	}
 	plan, err := mgr.PlanReleaseCleanup(t.Context(), "rel-1", selection)
 	if err != nil {
 		t.Fatal(err)
@@ -116,15 +125,15 @@ func TestExecuteReleaseCleanup_RemoteSelectionBlockedBeforeAnyMutation(t *testin
 	}
 
 	_, err = mgr.ExecuteReleaseCleanup(t.Context(), plan, nil)
-	if !errors.Is(err, ErrReleaseCleanupBlocked) || !errors.Is(err, ErrRemoteAtomicGuardUnsupported) {
-		t.Fatalf("error = %v, want unsupported remote deletion block", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(gitMock.removeWorktreeCalls) != 0 || gitMock.deleteBranchCalls != 0 {
-		t.Fatal("mutation occurred before unsupported remote deletion block")
+	if remoteDeletes != 1 {
+		t.Fatalf("remote deletes = %d, want 1", remoteDeletes)
 	}
 }
 
-func TestExecuteReleaseCleanupStep_RemoteDeletionFailsClosedWithValidTargets(t *testing.T) {
+func TestExecuteReleaseCleanupStep_RemoteDeletionUsesLeaseWithValidTargets(t *testing.T) {
 	mgr, gitMock := cleanupTestManager(t, "released")
 	gitMock.listWorktreesRes = nil
 	gitMock.resolveRefFn = func(_, _ string) (string, error) { return taskCleanupTaskSHA, nil }
@@ -141,10 +150,10 @@ func TestExecuteReleaseCleanupStep_RemoteDeletionFailsClosedWithValidTargets(t *
 	}
 
 	err := mgr.executeReleaseCleanupStep(t.Context(), ReleaseCleanupPlan{}, step)
-	if !errors.Is(err, ErrRemoteAtomicGuardUnsupported) {
-		t.Fatalf("error = %v, want unsupported atomic guard blocker", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if remoteDeletes != 0 {
-		t.Fatalf("remote branch deleted without atomic target guard: %d calls", remoteDeletes)
+	if remoteDeletes != 1 {
+		t.Fatalf("remote branch deletes = %d, want 1", remoteDeletes)
 	}
 }

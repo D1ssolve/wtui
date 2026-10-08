@@ -17,6 +17,8 @@ type cleanupOption uint8
 const (
 	cleanupTasks cleanupOption = iota
 	cleanupRelease
+	cleanupRemoteTaskBranches
+	cleanupRemoteReleaseBranches
 )
 
 type releaseCleanupRow struct {
@@ -24,12 +26,11 @@ type releaseCleanupRow struct {
 	label  string
 }
 
-// Only destructive resource scopes are toggles. Branch deletion is never
-// offered: local and remote branches are always retained by cleanup, so the
-// checklist renders their retention as explanatory text instead of checkboxes.
 var releaseCleanupRows = []releaseCleanupRow{
 	{cleanupTasks, "Remove task worktrees and task directories"},
 	{cleanupRelease, "Remove release worktrees and manifest"},
+	{cleanupRemoteTaskBranches, "Delete remote task branches"},
+	{cleanupRemoteReleaseBranches, "Delete remote release branches"},
 }
 
 type ReleaseCleanupChecklistModal struct {
@@ -47,13 +48,17 @@ type ReleaseCleanupChecklistModal struct {
 
 const (
 	releaseCleanupMinWidth  = 40
-	releaseCleanupMinHeight = 12
+	releaseCleanupMinHeight = 16
 )
 
 func NewReleaseCleanupChecklistModal(preview task.ReleaseCleanupPreview) *ReleaseCleanupChecklistModal {
 	selection := task.ReleaseCleanupSelection{
-		RemoveTasks:   preview.Selection.RemoveTasks,
-		RemoveRelease: preview.Selection.RemoveRelease,
+		RemoveTasks:                 preview.Selection.RemoveTasks,
+		DeleteLocalTaskBranches:     preview.Selection.DeleteLocalTaskBranches,
+		DeleteRemoteTaskBranches:    preview.Selection.DeleteRemoteTaskBranches,
+		RemoveRelease:               preview.Selection.RemoveRelease,
+		DeleteLocalReleaseBranches:  preview.Selection.DeleteLocalReleaseBranches,
+		DeleteRemoteReleaseBranches: preview.Selection.DeleteRemoteReleaseBranches,
 	}
 	return &ReleaseCleanupChecklistModal{
 		preview:   preview,
@@ -66,7 +71,7 @@ func NewReleaseCleanupChecklistModal(preview task.ReleaseCleanupPreview) *Releas
 func (m *ReleaseCleanupChecklistModal) Title() string     { return "Release Cleanup" }
 func (m *ReleaseCleanupChecklistModal) ReleaseID() string { return m.preview.ReleaseID }
 func (m *ReleaseCleanupChecklistModal) Selection() task.ReleaseCleanupSelection {
-	return task.ReleaseCleanupSelection{RemoveTasks: m.selection.RemoveTasks, RemoveRelease: m.selection.RemoveRelease}
+	return m.selection
 }
 
 func (m *ReleaseCleanupChecklistModal) SetTerminalSize(width, height int) {
@@ -142,13 +147,8 @@ func (m *ReleaseCleanupChecklistModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	}
 }
 
-// planSelection returns the planned scope reduced to resource scopes, used to
-// detect whether the user changed anything relative to a blocked plan.
 func (m *ReleaseCleanupChecklistModal) planSelection() task.ReleaseCleanupSelection {
-	return task.ReleaseCleanupSelection{
-		RemoveTasks:   m.preview.Selection.RemoveTasks,
-		RemoveRelease: m.preview.Selection.RemoveRelease,
-	}
+	return m.preview.Selection
 }
 
 func (m *ReleaseCleanupChecklistModal) toggle(option cleanupOption) {
@@ -157,6 +157,10 @@ func (m *ReleaseCleanupChecklistModal) toggle(option cleanupOption) {
 		m.selection.RemoveTasks = !m.selection.RemoveTasks
 	case cleanupRelease:
 		m.selection.RemoveRelease = !m.selection.RemoveRelease
+	case cleanupRemoteTaskBranches:
+		m.selection.DeleteRemoteTaskBranches = !m.selection.DeleteRemoteTaskBranches
+	case cleanupRemoteReleaseBranches:
+		m.selection.DeleteRemoteReleaseBranches = !m.selection.DeleteRemoteReleaseBranches
 	}
 }
 
@@ -166,6 +170,10 @@ func (m *ReleaseCleanupChecklistModal) selected(option cleanupOption) bool {
 		return m.selection.RemoveTasks
 	case cleanupRelease:
 		return m.selection.RemoveRelease
+	case cleanupRemoteTaskBranches:
+		return m.selection.DeleteRemoteTaskBranches
+	case cleanupRemoteReleaseBranches:
+		return m.selection.DeleteRemoteReleaseBranches
 	default:
 		return false
 	}
@@ -220,9 +228,7 @@ func (m *ReleaseCleanupChecklistModal) body() string {
 	var b strings.Builder
 	b.WriteString(renderCleanupOwnership(m.preview, normalStyle, dimStyle))
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("Local task and release branches are retained (never deleted)."))
-	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("Remote branches are not deleted by cleanup; delete them on the forge."))
+	b.WriteString(dimStyle.Render("Local task and release branches are removed. Remote deletion requires a separate confirmation."))
 	b.WriteString("\n")
 	if len(m.preview.Blockers) > 0 {
 		b.WriteString("\n")
@@ -357,15 +363,7 @@ func (m *ReleaseCleanupRemoteConfirmModal) Update(msg tea.Msg) (Modal, tea.Cmd) 
 	return m, nil
 }
 func (m *ReleaseCleanupRemoteConfirmModal) View() string {
-	remoteGroups := make([]string, 0, 2)
-	if m.preview.Selection.DeleteRemoteTaskBranches {
-		remoteGroups = append(remoteGroups, "Task remote branches")
-	}
-	if m.preview.Selection.DeleteRemoteReleaseBranches {
-		remoteGroups = append(remoteGroups, "Release remote branches")
-	}
-	warning := "REMOTE BRANCH DELETION IS UNSUPPORTED: " + strings.Join(remoteGroups, " and ") + " fail before any mutation and are retained."
-	return cleanupConfirmView(m.preview, warning, "[Enter/y] confirm (remote step fails before mutation)  [Esc/n] cancel", true)
+	return cleanupConfirmView(m.preview, "Remote branches below will be deleted.", "[Enter/y] delete remote branches  [Esc/n] cancel", true)
 }
 
 func cleanupConfirmView(preview task.ReleaseCleanupPreview, warning, footer string, danger bool) string {
@@ -382,6 +380,12 @@ func cleanupConfirmView(preview task.ReleaseCleanupPreview, warning, footer stri
 	b.WriteString(warningStyle.Render(warning))
 	b.WriteString("\n\n")
 	b.WriteString(renderCleanupSelection(preview.Selection, normalStyle))
+	if cleanupHasRemoteSelection(preview.Selection) {
+		b.WriteString("\n")
+		b.WriteString(normalStyle.Bold(true).Render("Remote branches"))
+		b.WriteString("\n")
+		b.WriteString(normalStyle.Render(remoteReleaseBranches(preview)))
+	}
 	b.WriteString("\n")
 	b.WriteString(dimStyle.Render(footer))
 	return b.String()
@@ -393,19 +397,19 @@ func renderCleanupSelection(selection task.ReleaseCleanupSelection, style lipglo
 		groups = append(groups, "Task worktrees and task directories")
 	}
 	if selection.DeleteLocalTaskBranches {
-		groups = append(groups, "Local task branches (retained)")
+		groups = append(groups, "Local task branches")
 	}
 	if selection.DeleteRemoteTaskBranches {
-		groups = append(groups, "Remote task branches (unsupported, fail before mutation)")
+		groups = append(groups, "Remote task branches")
 	}
 	if selection.RemoveRelease {
 		groups = append(groups, "Release worktrees and manifest")
 	}
 	if selection.DeleteLocalReleaseBranches {
-		groups = append(groups, "Local release branches (retained)")
+		groups = append(groups, "Local release branches")
 	}
 	if selection.DeleteRemoteReleaseBranches {
-		groups = append(groups, "Remote release branches (unsupported, fail before mutation)")
+		groups = append(groups, "Remote release branches")
 	}
 	var b strings.Builder
 	b.WriteString(style.Bold(true).Render("Selected cleanup groups"))
@@ -415,6 +419,19 @@ func renderCleanupSelection(selection task.ReleaseCleanupSelection, style lipglo
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func remoteReleaseBranches(preview task.ReleaseCleanupPreview) string {
+	var branches []string
+	for _, service := range preview.Services {
+		if preview.Selection.DeleteRemoteTaskBranches {
+			branches = append(branches, service.TaskBranches...)
+		}
+		if preview.Selection.DeleteRemoteReleaseBranches && service.ReleaseBranch != "" {
+			branches = append(branches, service.ReleaseBranch)
+		}
+	}
+	return valueList(branches)
 }
 
 func cleanupHasRemoteSelection(selection task.ReleaseCleanupSelection) bool {

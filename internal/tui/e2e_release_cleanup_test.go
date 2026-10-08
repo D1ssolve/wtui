@@ -131,7 +131,7 @@ func TestE2E_ReleaseCleanupChecklistCannotRequestBranchDeletion(t *testing.T) {
 	}
 }
 
-func TestE2E_ReleaseCleanupPartialFailureRefreshRetainsReleaseRow(t *testing.T) {
+func TestE2E_ReleaseCleanupPartialFailureOpensForceConfirmation(t *testing.T) {
 	mgr := &releaseCleanupE2EManager{executeErr: errors.New("branch deletion failed")}
 	mgr.listTasksResult = []domain.Task{{ID: "TASK-1"}}
 	mgr.listReleasesResult = []domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}}
@@ -142,11 +142,8 @@ func TestE2E_ReleaseCleanupPartialFailureRefreshRetainsReleaseRow(t *testing.T) 
 		t.Fatalf("partial failure statuses = %q", statuses)
 	}
 
-	if m.tasksPanel.SelectedTask() != nil {
-		t.Fatalf("removed task row retained: %+v", m.tasksPanel.SelectedTask())
-	}
-	if release := m.releasesPanel.SelectedRelease(); release == nil || release.ID != "rel-1" {
-		t.Fatalf("failed cleanup release row = %+v", release)
+	if _, ok := m.modal.(*modal.CleanupForceConfirmModal); !ok {
+		t.Fatalf("force confirmation = %T", m.modal)
 	}
 	if !strings.Contains(m.outputPanel.View(), "Release cleanup failed: branch deletion failed") {
 		t.Fatalf("failure missing: %s", m.outputPanel.View())
@@ -283,6 +280,9 @@ func cleanupE2EDrainExecution(t *testing.T, m Model, cmd tea.Cmd) (Model, []stri
 				updated, next := m.Update(msg)
 				m = updated.(Model)
 				if _, done := msg.(ReleaseCleanupDoneMsg); done {
+					if next == nil {
+						return m, statuses
+					}
 					m = cleanupE2EApplyRefresh(t, m, next)
 					return m, statuses
 				}

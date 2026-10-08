@@ -60,10 +60,6 @@ func (m *closeTaskE2EManager) ListServices(_ context.Context, taskID string) ([]
 	return m.services[taskID], nil
 }
 
-func (m *closeTaskE2EManager) Remove(_ context.Context, _ string, _ task.RemoveOptions) error {
-	return nil
-}
-
 func (m *closeTaskE2EManager) Repos(_ context.Context, _ bool) ([]domain.Repo, error) {
 	return nil, nil
 }
@@ -218,7 +214,7 @@ func (m *closeTaskE2EManager) ExecuteReleaseCleanup(context.Context, task.Releas
 func (m *closeTaskE2EManager) PlanTaskCleanup(context.Context, task.TaskCleanupRequest) (task.TaskCleanupPlan, error) {
 	return task.TaskCleanupPlan{}, nil
 }
-func (m *closeTaskE2EManager) ExecuteTaskCleanup(context.Context, task.TaskCleanupPlan, chan<- string) (task.TaskCleanupResult, error) {
+func (m *closeTaskE2EManager) ExecuteTaskCleanup(context.Context, task.TaskCleanupPlan, chan<- string, ...task.TaskCleanupExecutionSelection) (task.TaskCleanupResult, error) {
 	return task.TaskCleanupResult{}, nil
 }
 

@@ -71,6 +71,46 @@ func TestPlanTaskCleanup_AllServicesProvenComplete_AuthorizesLocalOnly(t *testin
 	}
 }
 
+func TestPlanTaskCleanup_RemoteDeleteSelectionAuthorizesRemoteStep(t *testing.T) {
+	mgr, _ := taskCleanupTestManager(t)
+
+	plan, err := mgr.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1", DeleteRemoteTaskBranches: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Blocked() {
+		t.Fatalf("blockers = %q", plan.Preview().Blockers)
+	}
+	found := false
+	for _, step := range plan.steps {
+		if step.kind == cleanupRemoteTaskBranch && step.branch == "feature/APP-1" && step.expectedSHA == taskCleanupTaskSHA {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("remote task branch delete step missing: %+v", plan.steps)
+	}
+}
+
+func TestPlanTaskCleanup_ServiceLessTaskPlansDirectoryCleanup(t *testing.T) {
+	mgr, _ := taskCleanupTestManager(t)
+	serviceDir := filepath.Join(mgr.cfg.TasksRoot, "APP-1", "svc")
+	if err := os.RemoveAll(serviceDir); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := mgr.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Blocked() {
+		t.Fatalf("blockers = %q", plan.Preview().Blockers)
+	}
+	if len(plan.steps) != 1 || plan.steps[0].kind != cleanupTaskDirectory {
+		t.Fatalf("steps = %+v, want only task directory cleanup", plan.steps)
+	}
+}
+
 // TestPlanTaskCleanup_ReviewRequestStrategy_ProvesEveryReviewTarget pins
 // cleanup proof for a review_request branch type to every configured
 // ReviewTarget: accepted merge evidence in only one target never authorizes
@@ -466,8 +506,11 @@ func TestPlanTaskCleanup_ProductionTargetedFeatureWithoutManifestAuthorizes(t *t
 }
 
 func TestPlanTaskCleanup_IntegrationOnlyFeatureWithoutManifestBlocks(t *testing.T) {
-	mgr, _ := taskCleanupTestManager(t)
+	mgr, gitMock := taskCleanupTestManager(t)
 	useIntegrationOnlyFeatureFlow(mgr)
+	gitMock.isAncestorFn = func(_, _, descendant string) (bool, error) {
+		return descendant != taskCleanupMasterSHA, nil
+	}
 
 	plan, err := mgr.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1"})
 	if err != nil {
@@ -478,6 +521,22 @@ func TestPlanTaskCleanup_IntegrationOnlyFeatureWithoutManifestBlocks(t *testing.
 	}
 	if !strings.Contains(strings.Join(plan.Preview().Blockers, "\n"), "released manifest") {
 		t.Fatalf("blockers = %q", plan.Preview().Blockers)
+	}
+}
+
+func TestPlanTaskCleanup_IntegrationOnlyFeatureInProductionWithoutManifestAuthorizes(t *testing.T) {
+	mgr, _ := taskCleanupTestManager(t)
+	useIntegrationOnlyFeatureFlow(mgr)
+
+	plan, err := mgr.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Blocked() {
+		t.Fatalf("blockers = %q", plan.Preview().Blockers)
+	}
+	if len(plan.steps) == 0 {
+		t.Fatal("expected cleanup steps")
 	}
 }
 

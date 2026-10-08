@@ -33,28 +33,11 @@ func (m *manager) ExecuteReleaseCleanup(ctx context.Context, plan ReleaseCleanup
 	if len(fresh.preview.Blockers) > 0 || fresh.fingerprint != plan.fingerprint || fresh.manifestDigest != plan.manifestDigest {
 		return result, fmt.Errorf("%w: approved plan is stale", ErrReleaseCleanupBlocked)
 	}
-	if err := blockUnsupportedRemoteDeletion(plan.steps); err != nil {
-		return result, err
-	}
-
 	for _, step := range plan.steps {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
 		line := step.description
-		if step.kind == cleanupLocalTaskBranch || step.kind == cleanupLocalReleaseBranch {
-			// Local branch deletion is never executed: the authoritative
-			// merge targets live on the remote and no atomic guard exists,
-			// so the branch is reported retained and never mutated.
-			result.Retained = append(result.Retained, line)
-			if err := sendReleaseCleanupStatus(ctx, statusCh, line); err != nil {
-				return result, err
-			}
-			if m.logger != nil {
-				m.logger.InfoContext(ctx, "release cleanup step retained", "release_id", plan.preview.ReleaseID, "step", line)
-			}
-			continue
-		}
 		if step.noop {
 			line += " (already absent)"
 		} else if err := m.executeReleaseCleanupStep(ctx, plan, step); err != nil {
@@ -88,14 +71,26 @@ func blockUnsupportedRemoteDeletion(steps []releaseCleanupStep) error {
 	return nil
 }
 
-// retainLocalBranchReason is the plan/execution description for local branch
-// steps: the branch is kept because no atomic remote target guard exists.
-func retainLocalBranchReason(kind, branch string) string {
-	return fmt.Sprintf("retain %s branch %s (no atomic remote target guard)", kind, branch)
+func deleteLocalBranchReason(kind, branch string) string {
+	return fmt.Sprintf("delete %s branch %s", kind, branch)
 }
 
 func remoteSourceDeletionUnsupported(branch string) error {
 	return fmt.Errorf("%w: remote branch %s: git push cannot atomically lease an unchanged target ref (no-op ref updates may be omitted)", ErrRemoteAtomicGuardUnsupported, branch)
+}
+
+func localCleanupBranchGuards(step releaseCleanupStep) ([]git.RefGuard, error) {
+	if len(step.targets) == 0 {
+		return nil, errors.New("cleanup branch has no planned merge target")
+	}
+	guards := make([]git.RefGuard, 0, len(step.targets))
+	for _, target := range step.targets {
+		if target.storeRef == "" || target.plannedSHA == "" {
+			return nil, fmt.Errorf("merge target %s has no atomic local guard", target.ref)
+		}
+		guards = append(guards, git.RefGuard{Ref: target.storeRef, OID: target.plannedSHA})
+	}
+	return guards, nil
 }
 
 func sendReleaseCleanupStatus(ctx context.Context, statusCh chan<- string, line string) error {
@@ -113,7 +108,7 @@ func sendReleaseCleanupStatus(ctx context.Context, statusCh chan<- string, line 
 func (m *manager) executeReleaseCleanupStep(ctx context.Context, plan ReleaseCleanupPlan, step releaseCleanupStep) error {
 	switch step.kind {
 	case cleanupReleaseWorktree, cleanupTaskWorktree:
-		_, err := m.removeCleanupWorktree(ctx, step)
+		_, err := m.removeCleanupWorktree(ctx, step, plan.preview.Selection.Force)
 		return err
 	case cleanupTaskDirectory:
 		if !pathWithin(m.cfg.TasksRoot, step.path) {
@@ -128,10 +123,19 @@ func (m *manager) executeReleaseCleanupStep(ctx context.Context, plan ReleaseCle
 		if err := ensureNoPresentCleanupPaths(plan.steps, cleanupTaskWorktree, step.path); err != nil {
 			return err
 		}
+		if plan.preview.Selection.Force {
+			return os.RemoveAll(step.path)
+		}
 		return removeKnownEntriesOrPreserve(step.path, cleanupStepPaths(plan.steps, cleanupTaskWorktree, step.path))
 	case cleanupLocalTaskBranch, cleanupLocalReleaseBranch:
-		// Retention-only step: never mutated, reported by the caller.
-		return nil
+		if err := m.recheckCleanupTargets(ctx, step); err != nil {
+			return err
+		}
+		guards, err := localCleanupBranchGuards(step)
+		if err != nil {
+			return err
+		}
+		return m.git.DeleteBranchIfUnchanged(ctx, step.repoPath, step.branch, step.expectedSHA, guards...)
 	case cleanupRemoteTaskBranch, cleanupRemoteReleaseBranch:
 		if err := m.recheckCleanupTargets(ctx, step); err != nil {
 			return err
@@ -146,7 +150,7 @@ func (m *manager) executeReleaseCleanupStep(ctx context.Context, plan ReleaseCle
 		if sha != step.expectedSHA {
 			return fmt.Errorf("remote branch moved: expected %s, got %s", step.expectedSHA, sha)
 		}
-		return remoteSourceDeletionUnsupported(step.branch)
+		return m.git.DeleteRemoteBranchIfUnchanged(ctx, step.repoPath, step.branch, step.expectedSHA)
 	case cleanupReleaseDirectory:
 		data, err := os.ReadFile(m.releaseManifestPath(plan.preview.ReleaseID))
 		if err != nil {
@@ -162,6 +166,9 @@ func (m *manager) executeReleaseCleanupStep(ctx context.Context, plan ReleaseCle
 			return err
 		}
 		known := append(cleanupStepPaths(plan.steps, cleanupReleaseWorktree, step.path), filepath.Join(step.path, releaseManifestFileName))
+		if plan.preview.Selection.Force {
+			return os.RemoveAll(step.path)
+		}
 		return removeKnownEntriesOrPreserve(step.path, known)
 	default:
 		return fmt.Errorf("unknown cleanup step %d", step.kind)
@@ -171,7 +178,7 @@ func (m *manager) executeReleaseCleanupStep(ctx context.Context, plan ReleaseCle
 // removeCleanupWorktree removes a registered worktree after revalidating its
 // full identity. The returned boolean reports whether a worktree was actually
 // removed; false with a nil error means the worktree was already absent.
-func (m *manager) removeCleanupWorktree(ctx context.Context, step releaseCleanupStep) (bool, error) {
+func (m *manager) removeCleanupWorktree(ctx context.Context, step releaseCleanupStep, force bool) (bool, error) {
 	entries, err := m.git.ListWorktrees(ctx, step.repoPath)
 	if err != nil {
 		return false, err
@@ -219,7 +226,7 @@ func (m *manager) removeCleanupWorktree(ctx context.Context, step releaseCleanup
 	if !samePath(commonDir, repoCommonDir) {
 		return false, errors.New("worktree common repository mismatch")
 	}
-	if err := m.git.RemoveWorktree(ctx, commonDir, step.path, false); err != nil {
+	if err := m.git.RemoveWorktree(ctx, commonDir, step.path, force); err != nil {
 		return false, err
 	}
 	// Fail closed on any replacement: a path still present after git

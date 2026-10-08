@@ -314,42 +314,6 @@ func TestTasksPanel_Keyd_EmitsCleanupTaskMsg(t *testing.T) {
 	}
 }
 
-func TestTasksPanel_KeyDelete_EmitsOpenRemoveDialogMsg(t *testing.T) {
-	tests := []struct {
-		name  string
-		setup func(*TasksPanel)
-	}{
-		{name: "flat", setup: func(p *TasksPanel) {
-			p.SetTasks(makeTasks("IN-001"))
-		}},
-		{name: "tree", setup: func(p *TasksPanel) {
-			p.SetFlow(makeFlow(gitflow.BranchTypeRelease))
-			p.SetTasks([]domain.Task{makeTaskWithMeta("IN-001", "", "feature", "", 1)})
-		}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := NewTasksPanel(40, 20)
-			tt.setup(&p)
-			p.SetFocused(true)
-
-			_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyDelete})
-			if cmd == nil {
-				t.Fatal("delete key should return a cmd")
-			}
-			msg := cmd()
-			got, ok := msg.(OpenRemoveDialogMsg)
-			if !ok {
-				t.Fatalf("expected OpenRemoveDialogMsg, got %T", msg)
-			}
-			if got.TaskID != "IN-001" {
-				t.Errorf("expected TaskID=IN-001, got %s", got.TaskID)
-			}
-		})
-	}
-}
-
 func TestTasksPanel_KeyC_EmitsOpenCloneDialogMsg(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetTasks(makeTasks("IN-001"))

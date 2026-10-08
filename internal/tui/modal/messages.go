@@ -16,11 +16,6 @@ type SubmitAddMsg struct {
 	BranchType string
 }
 
-type SubmitRemoveTaskMsg struct {
-	TaskID  string
-	Options task.RemoveOptions
-}
-
 type SubmitConvertHotfixMsg struct {
 	SourceTaskID string
 	TargetTaskID string

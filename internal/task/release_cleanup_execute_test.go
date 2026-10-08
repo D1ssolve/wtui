@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -64,9 +65,7 @@ func TestExecuteReleaseCleanup_StopsOnFirstFailureAndPreservesManifest(t *testin
 	}
 }
 
-// Local branch steps never consult merge targets: retention is unconditional
-// because nothing is deleted. Remote steps still fail closed on target drift.
-func TestExecuteReleaseCleanup_TargetMovementBlocksOnlyRemoteDeletion(t *testing.T) {
+func TestExecuteReleaseCleanup_TargetMovementBlocksBranchDeletion(t *testing.T) {
 	const sourceSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const plannedTargetSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	const movedTargetSHA = "cccccccccccccccccccccccccccccccccccccccc"
@@ -106,13 +105,85 @@ func TestExecuteReleaseCleanup_TargetMovementBlocksOnlyRemoteDeletion(t *testing
 				if err == nil {
 					t.Fatal("target movement did not block remote deletion")
 				}
-			} else if err != nil {
-				t.Fatalf("retention step failed: %v", err)
+			} else if err == nil {
+				t.Fatal("target movement did not block local deletion")
 			}
 			if deleted {
 				t.Fatal("branch deleted after target lost ancestry")
 			}
 		})
+	}
+}
+
+func TestExecuteReleaseCleanup_RemoteDeleteSelectionUsesExpectedSHA(t *testing.T) {
+	mgr, gitMock := cleanupTestManager(t, "released")
+	selection := DefaultReleaseCleanupSelection()
+	selection.DeleteRemoteTaskBranches = true
+	selection.DeleteRemoteReleaseBranches = true
+	var calls []string
+	gitMock.deleteRemoteBranchIfUnchangedFn = func(_, branch, expectedSHA string) error {
+		calls = append(calls, branch+"@"+expectedSHA)
+		return nil
+	}
+	gitMock.removeWorktreeFn = func(_, path string, _ bool) error {
+		for i, entry := range gitMock.listWorktreesRes {
+			if entry.Path == path {
+				gitMock.listWorktreesRes = append(gitMock.listWorktreesRes[:i], gitMock.listWorktreesRes[i+1:]...)
+				break
+			}
+		}
+		return os.RemoveAll(path)
+	}
+	plan, err := mgr.PlanReleaseCleanup(t.Context(), "rel-1", selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = mgr.ExecuteReleaseCleanup(t.Context(), plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(calls, "feature/APP-1@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") || !slices.Contains(calls, "release/1.0.0@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") {
+		t.Fatalf("remote delete calls = %q", calls)
+	}
+}
+
+func TestExecuteReleaseCleanup_ForceRemovesUnknownOwnedDirectories(t *testing.T) {
+	mgr, gitMock := cleanupTestManager(t, "released")
+	selection := DefaultReleaseCleanupSelection()
+	selection.Force = true
+	gitMock.removeWorktreeFn = func(_, path string, force bool) error {
+		if !force {
+			t.Fatal("RemoveWorktree called without force")
+		}
+		for i, entry := range gitMock.listWorktreesRes {
+			if entry.Path == path {
+				gitMock.listWorktreesRes = append(gitMock.listWorktreesRes[:i], gitMock.listWorktreesRes[i+1:]...)
+				break
+			}
+		}
+		return os.RemoveAll(path)
+	}
+	if err := os.WriteFile(filepath.Join(mgr.cfg.TasksRoot, "APP-1", "notes.md"), []byte("drop"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mgr.releasesRootDir(), "rel-1", "notes.md"), []byte("drop"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := mgr.PlanReleaseCleanup(t.Context(), "rel-1", selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = mgr.ExecuteReleaseCleanup(t.Context(), plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(filepath.Join(mgr.cfg.TasksRoot, "APP-1")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("task dir still exists: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(mgr.releasesRootDir(), "rel-1")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("release dir still exists: %v", statErr)
 	}
 }
 
@@ -126,7 +197,7 @@ func TestRemoveCleanupWorktree_CommonRepositoryMismatchBlocksRemoval(t *testing.
 		}
 		return filepath.Join(mgr.cfg.RootDir, "expected.git"), nil
 	}
-	if _, err := mgr.removeCleanupWorktree(context.Background(), step); err == nil {
+	if _, err := mgr.removeCleanupWorktree(context.Background(), step, false); err == nil {
 		t.Fatal("common repository mismatch allowed removal")
 	}
 	if len(gitMock.removeWorktreeCalls) != 0 {
@@ -361,7 +432,7 @@ func TestRemoveCleanupWorktree_RecreatedNonEmptyPathFailsClosed(t *testing.T) {
 				tc.recreate(t, path)
 				return nil
 			}
-			if _, err := mgr.removeCleanupWorktree(context.Background(), step); err == nil {
+			if _, err := mgr.removeCleanupWorktree(context.Background(), step, false); err == nil {
 				t.Fatal("recreated non-empty path did not block cleanup")
 			}
 			if _, err := os.Stat(tc.recreate(t, step.path)); err != nil {
@@ -383,7 +454,7 @@ func TestRemoveCleanupWorktree_RecreatedFileFailsClosedPreserved(t *testing.T) {
 		}
 		return os.WriteFile(path, []byte("recreated"), 0o600)
 	}
-	if _, err := mgr.removeCleanupWorktree(context.Background(), step); err == nil {
+	if _, err := mgr.removeCleanupWorktree(context.Background(), step, false); err == nil {
 		t.Fatal("replacement file did not block cleanup")
 	}
 	if _, err := os.Lstat(step.path); err != nil {
@@ -408,7 +479,7 @@ func TestRemoveCleanupWorktree_RecreatedSymlinkFailsClosedPreservesTarget(t *tes
 		}
 		return os.Symlink(target, path)
 	}
-	if _, err := mgr.removeCleanupWorktree(context.Background(), step); err == nil {
+	if _, err := mgr.removeCleanupWorktree(context.Background(), step, false); err == nil {
 		t.Fatal("symlink replacement did not block cleanup")
 	}
 	if _, err := os.Lstat(step.path); err != nil {

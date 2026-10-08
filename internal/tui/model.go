@@ -100,6 +100,8 @@ type Model struct {
 	pendingReleaseCleanupPreview task.ReleaseCleanupPreview
 	releaseCleanupExecuting      uint64
 	releaseCleanupExecutingID    string
+	releaseCleanupSelection      task.ReleaseCleanupSelection
+	failedReleaseCleanupID       string
 
 	taskCleanupGeneration     uint64
 	taskCleanupRequest        *taskCleanupRequest
@@ -107,6 +109,9 @@ type Model struct {
 	taskCleanupExecutingID    string
 	pendingTaskCleanupPlan    *task.TaskCleanupPlan
 	pendingTaskCleanupPreview task.TaskCleanupPreview
+	failedTaskCleanupPlan     *task.TaskCleanupPlan
+	taskCleanupForced         bool
+	taskCleanupRemoteSelected bool
 
 	cleanupScanning       bool
 	cleanupScanGeneration uint64
@@ -143,9 +148,11 @@ type releaseCleanupRequest struct {
 }
 
 type taskCleanupRequest struct {
-	generation          uint64
-	operationGeneration uint64
-	taskID              string
+	generation           uint64
+	operationGeneration  uint64
+	taskID               string
+	deleteRemoteBranches bool
+	remoteConfirmation   bool
 }
 
 type shellInputState struct {
@@ -504,10 +511,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = modal.NewAddDialogWithFlow(msg.TaskID, flow, m.repos, msg.ExistingServices, m.width, m.height)
 		return m, nil
 
-	case panels.OpenRemoveDialogMsg:
-		m.modal = modal.NewRemoveTaskDialog(msg.TaskID, 0, nil)
-		return m, loadDirtyServicesCmd(m.mgr, msg.TaskID)
-
 	case panels.OpenConvertHotfixDialogMsg:
 		m.modal = modal.NewConvertHotfixDialog(msg.TaskID, msg.TargetTaskID)
 		return m, nil
@@ -726,6 +729,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modal = nil
 			return m.stopCleanupQueue("")
 		}
+		if _, ok := m.modal.(*modal.TaskCleanupRemoteConfirmModal); ok {
+			m.pendingTaskCleanupPlan = nil
+			m.pendingTaskCleanupPreview = task.TaskCleanupPreview{}
+			m.outputPanel.AppendLine("Task cleanup cancelled.")
+			m.modal = nil
+			return m.stopCleanupQueue("")
+		}
+		if _, ok := m.modal.(*modal.CleanupForceConfirmModal); ok {
+			m.failedTaskCleanupPlan = nil
+			m.taskCleanupForced = false
+		}
 		if _, ok := m.modal.(*modal.PushConfirmDialog); ok {
 			m.outputPanel.AppendLine("Push cancelled.")
 			m.pendingPushSubmit = nil
@@ -847,16 +861,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingInitParams = nil
 		return m, tea.Batch(
 			addServiceCmd(m.mgr, *m.pendingAddParams, m.operationGeneration),
-			m.spinner.Tick,
-		)
-
-	case modal.SubmitRemoveTaskMsg:
-		m.modal = nil
-		m.opRunning = true
-		m.operationGeneration++
-		m.outputPanel.AppendLine("Removing task " + msg.TaskID + "...")
-		return m, tea.Batch(
-			removeTaskCmd(m.mgr, msg.TaskID, msg.Options, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
@@ -1149,6 +1153,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok || dialog.TaskID() != msg.TaskID || dialog.Generation() != msg.Generation || dialog.Fingerprint() != msg.Fingerprint {
 			return m, nil
 		}
+		if msg.DeleteRemoteTaskBranches {
+			return m.startTaskCleanupInspectionWithSelection(msg.TaskID, true, true)
+		}
 		m.modal = nil
 		plan := m.pendingTaskCleanupPlan
 		m.pendingTaskCleanupPlan = nil
@@ -1157,8 +1164,61 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.operationGeneration++
 		m.taskCleanupExecuting = m.taskCleanupGeneration
 		m.taskCleanupExecutingID = msg.TaskID
+		m.failedTaskCleanupPlan = plan
+		m.taskCleanupForced = false
+		m.taskCleanupRemoteSelected = false
 		m.outputPanel.AppendLine("Executing cleanup plan for " + plan.Preview().TaskID + "...")
-		return m, tea.Batch(executeTaskCleanupCmd(m.mgr, *plan, msg.TaskID, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
+		return m, tea.Batch(executeTaskCleanupCmd(m.mgr, *plan, msg.TaskID, task.TaskCleanupExecutionSelection{}, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
+
+	case modal.ConfirmRemoteTaskCleanupMsg:
+		if m.cleanupQueueCurrent == nil || m.cleanupQueueCurrent.kind != modal.CleanupKindTask || m.cleanupQueueCurrent.id != msg.TaskID || m.pendingTaskCleanupPlan == nil || m.pendingTaskCleanupPlan.Fingerprint() != msg.Fingerprint || msg.Generation != m.taskCleanupGeneration {
+			return m, nil
+		}
+		dialog, ok := m.modal.(*modal.TaskCleanupRemoteConfirmModal)
+		if !ok || dialog.TaskID() != msg.TaskID || dialog.Generation() != msg.Generation || dialog.Fingerprint() != msg.Fingerprint {
+			return m, nil
+		}
+		m.modal = nil
+		plan := m.pendingTaskCleanupPlan
+		m.pendingTaskCleanupPlan = nil
+		m.pendingTaskCleanupPreview = task.TaskCleanupPreview{}
+		m.opRunning = true
+		m.operationGeneration++
+		m.taskCleanupExecuting = m.taskCleanupGeneration
+		m.taskCleanupExecutingID = msg.TaskID
+		m.failedTaskCleanupPlan = plan
+		m.taskCleanupForced = false
+		m.taskCleanupRemoteSelected = true
+		m.outputPanel.AppendLine("Executing cleanup plan for " + plan.Preview().TaskID + "...")
+		return m, tea.Batch(executeTaskCleanupCmd(m.mgr, *plan, msg.TaskID, task.TaskCleanupExecutionSelection{}, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
+
+	case modal.ConfirmForceTaskCleanupMsg:
+		plan := m.failedTaskCleanupPlan
+		if plan == nil || m.taskCleanupExecuting != 0 || msg.Generation != m.taskCleanupGeneration || plan.Preview().TaskID != msg.TaskID {
+			return m, nil
+		}
+		if dialog, ok := m.modal.(*modal.CleanupForceConfirmModal); !ok || dialog.ID() != msg.TaskID || dialog.Generation() != msg.Generation {
+			return m, nil
+		}
+		m.modal = nil
+		m.opRunning = true
+		m.operationGeneration++
+		m.taskCleanupExecuting = m.taskCleanupGeneration
+		m.taskCleanupExecutingID = msg.TaskID
+		m.taskCleanupForced = true
+		m.outputPanel.AppendLine("Force cleaning task " + msg.TaskID + "...")
+		return m, tea.Batch(executeTaskCleanupCmd(m.mgr, *plan, msg.TaskID, task.TaskCleanupExecutionSelection{Force: true}, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
+
+	case modal.ConfirmForceReleaseCleanupMsg:
+		if m.releaseCleanupExecuting != 0 || msg.Generation != m.releaseCleanupGeneration || m.failedReleaseCleanupID != msg.ReleaseID {
+			return m, nil
+		}
+		if dialog, ok := m.modal.(*modal.CleanupForceConfirmModal); !ok || dialog.ID() != msg.ReleaseID || dialog.Generation() != msg.Generation {
+			return m, nil
+		}
+		selection := m.releaseCleanupSelection
+		selection.Force = true
+		return m.startReleaseCleanupPlan(msg.ReleaseID, selection, true)
 
 	case modal.ForgeCreateMRMsg:
 		m.modal = nil
@@ -1455,7 +1515,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = false
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Release cleanup failed: " + msg.Err.Error())
+			if !m.releaseCleanupSelection.Force && !releaseCleanupHasRemoteSelection(m.releaseCleanupSelection) {
+				m.failedReleaseCleanupID = msg.Result.ReleaseID
+				m.modal = modal.NewCleanupForceConfirmModal(msg.Result.ReleaseID, true, msg.Generation)
+				m.modal.SetTerminalSize(m.width, m.height)
+				return m, nil
+			}
 		} else {
+			m.failedReleaseCleanupID = ""
 			releaseID := msg.Result.ReleaseID
 			if releaseID == "" {
 				releaseID = "(unknown)"
@@ -1499,12 +1566,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if len(preview.Services) == 0 {
-			if m.cleanupQueueActive() {
-				return m.stopCleanupQueue("")
-			}
-			return m, nil
-		}
 		current := m.cleanupQueueCurrent
 		if current == nil || current.kind != modal.CleanupKindTask || current.id != msg.TaskID {
 			m.outputPanel.AppendLine("Ignoring cleanup plan for " + msg.TaskID + ": no matching cleanup request.")
@@ -1512,6 +1573,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingTaskCleanupPlan = &msg.Plan
 		m.pendingTaskCleanupPreview = preview
+		if request.remoteConfirmation {
+			confirmModal := modal.NewTaskCleanupRemoteConfirmModal(preview, msg.Generation, msg.Plan.Fingerprint())
+			confirmModal.SetTerminalSize(m.width, m.height)
+			m.modal = confirmModal
+			return m, nil
+		}
 		confirmModal := modal.NewTaskCleanupConfirmModal(preview, msg.Generation, msg.Plan.Fingerprint())
 		confirmModal.SetTerminalSize(m.width, m.height)
 		m.modal = confirmModal
@@ -1529,7 +1596,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = false
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Task cleanup failed for " + msg.TaskID + ": " + msg.Err.Error())
+			if !m.taskCleanupForced && !m.taskCleanupRemoteSelected && m.failedTaskCleanupPlan != nil {
+				m.modal = modal.NewCleanupForceConfirmModal(msg.TaskID, false, msg.Generation)
+				m.modal.SetTerminalSize(m.width, m.height)
+				return m, nil
+			}
 		} else {
+			m.failedTaskCleanupPlan = nil
+			m.taskCleanupForced = false
+			m.taskCleanupRemoteSelected = false
 			m.outputPanel.AppendLine("Task cleanup done: " + msg.TaskID)
 			for _, line := range msg.Result.Deferred {
 				m.outputPanel.AppendLine(line)
@@ -1582,15 +1657,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pending := *m.addDialogPending
 			m.addDialogPending = nil
 			m.modal = modal.NewAddDialogWithFlow(pending.TaskID, m.flow, msg.Repos, pending.ExistingServices, m.width, m.height)
-		}
-		return m, nil
-
-	case DirtyServicesLoadedMsg:
-		if m.modal != nil {
-			if rd, ok := m.modal.(*modal.RemoveTaskDialog); ok {
-				rd.UpdateInfo(msg.ServiceCount, msg.DirtyServices)
-				m.modal = rd
-			}
 		}
 		return m, nil
 
@@ -1684,6 +1750,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cleanupScanCandidates = append([]modal.CleanupCandidate(nil), msg.Candidates...)
 		m.cleanupScanModalGen++
 		m.modal = modal.NewCleanupCandidatesModal(msg.Candidates, m.cleanupScanModalGen)
+		m.modal.SetTerminalSize(m.width, m.height)
 		m.outputPanel.AppendLine(fmt.Sprintf("Cleanup scan ready: %d candidates.", len(msg.Candidates)))
 		return m, nil
 
@@ -2331,6 +2398,7 @@ func (m Model) startReleaseCleanupExecution(generation uint64) (Model, tea.Cmd) 
 	}
 	plan := *m.pendingReleaseCleanupPlan
 	releaseID := m.pendingReleaseCleanupPreview.ReleaseID
+	m.releaseCleanupSelection = m.pendingReleaseCleanupPreview.Selection
 	m.pendingReleaseCleanupPlan = nil
 	m.pendingReleaseCleanupPreview = task.ReleaseCleanupPreview{}
 	m.modal = nil
@@ -2349,12 +2417,16 @@ func releaseCleanupHasRemoteSelection(selection task.ReleaseCleanupSelection) bo
 // inspection for taskID. The planner authorizes from its durable on-disk
 // proof; the caller decides what happens with an unblocked plan.
 func (m Model) startTaskCleanupInspection(taskID string) (Model, tea.Cmd) {
+	return m.startTaskCleanupInspectionWithSelection(taskID, false, false)
+}
+
+func (m Model) startTaskCleanupInspectionWithSelection(taskID string, deleteRemoteBranches, remoteConfirmation bool) (Model, tea.Cmd) {
 	m.taskCleanupGeneration++
 	m.operationGeneration++
-	m.taskCleanupRequest = &taskCleanupRequest{generation: m.taskCleanupGeneration, operationGeneration: m.operationGeneration, taskID: taskID}
+	m.taskCleanupRequest = &taskCleanupRequest{generation: m.taskCleanupGeneration, operationGeneration: m.operationGeneration, taskID: taskID, deleteRemoteBranches: deleteRemoteBranches, remoteConfirmation: remoteConfirmation}
 	m.opRunning = true
 	m.outputPanel.AppendLine("Inspecting cleanup for task " + taskID + "...")
-	return m, tea.Batch(planTaskCleanupCmd(m.mgr, taskID, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
+	return m, tea.Batch(planTaskCleanupCmd(m.mgr, taskID, deleteRemoteBranches, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
 }
 
 func (m Model) openReleaseFolder(executable, releaseID, dir string) (Model, tea.Cmd) {
@@ -2422,7 +2494,6 @@ func releaseCleanupMutatingMessage(msg tea.Msg) bool {
 	case panels.OpenInitDialogMsg,
 		panels.OpenCloneDialogMsg,
 		panels.OpenAddServiceMsg,
-		panels.OpenRemoveDialogMsg,
 		panels.OpenConvertHotfixDialogMsg,
 		panels.OpenSyncStrategyDialogMsg,
 		panels.OpenSyncServiceStrategyDialogMsg,
@@ -2442,7 +2513,6 @@ func releaseCleanupMutatingMessage(msg tea.Msg) bool {
 		panels.OpenCreateReleaseDialogMsg,
 		modal.SubmitInitMsg,
 		modal.SubmitAddMsg,
-		modal.SubmitRemoveTaskMsg,
 		modal.SubmitConvertHotfixMsg,
 		modal.SubmitRemoveServiceMsg,
 		modal.SubmitSyncStrategyMsg,

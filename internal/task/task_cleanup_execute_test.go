@@ -11,15 +11,10 @@ import (
 	"github.com/D1ssolve/wtui/internal/git"
 )
 
-func TestExecuteTaskCleanup_RemovesWorktreeRetainsBranchThenEmptyDir(t *testing.T) {
+func TestExecuteTaskCleanup_RemovesWorktreeBranchThenEmptyDir(t *testing.T) {
 	mgr, gitMock, plan := setupExecutableTaskCleanup(t)
 	worktree := filepath.Join(mgr.cfg.TasksRoot, "APP-1", "svc")
 	taskDir := filepath.Join(mgr.cfg.TasksRoot, "APP-1")
-
-	gitMock.deleteBranchIfUnchangedFn = func(_, _, _ string) error {
-		t.Fatal("DeleteBranchIfUnchanged called without an atomic remote target guard")
-		return nil
-	}
 
 	statusCh := make(chan string, 16)
 	result, err := mgr.ExecuteTaskCleanup(t.Context(), plan, statusCh)
@@ -36,14 +31,15 @@ func TestExecuteTaskCleanup_RemovesWorktreeRetainsBranchThenEmptyDir(t *testing.
 	if len(gitMock.removeWorktreeCalls) != 1 || gitMock.removeWorktreeCalls[0].Force {
 		t.Fatalf("removeWorktree calls = %+v", gitMock.removeWorktreeCalls)
 	}
-	if len(result.Completed) != 2 {
+	if len(result.Completed) != 3 {
 		t.Fatalf("completed = %q retained = %q", result.Completed, result.Retained)
 	}
 	if !strings.HasPrefix(result.Completed[0], "remove task worktree") ||
-		!strings.HasPrefix(result.Completed[1], "remove task directory") {
+		!strings.HasPrefix(result.Completed[1], "delete local task branch") ||
+		!strings.HasPrefix(result.Completed[2], "remove task directory") {
 		t.Fatalf("execution order = %q", result.Completed)
 	}
-	if len(result.Retained) != 1 || !strings.HasPrefix(result.Retained[0], "retain local task branch feature/APP-1") {
+	if len(result.Retained) != 0 {
 		t.Fatalf("retained = %q", result.Retained)
 	}
 	if len(result.Deferred) != 0 {
@@ -105,11 +101,7 @@ func TestExecuteTaskCleanup_BlockedPlanRejected(t *testing.T) {
 }
 
 func TestExecuteTaskCleanup_NonEmptyTaskDirStopsAfterCompletedSteps(t *testing.T) {
-	mgr, gitMock, plan := setupExecutableTaskCleanup(t)
-	gitMock.deleteBranchIfUnchangedFn = func(_, _, _ string) error {
-		t.Fatal("DeleteBranchIfUnchanged called without an atomic remote target guard")
-		return nil
-	}
+	mgr, _, plan := setupExecutableTaskCleanup(t)
 	notesPath := filepath.Join(mgr.cfg.TasksRoot, "APP-1", "notes.md")
 	if err := os.WriteFile(notesPath, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
@@ -119,10 +111,10 @@ func TestExecuteTaskCleanup_NonEmptyTaskDirStopsAfterCompletedSteps(t *testing.T
 	if err == nil {
 		t.Fatal("expected error for non-empty task directory")
 	}
-	if len(result.Completed) != 1 || !strings.HasPrefix(result.Completed[0], "remove task worktree") {
+	if len(result.Completed) != 2 || !strings.HasPrefix(result.Completed[0], "remove task worktree") || !strings.HasPrefix(result.Completed[1], "delete local task branch") {
 		t.Fatalf("completed = %q", result.Completed)
 	}
-	if len(result.Retained) != 1 || !strings.HasPrefix(result.Retained[0], "retain local task branch") {
+	if len(result.Retained) != 0 {
 		t.Fatalf("retained = %q", result.Retained)
 	}
 	if _, statErr := os.Stat(notesPath); statErr != nil {
@@ -147,7 +139,7 @@ func TestExecuteTaskCleanupStep_MissingResourcesNoOp(t *testing.T) {
 	}
 
 	for _, step := range plan.steps {
-		noop, err := mgr.executeTaskCleanupStep(t.Context(), plan, step)
+		noop, err := mgr.executeTaskCleanupStep(t.Context(), plan, TaskCleanupExecutionSelection{}, step)
 		if err != nil {
 			t.Fatalf("step %q: %v", step.description, err)
 		}
@@ -175,7 +167,7 @@ func TestExecuteTaskCleanupStep_UnregisteredWorktreePathBlocks(t *testing.T) {
 	if step.kind != cleanupTaskWorktree {
 		t.Fatalf("step kind = %d", step.kind)
 	}
-	if _, err := mgr.executeTaskCleanupStep(t.Context(), plan, step); err == nil {
+	if _, err := mgr.executeTaskCleanupStep(t.Context(), plan, TaskCleanupExecutionSelection{}, step); err == nil {
 		t.Fatal("unregistered replacement path allowed removal")
 	}
 	if len(gitMock.removeWorktreeCalls) != 0 {
@@ -225,11 +217,7 @@ func TestExecuteTaskCleanup_DeferredRemoteReportedRetained(t *testing.T) {
 }
 
 func TestExecuteTaskCleanup_RemovesGeneratedFilesBeforeTaskDirectory(t *testing.T) {
-	mgr, gitMock, plan := setupExecutableTaskCleanup(t)
-	gitMock.deleteBranchIfUnchangedFn = func(_, _, _ string) error {
-		t.Fatal("DeleteBranchIfUnchanged called without an atomic remote target guard")
-		return nil
-	}
+	mgr, _, plan := setupExecutableTaskCleanup(t)
 	taskDir := filepath.Join(mgr.cfg.TasksRoot, "APP-1")
 	for _, name := range []string{"APP-1.sln", "APP-1.code-workspace"} {
 		if err := os.WriteFile(filepath.Join(taskDir, name), []byte("generated"), 0o600); err != nil {
@@ -244,14 +232,66 @@ func TestExecuteTaskCleanup_RemovesGeneratedFilesBeforeTaskDirectory(t *testing.
 	if _, statErr := os.Stat(taskDir); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("task directory still exists: %v", statErr)
 	}
-	if len(result.Completed) != 2 {
+	if len(result.Completed) != 3 {
 		t.Fatalf("completed = %q", result.Completed)
 	}
-	if len(result.Retained) != 1 {
+	if len(result.Retained) != 0 {
 		t.Fatalf("retained = %q", result.Retained)
 	}
 	if len(result.Remote) != 1 || result.Remote[0].Branch != "feature/APP-1" {
 		t.Fatalf("retained remote candidates = %+v", result.Remote)
+	}
+}
+
+func TestExecuteTaskCleanup_RemoteDeleteSelectionUsesExpectedSHA(t *testing.T) {
+	mgr, gitMock := taskCleanupTestManager(t)
+	gitMock.listWorktreesFn = func(string) ([]git.WorktreeEntry, error) { return gitMock.listWorktreesRes, nil }
+	gitMock.removeWorktreeFn = func(_, path string, _ bool) error {
+		gitMock.listWorktreesRes = nil
+		return os.RemoveAll(path)
+	}
+	var gotBranch, gotSHA string
+	gitMock.deleteRemoteBranchIfUnchangedFn = func(_, branch, expectedSHA string) error {
+		gotBranch, gotSHA = branch, expectedSHA
+		return nil
+	}
+	plan, err := mgr.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1", DeleteRemoteTaskBranches: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := mgr.ExecuteTaskCleanup(t.Context(), plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBranch != "feature/APP-1" || gotSHA != taskCleanupTaskSHA {
+		t.Fatalf("remote delete = %s %s", gotBranch, gotSHA)
+	}
+	if len(result.Remote) != 0 {
+		t.Fatalf("remote retained after delete: %+v", result.Remote)
+	}
+}
+
+func TestExecuteTaskCleanup_ForceRemovesNonEmptyOwnedTaskDirectory(t *testing.T) {
+	mgr, gitMock, plan := setupExecutableTaskCleanup(t)
+	gitMock.removeWorktreeFn = func(_, path string, force bool) error {
+		if !force {
+			t.Fatal("RemoveWorktree called without force")
+		}
+		gitMock.listWorktreesRes = nil
+		return os.RemoveAll(path)
+	}
+	notesPath := filepath.Join(mgr.cfg.TasksRoot, "APP-1", "notes.md")
+	if err := os.WriteFile(notesPath, []byte("drop"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := mgr.ExecuteTaskCleanup(t.Context(), plan, nil, TaskCleanupExecutionSelection{Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(filepath.Join(mgr.cfg.TasksRoot, "APP-1")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("task dir still exists: %v", statErr)
 	}
 }
 
@@ -273,6 +313,23 @@ func TestExecuteTaskCleanup_UnknownFilesPreserveRemoteRetentionReport(t *testing
 	}
 	if len(result.Remote) != 1 {
 		t.Fatalf("remote retention report lost after directory failure: %+v", result.Remote)
+	}
+}
+
+func TestExecuteTaskCleanup_ForceCompletesPartialCleanupPlan(t *testing.T) {
+	mgr, _, plan := setupExecutableTaskCleanup(t)
+	notesPath := filepath.Join(mgr.cfg.TasksRoot, "APP-1", "notes.md")
+	if err := os.WriteFile(notesPath, []byte("drop"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.ExecuteTaskCleanup(t.Context(), plan, nil); err == nil {
+		t.Fatal("normal cleanup succeeded with an unknown file")
+	}
+	if _, err := mgr.ExecuteTaskCleanup(t.Context(), plan, nil, TaskCleanupExecutionSelection{Force: true}); err != nil {
+		t.Fatalf("force cleanup after partial cleanup: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(mgr.cfg.TasksRoot, "APP-1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("task directory still exists: %v", err)
 	}
 }
 
@@ -314,6 +371,7 @@ func TestExecuteTaskCleanup_StalePlanReportsNoRemoteCandidates(t *testing.T) {
 func setupExecutableTaskCleanup(t *testing.T) (*manager, *mockGitClient, TaskCleanupPlan) {
 	t.Helper()
 	mgr, gitMock := taskCleanupTestManager(t)
+	gitMock.branchExistsRes = true
 	worktree := filepath.Join(mgr.cfg.TasksRoot, "APP-1", "svc")
 	gitMock.listWorktreesFn = func(string) ([]git.WorktreeEntry, error) {
 		return gitMock.listWorktreesRes, nil

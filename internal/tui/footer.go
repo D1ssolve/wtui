@@ -23,7 +23,6 @@ func renderFooter(m Model) string {
 			"[Enter] services",
 			"[i] init",
 			"[d] cleanup",
-			"[Del] remove",
 			"[S] sync",
 			"[C] close",
 			"[D] scan",

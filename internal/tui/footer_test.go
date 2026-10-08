@@ -30,11 +30,13 @@ func TestRenderFooter_FocusTasks_IncludesCoreHints(t *testing.T) {
 	m.focus = FocusTasks
 
 	footer := renderFooter(m)
+	if strings.Contains(footer, "[Del]") {
+		t.Fatalf("tasks footer advertises removed Delete shortcut: %q", footer)
+	}
 	for _, want := range []string{
 		"[Enter] services",
 		"[i] init",
 		"[d] cleanup",
-		"[Del] remove",
 		"[S] sync",
 		"[C] close",
 		"[M] merge MRs",

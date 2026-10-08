@@ -125,8 +125,6 @@ func (h *HelpOverlay) contentLines() []string {
 	sb.WriteString("\n")
 	sb.WriteString(h.shortcutRow("d", "Clean up selected task (no scan)"))
 	sb.WriteString("\n")
-	sb.WriteString(h.shortcutRow("Del", "Remove task group"))
-	sb.WriteString("\n")
 	sb.WriteString(h.shortcutRow("S", "Open sync strategy selection"))
 	sb.WriteString("\n")
 	sb.WriteString(h.shortcutRow("C", "Plan close selected task"))
@@ -162,7 +160,7 @@ func (h *HelpOverlay) contentLines() []string {
 	sb.WriteString("\n")
 	sb.WriteString(h.shortcutRow("a", "Add service to task"))
 	sb.WriteString("\n")
-	sb.WriteString(h.shortcutRow("d/Del", "Remove service from task"))
+	sb.WriteString(h.shortcutRow("d", "Remove service from task"))
 	sb.WriteString("\n")
 	if h.lazygitAvailable {
 		sb.WriteString(h.shortcutRow("g", "Open lazygit for selected service"))

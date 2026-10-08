@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -244,9 +245,6 @@ type cmdManager struct {
 	scanResult []domain.PruneCandidate
 	scanErr    error
 
-	removeCalls []string
-	removeErrs  map[string]error
-
 	tagTaskID string
 	tagCalls  []string
 	tagResult []domain.TagInfo
@@ -373,14 +371,6 @@ func (m *cmdManager) CloseTask(_ context.Context, params task.CloseTaskParams) (
 func (m *cmdManager) ScanPrunableTasks(_ context.Context) ([]domain.PruneCandidate, error) {
 	m.scanCalled = true
 	return m.scanResult, m.scanErr
-}
-
-func (m *cmdManager) Remove(_ context.Context, taskID string, _ task.RemoveOptions) error {
-	m.removeCalls = append(m.removeCalls, taskID)
-	if err, ok := m.removeErrs[taskID]; ok {
-		return err
-	}
-	return nil
 }
 
 func (m *cmdManager) ListTags(_ context.Context, taskID string) ([]domain.TagInfo, error) {
@@ -597,7 +587,7 @@ func TestScanCleanupCandidatesCmdReadOnlyAndPreservesIdentity(t *testing.T) {
 	if got.Candidates[2].Kind != modal.CleanupKindRelease || got.Candidates[2].ID != "rel-1" {
 		t.Fatalf("release candidate = %+v", got.Candidates[2])
 	}
-	if mgr.cleanupPlanSelection != (task.ReleaseCleanupSelection{RemoveRelease: true}) {
+	if mgr.cleanupPlanSelection != (task.ReleaseCleanupSelection{RemoveRelease: true, DeleteLocalReleaseBranches: true}) {
 		t.Fatalf("release scan selection = %+v, want release-only", mgr.cleanupPlanSelection)
 	}
 	if mgr.taskCleanupExecCalls != 0 || mgr.cleanupExecuteCalls != 0 {
@@ -640,6 +630,73 @@ func TestScanCleanupCandidatesCmdPlanErrorMarksCandidateBlocked(t *testing.T) {
 	}
 	if !strings.Contains(got.Candidates[0].Reason, "planner boom") {
 		t.Fatalf("block reason = %q, want planner error", got.Candidates[0].Reason)
+	}
+}
+
+func TestScanCleanupCandidatesCmdMarksTaskWithoutServicesReady(t *testing.T) {
+	mgr := &mockManager{listTasksResult: []domain.Task{{ID: "ORPHAN-1"}}}
+
+	msg := scanCleanupCandidatesCmd(mgr, 7)()
+	got, ok := msg.(CleanupScanReadyMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want CleanupScanReadyMsg", msg)
+	}
+	if got.Err != nil {
+		t.Fatalf("scan err = %v", got.Err)
+	}
+	if len(got.Candidates) != 1 {
+		t.Fatalf("candidates = %+v, want one", got.Candidates)
+	}
+	candidate := got.Candidates[0]
+	if !candidate.Ready || candidate.Services != 0 || candidate.Resources != 1 {
+		t.Fatalf("candidate = %+v, want ready orphan task with one directory resource", candidate)
+	}
+}
+
+func TestScanCleanupCandidatesCmdHasNoDeadline(t *testing.T) {
+	mgr := &mockManager{
+		listTasksResult: []domain.Task{{ID: "T-1"}},
+		taskCleanupPlanHook: func(ctx context.Context, _ task.TaskCleanupRequest) {
+			if _, ok := ctx.Deadline(); ok {
+				t.Error("cleanup scan context has deadline")
+			}
+		},
+	}
+
+	msg := scanCleanupCandidatesCmd(mgr, 1)()
+	if got := msg.(CleanupScanReadyMsg); got.Err != nil {
+		t.Fatalf("scan error = %v", got.Err)
+	}
+}
+
+func TestScanCleanupCandidatesCmdPlansTenTasksConcurrently(t *testing.T) {
+	tasks := make([]domain.Task, 11)
+	for i := range tasks {
+		tasks[i].ID = fmt.Sprintf("T-%02d", i)
+	}
+	started := make(chan struct{}, len(tasks))
+	release := make(chan struct{})
+	mgr := &mockManager{
+		listTasksResult: tasks,
+		taskCleanupPlanHook: func(context.Context, task.TaskCleanupRequest) {
+			started <- struct{}{}
+			<-release
+		},
+	}
+	done := make(chan tea.Msg, 1)
+	go func() { done <- scanCleanupCandidatesCmd(mgr, 1)() }()
+
+	for range 10 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatal("cleanup candidates did not start ten plans concurrently")
+		}
+	}
+	close(release)
+	if got := (<-done).(CleanupScanReadyMsg); got.Err != nil {
+		t.Fatalf("scan error = %v", got.Err)
 	}
 }
 
@@ -814,7 +871,7 @@ func TestExecuteReleaseCleanupCmdStreamsAndReturnsGeneration(t *testing.T) {
 
 func TestPlanTaskCleanupCmdReturnsReadyMsg(t *testing.T) {
 	mgr := &cmdManager{}
-	msg := planTaskCleanupCmd(mgr, "TASK-9", 4, 11)()
+	msg := planTaskCleanupCmd(mgr, "TASK-9", false, 4, 11)()
 	ready, ok := msg.(TaskCleanupPlanReadyMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want TaskCleanupPlanReadyMsg", msg)
@@ -822,8 +879,16 @@ func TestPlanTaskCleanupCmdReturnsReadyMsg(t *testing.T) {
 	if ready.TaskID != "TASK-9" || ready.Generation != 4 || ready.OperationGeneration != 11 || ready.Err != nil {
 		t.Fatalf("ready = %+v", ready)
 	}
-	if len(mgr.taskCleanupPlanTaskIDs) != 1 || mgr.taskCleanupPlanTaskIDs[0] != "TASK-9" {
-		t.Fatalf("plan calls = %v", mgr.taskCleanupPlanTaskIDs)
+	if len(mgr.taskCleanupPlanRequests) != 1 || mgr.taskCleanupPlanRequests[0].DeleteRemoteTaskBranches {
+		t.Fatalf("plan requests = %+v", mgr.taskCleanupPlanRequests)
+	}
+}
+
+func TestPlanTaskCleanupCmdCarriesRemoteSelection(t *testing.T) {
+	mgr := &cmdManager{}
+	_ = planTaskCleanupCmd(mgr, "TASK-9", true, 4, 11)()
+	if len(mgr.taskCleanupPlanRequests) != 1 || !mgr.taskCleanupPlanRequests[0].DeleteRemoteTaskBranches {
+		t.Fatalf("plan requests = %+v", mgr.taskCleanupPlanRequests)
 	}
 }
 
@@ -831,7 +896,7 @@ func TestExecuteTaskCleanupCmdStreamsAndReturnsGeneration(t *testing.T) {
 	mgr := &cmdManager{}
 	mgr.taskCleanupExecStatuses = []string{"remove task worktree w1"}
 	mgr.taskCleanupExecResult = task.TaskCleanupResult{TaskID: "TASK-9", Completed: []string{"remove task worktree w1"}}
-	cmd := executeTaskCleanupCmd(mgr, task.TaskCleanupPlan{}, "TASK-9", 7, 12)
+	cmd := executeTaskCleanupCmd(mgr, task.TaskCleanupPlan{}, "TASK-9", task.TaskCleanupExecutionSelection{}, 7, 12)
 
 	first, ok := cmd().(OutputLineMsg)
 	if !ok || first.Line != "remove task worktree w1" {
@@ -876,7 +941,7 @@ func TestExecuteReleaseCleanupCmdStampsConfirmedReleaseIDOnError(t *testing.T) {
 func TestExecuteTaskCleanupCmdStampsConfirmedTaskIDOnError(t *testing.T) {
 	mgr := &cmdManager{}
 	mgr.taskCleanupExecErr = errors.New("boom")
-	cmd := executeTaskCleanupCmd(mgr, task.TaskCleanupPlan{}, "TASK-9", 7, 12)
+	cmd := executeTaskCleanupCmd(mgr, task.TaskCleanupPlan{}, "TASK-9", task.TaskCleanupExecutionSelection{}, 7, 12)
 
 	msg := cmd()
 	for {

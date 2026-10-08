@@ -15,9 +15,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
-// ReleaseCleanupSelection selects release cleanup scope. Branch deletion
-// selections are honored as retention: authoritative targets are remote and
-// no atomic guard exists, so branches are never deleted by cleanup.
+// ReleaseCleanupSelection selects release cleanup scope.
 type ReleaseCleanupSelection struct {
 	RemoveTasks                 bool
 	DeleteLocalTaskBranches     bool
@@ -25,6 +23,7 @@ type ReleaseCleanupSelection struct {
 	RemoveRelease               bool
 	DeleteLocalReleaseBranches  bool
 	DeleteRemoteReleaseBranches bool
+	Force                       bool
 }
 
 type ReleaseCleanupServicePreview struct {
@@ -383,12 +382,10 @@ func (m *manager) validateCleanupReleaseSafety(ctx context.Context, plan cleanup
 	return nil
 }
 
-// cleanupBranchOwnedByTask applies the shared exact task ownership rules used
-// by task removal: the branch must equal a configured branch-type prefix
-// joined with the task ID. Release-namespace names take precedence and are
-// never task-owned, so a release branch embedding the task ID stays blocked.
+// cleanupBranchOwnedByTask requires an exact configured task branch. Release
+// namespace names take precedence and are never task-owned.
 func (m *manager) cleanupBranchOwnedByTask(taskID, branch string) bool {
-	for candidate, bt := range m.taskBranchCandidates(taskID) {
+	for candidate, bt := range m.taskCleanupBranchCandidates(taskID) {
 		if candidate == branch && bt != gitflow.BranchTypeRelease {
 			return true
 		}
@@ -431,7 +428,7 @@ func (m *manager) validateCleanupTaskBranch(ctx context.Context, plan *ReleaseCl
 		plan.block("remote task branch %s moved", fb.Branch)
 	}
 	if selection.DeleteLocalTaskBranches {
-		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalTaskBranch, description: retainLocalBranchReason("local task", fb.Branch), repoPath: svc.RepoPath, branch: fb.Branch, expectedSHA: leaseSHA, integratedSHA: fb.MergeRef, noop: !local, targets: targets})
+		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalTaskBranch, description: deleteLocalBranchReason("local task", fb.Branch), repoPath: svc.RepoPath, branch: fb.Branch, expectedSHA: leaseSHA, integratedSHA: fb.MergeRef, noop: !local, targets: targets})
 	}
 	if selection.DeleteRemoteTaskBranches {
 		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupRemoteTaskBranch, description: "delete remote task branch " + fb.Branch, repoPath: svc.RepoPath, branch: fb.Branch, expectedSHA: leaseSHA, integratedSHA: fb.MergeRef, noop: remoteSHA == "", targets: targets})
@@ -483,7 +480,7 @@ func (m *manager) validateCleanupReleaseBranch(ctx context.Context, plan *Releas
 		return err
 	}
 	if selection.DeleteLocalReleaseBranches {
-		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalReleaseBranch, description: retainLocalBranchReason("local release", svc.ReleaseBranch), repoPath: svc.RepoPath, branch: svc.ReleaseBranch, expectedSHA: svc.ReleaseSHA, noop: !local, targets: targets})
+		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalReleaseBranch, description: deleteLocalBranchReason("local release", svc.ReleaseBranch), repoPath: svc.RepoPath, branch: svc.ReleaseBranch, expectedSHA: svc.ReleaseSHA, noop: !local, targets: targets})
 	}
 	if selection.DeleteRemoteReleaseBranches {
 		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupRemoteReleaseBranch, description: "delete remote release branch " + svc.ReleaseBranch, repoPath: svc.RepoPath, branch: svc.ReleaseBranch, expectedSHA: svc.ReleaseSHA, noop: remoteSHA == "", targets: targets})

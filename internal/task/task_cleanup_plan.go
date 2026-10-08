@@ -22,15 +22,15 @@ type cleanupPlanBlocker interface {
 	block(format string, args ...any)
 }
 
-// TaskCleanupRequest selects the task to plan cleanup for. Planning is
-// read-only; it authorizes nothing by itself. Close post-action authorization
-// comes only from the durable on-disk proof the planner verifies per service.
+// TaskCleanupRequest selects the task cleanup scope. Planning is read-only; it
+// authorizes nothing by itself. Close post-action authorization comes only from
+// the durable on-disk proof the planner verifies per service.
 type TaskCleanupRequest struct {
-	TaskID string
+	TaskID                   string
+	DeleteRemoteTaskBranches bool
 }
 
-// TaskCleanupRemoteCandidate reports a remote branch that task cleanup
-// retains. Remote branches are never deleted by wtui.
+// TaskCleanupRemoteCandidate reports a remote branch cleanup candidate.
 type TaskCleanupRemoteCandidate struct {
 	RepoPath    string
 	Branch      string
@@ -176,10 +176,10 @@ func (p TaskCleanupPlan) fingerprintAuthentic() bool {
 // task. Every current task service must be proven complete (exact source SHA
 // is an ancestor of all effective close targets) and safe (clean, unlocked,
 // registered, operation-free, non-protected worktree) before local worktree
-// and local branch steps are authorized. Feature tasks that remain release
-// inputs additionally require a valid released manifest covering the exact
-// task/service/branch identity. Remote branches are only previewed as
-// retained candidates for reporting.
+// and local branch steps are authorized. Feature tasks not proven by live
+// production ancestry additionally require a valid released manifest covering
+// the exact task/service/branch identity. Remote branches are deleted only when the
+// request explicitly selects remote task branch deletion.
 func (m *manager) PlanTaskCleanup(ctx context.Context, request TaskCleanupRequest) (TaskCleanupPlan, error) {
 	plan := TaskCleanupPlan{preview: TaskCleanupPreview{TaskID: request.TaskID}}
 	if err := validateTaskID(request.TaskID); err != nil {
@@ -196,7 +196,9 @@ func (m *manager) PlanTaskCleanup(ctx context.Context, request TaskCleanupReques
 		return plan, err
 	}
 	if len(services) == 0 {
-		plan.block("task %s has no services", request.TaskID)
+		taskDir := m.taskDir(request.TaskID)
+		_, statErr := os.Stat(taskDir)
+		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupTaskDirectory, description: "remove task directory " + taskDir, path: taskDir, noop: os.IsNotExist(statErr)})
 		plan.finishFingerprint()
 		return plan, nil
 	}
@@ -243,7 +245,7 @@ func (m *manager) PlanTaskCleanup(ctx context.Context, request TaskCleanupReques
 		// Authorization is exact task ownership, not the generic protected
 		// policy: a valid task-owned hotfix is accepted, while unrelated or
 		// release-namespace branches stay blocked (release prefixes win).
-		if m.isRemoveProtectedBranch(ctx, svc.Branch, request.TaskID) {
+		if m.isCleanupProtectedBranch(ctx, svc.Branch, request.TaskID) {
 			plan.block("service %s branch %s is protected or not an exact task-owned branch", svc.Name, svc.Branch)
 			continue
 		}
@@ -297,7 +299,16 @@ func (m *manager) PlanTaskCleanup(ctx context.Context, request TaskCleanupReques
 		releaseID := ""
 		ancestrySHA := sourceSHA
 		integratedSHA := ""
-		if branchType == gitflow.BranchTypeFeature && !taskCleanupReachesProduction(m.flow, refs) {
+		provenInProduction := false
+		requiresManifest := branchType == gitflow.BranchTypeFeature && !taskCleanupReachesProduction(m.flow, refs)
+		if requiresManifest && !taskCleanupHasReleaseProofCandidate(releases, request.TaskID, svc) {
+			var productionErr error
+			provenInProduction, productionErr = m.taskCleanupSourceReachesProduction(ctx, svc.RepoPath, sourceSHA)
+			if productionErr != nil {
+				return plan, productionErr
+			}
+		}
+		if requiresManifest && !provenInProduction {
 			var proofIntegrated string
 			releaseID, proofIntegrated, err = m.validateTaskCleanupReleaseProof(ctx, &plan, releases, request.TaskID, svc, sourceSHA)
 			if err != nil {
@@ -339,7 +350,11 @@ func (m *manager) PlanTaskCleanup(ctx context.Context, request TaskCleanupReques
 	if len(plan.preview.Blockers) == 0 {
 		for _, r := range ready {
 			plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupTaskWorktree, description: "remove task worktree " + r.svc.WorktreePath, repoPath: r.svc.RepoPath, path: r.svc.WorktreePath, branch: r.svc.Branch, expectedSHA: r.source})
-			plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalTaskBranch, description: retainLocalBranchReason("local task", r.svc.Branch), repoPath: r.svc.RepoPath, branch: r.svc.Branch, expectedSHA: r.source, integratedSHA: r.integrated, targets: r.targets})
+			local, err := m.git.BranchExists(ctx, r.svc.RepoPath, r.svc.Branch)
+			if err != nil {
+				return plan, err
+			}
+			plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalTaskBranch, description: deleteLocalBranchReason("local task", r.svc.Branch), repoPath: r.svc.RepoPath, branch: r.svc.Branch, expectedSHA: r.source, integratedSHA: r.integrated, noop: !local, targets: r.targets})
 			remoteSHA, err := m.git.RemoteRefSHA(ctx, r.svc.RepoPath, "refs/heads/"+r.svc.Branch)
 			if err != nil {
 				return plan, err
@@ -348,6 +363,9 @@ func (m *manager) PlanTaskCleanup(ctx context.Context, request TaskCleanupReques
 				candidate := TaskCleanupRemoteCandidate{RepoPath: r.svc.RepoPath, Branch: r.svc.Branch, ExpectedSHA: remoteSHA}
 				if remoteSHA == r.source {
 					plan.preview.Remote = append(plan.preview.Remote, candidate)
+					if request.DeleteRemoteTaskBranches {
+						plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupRemoteTaskBranch, description: "delete remote task branch " + r.svc.Branch, repoPath: r.svc.RepoPath, branch: r.svc.Branch, expectedSHA: r.source, integratedSHA: r.integrated, targets: r.targets})
+					}
 				} else {
 					plan.preview.DeferredRemote = append(plan.preview.DeferredRemote, candidate)
 				}
@@ -411,6 +429,38 @@ func taskCleanupReachesProduction(flow *gitflow.ResolvedGitFlow, refs []string) 
 		return false
 	}
 	return slices.Contains(refs, "refs/heads/"+flow.ProductionBranch)
+}
+
+// taskCleanupSourceReachesProduction proves a legacy feature branch was
+// integrated before release manifests existed.
+func (m *manager) taskCleanupSourceReachesProduction(ctx context.Context, repoPath, sourceSHA string) (bool, error) {
+	if m.flow == nil || m.flow.ProductionBranch == "" {
+		return false, nil
+	}
+	productionSHA, err := m.git.RemoteRefSHA(ctx, repoPath, "refs/heads/"+m.flow.ProductionBranch)
+	if err != nil || productionSHA == "" {
+		return false, err
+	}
+	if err := m.git.EnsureCommit(ctx, repoPath, productionSHA); err != nil {
+		return false, err
+	}
+	return m.git.IsAncestor(ctx, repoPath, sourceSHA, productionSHA)
+}
+
+func taskCleanupHasReleaseProofCandidate(releases []domain.Release, taskID string, svc domain.Service) bool {
+	for _, release := range releases {
+		if slices.Contains(release.TaskIDs, taskID) {
+			return true
+		}
+		for _, releaseSvc := range release.Services {
+			for _, feature := range releaseSvc.FeatureBranches {
+				if feature.TaskID == taskID && feature.ServiceName == svc.Name && feature.Branch == svc.Branch {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // taskCleanupMergeTargetBranches resolves the branches task-cleanup must prove

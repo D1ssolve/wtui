@@ -37,8 +37,8 @@ func TestTaskCleanupConfirmModal_ViewListsExactResourcesAndBranchBehavior(t *tes
 	if !strings.Contains(view, "retained") {
 		t.Fatalf("confirm view must state local branch retention:\n%s", view)
 	}
-	if !strings.Contains(view, "not deleted") && !strings.Contains(view, "NOT deleted") {
-		t.Fatalf("confirm view must state remote branches are excluded:\n%s", view)
+	if !strings.Contains(view, "[Space] delete remote branches") {
+		t.Fatalf("confirm view must offer remote branch deletion:\n%s", view)
 	}
 }
 
@@ -55,6 +55,25 @@ func TestTaskCleanupConfirmModal_EnterConfirmsExactBinding(t *testing.T) {
 	}
 	if msg.TaskID != "T-1" || msg.Generation != 5 || msg.Fingerprint != fingerprint {
 		t.Fatalf("confirmation binding = %+v", msg)
+	}
+}
+
+func TestTaskCleanupConfirmModal_RemoteSelectionRequiresSecondConfirmation(t *testing.T) {
+	m := NewTaskCleanupConfirmModal(taskCleanupConfirmPreview(), 5, [32]byte{1})
+	updated, _ := m.Update(sendKey(" "))
+	m = updated.(*TaskCleanupConfirmModal)
+	if !m.DeleteRemoteBranches() {
+		t.Fatal("remote deletion not selected")
+	}
+	_, cmd := m.Update(sendSpecialKey(tea.KeyEnter))
+	msg := execCmd(cmd).(ConfirmTaskCleanupMsg)
+	if !msg.DeleteRemoteTaskBranches {
+		t.Fatal("remote selection missing from confirmation")
+	}
+
+	remote := NewTaskCleanupRemoteConfirmModal(taskCleanupConfirmPreview(), 5, [32]byte{1})
+	if view := stripAnsi(remote.View()); !strings.Contains(view, "feature/T-1") {
+		t.Fatalf("remote branch missing from confirmation: %s", view)
 	}
 }
 

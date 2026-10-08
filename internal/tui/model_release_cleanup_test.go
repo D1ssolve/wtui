@@ -142,6 +142,7 @@ func TestUpdate_ReleaseCleanupDoneRefreshesTasksReleasesAndRepoOnSuccessOrFailur
 		m.opRunning = true
 		m.releaseCleanupExecuting = 4
 		m.releaseCleanupExecutingID = "rel-1"
+		m.releaseCleanupSelection = task.ReleaseCleanupSelection{Force: executeErr != nil}
 		updated, cmd := m.Update(ReleaseCleanupDoneMsg{Generation: 4, Result: task.ReleaseCleanupResult{ReleaseID: "rel-1"}, Err: executeErr})
 		m = updated.(Model)
 		if cmd == nil || m.opRunning {
@@ -331,7 +332,6 @@ func TestUpdate_ExecutingReleaseCleanupBlocksTaskMutations(t *testing.T) {
 	m.opRunning = true
 
 	for _, msg := range []tea.Msg{
-		panels.OpenRemoveDialogMsg{TaskID: "TASK-1"},
 		panels.PlanCloseTaskMsg{TaskID: "TASK-1"},
 		panels.OpenSyncStrategyDialogMsg{TaskID: "TASK-1"},
 		panels.PushTaskMsg{TaskID: "TASK-1"},
@@ -383,7 +383,7 @@ func TestUpdate_PendingReleaseCleanupPlanBlocksTaskMutation(t *testing.T) {
 	m.pendingReleaseCleanupPlan = &task.ReleaseCleanupPlan{}
 	m.pendingReleaseCleanupPreview = testCleanupPreview(task.DefaultReleaseCleanupSelection())
 
-	updated, cmd := m.Update(panels.OpenRemoveDialogMsg{TaskID: "TASK-1"})
+	updated, cmd := m.Update(panels.PlanCloseTaskMsg{TaskID: "TASK-1"})
 	m = updated.(Model)
 	if cmd != nil || m.modal != nil || m.pendingReleaseCleanupPlan == nil {
 		t.Fatal("pending cleanup approval allowed task mutation")

@@ -18,6 +18,7 @@ type TaskCleanupConfirmModal struct {
 	preview       task.TaskCleanupPreview
 	generation    uint64
 	fingerprint   [32]byte
+	deleteRemote  bool
 	width         int
 	height        int
 	contentWidth  int
@@ -42,10 +43,11 @@ func NewTaskCleanupConfirmModal(preview task.TaskCleanupPreview, generation uint
 	}
 }
 
-func (m *TaskCleanupConfirmModal) Title() string         { return "Confirm Task Cleanup" }
-func (m *TaskCleanupConfirmModal) TaskID() string        { return m.preview.TaskID }
-func (m *TaskCleanupConfirmModal) Generation() uint64    { return m.generation }
-func (m *TaskCleanupConfirmModal) Fingerprint() [32]byte { return m.fingerprint }
+func (m *TaskCleanupConfirmModal) Title() string              { return "Confirm Task Cleanup" }
+func (m *TaskCleanupConfirmModal) TaskID() string             { return m.preview.TaskID }
+func (m *TaskCleanupConfirmModal) Generation() uint64         { return m.generation }
+func (m *TaskCleanupConfirmModal) Fingerprint() [32]byte      { return m.fingerprint }
+func (m *TaskCleanupConfirmModal) DeleteRemoteBranches() bool { return m.deleteRemote }
 
 func (m *TaskCleanupConfirmModal) SetTerminalSize(width, height int) {
 	m.width = width
@@ -83,8 +85,11 @@ func (m *TaskCleanupConfirmModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 		if !m.usable() {
 			return m, nil
 		}
-		result := ConfirmTaskCleanupMsg{TaskID: m.preview.TaskID, Generation: m.generation, Fingerprint: m.fingerprint}
+		result := ConfirmTaskCleanupMsg{TaskID: m.preview.TaskID, Generation: m.generation, Fingerprint: m.fingerprint, DeleteRemoteTaskBranches: m.deleteRemote}
 		return m, func() tea.Msg { return result }
+	case " ":
+		m.deleteRemote = !m.deleteRemote
+		return m, nil
 	case "esc", "n":
 		return m, func() tea.Msg { return CloseModalMsg{} }
 	case "g", "home":
@@ -131,7 +136,7 @@ func (m *TaskCleanupConfirmModal) header() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	warningStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorWarning)
 	return titleStyle.Render("Task cleanup: "+m.preview.TaskID) + "\n\n" +
-		warningStyle.Render("Local cleanup removes the resources below. Local task branches are retained (never deleted). Remote branches are not deleted by this cleanup.") + "\n\n"
+		warningStyle.Render("Local cleanup removes the resources below, including local task branches.") + "\n\n"
 }
 
 func (m *TaskCleanupConfirmModal) body() string {
@@ -146,14 +151,18 @@ func (m *TaskCleanupConfirmModal) body() string {
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render("  Worktree (removed): " + valueOrNone(service.WorktreePath)))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("  Branch (retained): " + valueOrNone(service.Branch)))
+		b.WriteString(dimStyle.Render("  Branch (removed): " + valueOrNone(service.Branch)))
 		b.WriteString("\n")
 	}
 	b.WriteString(dimStyle.Render("Task directory (removed; unknown entries are preserved and reported)"))
 	b.WriteString("\n")
 	if len(m.preview.Remote) > 0 {
 		b.WriteString("\n")
-		b.WriteString(normalStyle.Bold(true).Render("Remote branches (retained; delete manually on GitHub/GitLab if desired)"))
+		remoteTitle := "Remote branches (retained)"
+		if m.deleteRemote {
+			remoteTitle = "Remote branches (deleted after separate confirmation)"
+		}
+		b.WriteString(normalStyle.Bold(true).Render(remoteTitle))
 		b.WriteString("\n")
 		for _, candidate := range m.preview.Remote {
 			b.WriteString(dimStyle.Render("  " + candidate.Branch + " @ " + shortSHA(candidate.ExpectedSHA)))
@@ -173,7 +182,50 @@ func (m *TaskCleanupConfirmModal) footer(withScrollHint bool) string {
 	if withScrollHint {
 		hint = "  [j/k] scroll  [g/G] top/bottom"
 	}
-	return "\n\n" + dimStyle.Render("[Enter/y] confirm cleanup  [Esc/n] cancel"+hint)
+	remote := "[Space] delete remote branches"
+	if m.deleteRemote {
+		remote = "[Space] keep remote branches"
+	}
+	return "\n\n" + dimStyle.Render("[Enter/y] confirm cleanup  "+remote+"  [Esc/n] cancel"+hint)
+}
+
+type TaskCleanupRemoteConfirmModal struct {
+	preview     task.TaskCleanupPreview
+	generation  uint64
+	fingerprint [32]byte
+}
+
+func NewTaskCleanupRemoteConfirmModal(preview task.TaskCleanupPreview, generation uint64, fingerprint [32]byte) *TaskCleanupRemoteConfirmModal {
+	return &TaskCleanupRemoteConfirmModal{preview: preview, generation: generation, fingerprint: fingerprint}
+}
+
+func (m *TaskCleanupRemoteConfirmModal) Title() string            { return "Confirm Remote Branch Deletion" }
+func (m *TaskCleanupRemoteConfirmModal) TaskID() string           { return m.preview.TaskID }
+func (m *TaskCleanupRemoteConfirmModal) Generation() uint64       { return m.generation }
+func (m *TaskCleanupRemoteConfirmModal) Fingerprint() [32]byte    { return m.fingerprint }
+func (m *TaskCleanupRemoteConfirmModal) SetTerminalSize(_, _ int) {}
+func (m *TaskCleanupRemoteConfirmModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "enter", "y":
+			result := ConfirmRemoteTaskCleanupMsg{TaskID: m.preview.TaskID, Generation: m.generation, Fingerprint: m.fingerprint}
+			return m, func() tea.Msg { return result }
+		case "esc", "n":
+			return m, func() tea.Msg { return CloseModalMsg{} }
+		}
+	}
+	return m, nil
+}
+func (m *TaskCleanupRemoteConfirmModal) View() string {
+	style := lipgloss.NewStyle().Foreground(modalColorDanger).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(modalColorDim)
+	var branches []string
+	for _, candidate := range m.preview.Remote {
+		branches = append(branches, candidate.Branch)
+	}
+	return style.Render("Delete remote branches for task "+m.preview.TaskID) + "\n\n" +
+		dim.Render(valueList(branches)) + "\n\n" +
+		dim.Render("[Enter/y] delete remote branches  [Esc/n] cancel")
 }
 
 func shortSHA(sha string) string {

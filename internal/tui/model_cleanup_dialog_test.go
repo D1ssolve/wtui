@@ -158,7 +158,7 @@ func TestCleanupDialog_KeyDStartsReadOnlyScan(t *testing.T) {
 	if ready.Candidates[1].Kind != modal.CleanupKindRelease || ready.Candidates[1].ID != "rel-1" {
 		t.Fatalf("release candidate = %+v", ready.Candidates[1])
 	}
-	if mgr.cleanupPlanSelection != (task.ReleaseCleanupSelection{RemoveRelease: true}) {
+	if mgr.cleanupPlanSelection != (task.ReleaseCleanupSelection{RemoveRelease: true, DeleteLocalReleaseBranches: true}) {
 		t.Fatalf("release scan selection = %+v, want release-only", mgr.cleanupPlanSelection)
 	}
 
@@ -166,6 +166,9 @@ func TestCleanupDialog_KeyDStartsReadOnlyScan(t *testing.T) {
 	m = updated.(Model)
 	if _, ok := m.modal.(*modal.CleanupCandidatesModal); !ok {
 		t.Fatalf("scan ready did not open dialog: %T", m.modal)
+	}
+	if view := stripANSIForModel(m.View()); !strings.Contains(view, "[Esc] cancel") {
+		t.Fatalf("cleanup modal controls wrapped unexpectedly:\n%s", view)
 	}
 }
 
@@ -541,11 +544,12 @@ func TestCleanupDialog_ConfirmCommandDoneGenerations(t *testing.T) {
 	}
 }
 
-func TestCleanupDialog_TaskFailureStopsQueueAndRefreshes(t *testing.T) {
+func TestCleanupDialog_TaskFailureInQueueOpensForceConfirmation(t *testing.T) {
 	mgr := &mockManager{}
 	m := queueTaskCleanup(t, mgr)
 	m.taskCleanupExecuting = m.taskCleanupGeneration
 	m.taskCleanupExecutingID = "T-1"
+	m.failedTaskCleanupPlan = &task.TaskCleanupPlan{}
 	m.opRunning = true
 
 	updated, cmd := m.Update(TaskCleanupDoneMsg{
@@ -556,15 +560,14 @@ func TestCleanupDialog_TaskFailureStopsQueueAndRefreshes(t *testing.T) {
 		Err:                 errors.New("worktree busy"),
 	})
 	m = updated.(Model)
-	if m.cleanupQueueActive() {
-		t.Fatal("failure left queue active")
+	if _, ok := m.modal.(*modal.CleanupForceConfirmModal); !ok {
+		t.Fatalf("force confirmation = %T", m.modal)
 	}
 	if !strings.Contains(m.outputPanel.View(), "Task cleanup failed for T-1: worktree busy") {
 		t.Fatalf("failure missing: %s", m.outputPanel.View())
 	}
-	runBatchCommands(cmd())
-	if mgr.listTasksCalls == 0 || mgr.listReleasesCalls == 0 {
-		t.Fatal("failure did not refresh lists")
+	if cmd != nil {
+		t.Fatal("force confirmation must not refresh before user decision")
 	}
 }
 
@@ -688,7 +691,7 @@ func TestCleanupDialog_TaskSuccessAdvancesToReleaseChecklist(t *testing.T) {
 	if mgr.cleanupPlanReleaseID != "rel-1" {
 		t.Fatalf("release replan = %q, want rel-1", mgr.cleanupPlanReleaseID)
 	}
-	if mgr.cleanupPlanSelection != (task.ReleaseCleanupSelection{RemoveRelease: true}) {
+	if mgr.cleanupPlanSelection != (task.ReleaseCleanupSelection{RemoveRelease: true, DeleteLocalReleaseBranches: true}) {
 		t.Fatalf("release replan selection = %+v, want release-only", mgr.cleanupPlanSelection)
 	}
 	if m.focus != FocusReleases {
@@ -1037,7 +1040,7 @@ func TestUpdate_KeydStartsSelectedReleaseCleanupWithoutScan(t *testing.T) {
 	if mgr.cleanupPlanCalls != 1 {
 		t.Fatalf("release cleanup plan calls = %d, want 1", mgr.cleanupPlanCalls)
 	}
-	if mgr.cleanupPlanSelection != (task.ReleaseCleanupSelection{RemoveRelease: true}) {
+	if mgr.cleanupPlanSelection != (task.ReleaseCleanupSelection{RemoveRelease: true, DeleteLocalReleaseBranches: true}) {
 		t.Fatalf("release selection = %+v, want release-only", mgr.cleanupPlanSelection)
 	}
 }
@@ -1068,24 +1071,4 @@ func TestUpdate_CleanupReleaseMsgRejectsUnreleasedAndWrongContext(t *testing.T) 
 			t.Fatal("cleanup release message outside releases focus must be ignored")
 		}
 	})
-}
-
-func TestUpdate_KeyDeleteStillOpensRemoveTaskDialog(t *testing.T) {
-	mgr := &mockManager{listTasksResult: []domain.Task{{ID: "T-1"}}}
-	m := sendWindowSize(newTestModel(t, mgr), 120, 40)
-	m.tasksPanel.SetTasks(mgr.listTasksResult)
-
-	updated, keyCmd := m.Update(tea.KeyMsg{Type: tea.KeyDelete})
-	m = updated.(Model)
-	if keyCmd == nil {
-		t.Fatal("expected delete key to emit OpenRemoveDialogMsg command")
-	}
-	if _, ok := keyCmd().(panels.OpenRemoveDialogMsg); !ok {
-		t.Fatalf("expected OpenRemoveDialogMsg, got %T", keyCmd())
-	}
-	updated, _ = m.Update(keyCmd())
-	m = updated.(Model)
-	if _, ok := m.modal.(*modal.RemoveTaskDialog); !ok {
-		t.Fatalf("delete key modal = %T, want RemoveTaskDialog", m.modal)
-	}
 }

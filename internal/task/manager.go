@@ -93,8 +93,6 @@ type Manager interface {
 
 	ListServices(ctx context.Context, taskID string) ([]domain.Service, error)
 
-	Remove(ctx context.Context, taskID string, opts RemoveOptions) error
-
 	Repos(ctx context.Context, refresh bool) ([]domain.Repo, error)
 
 	SyncTask(ctx context.Context, taskID string, strategy SyncStrategy, lineCh chan<- string) error
@@ -155,9 +153,8 @@ type Manager interface {
 	// PlanTaskCleanup builds a read-only cleanup plan for a completed task.
 	// Blocked plans carry reasons and authorize nothing.
 	PlanTaskCleanup(ctx context.Context, request TaskCleanupRequest) (TaskCleanupPlan, error)
-	// ExecuteTaskCleanup revalidates and executes the local steps of a planned
-	// task cleanup; the result reports local and remote branches as retained.
-	ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, statusCh chan<- string) (TaskCleanupResult, error)
+	// ExecuteTaskCleanup revalidates and executes a planned task cleanup.
+	ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, statusCh chan<- string, selections ...TaskCleanupExecutionSelection) (TaskCleanupResult, error)
 
 	ScanPrunableTasks(ctx context.Context) ([]domain.PruneCandidate, error)
 
@@ -216,6 +213,47 @@ func (m *manager) Repos(ctx context.Context, refresh bool) ([]domain.Repo, error
 
 func (m *manager) taskDir(taskID string) string {
 	return filepath.Join(m.cfg.TasksRoot, taskID)
+}
+
+// taskCleanupBranchCandidates returns exact task branches under configured
+// git-flow rules. Cleanup must never delete a similarly named foreign branch.
+func (m *manager) taskCleanupBranchCandidates(taskID string) map[string]gitflow.BranchType {
+	candidates := make(map[string]gitflow.BranchType)
+	if m.flow == nil || taskID == "" {
+		return candidates
+	}
+	for branchType, rule := range m.flow.BranchTypes {
+		for _, prefix := range rule.Prefixes {
+			if prefix != "" {
+				candidates[prefix+taskID] = branchType
+			}
+		}
+	}
+	return candidates
+}
+
+func (m *manager) isCleanupProtectedBranch(ctx context.Context, branch, taskID string) bool {
+	branch = strings.TrimSpace(branch)
+	if branch == "" || branch == "HEAD" || (strings.HasPrefix(branch, "(") && strings.HasSuffix(branch, ")")) {
+		return true
+	}
+	exact, _ := m.protectedBranchPolicy()
+	for _, protected := range exact {
+		if protected == branch {
+			return true
+		}
+	}
+	if m.flow != nil {
+		if rule, ok := m.flow.BranchTypes[gitflow.BranchTypeRelease]; ok {
+			for _, prefix := range rule.Prefixes {
+				if prefix != "" && strings.HasPrefix(branch, prefix) {
+					return true
+				}
+			}
+		}
+	}
+	_, owned := m.taskCleanupBranchCandidates(taskID)[branch]
+	return !owned
 }
 
 func (m *manager) concurrency() int {

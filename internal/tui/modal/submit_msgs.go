@@ -12,9 +12,26 @@ type SubmitCleanupMsg struct {
 }
 
 type ConfirmTaskCleanupMsg struct {
+	TaskID                   string
+	Generation               uint64
+	Fingerprint              [32]byte
+	DeleteRemoteTaskBranches bool
+}
+
+type ConfirmRemoteTaskCleanupMsg struct {
 	TaskID      string
 	Generation  uint64
 	Fingerprint [32]byte
+}
+
+type ConfirmForceTaskCleanupMsg struct {
+	TaskID     string
+	Generation uint64
+}
+
+type ConfirmForceReleaseCleanupMsg struct {
+	ReleaseID  string
+	Generation uint64
 }
 
 type ForgeCreateMRMsg struct {

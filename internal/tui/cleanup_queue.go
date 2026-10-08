@@ -99,7 +99,7 @@ func (m Model) advanceCleanupQueue() (Model, tea.Cmd) {
 	if selected := m.releasesPanel.SelectedRelease(); selected == nil || selected.Status != domain.ReleaseStatusReleased {
 		return m.stopCleanupQueue("Cleanup queue stopped: release " + item.id + " is no longer released.")
 	}
-	return m.startReleaseCleanupPlan(item.id, task.ReleaseCleanupSelection{RemoveRelease: true}, false)
+	return m.startReleaseCleanupPlan(item.id, task.ReleaseCleanupSelection{RemoveRelease: true, DeleteLocalReleaseBranches: true}, false)
 }
 
 // stopCleanupQueue drops the current item and all remaining ones, then
