@@ -155,6 +155,9 @@ type Manager interface {
 	PlanTaskCleanup(ctx context.Context, request TaskCleanupRequest) (TaskCleanupPlan, error)
 	// ExecuteTaskCleanup revalidates and executes a planned task cleanup.
 	ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, statusCh chan<- string, selections ...TaskCleanupExecutionSelection) (TaskCleanupResult, error)
+	// ForceTaskCleanup removes task-owned local resources without completion checks.
+	// Protected or non-task-owned branches remain untouched.
+	ForceTaskCleanup(ctx context.Context, taskID string, deleteRemoteBranches bool, statusCh chan<- string) (TaskCleanupResult, error)
 
 	ScanPrunableTasks(ctx context.Context) ([]domain.PruneCandidate, error)
 

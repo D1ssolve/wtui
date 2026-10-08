@@ -101,16 +101,17 @@ type mockManager struct {
 	cleanupExecuteErr      error
 	cleanupExecuteStatuses []string
 
-	taskCleanupPlanCalls    int
-	taskCleanupPlanTaskIDs  []string
-	taskCleanupPlanRequests []task.TaskCleanupRequest
-	taskCleanupPlanResult   task.TaskCleanupPlan
-	taskCleanupPlanErr      error
-	taskCleanupPlanHook     func(context.Context, task.TaskCleanupRequest)
-	taskCleanupExecCalls    int
-	taskCleanupExecResult   task.TaskCleanupResult
-	taskCleanupExecErr      error
-	taskCleanupExecStatuses []string
+	taskCleanupPlanCalls     int
+	taskCleanupPlanTaskIDs   []string
+	taskCleanupPlanRequests  []task.TaskCleanupRequest
+	taskCleanupPlanResult    task.TaskCleanupPlan
+	taskCleanupPlanErr       error
+	taskCleanupPlanHook      func(context.Context, task.TaskCleanupRequest)
+	taskCleanupExecCalls     int
+	taskCleanupExecSelection []task.TaskCleanupExecutionSelection
+	taskCleanupExecResult    task.TaskCleanupResult
+	taskCleanupExecErr       error
+	taskCleanupExecStatuses  []string
 
 	planTaskMergeCalls          int
 	planTaskMergeParams         task.CreateReleaseParams
@@ -367,12 +368,17 @@ func (m *mockManager) PlanTaskCleanup(ctx context.Context, request task.TaskClea
 	return m.taskCleanupPlanResult, m.taskCleanupPlanErr
 }
 
-func (m *mockManager) ExecuteTaskCleanup(_ context.Context, _ task.TaskCleanupPlan, statusCh chan<- string, _ ...task.TaskCleanupExecutionSelection) (task.TaskCleanupResult, error) {
+func (m *mockManager) ExecuteTaskCleanup(_ context.Context, _ task.TaskCleanupPlan, statusCh chan<- string, selections ...task.TaskCleanupExecutionSelection) (task.TaskCleanupResult, error) {
 	m.taskCleanupExecCalls++
+	m.taskCleanupExecSelection = append(m.taskCleanupExecSelection, selections...)
 	for _, line := range m.taskCleanupExecStatuses {
 		statusCh <- line
 	}
 	return m.taskCleanupExecResult, m.taskCleanupExecErr
+}
+
+func (m *mockManager) ForceTaskCleanup(_ context.Context, taskID string, _ bool, _ chan<- string) (task.TaskCleanupResult, error) {
+	return task.TaskCleanupResult{TaskID: taskID}, nil
 }
 
 func newTestConfig() *config.Config {

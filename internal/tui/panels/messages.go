@@ -82,6 +82,7 @@ type PlanCloseTaskMsg struct{ TaskID string }
 type OpenCleanupDialogMsg struct{}
 
 type CleanupTaskMsg struct{ TaskID string }
+type ForceCleanupTaskMsg struct{ TaskID string }
 
 type CleanupReleaseMsg struct{ ReleaseID string }
 

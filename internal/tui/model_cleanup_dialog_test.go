@@ -447,8 +447,8 @@ func TestCleanupDialog_TaskConfirmExecutesOnlyExactApproval(t *testing.T) {
 		if m.pendingTaskCleanupPlan != nil {
 			t.Fatal("approval not consumed before execution")
 		}
-		if m.modal != nil {
-			t.Fatalf("confirmation left modal %T", m.modal)
+		if _, ok := m.modal.(*modal.CleanupProgressModal); !ok {
+			t.Fatalf("confirmation modal = %T, want CleanupProgressModal", m.modal)
 		}
 		runBatchCommands(cmd())
 		if mgr.taskCleanupExecCalls != 1 {
@@ -711,6 +711,57 @@ func TestCleanupDialog_TaskSuccessAdvancesToReleaseChecklist(t *testing.T) {
 	}
 	if got := checklist.Selection(); got.RemoveTasks {
 		t.Fatalf("associated tasks preselected: %+v", got)
+	}
+}
+
+func TestCleanupDialog_TaskExecutionShowsProgressOverlay(t *testing.T) {
+	mgr := &mockManager{}
+	m := executingTaskCleanup(t, mgr)
+
+	progress, ok := m.modal.(*modal.CleanupProgressModal)
+	if !ok {
+		t.Fatalf("modal = %T, want CleanupProgressModal", m.modal)
+	}
+	if !strings.Contains(progress.View(), "Cleaning task T-1...") {
+		t.Fatalf("progress view missing task: %s", progress.View())
+	}
+
+	updated, _ := m.Update(OutputLineMsg{Line: "removing worktree api"})
+	m = updated.(Model)
+	progress = m.modal.(*modal.CleanupProgressModal)
+	if !strings.Contains(progress.View(), "removing worktree api") {
+		t.Fatalf("progress view missing status: %s", progress.View())
+	}
+
+	updated, _ = m.Update(TaskCleanupDoneMsg{
+		TaskID:              "T-1",
+		Generation:          m.taskCleanupExecuting,
+		OperationGeneration: m.operationGeneration,
+		Result:              task.TaskCleanupResult{TaskID: "T-1"},
+	})
+	m = updated.(Model)
+	if _, ok := m.modal.(*modal.CleanupProgressModal); ok {
+		t.Fatal("cleanup progress overlay remained after completion")
+	}
+}
+
+func TestCleanupDialog_TaskConfirmForceRunsOnFirstAttempt(t *testing.T) {
+	mgr := &mockManager{}
+	m := queueTaskCleanup(t, mgr)
+	m = stageTaskCleanupConfirm(m)
+	dialog := m.modal.(*modal.TaskCleanupConfirmModal)
+	updatedDialog, _ := dialog.Update(sendKey("f"))
+	m.modal = updatedDialog
+	fingerprint := m.pendingTaskCleanupPlan.Fingerprint()
+
+	updated, cmd := m.Update(modal.ConfirmTaskCleanupMsg{TaskID: "T-1", Generation: m.taskCleanupGeneration, Fingerprint: fingerprint, Force: true})
+	m = updated.(Model)
+	if !m.taskCleanupForced {
+		t.Fatal("model did not retain first-attempt force selection")
+	}
+	runBatchCommands(cmd())
+	if len(mgr.taskCleanupExecSelection) != 1 || !mgr.taskCleanupExecSelection[0].Force {
+		t.Fatalf("cleanup selection = %+v, want force", mgr.taskCleanupExecSelection)
 	}
 }
 

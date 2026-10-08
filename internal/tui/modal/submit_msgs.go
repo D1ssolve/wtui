@@ -16,17 +16,24 @@ type ConfirmTaskCleanupMsg struct {
 	Generation               uint64
 	Fingerprint              [32]byte
 	DeleteRemoteTaskBranches bool
+	Force                    bool
 }
 
 type ConfirmRemoteTaskCleanupMsg struct {
 	TaskID      string
 	Generation  uint64
 	Fingerprint [32]byte
+	Force       bool
 }
 
 type ConfirmForceTaskCleanupMsg struct {
 	TaskID     string
 	Generation uint64
+}
+
+type StartForceTaskCleanupMsg struct {
+	TaskID                   string
+	DeleteRemoteTaskBranches bool
 }
 
 type ConfirmForceReleaseCleanupMsg struct {

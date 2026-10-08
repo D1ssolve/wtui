@@ -217,6 +217,9 @@ func (m *closeTaskE2EManager) PlanTaskCleanup(context.Context, task.TaskCleanupR
 func (m *closeTaskE2EManager) ExecuteTaskCleanup(context.Context, task.TaskCleanupPlan, chan<- string, ...task.TaskCleanupExecutionSelection) (task.TaskCleanupResult, error) {
 	return task.TaskCleanupResult{}, nil
 }
+func (m *closeTaskE2EManager) ForceTaskCleanup(_ context.Context, taskID string, _ bool, _ chan<- string) (task.TaskCleanupResult, error) {
+	return task.TaskCleanupResult{TaskID: taskID}, nil
+}
 
 func TestE2E_CloseTask_DirtyTask_ShowsValidationModalAndDoesNotExecuteClose(t *testing.T) {
 	mgr := &closeTaskE2EManager{

@@ -513,6 +513,20 @@ func executeTaskCleanupCmd(mgr task.Manager, plan task.TaskCleanupPlan, taskID s
 	return readStatusOrDone(statusCh, doneCh)
 }
 
+func forceTaskCleanupCmd(mgr task.Manager, taskID string, deleteRemoteBranches bool, generation, operationGeneration uint64) tea.Cmd {
+	statusCh := make(chan string, 32)
+	doneCh := make(chan TaskCleanupDoneMsg, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 10*time.Minute)
+		defer cancel()
+		result, err := mgr.ForceTaskCleanup(ctx, taskID, deleteRemoteBranches, statusCh)
+		close(statusCh)
+		doneCh <- TaskCleanupDoneMsg{TaskID: taskID, Generation: generation, OperationGeneration: operationGeneration, Result: result, Err: err}
+		close(doneCh)
+	}()
+	return readStatusOrDone(statusCh, doneCh)
+}
+
 func createReleaseCmd(mgr task.Manager, params task.CreateReleaseParams, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan CreateReleaseDoneMsg, 1)

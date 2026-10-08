@@ -331,6 +331,12 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 				}
 				id := task.ID
 				return p, func() tea.Msg { return CleanupTaskMsg{TaskID: id} }
+			case "X":
+				task := p.SelectedTask()
+				if task == nil {
+					return p, nil
+				}
+				return p, func() tea.Msg { return ForceCleanupTaskMsg{TaskID: task.ID} }
 
 			case "S":
 				task := p.SelectedTask()
@@ -487,6 +493,12 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 			}
 			id := task.ID
 			return p, func() tea.Msg { return CleanupTaskMsg{TaskID: id} }
+		case "X":
+			task := p.SelectedTask()
+			if task == nil {
+				return p, nil
+			}
+			return p, func() tea.Msg { return ForceCleanupTaskMsg{TaskID: task.ID} }
 
 		case "S":
 			task := p.SelectedTask()

@@ -153,6 +153,7 @@ type taskCleanupRequest struct {
 	taskID               string
 	deleteRemoteBranches bool
 	remoteConfirmation   bool
+	force                bool
 }
 
 type shellInputState struct {
@@ -471,6 +472,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.startSelectedCleanup(cleanupQueueItem{kind: modal.CleanupKindTask, id: msg.TaskID})
+
+	case panels.ForceCleanupTaskMsg:
+		if m.focus != FocusTasks {
+			return m, nil
+		}
+		if selected := m.tasksPanel.SelectedTask(); selected == nil || selected.ID != msg.TaskID {
+			return m, nil
+		}
+		m.modal = modal.NewForceTaskCleanupModal(msg.TaskID)
+		m.modal.SetTerminalSize(m.width, m.height)
+		return m, nil
 
 	case panels.CleanupReleaseMsg:
 		if m.focus != FocusReleases {
@@ -1150,11 +1162,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		dialog, ok := m.modal.(*modal.TaskCleanupConfirmModal)
-		if !ok || dialog.TaskID() != msg.TaskID || dialog.Generation() != msg.Generation || dialog.Fingerprint() != msg.Fingerprint {
+		if !ok || dialog.TaskID() != msg.TaskID || dialog.Generation() != msg.Generation || dialog.Fingerprint() != msg.Fingerprint || dialog.Force() != msg.Force {
 			return m, nil
 		}
 		if msg.DeleteRemoteTaskBranches {
-			return m.startTaskCleanupInspectionWithSelection(msg.TaskID, true, true)
+			return m.startTaskCleanupInspectionWithSelection(msg.TaskID, true, true, msg.Force)
 		}
 		m.modal = nil
 		plan := m.pendingTaskCleanupPlan
@@ -1165,17 +1177,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskCleanupExecuting = m.taskCleanupGeneration
 		m.taskCleanupExecutingID = msg.TaskID
 		m.failedTaskCleanupPlan = plan
-		m.taskCleanupForced = false
+		m.taskCleanupForced = msg.Force
 		m.taskCleanupRemoteSelected = false
+		m.modal = modal.NewCleanupProgressModal("Cleaning task "+msg.TaskID+"...", m.spinner.View())
+		m.modal.SetTerminalSize(m.width, m.height)
 		m.outputPanel.AppendLine("Executing cleanup plan for " + plan.Preview().TaskID + "...")
-		return m, tea.Batch(executeTaskCleanupCmd(m.mgr, *plan, msg.TaskID, task.TaskCleanupExecutionSelection{}, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
+		return m, tea.Batch(executeTaskCleanupCmd(m.mgr, *plan, msg.TaskID, task.TaskCleanupExecutionSelection{Force: msg.Force}, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
+
+	case modal.StartForceTaskCleanupMsg:
+		dialog, ok := m.modal.(*modal.ForceTaskCleanupModal)
+		if !ok || m.opRunning || dialog.TaskID() != msg.TaskID || dialog.DeleteRemoteBranches() != msg.DeleteRemoteTaskBranches {
+			return m, nil
+		}
+		m.taskCleanupGeneration++
+		m.operationGeneration++
+		m.taskCleanupExecuting = m.taskCleanupGeneration
+		m.taskCleanupExecutingID = msg.TaskID
+		m.taskCleanupForced = true
+		m.taskCleanupRemoteSelected = msg.DeleteRemoteTaskBranches
+		m.modal = modal.NewCleanupProgressModal("Force cleaning task "+msg.TaskID+"...", m.spinner.View())
+		m.modal.SetTerminalSize(m.width, m.height)
+		m.opRunning = true
+		m.outputPanel.AppendLine("Force cleaning task " + msg.TaskID + "...")
+		return m, tea.Batch(forceTaskCleanupCmd(m.mgr, msg.TaskID, msg.DeleteRemoteTaskBranches, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
 
 	case modal.ConfirmRemoteTaskCleanupMsg:
 		if m.cleanupQueueCurrent == nil || m.cleanupQueueCurrent.kind != modal.CleanupKindTask || m.cleanupQueueCurrent.id != msg.TaskID || m.pendingTaskCleanupPlan == nil || m.pendingTaskCleanupPlan.Fingerprint() != msg.Fingerprint || msg.Generation != m.taskCleanupGeneration {
 			return m, nil
 		}
 		dialog, ok := m.modal.(*modal.TaskCleanupRemoteConfirmModal)
-		if !ok || dialog.TaskID() != msg.TaskID || dialog.Generation() != msg.Generation || dialog.Fingerprint() != msg.Fingerprint {
+		if !ok || dialog.TaskID() != msg.TaskID || dialog.Generation() != msg.Generation || dialog.Fingerprint() != msg.Fingerprint || dialog.Force() != msg.Force {
 			return m, nil
 		}
 		m.modal = nil
@@ -1187,10 +1218,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskCleanupExecuting = m.taskCleanupGeneration
 		m.taskCleanupExecutingID = msg.TaskID
 		m.failedTaskCleanupPlan = plan
-		m.taskCleanupForced = false
+		m.taskCleanupForced = msg.Force
 		m.taskCleanupRemoteSelected = true
+		m.modal = modal.NewCleanupProgressModal("Cleaning task "+msg.TaskID+"...", m.spinner.View())
+		m.modal.SetTerminalSize(m.width, m.height)
 		m.outputPanel.AppendLine("Executing cleanup plan for " + plan.Preview().TaskID + "...")
-		return m, tea.Batch(executeTaskCleanupCmd(m.mgr, *plan, msg.TaskID, task.TaskCleanupExecutionSelection{}, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
+		return m, tea.Batch(executeTaskCleanupCmd(m.mgr, *plan, msg.TaskID, task.TaskCleanupExecutionSelection{Force: msg.Force}, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
 
 	case modal.ConfirmForceTaskCleanupMsg:
 		plan := m.failedTaskCleanupPlan
@@ -1206,6 +1239,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskCleanupExecuting = m.taskCleanupGeneration
 		m.taskCleanupExecutingID = msg.TaskID
 		m.taskCleanupForced = true
+		m.modal = modal.NewCleanupProgressModal("Cleaning task "+msg.TaskID+"...", m.spinner.View())
+		m.modal.SetTerminalSize(m.width, m.height)
 		m.outputPanel.AppendLine("Force cleaning task " + msg.TaskID + "...")
 		return m, tea.Batch(executeTaskCleanupCmd(m.mgr, *plan, msg.TaskID, task.TaskCleanupExecutionSelection{Force: true}, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)
 
@@ -1513,6 +1548,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.releaseCleanupExecuting = 0
 		m.releaseCleanupExecutingID = ""
 		m.opRunning = false
+		if _, ok := m.modal.(*modal.CleanupProgressModal); ok {
+			m.modal = nil
+		}
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Release cleanup failed: " + msg.Err.Error())
 			if !m.releaseCleanupSelection.Force && !releaseCleanupHasRemoteSelection(m.releaseCleanupSelection) {
@@ -1574,7 +1612,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingTaskCleanupPlan = &msg.Plan
 		m.pendingTaskCleanupPreview = preview
 		if request.remoteConfirmation {
-			confirmModal := modal.NewTaskCleanupRemoteConfirmModal(preview, msg.Generation, msg.Plan.Fingerprint())
+			confirmModal := modal.NewTaskCleanupRemoteConfirmModal(preview, msg.Generation, msg.Plan.Fingerprint(), request.force)
 			confirmModal.SetTerminalSize(m.width, m.height)
 			m.modal = confirmModal
 			return m, nil
@@ -1594,6 +1632,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskCleanupExecuting = 0
 		m.taskCleanupExecutingID = ""
 		m.opRunning = false
+		if _, ok := m.modal.(*modal.CleanupProgressModal); ok {
+			m.modal = nil
+		}
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Task cleanup failed for " + msg.TaskID + ": " + msg.Err.Error())
 			if !m.taskCleanupForced && !m.taskCleanupRemoteSelected && m.failedTaskCleanupPlan != nil {
@@ -1662,6 +1703,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OutputLineMsg:
 		m.outputPanel.AppendLine(msg.Line)
+		if progress, ok := m.modal.(*modal.CleanupProgressModal); ok {
+			progress.SetStatus(msg.Line)
+		}
 		if m.opProgress != nil {
 			m.opProgress.ApplyLine(msg.Line)
 			m.servicesPanel.SetOperationProgress(m.opProgress)
@@ -1976,6 +2020,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.opRunning {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
+			if progress, ok := m.modal.(*modal.CleanupProgressModal); ok {
+				progress.SetSpinner(m.spinner.View())
+			}
 			return m, cmd
 		}
 		return m, nil
@@ -2405,6 +2452,8 @@ func (m Model) startReleaseCleanupExecution(generation uint64) (Model, tea.Cmd) 
 	m.releaseCleanupExecuting = generation
 	m.releaseCleanupExecutingID = releaseID
 	m.opRunning = true
+	m.modal = modal.NewCleanupProgressModal("Cleaning release "+releaseID+"...", m.spinner.View())
+	m.modal.SetTerminalSize(m.width, m.height)
 	m.outputPanel.AppendLine("Cleaning release " + releaseID + "...")
 	return m, tea.Batch(executeReleaseCleanupCmd(m.mgr, plan, releaseID, generation), m.spinner.Tick)
 }
@@ -2417,13 +2466,13 @@ func releaseCleanupHasRemoteSelection(selection task.ReleaseCleanupSelection) bo
 // inspection for taskID. The planner authorizes from its durable on-disk
 // proof; the caller decides what happens with an unblocked plan.
 func (m Model) startTaskCleanupInspection(taskID string) (Model, tea.Cmd) {
-	return m.startTaskCleanupInspectionWithSelection(taskID, false, false)
+	return m.startTaskCleanupInspectionWithSelection(taskID, false, false, false)
 }
 
-func (m Model) startTaskCleanupInspectionWithSelection(taskID string, deleteRemoteBranches, remoteConfirmation bool) (Model, tea.Cmd) {
+func (m Model) startTaskCleanupInspectionWithSelection(taskID string, deleteRemoteBranches, remoteConfirmation, force bool) (Model, tea.Cmd) {
 	m.taskCleanupGeneration++
 	m.operationGeneration++
-	m.taskCleanupRequest = &taskCleanupRequest{generation: m.taskCleanupGeneration, operationGeneration: m.operationGeneration, taskID: taskID, deleteRemoteBranches: deleteRemoteBranches, remoteConfirmation: remoteConfirmation}
+	m.taskCleanupRequest = &taskCleanupRequest{generation: m.taskCleanupGeneration, operationGeneration: m.operationGeneration, taskID: taskID, deleteRemoteBranches: deleteRemoteBranches, remoteConfirmation: remoteConfirmation, force: force}
 	m.opRunning = true
 	m.outputPanel.AppendLine("Inspecting cleanup for task " + taskID + "...")
 	return m, tea.Batch(planTaskCleanupCmd(m.mgr, taskID, deleteRemoteBranches, m.taskCleanupGeneration, m.operationGeneration), m.spinner.Tick)

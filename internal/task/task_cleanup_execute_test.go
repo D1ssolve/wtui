@@ -333,6 +333,24 @@ func TestExecuteTaskCleanup_ForceCompletesPartialCleanupPlan(t *testing.T) {
 	}
 }
 
+func TestForceTaskCleanup_RemovesDirtyTaskWithoutPlanProof(t *testing.T) {
+	mgr, gitMock, _ := setupExecutableTaskCleanup(t)
+	taskDir := filepath.Join(mgr.cfg.TasksRoot, "APP-1")
+	if err := os.WriteFile(filepath.Join(taskDir, "notes.md"), []byte("drop"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := mgr.ForceTaskCleanup(t.Context(), "APP-1", false, nil); err != nil {
+		t.Fatalf("ForceTaskCleanup() error: %v", err)
+	}
+	if len(gitMock.removeWorktreeCalls) != 1 || !gitMock.removeWorktreeCalls[0].Force {
+		t.Fatalf("force worktree calls = %+v", gitMock.removeWorktreeCalls)
+	}
+	if _, err := os.Stat(taskDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("task directory still exists: %v", err)
+	}
+}
+
 func TestExecuteTaskCleanup_GitStepFailureReportsNoRemoteCandidates(t *testing.T) {
 	mgr, gitMock, plan := setupExecutableTaskCleanup(t)
 	gitMock.removeWorktreeFn = func(_, _ string, _ bool) error { return errors.New("remove worktree failed") }

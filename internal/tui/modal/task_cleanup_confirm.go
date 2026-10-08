@@ -19,6 +19,7 @@ type TaskCleanupConfirmModal struct {
 	generation    uint64
 	fingerprint   [32]byte
 	deleteRemote  bool
+	force         bool
 	width         int
 	height        int
 	contentWidth  int
@@ -48,6 +49,7 @@ func (m *TaskCleanupConfirmModal) TaskID() string             { return m.preview
 func (m *TaskCleanupConfirmModal) Generation() uint64         { return m.generation }
 func (m *TaskCleanupConfirmModal) Fingerprint() [32]byte      { return m.fingerprint }
 func (m *TaskCleanupConfirmModal) DeleteRemoteBranches() bool { return m.deleteRemote }
+func (m *TaskCleanupConfirmModal) Force() bool                { return m.force }
 
 func (m *TaskCleanupConfirmModal) SetTerminalSize(width, height int) {
 	m.width = width
@@ -85,10 +87,13 @@ func (m *TaskCleanupConfirmModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 		if !m.usable() {
 			return m, nil
 		}
-		result := ConfirmTaskCleanupMsg{TaskID: m.preview.TaskID, Generation: m.generation, Fingerprint: m.fingerprint, DeleteRemoteTaskBranches: m.deleteRemote}
+		result := ConfirmTaskCleanupMsg{TaskID: m.preview.TaskID, Generation: m.generation, Fingerprint: m.fingerprint, DeleteRemoteTaskBranches: m.deleteRemote, Force: m.force}
 		return m, func() tea.Msg { return result }
 	case " ":
 		m.deleteRemote = !m.deleteRemote
+		return m, nil
+	case "f":
+		m.force = !m.force
 		return m, nil
 	case "esc", "n":
 		return m, func() tea.Msg { return CloseModalMsg{} }
@@ -156,6 +161,10 @@ func (m *TaskCleanupConfirmModal) body() string {
 	}
 	b.WriteString(dimStyle.Render("Task directory (removed; unknown entries are preserved and reported)"))
 	b.WriteString("\n")
+	if m.force {
+		b.WriteString(lipgloss.NewStyle().Foreground(modalColorDanger).Render("Force cleanup removes unknown local files."))
+		b.WriteString("\n")
+	}
 	if len(m.preview.Remote) > 0 {
 		b.WriteString("\n")
 		remoteTitle := "Remote branches (retained)"
@@ -182,33 +191,39 @@ func (m *TaskCleanupConfirmModal) footer(withScrollHint bool) string {
 	if withScrollHint {
 		hint = "  [j/k] scroll  [g/G] top/bottom"
 	}
-	remote := "[Space] delete remote branches"
+	remote := "[ ] Delete remote branches"
 	if m.deleteRemote {
-		remote = "[Space] keep remote branches"
+		remote = "[x] Delete remote branches"
 	}
-	return "\n\n" + dimStyle.Render("[Enter/y] confirm cleanup  "+remote+"  [Esc/n] cancel"+hint)
+	force := "[ ] Force local files"
+	if m.force {
+		force = "[x] Force local files"
+	}
+	return "\n\n" + dimStyle.Render(remote+"  [Space]\n"+force+"  [f]\n[Enter/y] confirm cleanup  [Esc/n] cancel"+hint)
 }
 
 type TaskCleanupRemoteConfirmModal struct {
 	preview     task.TaskCleanupPreview
 	generation  uint64
 	fingerprint [32]byte
+	force       bool
 }
 
-func NewTaskCleanupRemoteConfirmModal(preview task.TaskCleanupPreview, generation uint64, fingerprint [32]byte) *TaskCleanupRemoteConfirmModal {
-	return &TaskCleanupRemoteConfirmModal{preview: preview, generation: generation, fingerprint: fingerprint}
+func NewTaskCleanupRemoteConfirmModal(preview task.TaskCleanupPreview, generation uint64, fingerprint [32]byte, force bool) *TaskCleanupRemoteConfirmModal {
+	return &TaskCleanupRemoteConfirmModal{preview: preview, generation: generation, fingerprint: fingerprint, force: force}
 }
 
 func (m *TaskCleanupRemoteConfirmModal) Title() string            { return "Confirm Remote Branch Deletion" }
 func (m *TaskCleanupRemoteConfirmModal) TaskID() string           { return m.preview.TaskID }
 func (m *TaskCleanupRemoteConfirmModal) Generation() uint64       { return m.generation }
 func (m *TaskCleanupRemoteConfirmModal) Fingerprint() [32]byte    { return m.fingerprint }
+func (m *TaskCleanupRemoteConfirmModal) Force() bool              { return m.force }
 func (m *TaskCleanupRemoteConfirmModal) SetTerminalSize(_, _ int) {}
 func (m *TaskCleanupRemoteConfirmModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "enter", "y":
-			result := ConfirmRemoteTaskCleanupMsg{TaskID: m.preview.TaskID, Generation: m.generation, Fingerprint: m.fingerprint}
+			result := ConfirmRemoteTaskCleanupMsg{TaskID: m.preview.TaskID, Generation: m.generation, Fingerprint: m.fingerprint, Force: m.force}
 			return m, func() tea.Msg { return result }
 		case "esc", "n":
 			return m, func() tea.Msg { return CloseModalMsg{} }
