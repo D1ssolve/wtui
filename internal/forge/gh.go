@@ -203,7 +203,7 @@ func ghReadiness(pr ghPR, sourceBranch string) MRReadiness {
 		Ready:          len(blockers) == 0,
 		Blockers:       blockers,
 		SupportsSHAPin: true,
-		// gh pr merge pins the source head only; no target binding exists.
+		// Source head is server pinned; target branch preflight is non-atomic.
 		SupportsTargetBinding: false,
 	}
 }
@@ -240,11 +240,11 @@ func ghChecksState(checks []ghCheck) string {
 }
 
 func (c *GhClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMergeResult, error) {
-	if params.ExpectedTargetBranch != "" || params.ExpectedTargetSHA != "" {
+	if params.ExpectedTargetSHA != "" {
 		return MRMergeResult{}, &ForgeError{
 			Category: ErrCategoryUnknown,
 			Cause:    errors.New("gh merge: requested target binding cannot be enforced: gh pr merge pins the source head only"),
-			Stderr:   "gh pr merge does not support target branch/SHA pinning",
+			Stderr:   "gh pr merge does not support target SHA pinning",
 		}
 	}
 	worktreePath := pickWorktree(c.worktreePath, params.WorktreePath)
@@ -256,6 +256,27 @@ func (c *GhClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMergeRe
 	args := []string{"pr", "merge", number, "--" + method, "--repo", params.Repo}
 	if params.ExpectedHeadSHA != "" {
 		args = append(args, "--match-head-commit", params.ExpectedHeadSHA)
+	}
+	if params.ExpectedTargetBranch != "" {
+		fresh, err := c.MRReadinessByNumber(ctx, params.Number, params.Repo, worktreePath)
+		if err != nil {
+			return MRMergeResult{}, err
+		}
+		if fresh.TargetBranch != params.ExpectedTargetBranch {
+			return MRMergeResult{}, fmt.Errorf("gh merge: target branch changed: got %q, want %q", fresh.TargetBranch, params.ExpectedTargetBranch)
+		}
+		if params.ExpectedHeadSHA != "" && fresh.HeadSHA != params.ExpectedHeadSHA {
+			return MRMergeResult{}, fmt.Errorf("gh merge: source head changed: got %q, want %q", fresh.HeadSHA, params.ExpectedHeadSHA)
+		}
+		if fresh.State != "open" {
+			return MRMergeResult{}, fmt.Errorf("gh merge: pull request is not open: %q", fresh.State)
+		}
+		if !fresh.Ready || len(fresh.Blockers) != 0 {
+			return MRMergeResult{}, fmt.Errorf("gh merge: pull request not ready: %s", strings.Join(fresh.Blockers, "; "))
+		}
+		if params.ExpectedHeadSHA != "" && !fresh.SupportsSHAPin {
+			return MRMergeResult{}, errors.New("gh merge: source head pinning unsupported")
+		}
 	}
 	if _, _, err := c.run(ctx, worktreePath, args...); err != nil {
 		return MRMergeResult{}, err

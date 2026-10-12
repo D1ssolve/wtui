@@ -136,6 +136,8 @@ type mockGitClient struct {
 	operationStateFn     func(path string) ([]domain.RepoState, error)
 	isAncestorFn         func(repoPath, ancestor, descendant string) (bool, error)
 	ensureCommitFn       func(repoPath, sha string) error
+	buildMergeCommitFn   func(repoPath, targetSHA, headSHA, method string) (string, error)
+	remoteRefSHAAtFn     func(repoPath, remoteURL, ref string) (string, error)
 
 	addWorktreeWithTrackingErr error
 	createBranchFromBranchErr  error
@@ -651,6 +653,20 @@ func (m *mockGitClient) RemoteRefSHA(_ context.Context, repoPath, ref string) (s
 		return m.remoteRefSHAFn(repoPath, ref)
 	}
 	return "", nil
+}
+
+func (m *mockGitClient) RemoteRefSHAAt(_ context.Context, repoPath, remoteURL, ref string) (string, error) {
+	if m.remoteRefSHAAtFn != nil {
+		return m.remoteRefSHAAtFn(repoPath, remoteURL, ref)
+	}
+	return "", errors.New("unexpected RemoteRefSHAAt")
+}
+
+func (m *mockGitClient) BuildMergeCommit(_ context.Context, repoPath, targetSHA, headSHA, method string) (string, error) {
+	if m.buildMergeCommitFn != nil {
+		return m.buildMergeCommitFn(repoPath, targetSHA, headSHA, method)
+	}
+	return "", errors.New("unexpected BuildMergeCommit")
 }
 
 type remoteRefSHACall struct {

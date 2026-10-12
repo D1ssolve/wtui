@@ -38,6 +38,7 @@ type Client interface {
 
 	RemoteBranchExists(ctx context.Context, repoPath, branch string) (bool, error)
 	RemoteRefSHA(ctx context.Context, repoPath, ref string) (string, error)
+	RemoteRefSHAAt(ctx context.Context, repoPath, capturedRemoteURL, ref string) (string, error)
 
 	ListWorktrees(ctx context.Context, repoPath string) ([]WorktreeEntry, error)
 
@@ -96,6 +97,11 @@ type Client interface {
 	Merge(ctx context.Context, worktreePath, branch string) error
 	MergeNoFF(ctx context.Context, worktreePath, ref string) error
 	MergeFFOnly(ctx context.Context, worktreePath, ref string) error
+
+	// BuildMergeCommit constructs a commit from exact commit SHAs in an
+	// isolated detached worktree. Empty method means merge; supported methods
+	// are merge, squash, and rebase. No branches or caller checkout are changed.
+	BuildMergeCommit(ctx context.Context, repoPath, targetSHA, headSHA, method string) (string, error)
 
 	MergeAbort(ctx context.Context, worktreePath string) error
 
@@ -276,12 +282,19 @@ func (c *CommandClient) RemoteRefSHA(ctx context.Context, repoPath, ref string) 
 	if err != nil {
 		return "", err
 	}
+	return parseRemoteRefSHA(out, ref)
+}
+
+func parseRemoteRefSHA(out, ref string) (string, error) {
 	if strings.TrimSpace(out) == "" {
 		return "", nil
 	}
 	for line := range strings.SplitSeq(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && fields[1] == ref {
+			if !validObjectID(fields[0]) {
+				return "", fmt.Errorf("ls-remote returned invalid OID for %s", ref)
+			}
 			return fields[0], nil
 		}
 	}
@@ -527,7 +540,7 @@ func (c *CommandClient) Merge(ctx context.Context, worktreePath, branch string) 
 }
 
 func (c *CommandClient) MergeNoFF(ctx context.Context, worktreePath, ref string) error {
-	_, err := c.execGit(ctx, "-C", worktreePath, "merge", "--no-ff", ref)
+	_, err := c.execGit(ctx, "-C", worktreePath, "merge", "--no-ff", "--no-edit", ref)
 	return err
 }
 

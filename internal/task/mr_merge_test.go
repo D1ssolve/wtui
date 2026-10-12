@@ -167,26 +167,31 @@ func TestMergeTaskMRs_RejectsForgeWithoutSHAPinSupport(t *testing.T) {
 	}
 }
 
-func TestMergeTaskMRs_RejectsForgeWithoutTargetBindingSupport(t *testing.T) {
+func TestMergeTaskMRs_MergesWithoutAtomicTargetBinding(t *testing.T) {
+	// Given
+	ready := forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/a", TargetBranch: "develop", HeadSHA: "a-sha", Ready: true}
 	client := &mergeForgeClient{
-		readiness: map[string]forge.MRReadiness{
-			"feature/a": {Number: 1, State: "open", TargetBranch: "develop", HeadSHA: "a-sha", Ready: true, SupportsSHAPin: true, SupportsTargetBinding: false},
-		},
+		readiness:         map[string]forge.MRReadiness{"feature/a": ready},
+		readinessByNumber: map[int]forge.MRReadiness{1: ready},
 	}
-	mgr, _ := newMRMergeTestManager(t, map[string]string{"a": "feature/a"}, "git@gitlab.com:group/repo.git", client)
+	mgr, g := newMRMergeTestManager(t, map[string]string{"a": "feature/a"}, "git@gitlab.com:group/repo.git", client)
+	configureDirectMergeGit(t, g, "origin/develop-sha", "a-sha")
 
+	// When
 	result, err := mgr.MergeTaskMRs(t.Context(), "TASK-1")
+
+	// Then
 	if err != nil {
 		t.Fatalf("MergeTaskMRs() err = %v", err)
 	}
 	if len(client.merges) != 0 {
-		t.Fatalf("merges = %#v, want no target-unbound merge", client.merges)
+		t.Fatalf("merges = %#v, want no non-atomic forge merge", client.merges)
 	}
-	if result.Errs["a"] == nil || !strings.Contains(result.Errs["a"].Error(), "target-bound") {
-		t.Fatalf("Errs[a] = %v, want target-binding rejection", result.Errs["a"])
+	if pushes := leasePushes(g); len(pushes) != 1 || pushes[0].LeaseOID != "origin/develop-sha" || pushes[0].ExactOID != "direct-merge" || pushes[0].TargetRef != "refs/heads/develop" {
+		t.Fatalf("pushes = %#v, want fixed target and exact pre-merge lease", pushes)
 	}
-	if !slices.Contains(result.Skipped, "a") || slices.Contains(result.Merged, "a") {
-		t.Fatalf("result = %#v, want a failed per-service", result)
+	if len(result.Errs) != 0 || !slices.Equal(result.Merged, []string{"a"}) {
+		t.Fatalf("result = %#v, want a merged", result)
 	}
 }
 

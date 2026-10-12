@@ -94,6 +94,9 @@ func (m *manager) validateReleaseTaskMergeStep(ctx context.Context, step release
 	if err != nil {
 		return fmt.Errorf("release task merge fresh gate: read MR !%d: %w", step.MRNumber, err)
 	}
+	if _, err := m.reconcileDirectMR(ctx, step.RepoPath, step.MergeMethod, &mr); err != nil {
+		return err
+	}
 	if step.Status == taskMergeStatusMerged {
 		if mr.SourceBranch != step.Branch || mr.TargetBranch != step.TargetBranch || mr.HeadSHA != step.HeadSHA || !mergedMRState(mr.State) || strings.TrimSpace(mr.MergedSHA) == "" || mr.MergedSHA != step.AcceptedSHA {
 			return errors.New("release task merge fresh gate: proven merged MR changed")

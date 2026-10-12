@@ -161,6 +161,9 @@ func (m *manager) planReleaseTaskMergeRetryRow(ctx context.Context, svc domain.R
 	if err != nil {
 		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, fmt.Errorf("release task merge retry: read MR !%d: %w", fb.TaskMergeMRNumber, err)
 	}
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(fb.Branch), &mr); err != nil {
+		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, err
+	}
 	targetSHA := fb.TaskMergeExpectedTarget
 	if targetSHA == "" {
 		targetSHA = fb.TaskMergeTargetSHA

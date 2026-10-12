@@ -81,7 +81,7 @@ func TestEnsureCommit_RealBareRemoteFetchesObjectWithoutRefMovement(t *testing.T
 	remote := filepath.Join(root, "origin.git")
 	repo := filepath.Join(root, "repo")
 	runEnsureCommitGit(t, root, "init", "--bare", remote)
-	runEnsureCommitGit(t, remote, "config", "uploadpack.allowAnySHA1InWant", "true")
+	runEnsureCommitGit(t, root, "--git-dir", remote, "config", "uploadpack.allowAnySHA1InWant", "true")
 
 	seed := filepath.Join(root, "seed")
 	runEnsureCommitGit(t, root, "clone", remote, seed)

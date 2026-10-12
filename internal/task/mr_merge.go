@@ -166,6 +166,16 @@ func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string, 
 			ExpectedTargetSHA:    targetSHA,
 			Method:               m.mergeMethodForBranch(svc.Branch),
 		}
+		if !item.MR.SupportsTargetBinding {
+			_, err := m.mergeMRWithLease(ctx, svc.RepoPath, params, client)
+			if err != nil {
+				recordMergeFailure(&result, item.ServiceName, err)
+				continue
+			}
+			result.Merged = append(result.Merged, item.ServiceName)
+			result.Steps = append(result.Steps, item.ServiceName+": merged with target lease")
+			continue
+		}
 
 		merged, mergeErr := client.MergeMR(ctx, params)
 		if mergeErr != nil {
@@ -200,17 +210,10 @@ func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string, 
 	return result, nil
 }
 
-// validateTaskMRForMerge is the strict gate immediately before a task MR
-// merge: a forge capable of enforcing both the server-side head pin and the
-// target binding, plus a complete merge identity (nonempty target branch and
-// head SHA to bind). Any failure blocks the service; task merges never run
-// unpinned, target-unbound, or with an incomplete identity.
+// Server merges require a head pin; direct merges use exact source objects.
 func validateTaskMRForMerge(mr forge.MRReadiness) error {
-	if !mr.SupportsSHAPin {
+	if mr.SupportsTargetBinding && !mr.SupportsSHAPin {
 		return fmt.Errorf("MR !%d requires a SHA-pinned merge, forge cannot enforce it", mr.Number)
-	}
-	if !mr.SupportsTargetBinding {
-		return fmt.Errorf("MR !%d requires a target-bound merge, forge cannot enforce it", mr.Number)
 	}
 	if strings.TrimSpace(mr.TargetBranch) == "" {
 		return fmt.Errorf("MR !%d target branch missing", mr.Number)
@@ -416,6 +419,9 @@ func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]S
 				return nil, err
 			}
 			if err := validateHotfixMRIdentity(svc, sha, matches[0], item.MR); err != nil {
+				return nil, err
+			}
+			if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &item.MR); err != nil {
 				return nil, err
 			}
 			item.Blockers = append([]string(nil), item.MR.Blockers...)

@@ -87,29 +87,46 @@ func TestIntegrateReleaseTaskMRs_RequiresSHAPinning(t *testing.T) {
 	}
 }
 
-func TestIntegrateReleaseTaskMRs_RequiresTargetBinding(t *testing.T) {
+func TestIntegrateReleaseTaskMRs_MergesWithoutAtomicTargetBinding(t *testing.T) {
 	// Given
 	x := newTaskMergeSafetyFixture(t, []string{"develop"})
 	mr := x.forge.readiness[1]
 	mr.SupportsTargetBinding = false
+	mr.SupportsSHAPin = false
 	x.forge.readiness[1] = mr
+	g := x.m.git.(*mockGitClient)
+	configureDirectMergeGit(t, g, "base-develop", "head-1")
+	push := g.pushRefWithLeaseFn
+	g.pushRefWithLeaseFn = func(repo, remote, target, oid, leaseRef, lease string) error {
+		if err := push(repo, remote, target, oid, leaseRef, lease); err != nil {
+			return err
+		}
+		x.tips["origin/develop"] = oid
+		return nil
+	}
 
 	// When
 	err := x.m.integrateReleaseTaskMRs(t.Context(), &x.release, &x.plan, nil)
 
 	// Then
-	if err == nil || !strings.Contains(err.Error(), "target binding") {
-		t.Errorf("error = %v, want explicit target binding rejection", err)
+	if err != nil {
+		t.Fatalf("integrateReleaseTaskMRs() error = %v", err)
 	}
 	if x.forge.mergeCalls != 0 {
-		t.Errorf("merge calls = %d, want zero", x.forge.mergeCalls)
+		t.Fatalf("forge = %+v, want no server merge", x.forge)
+	}
+	if len(g.pushRefWithLeaseCalls) != 1 {
+		t.Fatalf("lease pushes = %#v, want one", g.pushRefWithLeaseCalls)
+	}
+	if push := g.pushRefWithLeaseCalls[0]; push.TargetRef != "refs/heads/develop" || push.LeaseRef != push.TargetRef || push.LeaseOID != "base-develop" || push.ExactOID != "direct-merge" {
+		t.Fatalf("push = %#v, want exact integration target lease", push)
 	}
 	stored, err := x.m.GetRelease(t.Context(), x.release.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status != domain.ReleaseStatusTaskMergeBlocked || stored.Services[0].FeatureBranches[0].TaskMergeStatus != taskMergeStatusPending {
-		t.Fatalf("target-unbound release was not blocked before attempting: %+v", stored)
+	if stored.Services[0].FeatureBranches[0].TaskMergeStatus != taskMergeStatusMerged || stored.Services[0].PostIntegrationSHA != "direct-merge" {
+		t.Fatalf("release did not record verified merge: %+v", stored)
 	}
 }
 

@@ -156,7 +156,18 @@ func (m *manager) planReleaseTaskMergeRow(ctx context.Context, svc domain.Releas
 	if err != nil {
 		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, fmt.Errorf("release task merge plan: read MR !%d: %w", matches[0].Number, err)
 	}
+	reconciled, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(fb.Branch), &mr)
+	if err != nil {
+		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, err
+	}
 	ready := mr.Ready && openMRState(mr.State) && mr.SourceBranch == fb.Branch && mr.TargetBranch == svc.IntegrationBranch && strings.TrimSpace(mr.HeadSHA) != ""
+	status, acceptedSHA := taskMergeStatusPending, ""
+	if reconciled && mr.SourceBranch == fb.Branch && mr.TargetBranch == svc.IntegrationBranch {
+		if err := m.proveTaskMergeSHA(ctx, svc, mr.MergedSHA); err != nil {
+			return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, err
+		}
+		ready, status, acceptedSHA = true, taskMergeStatusMerged, mr.MergedSHA
+	}
 	blockers := append([]string(nil), mr.Blockers...)
 	if !ready && len(blockers) == 0 {
 		blockers = append(blockers, "MR is not ready")
@@ -167,11 +178,11 @@ func (m *manager) planReleaseTaskMergeRow(ctx context.Context, svc domain.Releas
 	}
 	row := ReleaseTaskMergeRow{
 		ServiceName: svc.Name, TaskID: fb.TaskID, Branch: fb.Branch,
-		MRNumber: mr.Number, MRURL: mr.URL, HeadSHA: mr.HeadSHA, TargetBranch: svc.IntegrationBranch, TargetSHA: targetSHA, Status: taskMergeStatusPending, Ready: ready, Blockers: blockers,
+		MRNumber: mr.Number, MRURL: mr.URL, HeadSHA: mr.HeadSHA, TargetBranch: svc.IntegrationBranch, TargetSHA: targetSHA, Status: status, Ready: ready, Blockers: blockers,
 	}
 	step := releaseTaskMergeStep{
 		ServiceName: svc.Name, TaskID: fb.TaskID, Branch: fb.Branch,
-		MRNumber: mr.Number, MRURL: mr.URL, HeadSHA: mr.HeadSHA, TargetSHA: targetSHA, Ready: ready, Status: taskMergeStatusPending, Blockers: append([]string(nil), blockers...),
+		MRNumber: mr.Number, MRURL: mr.URL, HeadSHA: mr.HeadSHA, TargetSHA: targetSHA, AcceptedSHA: acceptedSHA, Ready: ready, Status: status, Blockers: append([]string(nil), blockers...),
 		RepoPath: svc.RepoPath, WorktreePath: fb.WorktreePath, Repo: repo, TargetBranch: svc.IntegrationBranch, SupportsPin: mr.SupportsSHAPin, MergeMethod: m.mergeMethodForBranch(fb.Branch),
 	}
 	return row, step, nil

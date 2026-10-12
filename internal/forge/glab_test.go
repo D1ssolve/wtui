@@ -558,7 +558,7 @@ fi
 	}
 }
 
-func TestGlabMergeMR_RejectsTargetBinding(t *testing.T) {
+func TestGlabMergeMR_RejectsTargetSHA(t *testing.T) {
 	binDir := t.TempDir()
 	argsFile := filepath.Join(t.TempDir(), "args")
 	fake := filepath.Join(binDir, "glab")
@@ -578,7 +578,6 @@ fi
 		name   string
 		params MergeMRParams
 	}{
-		{name: "target branch", params: MergeMRParams{Repo: "group/proj", Number: 7, ExpectedHeadSHA: "abc123", ExpectedTargetBranch: "main"}},
 		{name: "target SHA", params: MergeMRParams{Repo: "group/proj", Number: 7, ExpectedHeadSHA: "abc123", ExpectedTargetSHA: "base456"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -595,6 +594,101 @@ fi
 				t.Fatalf("glab executed merge despite unsupported target binding: %q", args)
 			}
 		})
+	}
+}
+
+func TestGlabMergeMR_TargetBranchPreflight(t *testing.T) {
+	for _, tc := range []struct {
+		name, target, head, state, status, readError, expectedHead, shaFlag, wantError string
+	}{
+		{name: "success", target: "main", head: "abc123", state: "opened", status: "mergeable", expectedHead: "abc123", shaFlag: "--sha"},
+		{name: "branch only", target: "main", head: "abc123", state: "opened", status: "mergeable"},
+		{name: "retarget", target: "other", head: "abc123", state: "opened", status: "mergeable", expectedHead: "abc123", shaFlag: "--sha", wantError: "target branch"},
+		{name: "repush", target: "main", head: "new456", state: "opened", status: "mergeable", expectedHead: "abc123", shaFlag: "--sha", wantError: "source head"},
+		{name: "closed", target: "main", head: "abc123", state: "closed", status: "mergeable", expectedHead: "abc123", shaFlag: "--sha", wantError: "not open"},
+		{name: "blocked", target: "main", head: "abc123", state: "opened", status: "not_approved", expectedHead: "abc123", shaFlag: "--sha", wantError: "not approved"},
+		{name: "read failure", readError: "read failed", expectedHead: "abc123", shaFlag: "--sha", wantError: "read failed"},
+		{name: "no pin support", target: "main", head: "abc123", state: "opened", status: "mergeable", expectedHead: "abc123", wantError: "source head pinning"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binDir, worktree := t.TempDir(), t.TempDir()
+			argsFile := filepath.Join(t.TempDir(), "args")
+			script := `#!/bin/sh
+printf '%s\n' "$*" >> "$ARGS_FILE"
+if [ "$PWD" != "$WORKTREE" ]; then exit 2; fi
+if [ "$1 $2 $3" = "mr merge --help" ]; then
+  printf '%s' "$SHA_FLAG"
+elif [ "$1 $2" = "mr view" ]; then
+  if [ -n "$READ_ERROR" ]; then printf '%s' "$READ_ERROR" >&2; exit 1; fi
+  printf '{"iid":7,"state":"%s","target_branch":"%s","sha":"%s","detailed_merge_status":"%s","blocking_discussions_resolved":true,"merge_commit_sha":"merge123"}' "$STATE" "$TARGET" "$HEAD" "$STATUS"
+fi
+`
+			if err := os.WriteFile(filepath.Join(binDir, "glab"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir)
+			t.Setenv("ARGS_FILE", argsFile)
+			t.Setenv("WORKTREE", worktree)
+			t.Setenv("STATE", tc.state)
+			t.Setenv("TARGET", tc.target)
+			t.Setenv("HEAD", tc.head)
+			t.Setenv("STATUS", tc.status)
+			t.Setenv("READ_ERROR", tc.readError)
+			t.Setenv("SHA_FLAG", tc.shaFlag)
+			got, err := NewGlabClient(t.TempDir()).MergeMR(t.Context(), MergeMRParams{
+				WorktreePath: worktree, Repo: "group/proj", Number: 7,
+				ExpectedTargetBranch: "main", ExpectedHeadSHA: tc.expectedHead,
+			})
+			args, readErr := os.ReadFile(argsFile)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) || got.Merged {
+					t.Fatalf("MergeMR() = %#v, %v, want %q", got, err, tc.wantError)
+				}
+				if strings.Contains(string(args), "mr merge 7") {
+					t.Fatalf("merge executed after failed preflight: %s", args)
+				}
+				return
+			}
+			if err != nil || !got.Merged || got.MergeCommitSHA != "merge123" {
+				t.Fatalf("MergeMR() = %#v, %v", got, err)
+			}
+			lines := strings.Split(strings.TrimSpace(string(args)), "\n")
+			if len(lines) != 4 || !strings.HasPrefix(lines[1], "mr view 7 --output json --repo group/proj") || !strings.HasPrefix(lines[2], "mr merge 7 --auto-merge=false --yes --repo group/proj") {
+				t.Fatalf("expected readiness immediately before merge: %s", args)
+			}
+			if tc.expectedHead != "" && !strings.Contains(lines[2], "--sha abc123") {
+				t.Fatalf("missing server head pin: %s", args)
+			}
+		})
+	}
+}
+
+func TestGlabMergeMR_RejectsUnsupportedHeadPin(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$ARGS_FILE"
+`
+	if err := os.WriteFile(filepath.Join(binDir, "glab"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("ARGS_FILE", argsFile)
+	got, err := NewGlabClient(t.TempDir()).MergeMR(t.Context(), MergeMRParams{
+		Repo: "group/proj", Number: 7, ExpectedHeadSHA: "abc123",
+	})
+	if err == nil || !strings.Contains(err.Error(), "source head pinning") || got.Merged {
+		t.Fatalf("MergeMR() = %#v, %v, want unsupported head pin error", got, err)
+	}
+	args, readErr := os.ReadFile(argsFile)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(args), "mr merge 7") {
+		t.Fatalf("requested head pin silently dropped: %s", args)
 	}
 }
 

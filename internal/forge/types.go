@@ -55,22 +55,24 @@ type MRReadiness struct {
 	Blockers       []string
 	SupportsSHAPin bool
 	// SupportsTargetBinding reports atomic target-branch/repo binding during
-	// merge. Zero value false: forges that pin only the source head (gh/glab)
-	// advertise unsupported so automatic merges fail closed.
+	// merge. gh/glab report false: callers can request a non-atomic branch
+	// preflight while the requested source head remains server pinned.
 	SupportsTargetBinding bool
 	StatusChecksBlocking  bool
 }
 
 type MergeMRParams struct {
-	WorktreePath    string
-	Repo            string
-	Number          int
+	WorktreePath string
+	Repo         string
+	Number       int
+	// ExpectedHeadSHA requires a server-side source head pin.
 	ExpectedHeadSHA string
-	// ExpectedTargetBranch binds the merge to the exact target branch; the
-	// adapter must refuse the merge if the MR no longer targets it.
+	// ExpectedTargetBranch requests a fresh readiness check immediately before
+	// merge, rejecting target or expected head drift and non-open/not-ready MRs.
+	// This preflight is not atomic target binding: retargeting can still race it.
 	ExpectedTargetBranch string
-	// ExpectedTargetSHA additionally binds the merge to an exact target tip;
-	// required at release frontiers where a moved target must abort the merge.
+	// ExpectedTargetSHA requests an atomic target-tip pin only from adapters
+	// advertising SupportsTargetBinding; gh/glab reject it.
 	ExpectedTargetSHA string
 	Method            string
 }

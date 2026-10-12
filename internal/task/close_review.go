@@ -51,6 +51,9 @@ func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, 
 	if err != nil {
 		return "", "", err
 	}
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &fresh); err != nil {
+		return "", "", err
+	}
 	switch strings.ToLower(strings.TrimSpace(fresh.State)) {
 	case "open", "opened":
 		return reviewCloseWaiting, "", nil

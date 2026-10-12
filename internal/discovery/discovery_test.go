@@ -122,6 +122,14 @@ func (m *mockGitClient) RemoteRefSHA(context.Context, string, string) (string, e
 	panic("mockGitClient.RemoteRefSHA called unexpectedly")
 }
 
+func (m *mockGitClient) RemoteRefSHAAt(context.Context, string, string, string) (string, error) {
+	panic("mockGitClient.RemoteRefSHAAt called unexpectedly")
+}
+
+func (m *mockGitClient) BuildMergeCommit(context.Context, string, string, string, string) (string, error) {
+	panic("mockGitClient.BuildMergeCommit called unexpectedly")
+}
+
 func (m *mockGitClient) DeleteBranchIfUnchanged(context.Context, string, string, string, ...git.RefGuard) error {
 	panic("mockGitClient.DeleteBranchIfUnchanged called unexpectedly")
 }

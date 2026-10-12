@@ -45,7 +45,14 @@ func (m *manager) inspectWorkflowReviewMR(ctx context.Context, svc domain.Servic
 			item.Blockers = append(item.Blockers, drift)
 			break
 		}
+		if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &item.MR); err != nil {
+			item.Status, item.Blockers = "failed", []string{err.Error()}
+			break
+		}
+		item.Blockers = append([]string(nil), item.MR.Blockers...)
 		switch {
+		case mergedMRState(item.MR.State):
+			item.Status = "merged"
 		case item.MR.Ready:
 			item.Status = "ready"
 		case waitingBlockers(item.Blockers):
@@ -88,6 +95,9 @@ func (m *manager) reconcileMergedReviewMR(ctx context.Context, svc domain.Servic
 	}
 	mr, err := client.MRReadinessByNumber(ctx, active[0].Number, repo, svc.WorktreePath)
 	if err != nil {
+		return fail(err)
+	}
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &mr); err != nil {
 		return fail(err)
 	}
 	currentSHA, err := m.resolveFreshSourceSHA(ctx, svc)

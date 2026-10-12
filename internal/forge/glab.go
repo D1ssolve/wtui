@@ -315,7 +315,7 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 		Ready:                 len(blockers) == 0,
 		Blockers:              blockers,
 		SupportsSHAPin:        supportsSHAPin,
-		SupportsTargetBinding: false, // glab mr merge --sha pins the source head only
+		SupportsTargetBinding: false, // source head is server pinned; target preflight is non-atomic
 		StatusChecksBlocking:  mergeStatus == "status_checks_must_pass",
 	}, nil
 }
@@ -362,11 +362,11 @@ func (c *GlabClient) statusCheckBlockers(ctx context.Context, worktreePath, repo
 }
 
 func (c *GlabClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMergeResult, error) {
-	if params.ExpectedTargetBranch != "" || params.ExpectedTargetSHA != "" {
+	if params.ExpectedTargetSHA != "" {
 		return MRMergeResult{}, &ForgeError{
 			Category: ErrCategoryUnknown,
 			Cause:    errors.New("glab merge: requested target binding cannot be enforced: glab mr merge pins the source head only"),
-			Stderr:   "glab mr merge does not support target branch/SHA pinning",
+			Stderr:   "glab mr merge does not support target SHA pinning",
 		}
 	}
 	worktreePath := pickWorktree(c.worktreePath, params.WorktreePath)
@@ -378,8 +378,32 @@ func (c *GlabClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMerge
 	case "rebase":
 		args = append(args, "--rebase")
 	}
-	if params.ExpectedHeadSHA != "" && c.supportsSHAPin(ctx, worktreePath) {
+	if params.ExpectedHeadSHA != "" && params.ExpectedTargetBranch == "" && !c.supportsSHAPin(ctx, worktreePath) {
+		return MRMergeResult{}, errors.New("glab merge: source head pinning unsupported")
+	}
+	if params.ExpectedHeadSHA != "" {
 		args = append(args, "--sha", params.ExpectedHeadSHA)
+	}
+	if params.ExpectedTargetBranch != "" {
+		fresh, err := c.MRReadinessByNumber(ctx, params.Number, params.Repo, worktreePath)
+		if err != nil {
+			return MRMergeResult{}, err
+		}
+		if fresh.TargetBranch != params.ExpectedTargetBranch {
+			return MRMergeResult{}, fmt.Errorf("glab merge: target branch changed: got %q, want %q", fresh.TargetBranch, params.ExpectedTargetBranch)
+		}
+		if params.ExpectedHeadSHA != "" && fresh.HeadSHA != params.ExpectedHeadSHA {
+			return MRMergeResult{}, fmt.Errorf("glab merge: source head changed: got %q, want %q", fresh.HeadSHA, params.ExpectedHeadSHA)
+		}
+		if fresh.State != "open" {
+			return MRMergeResult{}, fmt.Errorf("glab merge: merge request is not open: %q", fresh.State)
+		}
+		if !fresh.Ready || len(fresh.Blockers) != 0 {
+			return MRMergeResult{}, fmt.Errorf("glab merge: merge request not ready: %s", strings.Join(fresh.Blockers, "; "))
+		}
+		if params.ExpectedHeadSHA != "" && !fresh.SupportsSHAPin {
+			return MRMergeResult{}, errors.New("glab merge: source head pinning unsupported")
+		}
 	}
 	if _, _, err := c.run(ctx, worktreePath, args...); err != nil {
 		return MRMergeResult{}, err

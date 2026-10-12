@@ -353,22 +353,30 @@ func TestReleaseMerge_UnpinnedHeadDriftSkipsMerge(t *testing.T) {
 	}
 }
 
-func TestReleaseMerge_UnsupportedTargetBindingSkipsMerge(t *testing.T) {
-	m, _, client := newReleaseMergeTestManager(t)
+func TestReleaseMerge_MergesWithoutAtomicTargetBinding(t *testing.T) {
+	m, gitMock, client := newReleaseMergeTestManager(t)
 	readiness := openProductionMR(9, "api", "api-source")
 	readiness.SupportsTargetBinding = false
+	readiness.SupportsSHAPin = false
 	client.readiness = map[int]forge.MRReadiness{9: readiness}
+	configureDirectMergeGit(t, gitMock, "origin/master-sha", "api-source")
+	gitMock.resolveRefFn = func(repo, ref string) (string, error) {
+		return gitMock.remoteRefSHAAtFn(repo, gitMock.remoteURLRes, ref)
+	}
 	release := writePromoteRelease(t, m, domain.ReleaseStatusAwaitingMasterMerge, releaseMergeService("api", 9))
 
 	got, result, err := m.MergeReleaseMRs(t.Context(), release.ID, nil)
 	if err != nil {
 		t.Fatalf("MergeReleaseMRs() error = %v", err)
 	}
-	if len(client.merges) != 0 || !slices.Equal(result.Failed, []string{"api"}) || got.Services[0].AcceptedMergeSHA != "" {
+	if len(client.merges) != 0 || !slices.Equal(result.Merged, []string{"api"}) || got.Services[0].AcceptedMergeSHA != "direct-merge" {
 		t.Fatalf("merges = %#v, result = %#v, service = %#v", client.merges, result, got.Services[0])
 	}
-	if got.Services[0].Error == nil || !strings.Contains(got.Services[0].Error.Cause, "target-bound") {
-		t.Fatalf("service error = %#v, want target-binding rejection", got.Services[0].Error)
+	if len(gitMock.pushRefWithLeaseCalls) != 1 {
+		t.Fatalf("lease pushes = %#v, want one", gitMock.pushRefWithLeaseCalls)
+	}
+	if push := gitMock.pushRefWithLeaseCalls[0]; push.TargetRef != "refs/heads/master" || push.LeaseRef != push.TargetRef || push.LeaseOID != "origin/master-sha" || push.ExactOID != "direct-merge" {
+		t.Fatalf("push = %#v, want fixed production ref and exact target lease", push)
 	}
 }
 

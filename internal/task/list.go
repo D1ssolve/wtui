@@ -122,7 +122,7 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 }
 
 func (m *manager) shouldIgnoreTaskDir(name string) bool {
-	if name == ".releases" || name == conversionRootName {
+	if name == ".releases" || name == conversionRootName || name == directMergeRoot {
 		return true
 	}
 

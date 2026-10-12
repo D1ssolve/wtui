@@ -682,6 +682,24 @@ func (m *manager) reconstructMergedReviewEvidence(ctx context.Context, svc domai
 			continue
 		}
 		if !strings.EqualFold(strings.TrimSpace(row.State), "merged") {
+			params := forge.MergeMRParams{Repo: repo, Number: row.Number, ExpectedHeadSHA: sourceSHA, ExpectedTargetBranch: targetBranch, Method: m.mergeMethodForBranch(svc.Branch)}
+			proofs, _, err := m.readDirectMergeProofs(params)
+			if err != nil {
+				return "", err
+			}
+			if len(proofs) != 0 {
+				detail, err := client.MRReadinessByNumber(ctx, row.Number, repo, svc.WorktreePath)
+				if err != nil {
+					return "", err
+				}
+				reconciled, err := m.reconcileDirectMR(ctx, svc.RepoPath, params.Method, &detail)
+				if err != nil {
+					return "", err
+				}
+				if reconciled {
+					matches = append(matches, row)
+				}
+			}
 			continue
 		}
 		matches = append(matches, row)
@@ -694,6 +712,9 @@ func (m *manager) reconstructMergedReviewEvidence(ctx context.Context, svc domai
 	}
 	detail, err := client.MRReadinessByNumber(ctx, matches[0].Number, repo, svc.WorktreePath)
 	if err != nil {
+		return "", err
+	}
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &detail); err != nil {
 		return "", err
 	}
 	if detail.Number != matches[0].Number || detail.SourceBranch != svc.Branch || detail.TargetBranch != targetBranch {

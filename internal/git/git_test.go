@@ -982,7 +982,7 @@ printf '%s\n' "$*" >> "$GIT_ARGS_FILE"
 	if err != nil {
 		t.Fatalf("read args file: %v", err)
 	}
-	want := "-C /repo merge --no-ff origin/develop\n"
+	want := "-C /repo merge --no-ff --no-edit origin/develop\n"
 	if string(args) != want {
 		t.Fatalf("git args = %q, want %q", string(args), want)
 	}

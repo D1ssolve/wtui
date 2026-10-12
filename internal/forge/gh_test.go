@@ -328,7 +328,7 @@ fi
 	}
 }
 
-func TestGhMergeMR_RejectsTargetBinding(t *testing.T) {
+func TestGhMergeMR_RejectsTargetSHA(t *testing.T) {
 	binDir := t.TempDir()
 	argsFile := filepath.Join(t.TempDir(), "args")
 	fake := filepath.Join(binDir, "gh")
@@ -345,7 +345,6 @@ printf '%s\n' "$*" >> "$ARGS_FILE"
 		name   string
 		params MergeMRParams
 	}{
-		{name: "target branch", params: MergeMRParams{Repo: "org/repo", Number: 5, ExpectedHeadSHA: "abc123", ExpectedTargetBranch: "main"}},
 		{name: "target SHA", params: MergeMRParams{Repo: "org/repo", Number: 5, ExpectedHeadSHA: "abc123", ExpectedTargetSHA: "base456"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -360,6 +359,71 @@ printf '%s\n' "$*" >> "$ARGS_FILE"
 			}
 			if strings.Contains(string(args), "pr merge") {
 				t.Fatalf("gh executed merge despite unsupported target binding: %q", args)
+			}
+		})
+	}
+}
+
+func TestGhMergeMR_TargetBranchPreflight(t *testing.T) {
+	for _, tc := range []struct {
+		name, target, head, state, review, readError, expectedHead, wantError string
+	}{
+		{name: "success", target: "main", head: "abc123", state: "OPEN", review: "APPROVED", expectedHead: "abc123"},
+		{name: "branch only", target: "main", head: "abc123", state: "OPEN", review: "APPROVED"},
+		{name: "retarget", target: "other", head: "abc123", state: "OPEN", review: "APPROVED", expectedHead: "abc123", wantError: "target branch"},
+		{name: "repush", target: "main", head: "new456", state: "OPEN", review: "APPROVED", expectedHead: "abc123", wantError: "source head"},
+		{name: "closed", target: "main", head: "abc123", state: "CLOSED", review: "APPROVED", expectedHead: "abc123", wantError: "not open"},
+		{name: "blocked", target: "main", head: "abc123", state: "OPEN", review: "REVIEW_REQUIRED", expectedHead: "abc123", wantError: "not approved"},
+		{name: "read failure", readError: "read failed", expectedHead: "abc123", wantError: "read failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binDir, worktree := t.TempDir(), t.TempDir()
+			argsFile := filepath.Join(t.TempDir(), "args")
+			script := `#!/bin/sh
+printf '%s\n' "$*" >> "$ARGS_FILE"
+if [ "$PWD" != "$WORKTREE" ]; then exit 2; fi
+if [ "$1 $2" = "pr view" ]; then
+  if [ -n "$READ_ERROR" ]; then printf '%s' "$READ_ERROR" >&2; exit 1; fi
+  printf '{"number":5,"state":"%s","baseRefName":"%s","headRefOid":"%s","mergeable":"MERGEABLE","reviewDecision":"%s","statusCheckRollup":[],"mergeCommit":{"oid":"merge123"}}' "$STATE" "$TARGET" "$HEAD" "$REVIEW"
+fi
+`
+			if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir)
+			t.Setenv("ARGS_FILE", argsFile)
+			t.Setenv("WORKTREE", worktree)
+			t.Setenv("STATE", tc.state)
+			t.Setenv("TARGET", tc.target)
+			t.Setenv("HEAD", tc.head)
+			t.Setenv("REVIEW", tc.review)
+			t.Setenv("READ_ERROR", tc.readError)
+			got, err := NewGhClient(t.TempDir()).MergeMR(t.Context(), MergeMRParams{
+				WorktreePath: worktree, Repo: "org/repo", Number: 5,
+				ExpectedTargetBranch: "main", ExpectedHeadSHA: tc.expectedHead,
+			})
+			args, readErr := os.ReadFile(argsFile)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) || got.Merged {
+					t.Fatalf("MergeMR() = %#v, %v, want %q", got, err, tc.wantError)
+				}
+				if strings.Contains(string(args), "pr merge 5") {
+					t.Fatalf("merge executed after failed preflight: %s", args)
+				}
+				return
+			}
+			if err != nil || !got.Merged || got.MergeCommitSHA != "merge123" {
+				t.Fatalf("MergeMR() = %#v, %v", got, err)
+			}
+			lines := strings.Split(strings.TrimSpace(string(args)), "\n")
+			if len(lines) != 3 || !strings.HasPrefix(lines[0], "pr view 5 --json number,state,") || !strings.HasPrefix(lines[1], "pr merge 5 --merge --repo org/repo") {
+				t.Fatalf("expected readiness immediately before merge: %s", args)
+			}
+			if tc.expectedHead != "" && !strings.Contains(lines[1], "--match-head-commit abc123") {
+				t.Fatalf("missing server head pin: %s", args)
 			}
 		})
 	}

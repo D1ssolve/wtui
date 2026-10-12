@@ -122,6 +122,12 @@ func (m *mockValidationGitClient) DeleteBranch(context.Context, string, string) 
 func (m *mockValidationGitClient) RemoteRefSHA(context.Context, string, string) (string, error) {
 	return "", nil
 }
+func (m *mockValidationGitClient) RemoteRefSHAAt(context.Context, string, string, string) (string, error) {
+	panic("unexpected RemoteRefSHAAt in validation")
+}
+func (m *mockValidationGitClient) BuildMergeCommit(context.Context, string, string, string, string) (string, error) {
+	panic("unexpected BuildMergeCommit in validation")
+}
 func (m *mockValidationGitClient) DeleteBranchIfUnchanged(context.Context, string, string, string, ...git.RefGuard) error {
 	return nil
 }

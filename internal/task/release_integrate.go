@@ -104,14 +104,14 @@ func (m *manager) integrateReleaseTaskMR(ctx context.Context, release *domain.Re
 		}
 		return fmt.Errorf("release task merge: read MR !%d: %w", step.MRNumber, err)
 	}
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, step.MergeMethod, &mr); err != nil {
+		return err
+	}
 	if mr.SourceBranch != step.Branch || mr.TargetBranch != step.TargetBranch || mr.HeadSHA != step.HeadSHA || !openMRState(mr.State) || !mr.Ready {
 		return errors.New("release task merge: MR changed since preview")
 	}
-	if !mr.SupportsSHAPin {
+	if mr.SupportsTargetBinding && !mr.SupportsSHAPin {
 		return fmt.Errorf("release task merge: MR !%d does not support required head SHA pinning", step.MRNumber)
-	}
-	if !mr.SupportsTargetBinding {
-		return fmt.Errorf("release task merge: MR !%d does not support required target binding", step.MRNumber)
 	}
 	if strings.TrimSpace(step.HeadSHA) == "" {
 		return errors.New("release task merge: confirmed head SHA is empty")
@@ -123,7 +123,12 @@ func (m *manager) integrateReleaseTaskMR(ctx context.Context, release *domain.Re
 	}
 	params := forge.MergeMRParams{WorktreePath: step.WorktreePath, Repo: step.Repo, Number: step.MRNumber, Method: step.MergeMethod, ExpectedHeadSHA: step.HeadSHA, ExpectedTargetBranch: step.TargetBranch, ExpectedTargetSHA: expected}
 	sendStatus(statusCh, fmt.Sprintf("[%s][task-merge] merging !%d", step.ServiceName, step.MRNumber))
-	if _, err := client.MergeMR(ctx, params); err != nil {
+	if mr.SupportsTargetBinding {
+		_, err = client.MergeMR(ctx, params)
+	} else {
+		_, err = m.mergeMRWithLease(ctx, svc.RepoPath, params, client)
+	}
+	if err != nil {
 		if ctx.Err() == nil {
 			if ok, reconcileErr := m.reconcileTaskMRMerge(ctx, release, svc, fb, step, client, rollingByTarget); ok || reconcileErr != nil {
 				return reconcileErr
@@ -136,6 +141,9 @@ func (m *manager) integrateReleaseTaskMR(ctx context.Context, release *domain.Re
 		return fmt.Errorf("release task merge: merge MR !%d: %w", step.MRNumber, err)
 	}
 	fresh, err := client.MRReadinessByNumber(ctx, step.MRNumber, step.Repo, step.WorktreePath)
+	if err == nil {
+		_, err = m.reconcileDirectMR(ctx, svc.RepoPath, step.MergeMethod, &fresh)
+	}
 	if err != nil || !mergedMRState(fresh.State) || strings.TrimSpace(fresh.MergedSHA) == "" || fresh.SourceBranch != step.Branch || fresh.TargetBranch != step.TargetBranch || fresh.HeadSHA != step.HeadSHA {
 		fb.TaskMergeStatus = taskMergeStatusUnknown
 		if persistErr := m.persistCheckpoint(release, "task_merge_unknown", nil); persistErr != nil {
@@ -171,6 +179,12 @@ func (m *manager) integrateReleaseTaskMR(ctx context.Context, release *domain.Re
 
 func (m *manager) reconcileTaskMRMerge(ctx context.Context, release *domain.Release, svc *domain.ReleaseService, fb *domain.ReleaseFeatureBranch, step releaseTaskMergeStep, client forge.ForgeClient, rollingByTarget map[string]string) (bool, error) {
 	fresh, err := client.MRReadinessByNumber(ctx, step.MRNumber, step.Repo, step.WorktreePath)
+	if err == nil {
+		_, err = m.reconcileDirectMR(ctx, svc.RepoPath, step.MergeMethod, &fresh)
+		if err != nil {
+			return false, err
+		}
+	}
 	if err != nil || !mergedMRState(fresh.State) || strings.TrimSpace(fresh.MergedSHA) == "" || fresh.SourceBranch != step.Branch || fresh.TargetBranch != step.TargetBranch || fresh.HeadSHA != step.HeadSHA {
 		return false, nil
 	}

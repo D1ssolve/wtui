@@ -146,6 +146,9 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 				if err := validateHotfixMRIdentity(svc, sha, matches[0], r); err != nil {
 					return plan, fmt.Errorf("%s → %s: %w", svc.Name, target, err)
 				}
+				if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &r); err != nil {
+					return plan, err
+				}
 				review.Number, review.URL = r.Number, r.URL
 				switch strings.ToLower(r.State) {
 				case "open", "opened":

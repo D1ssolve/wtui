@@ -72,6 +72,9 @@ func (m *manager) inspectReleaseMerge(ctx context.Context, releaseID string) (Re
 			}
 
 			item.MR, detailErr = client.MRReadinessByNumber(ctx, svc.ProductionMR.Number, repo, worktreePath)
+			if detailErr == nil {
+				_, detailErr = m.reconcileDirectMR(ctx, svc.RepoPath, m.releaseMergeMethod(), &item.MR)
+			}
 			item.Blockers = append([]string(nil), item.MR.Blockers...)
 			identity := releaseProductionMRBlockers(svc, m.productionBranch(), item.MR)
 			item.Blockers = append(item.Blockers, identity...)
@@ -192,6 +195,17 @@ func (m *manager) mergeReleaseServiceMR(ctx context.Context, release *domain.Rel
 	if err != nil {
 		return fmt.Errorf("recheck production MR !%d: %w", svc.ProductionMR.Number, err)
 	}
+	reconciled, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.releaseMergeMethod(), &fresh)
+	if err != nil {
+		return err
+	}
+	if reconciled {
+		authoritative, err := m.verifyAcceptedMergeSHA(ctx, svc, client, repo, worktreePath, fresh.MergedSHA)
+		if err != nil {
+			return err
+		}
+		return m.persistMergedReleaseService(release, svc, authoritative)
+	}
 	if err := validateReleaseMRForMerge(*svc, m.productionBranch(), fresh); err != nil {
 		return err
 	}
@@ -211,9 +225,13 @@ func (m *manager) mergeReleaseServiceMR(ctx context.Context, release *domain.Rel
 		ExpectedTargetBranch: fresh.TargetBranch,
 		ExpectedTargetSHA:    targetSHA,
 	}
-
 	sendStatus(statusCh, fmt.Sprintf("[%s][merge] merging production MR %d", svc.Name, params.Number))
-	merged, err := client.MergeMR(ctx, params)
+	var merged forge.MRMergeResult
+	if fresh.SupportsTargetBinding {
+		merged, err = client.MergeMR(ctx, params)
+	} else {
+		merged, err = m.mergeMRWithLease(ctx, svc.RepoPath, params, client)
+	}
 	if err != nil {
 		return err
 	}
@@ -297,8 +315,8 @@ func releaseProductionMRBlockers(svc domain.ReleaseService, productionBranch str
 
 // validateReleaseMRForMerge is the strict gate immediately before a production
 // merge: exact recorded identity, undrifted head, open ready state, and a
-// forge capable of enforcing the requested server-side head pin. Any failure
-// is a blocker; production merges never run unpinned.
+// server-side head pin when using the atomic server path. Direct merges use
+// the exact head object and a fixed target lease.
 func validateReleaseMRForMerge(svc domain.ReleaseService, productionBranch string, mr forge.MRReadiness) error {
 	if blockers := releaseProductionMRBlockers(svc, productionBranch, mr); len(blockers) > 0 {
 		return errors.New(strings.Join(blockers, "; "))
@@ -310,11 +328,8 @@ func validateReleaseMRForMerge(svc domain.ReleaseService, productionBranch strin
 	if len(mr.Blockers) > 0 {
 		return errors.New(strings.Join(mr.Blockers, "; "))
 	}
-	if !mr.SupportsSHAPin {
+	if mr.SupportsTargetBinding && !mr.SupportsSHAPin {
 		return fmt.Errorf("production MR !%d requires a SHA-pinned merge, forge cannot enforce it", mr.Number)
-	}
-	if !mr.SupportsTargetBinding {
-		return fmt.Errorf("production MR !%d requires a target-bound merge, forge cannot enforce it", mr.Number)
 	}
 	return nil
 }
@@ -339,6 +354,9 @@ func (m *manager) verifyAcceptedMergeSHA(ctx context.Context, svc *domain.Releas
 	fresh, err := client.MRReadinessByNumber(ctx, svc.ProductionMR.Number, repo, worktreePath)
 	if err != nil {
 		return "", fmt.Errorf("release merge: verify merged MR %d: %w", svc.ProductionMR.Number, err)
+	}
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.releaseMergeMethod(), &fresh); err != nil {
+		return "", err
 	}
 	if blockers := releaseProductionMRBlockers(*svc, m.productionBranch(), fresh); len(blockers) > 0 {
 		return "", fmt.Errorf("release merge: merged MR %d identity rejected: %s", svc.ProductionMR.Number, strings.Join(blockers, "; "))
@@ -392,6 +410,9 @@ func (m *manager) recoverMissingReleaseMergeSHAWithClient(ctx context.Context, s
 	fresh, err := client.MRReadinessByNumber(ctx, svc.ProductionMR.Number, repo, worktreePath)
 	if err != nil {
 		return "", fmt.Errorf("release merge: inspect merged MR %d: %w", svc.ProductionMR.Number, err)
+	}
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.releaseMergeMethod(), &fresh); err != nil {
+		return "", err
 	}
 	if !strings.EqualFold(fresh.State, "merged") {
 		return "", fmt.Errorf("release merge: merge commit SHA unavailable for MR %d (state=%s)", svc.ProductionMR.Number, fresh.State)
