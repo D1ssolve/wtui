@@ -242,7 +242,7 @@ func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
 		"Open <taskID>.sln in Rider",
 		"Open selected release folder in configured editor",
 		"Open selected release folder in Rider",
-		"Open <taskID>.code-workspace in VS Code",
+		"Open selected task in configured editor",
 		"Run shell command in selected task directory",
 		"Open sync strategy selection",
 		"Refresh tasks and repository cache",

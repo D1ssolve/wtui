@@ -198,8 +198,13 @@ func riderTaskCmd(taskID, dir string, generation uint64) tea.Cmd {
 	return execProcessCmd("rider", []string{taskID + ".sln"}, dir, "Open Rider for "+taskID, generation)
 }
 
-func codeWorkspaceTaskCmd(editor, taskID, dir string, generation uint64) tea.Cmd {
-	return execProcessCmd(editor, []string{taskID + ".code-workspace"}, dir, "Open "+editor+" for "+taskID, generation)
+func editorTaskCmd(editor, taskID, dir string, generation uint64) tea.Cmd {
+	target := "."
+	switch strings.TrimSuffix(strings.ToLower(filepath.Base(editor)), ".exe") {
+	case "code", "code-insiders", "codium", "cursor":
+		target = taskID + ".code-workspace"
+	}
+	return execProcessCmd(editor, []string{target}, dir, "Open "+editor+" for "+taskID, generation)
 }
 
 func openReleaseFolderCmd(executable, releaseID, dir string, generation uint64) tea.Cmd {
@@ -786,8 +791,11 @@ func execShellCmd(command, dir string, generation uint64) tea.Cmd {
 }
 
 func execProcessCmd(name string, args []string, dir string, op string, generation uint64) tea.Cmd {
-	if base := filepath.Base(name); base == "zed" || base == "zed.exe" {
+	switch strings.TrimSuffix(strings.ToLower(filepath.Base(name)), ".exe") {
+	case "zed":
 		args = append([]string{"--new"}, args...)
+	case "code", "code-insiders", "codium", "cursor":
+		args = append([]string{"--new-window"}, args...)
 	}
 	c := exec.Command(name, args...)
 	c.Dir = dir

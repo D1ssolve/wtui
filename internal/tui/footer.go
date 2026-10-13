@@ -28,7 +28,7 @@ func renderFooter(m Model) string {
 			"[C] close",
 			"[D] scan",
 			"[M] merge MRs",
-			"[O] VS Code",
+			"[O] editor",
 			"[;] shell",
 			"[/] filter",
 		}

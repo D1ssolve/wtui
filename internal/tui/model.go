@@ -713,8 +713,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panels.CodeWorkspaceTaskMsg:
 		m.opRunning = true
 		m.operationGeneration++
-		m.outputPanel.AppendLine("Opening " + msg.TaskID + ".code-workspace in " + m.cfg.Editor + " from " + msg.TaskDir + "...")
-		return m, tea.Batch(codeWorkspaceTaskCmd(m.cfg.Editor, msg.TaskID, msg.TaskDir, m.operationGeneration), m.spinner.Tick)
+		m.outputPanel.AppendLine("Opening task " + msg.TaskID + " in " + m.cfg.Editor + " from " + msg.TaskDir + "...")
+		return m, tea.Batch(editorTaskCmd(m.cfg.Editor, msg.TaskID, msg.TaskDir, m.operationGeneration), m.spinner.Tick)
 
 	case modal.CloseModalMsg:
 		switch m.modal.(type) {

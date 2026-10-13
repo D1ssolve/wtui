@@ -139,7 +139,7 @@ func (h *HelpOverlay) contentLines() []string {
 	sb.WriteString("\n")
 	sb.WriteString(h.shortcutRow("R", "Open <taskID>.sln in Rider"))
 	sb.WriteString("\n")
-	sb.WriteString(h.shortcutRow("O", "Open <taskID>.code-workspace in VS Code"))
+	sb.WriteString(h.shortcutRow("O", "Open selected task in configured editor"))
 	sb.WriteString("\n")
 	sb.WriteString(h.shortcutRow(";", "Run shell command in selected task directory"))
 	sb.WriteString("\n")

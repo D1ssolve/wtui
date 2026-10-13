@@ -40,7 +40,7 @@ func TestRenderFooter_FocusTasks_IncludesCoreHints(t *testing.T) {
 		"[S] sync",
 		"[C] close",
 		"[M] merge MRs",
-		"[O] VS Code",
+		"[O] editor",
 		"[/] filter",
 		"[.] status",
 		"[?] help",

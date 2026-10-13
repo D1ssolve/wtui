@@ -158,11 +158,13 @@ The complete example shows every key, not a recommended starting point. Prefer t
 | `tasks_root` | string | `<root_dir>/.tasks` | Parent directory for task worktrees and default release storage. |
 | `branch_prefix` | string | `feature/` | Legacy feature branch prefix used when synthesizing default Git Flow rules. |
 | `base_branch` | string | `develop` | Legacy feature base and integration branch. |
-| `editor` | string | `code` | Executable used to open generated `.code-workspace` files. |
+| `editor` | string | `code` | Editor executable name or path (without arguments), used by `O`. VS Code, Code Insiders, VSCodium, and Cursor open the generated `.code-workspace`; other editors open the task root folder. |
 | `concurrency` | integer | `4` | Global worker limit for task operations. Values `<= 0` become `4`. |
 | `discovery_depth` | integer | `4` | Maximum repository scan depth. `0` becomes `4`; values below `2` become `2`. |
 | `output_panel_lines` | integer | `12` | Preferred output panel height, clamped to `3..40`. |
 | `log_level` | string | `INFO` | File logger level. |
+
+Zed opens tasks and release folders in a new window with `--new`; VS Code and the compatible editors listed above use `--new-window`. Other editors receive only the folder path and use their own window preferences. `R` on Tasks remains a separate action that opens `<taskID>.sln` in Rider.
 
 ## Environment Overrides
 

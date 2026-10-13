@@ -192,7 +192,7 @@ func TestTaskIDECommands_PreserveTargetsAndWorkingDirectory(t *testing.T) {
 	executable, record := fakeIDE(t, "rider")
 	t.Setenv("PATH", filepath.Dir(executable)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	dir := t.TempDir()
-	for _, cmd := range []tea.Cmd{riderTaskCmd("TASK-1", dir, 7), codeWorkspaceTaskCmd(executable, "TASK-1", dir, 7)} {
+	for _, cmd := range []tea.Cmd{riderTaskCmd("TASK-1", dir, 7), editorTaskCmd(executable, "TASK-1", dir, 7)} {
 		if done := runProcessTestCmd(t, cmd); done.Err != nil {
 			t.Fatal(done.Err)
 		}
@@ -201,16 +201,30 @@ func TestTaskIDECommands_PreserveTargetsAndWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "1\nTASK-1.sln\n" + dir + "\n1\nTASK-1.code-workspace\n" + dir + "\n"; string(got) != want {
+	if want := "1\nTASK-1.sln\n" + dir + "\n1\n.\n" + dir + "\n"; string(got) != want {
 		t.Fatalf("task launch records = %q, want %q", got, want)
 	}
 }
 
-func TestUpdate_KeyO_ZedOpensNewWindow(t *testing.T) {
-	for _, executableName := range []string{"zed", "zed.exe"} {
+func TestUpdate_KeyO_EditorTargetsAndWindows(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		windowArg string
+		workspace bool
+	}{
+		{"zed", "--new", false},
+		{"zed.exe", "--new", false},
+		{"code", "--new-window", true},
+		{"code.exe", "--new-window", true},
+		{"code-insiders", "--new-window", true},
+		{"codium", "--new-window", true},
+		{"cursor", "--new-window", true},
+		{"rider", "", false},
+		{"custom editor", "", false},
+	} {
 		for _, release := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/release_%v", executableName, release), func(t *testing.T) {
-				executable, record := fakeIDE(t, executableName)
+			t.Run(fmt.Sprintf("%s/release_%v", tc.name, release), func(t *testing.T) {
+				executable, record := fakeIDE(t, tc.name)
 				dir := t.TempDir()
 				m := releaseFolderTestModel(t, dir)
 				m.cfg.Editor = executable
@@ -218,7 +232,10 @@ func TestUpdate_KeyO_ZedOpensNewWindow(t *testing.T) {
 				if !release {
 					m.setFocus(FocusTasks)
 					m.tasksPanel.SetTasks([]domain.Task{{ID: "TASK-1", Dir: dir}})
-					target = "TASK-1.code-workspace"
+					target = "."
+					if tc.workspace {
+						target = "TASK-1.code-workspace"
+					}
 				}
 
 				updated, dispatch := m.Update(sendKey("O"))
@@ -234,7 +251,10 @@ func TestUpdate_KeyO_ZedOpensNewWindow(t *testing.T) {
 				}
 
 				got, err := os.ReadFile(record)
-				want := "2\n--new\n" + target + "\n" + dir + "\n"
+				want := "1\n" + target + "\n" + dir + "\n"
+				if tc.windowArg != "" {
+					want = "2\n" + tc.windowArg + "\n" + target + "\n" + dir + "\n"
+				}
 				if err != nil || string(got) != want {
 					t.Fatalf("launch record = %q, want %q, err = %v", got, want, err)
 				}
