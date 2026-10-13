@@ -105,7 +105,7 @@ func fakeIDE(t *testing.T, name string) (string, string) {
 	record := filepath.Join(dir, "launch.txt")
 	t.Setenv("WTUI_TEST_IDE_RECORD", record)
 	t.Setenv("WTUI_TEST_IDE_EXIT", "0")
-	if err := os.WriteFile(executable, []byte("#!/bin/sh\nprintf '%s\\n' \"$#\" \"$1\" \"$PWD\" >> \"$WTUI_TEST_IDE_RECORD\"\nexit \"$WTUI_TEST_IDE_EXIT\"\n"), 0700); err != nil {
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nprintf '%s\\n' \"$#\" \"$@\" \"$PWD\" >> \"$WTUI_TEST_IDE_RECORD\"\nexit \"$WTUI_TEST_IDE_EXIT\"\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	return executable, record
@@ -203,6 +203,43 @@ func TestTaskIDECommands_PreserveTargetsAndWorkingDirectory(t *testing.T) {
 	}
 	if want := "1\nTASK-1.sln\n" + dir + "\n1\nTASK-1.code-workspace\n" + dir + "\n"; string(got) != want {
 		t.Fatalf("task launch records = %q, want %q", got, want)
+	}
+}
+
+func TestUpdate_KeyO_ZedOpensNewWindow(t *testing.T) {
+	for _, executableName := range []string{"zed", "zed.exe"} {
+		for _, release := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/release_%v", executableName, release), func(t *testing.T) {
+				executable, record := fakeIDE(t, executableName)
+				dir := t.TempDir()
+				m := releaseFolderTestModel(t, dir)
+				m.cfg.Editor = executable
+				target := dir
+				if !release {
+					m.setFocus(FocusTasks)
+					m.tasksPanel.SetTasks([]domain.Task{{ID: "TASK-1", Dir: dir}})
+					target = "TASK-1.code-workspace"
+				}
+
+				updated, dispatch := m.Update(sendKey("O"))
+				if dispatch == nil {
+					t.Fatal("O did not dispatch editor action")
+				}
+				_, launch := updated.(Model).Update(dispatch())
+				if launch == nil {
+					t.Fatal("editor action did not launch")
+				}
+				if done := runProcessTestCmd(t, launch); done.Err != nil {
+					t.Fatal(done.Err)
+				}
+
+				got, err := os.ReadFile(record)
+				want := "2\n--new\n" + target + "\n" + dir + "\n"
+				if err != nil || string(got) != want {
+					t.Fatalf("launch record = %q, want %q, err = %v", got, want, err)
+				}
+			})
+		}
 	}
 }
 

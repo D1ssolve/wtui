@@ -212,7 +212,7 @@ func (m *manager) removeCleanupWorktree(ctx context.Context, step releaseCleanup
 	if err != nil {
 		return false, err
 	}
-	if dirty {
+	if dirty && !force {
 		return false, errors.New("worktree became dirty")
 	}
 	commonDir, err := m.git.CommonDir(ctx, step.path)

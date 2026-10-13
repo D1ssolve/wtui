@@ -366,7 +366,7 @@ func scanCleanupCandidatesCmd(mgr task.Manager, generation uint64) tea.Cmd {
 			return CleanupScanReadyMsg{Generation: generation, Err: fmt.Errorf("list releases: %w", err)}
 		}
 
-		candidates := make([]modal.CleanupCandidate, 0, len(tasks)+len(releases))
+		candidates := make([]modal.CleanupCandidate, len(tasks)+len(releases))
 
 		const cleanupScanConcurrency = 10
 		sem := make(chan struct{}, cleanupScanConcurrency)
@@ -388,9 +388,7 @@ func scanCleanupCandidatesCmd(mgr task.Manager, generation uint64) tea.Cmd {
 			}()
 		}
 
-		for _, taskInfo := range tasks {
-			index, taskInfo := len(candidates), taskInfo
-			candidates = append(candidates, modal.CleanupCandidate{})
+		for index, taskInfo := range tasks {
 			plan(index, modal.CleanupCandidate{Kind: modal.CleanupKindTask, ID: taskInfo.ID}, func() (int, int, bool, string) {
 				cleanupPlan, planErr := mgr.PlanTaskCleanup(ctx, task.TaskCleanupRequest{TaskID: taskInfo.ID})
 				if planErr != nil {
@@ -412,12 +410,11 @@ func scanCleanupCandidatesCmd(mgr task.Manager, generation uint64) tea.Cmd {
 				return len(preview.Services), resources, true, ""
 			})
 		}
+		index := len(tasks)
 		for _, release := range releases {
 			if release.Status != domain.ReleaseStatusReleased {
 				continue
 			}
-			index := len(candidates)
-			candidates = append(candidates, modal.CleanupCandidate{})
 			plan(index, modal.CleanupCandidate{Kind: modal.CleanupKindRelease, ID: release.ID}, func() (int, int, bool, string) {
 				cleanupPlan, planErr := mgr.PlanReleaseCleanup(ctx, release.ID, task.ReleaseCleanupSelection{RemoveRelease: true, DeleteLocalReleaseBranches: true})
 				if planErr != nil {
@@ -429,9 +426,10 @@ func scanCleanupCandidatesCmd(mgr task.Manager, generation uint64) tea.Cmd {
 				}
 				return len(preview.Services), len(preview.Tasks), true, ""
 			})
+			index++
 		}
 		wg.Wait()
-		return CleanupScanReadyMsg{Generation: generation, Candidates: candidates}
+		return CleanupScanReadyMsg{Generation: generation, Candidates: candidates[:index]}
 	}
 }
 
@@ -788,6 +786,9 @@ func execShellCmd(command, dir string, generation uint64) tea.Cmd {
 }
 
 func execProcessCmd(name string, args []string, dir string, op string, generation uint64) tea.Cmd {
+	if base := filepath.Base(name); base == "zed" || base == "zed.exe" {
+		args = append([]string{"--new"}, args...)
+	}
 	c := exec.Command(name, args...)
 	c.Dir = dir
 	return execTeaProcess(c, op, generation)
