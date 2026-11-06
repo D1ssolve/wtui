@@ -16,13 +16,14 @@ import (
 var _ Modal = (*ReleaseExecuteConfirmDialog)(nil)
 
 type ReleaseExecuteConfirmDialog struct {
-	title    string
-	taskIDs  []string
-	versions map[string]string
-	preview  task.ReleasePreview
-	width    int
-	height   int
-	viewport viewport.Model
+	description string
+	title       string
+	taskIDs     []string
+	versions    map[string]string
+	preview     task.ReleasePreview
+	width       int
+	height      int
+	viewport    viewport.Model
 
 	hasTaskMerge        bool
 	taskMergeRows       []task.ReleaseTaskMergeRow
@@ -30,7 +31,7 @@ type ReleaseExecuteConfirmDialog struct {
 	narrowRows          bool
 }
 
-func NewReleaseExecuteConfirmDialog(title string, taskIDs []string, versions map[string]string, preview task.ReleasePreview) *ReleaseExecuteConfirmDialog {
+func NewReleaseExecuteConfirmDialog(title string, taskIDs []string, versions map[string]string, preview task.ReleasePreview, descriptions ...string) *ReleaseExecuteConfirmDialog {
 	clonedVersions := make(map[string]string, len(versions))
 	for k, v := range versions {
 		clonedVersions[k] = v
@@ -46,11 +47,14 @@ func NewReleaseExecuteConfirmDialog(title string, taskIDs []string, versions map
 		preview:  preview,
 		viewport: viewport.New(1, 1),
 	}
+	if len(descriptions) > 0 {
+		dialog.description = descriptions[0]
+	}
 	return dialog
 }
 
-func NewReleaseExecuteConfirmDialogWithTaskMerge(title string, taskIDs []string, versions map[string]string, preview task.ReleasePreview, rows []task.ReleaseTaskMergeRow, generation uint64) *ReleaseExecuteConfirmDialog {
-	dialog := NewReleaseExecuteConfirmDialog(title, taskIDs, versions, preview)
+func NewReleaseExecuteConfirmDialogWithTaskMerge(title string, taskIDs []string, versions map[string]string, preview task.ReleasePreview, rows []task.ReleaseTaskMergeRow, generation uint64, descriptions ...string) *ReleaseExecuteConfirmDialog {
+	dialog := NewReleaseExecuteConfirmDialog(title, taskIDs, versions, preview, descriptions...)
 	dialog.hasTaskMerge = true
 	dialog.taskMergeRows = append([]task.ReleaseTaskMergeRow(nil), rows...)
 	dialog.taskMergeGeneration = generation
@@ -120,7 +124,7 @@ func (d *ReleaseExecuteConfirmDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 					descriptions[row.ServiceName] = row.TagDescription
 				}
 			}
-			return ConfirmReleaseExecuteMsg{Title: d.title, TaskIDs: append([]string(nil), d.taskIDs...), Versions: versions, TagDescriptions: descriptions, Generation: d.taskMergeGeneration}
+			return ConfirmReleaseExecuteMsg{Title: d.title, Description: d.description, TaskIDs: append([]string(nil), d.taskIDs...), Versions: versions, TagDescriptions: descriptions, Generation: d.taskMergeGeneration}
 		}
 	case "esc", "n":
 		return d, func() tea.Msg { return CloseModalMsg{} }
@@ -163,6 +167,10 @@ func (d *ReleaseExecuteConfirmDialog) content() string {
 	b.WriteString("\n\n")
 	if d.title != "" {
 		b.WriteString(normalStyle.Render("Title: " + d.title))
+		b.WriteString("\n")
+	}
+	if d.description != "" {
+		b.WriteString(normalStyle.Render("Description: " + d.description))
 		b.WriteString("\n")
 	}
 

@@ -46,6 +46,7 @@ type TagListMsg struct {
 }
 
 type ForgeResultMsg struct {
+	Description string
 	Generation  uint64
 	TaskID      string
 	ServiceName string

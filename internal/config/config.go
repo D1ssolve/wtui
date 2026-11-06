@@ -21,6 +21,7 @@ type Config struct {
 	DiscoveryDepth   int               `yaml:"discovery_depth"`
 	OutputPanelLines int               `yaml:"output_panel_lines"`
 	LogLevel         string            `yaml:"log_level"`
+	AI               *AIConfig         `yaml:"ai"`
 	GitFlow          *GitFlowConfig    `yaml:"git_flow"`
 	Forge            *ForgeConfig      `yaml:"forge"`
 	Tag              *TagConfig        `yaml:"tag"`
@@ -211,6 +212,9 @@ func (c *Config) Effective() (*Config, error) {
 	c.effectiveValidation()
 	c.effectiveClose()
 	c.effectivePrune()
+	if err := c.effectiveAI(); err != nil {
+		return nil, err
+	}
 	if err := c.effectiveWorktree(); err != nil {
 		return nil, err
 	}

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/D1ssolve/wtui/internal/ai"
+	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/Masterminds/semver/v3"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -47,6 +49,7 @@ const (
 )
 
 type CreateReleaseDialog struct {
+	MetadataEditor
 	phase createReleasePhase
 
 	taskRows      []createReleaseTaskRow
@@ -109,6 +112,9 @@ func NewCreateReleaseDialog(tasks []domain.Task, width, height int) *CreateRelea
 		height:            height,
 		descriptionEditor: editor,
 	}
+	dialog.metadataSize(width, height)
+	dialog.setMetadataField("title", "Release title", "")
+	dialog.setMetadataField("description", "Release description", "")
 	dialog.sizeDescriptionEditor()
 	dialog.filterTasks()
 	return dialog
@@ -122,6 +128,7 @@ func (d *CreateReleaseDialog) Title() string {
 }
 
 func (d *CreateReleaseDialog) SetTerminalSize(width, height int) {
+	d.metadataSize(width, height)
 	d.width = width
 	d.height = height
 	d.sizeDescriptionEditor()
@@ -130,6 +137,24 @@ func (d *CreateReleaseDialog) SetTerminalSize(width, height int) {
 
 func (d *CreateReleaseDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	defer d.clampOffsets()
+	if d.discarding {
+		_, cmd := d.updateMetadata(msg)
+		return d, cmd
+	}
+	if d.phase == phaseVersionInput {
+		if !d.editing {
+			d.setMetadataField("title", "Release title", d.title)
+			if len(d.fields) == 1 {
+				d.setMetadataField("description", "Release description", "")
+			}
+		}
+		if handled, cmd := d.updateMetadata(msg); handled {
+			if !d.editing {
+				d.title = d.metadataValue("title")
+			}
+			return d, cmd
+		}
+	}
 	switch m := msg.(type) {
 	case tea.WindowSizeMsg:
 		d.SetTerminalSize(m.Width, m.Height)
@@ -215,6 +240,9 @@ func (d *CreateReleaseDialog) updateTaskSelect(keyMsg tea.KeyMsg) (Modal, tea.Cm
 			return RequestReleaseVersionsMsg{TaskIDs: append([]string(nil), taskIDs...)}
 		}
 	case "esc":
+		if d.confirmMetadataDiscard() {
+			return d, nil
+		}
 		return d, func() tea.Msg { return CloseModalMsg{} }
 	default:
 		return d, nil
@@ -279,6 +307,9 @@ func (d *CreateReleaseDialog) View() string {
 	width, _ := overlayContentSize(d.width, d.height)
 	if d.tooSmall() {
 		return releaseLine("Resize terminal — Esc back", max(1, width))
+	}
+	if d.editing || d.discarding {
+		return d.MetadataView()
 	}
 	if d.editingDescription {
 		return d.descriptionEditorView()
@@ -364,8 +395,10 @@ func (d *CreateReleaseDialog) View() string {
 
 	if d.loadingVersions {
 		line(dimStyle, "Loading proposed versions...")
-	} else {
+	} else if !d.generating {
 		line(dimStyle, "Edit versions; Enter submits")
+	} else {
+		line(dimStyle, "Inputs paused while AI generates")
 	}
 	title := d.title
 	if title == "" {
@@ -407,7 +440,10 @@ func (d *CreateReleaseDialog) View() string {
 	}
 	line(normalStyle.Underline(true), field)
 	line(errorStyle, fieldError)
-	line(dimStyle, "Tab focus · Enter OK · Esc back")
+	if !d.generating {
+		line(dimStyle, "Tab focus · Enter OK · Esc back")
+	}
+	b.WriteString(d.MetadataView())
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
@@ -419,9 +455,15 @@ func (d *CreateReleaseDialog) descriptionEditorView() string {
 		serviceName = d.inputRows[d.editingRow].serviceName
 	}
 	width, _ := overlayContentSize(d.width, d.height)
+	editor := d.descriptionEditor
+	controls := "[Ctrl+S] save  [Esc] cancel"
+	if d.generating {
+		editor.Blur()
+		controls = "Inputs paused while AI generates"
+	}
 	return titleStyle.Render(releaseLine("Tag description — "+serviceName, width)) + "\n" +
-		d.descriptionEditor.View() + "\n" +
-		dimStyle.Render(releaseLine("[Ctrl+S] save  [Esc] cancel", width))
+		editor.View() + "\n" +
+		dimStyle.Render(releaseLine(controls, width)) + "\n" + d.MetadataView()
 }
 
 func (d *CreateReleaseDialog) applyVersions(versions map[string]string) {
@@ -442,8 +484,10 @@ func (d *CreateReleaseDialog) applyVersions(versions map[string]string) {
 			continue
 		}
 		d.inputRows[i].proposed = v
-		d.inputRows[i].value = v
-		d.inputRows[i].err = ""
+		if d.inputRows[i].value == "…" {
+			d.inputRows[i].value = v
+			d.inputRows[i].err = ""
+		}
 	}
 	d.loadingVersions = false
 	d.err = ""
@@ -504,6 +548,10 @@ func (d *CreateReleaseDialog) filterTasks() {
 }
 
 func (d *CreateReleaseDialog) rebuildServiceInputs() {
+	previous := make(map[string]createReleaseServiceInput, len(d.inputRows))
+	for _, input := range d.inputRows {
+		previous[input.serviceName] = input
+	}
 	selected := make(map[string]struct{})
 	inputs := make([]createReleaseServiceInput, 0)
 
@@ -520,6 +568,10 @@ func (d *CreateReleaseDialog) rebuildServiceInputs() {
 				continue
 			}
 			selected[name] = struct{}{}
+			if input, exists := previous[name]; exists {
+				inputs = append(inputs, input)
+				continue
+			}
 			inputs = append(inputs, createReleaseServiceInput{
 				serviceName: name,
 				value:       "…",
@@ -690,7 +742,7 @@ func (d *CreateReleaseDialog) submitIfValid() tea.Cmd {
 
 	taskIDs := d.selectedTaskIDs()
 	return func() tea.Msg {
-		return SubmitCreateReleaseMsg{Title: strings.TrimSpace(d.title), TaskIDs: append([]string(nil), taskIDs...), Versions: versions, TagDescriptions: tagDescriptions}
+		return SubmitCreateReleaseMsg{Title: strings.TrimSpace(d.title), Description: d.metadataValue("description"), TaskIDs: append([]string(nil), taskIDs...), Versions: versions, TagDescriptions: tagDescriptions}
 	}
 }
 
@@ -726,7 +778,7 @@ func (d *CreateReleaseDialog) updateDescriptionEditor(msg tea.Msg) (Modal, tea.C
 func (d *CreateReleaseDialog) sizeDescriptionEditor() {
 	width, height := overlayContentSize(d.width, d.height)
 	d.descriptionEditor.SetWidth(max(4, width))
-	d.descriptionEditor.SetHeight(max(1, height-2))
+	d.descriptionEditor.SetHeight(max(1, height-8))
 	if d.editingDescription {
 		// Bubbles v1 refreshes wrapped viewport content in View, then follows the cursor in Update.
 		d.descriptionEditor.View()
@@ -744,7 +796,39 @@ func (d *CreateReleaseDialog) visibleRows() int {
 	if d.phase == phaseTaskSelect {
 		return max(1, height-5)
 	}
-	return max(1, height-7)
+	return max(1, height-8-lipgloss.Height(d.MetadataView()))
+}
+
+func (d *CreateReleaseDialog) MetadataRequest() (task.MetadataRequest, bool) {
+	title := d.title
+	if d.editing {
+		title = d.metadataValue("title")
+	}
+	return task.MetadataRequest{Purpose: ai.PurposeRelease, TaskIDs: d.selectedTaskIDs(), Title: title, Description: d.metadataValue("description")}, d.phase == phaseVersionInput && !d.loadingVersions && !d.discarding
+}
+
+func (d *CreateReleaseDialog) ApplyMetadataDraft(draft ai.Draft) {
+	d.applyMetadata(draft)
+	d.title = draft.Title
+	for i := range d.inputRows {
+		for _, generated := range draft.Services {
+			if generated.Name == d.inputRows[i].serviceName {
+				d.inputRows[i].value = generated.Version
+				d.inputRows[i].description = generated.TagDescription
+				d.inputRows[i].err = ""
+				if generated.Reason != "" {
+					d.setMetadataField("reason:"+generated.Name, generated.Name+" version rationale", generated.Reason)
+				}
+			}
+		}
+	}
+	if d.editing {
+		d.editor.SetValue(d.fields[d.selected].value)
+	}
+	if d.editingDescription {
+		d.descriptionEditor.SetValue(d.inputRows[d.editingRow].description)
+	}
+	d.err = ""
 }
 
 func (d *CreateReleaseDialog) clampOffsets() {

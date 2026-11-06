@@ -24,13 +24,17 @@ type ServiceMRCreateResult struct {
 	Err         error
 }
 
-func (m *manager) ForgeCreateMissingMRs(ctx context.Context, taskID, title string, force bool) (TaskMRCreateResult, error) {
+func (m *manager) ForgeCreateMissingMRs(ctx context.Context, taskID, title string, force bool, descriptions ...string) (TaskMRCreateResult, error) {
 	services, err := m.ListServices(ctx, taskID)
 	if err != nil {
 		return TaskMRCreateResult{}, err
 	}
 	if strings.TrimSpace(title) == "" {
 		title = taskID
+	}
+	description := ""
+	if len(descriptions) > 0 {
+		description = descriptions[0]
 	}
 
 	result := TaskMRCreateResult{TaskID: taskID, Title: title, Services: make([]ServiceMRCreateResult, 0, len(services))}
@@ -77,6 +81,7 @@ func (m *manager) ForgeCreateMissingMRs(ctx context.Context, taskID, title strin
 			SourceBranch: svc.Branch,
 			TargetBranch: target,
 			Title:        title,
+			Description:  description,
 			Repo:         repo,
 		})
 		if item.Err != nil {

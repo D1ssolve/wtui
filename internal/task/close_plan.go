@@ -53,13 +53,16 @@ type PipelinePlan struct {
 }
 
 type CloseTaskParams struct {
-	Fingerprint string
-	TagVersions map[string]string
-	TaskID      string
-	ServiceName string
-	StatusCh    chan<- string
-	DryRun      bool
-	TagVersion  string
+	TagMessages       map[string]string
+	ReviewTitle       string
+	ReviewDescription string
+	Fingerprint       string
+	TagVersions       map[string]string
+	TaskID            string
+	ServiceName       string
+	StatusCh          chan<- string
+	DryRun            bool
+	TagVersion        string
 }
 
 type CloseTaskResult struct {

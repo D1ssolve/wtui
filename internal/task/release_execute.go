@@ -40,16 +40,17 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 
 	now := defaultReleaseNow().UTC()
 	release := domain.Release{
-		ID:         releaseID,
-		Title:      title,
-		Status:     domain.ReleaseStatusDraft,
-		Checkpoint: "draft",
-		Version:    strings.TrimSpace(releaseVersion),
-		TaskIDs:    append([]string(nil), plan.TaskIDs...),
-		Tasks:      append([]domain.ReleaseTaskRef(nil), plan.Tasks...),
-		Services:   append([]domain.ReleaseService(nil), plan.Services...),
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:          releaseID,
+		Title:       title,
+		Description: params.Description,
+		Status:      domain.ReleaseStatusDraft,
+		Checkpoint:  "draft",
+		Version:     strings.TrimSpace(releaseVersion),
+		TaskIDs:     append([]string(nil), plan.TaskIDs...),
+		Tasks:       append([]domain.ReleaseTaskRef(nil), plan.Tasks...),
+		Services:    append([]domain.ReleaseService(nil), plan.Services...),
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	release.Tag = sharedTagOrEmpty(release.Services)

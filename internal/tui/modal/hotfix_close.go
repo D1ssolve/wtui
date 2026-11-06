@@ -2,14 +2,17 @@ package modal
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/D1ssolve/wtui/internal/ai"
 	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/Masterminds/semver/v3"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type hotfixVersionInput struct {
@@ -19,12 +22,14 @@ type hotfixVersionInput struct {
 }
 
 type HotfixCloseModal struct {
+	MetadataEditor
 	viewport viewport.Model
 	sized    bool
 	plan     task.ClosePlan
 	versions []hotfixVersionInput
 	selected int
 	err      string
+	tooSmall bool
 }
 
 func NewHotfixCloseModal(plan task.ClosePlan) *HotfixCloseModal {
@@ -58,15 +63,22 @@ func NewHotfixCloseModal(plan task.ClosePlan) *HotfixCloseModal {
 }
 func (d *HotfixCloseModal) Title() string { return "Continue Hotfix: " + d.plan.TaskID }
 func (d *HotfixCloseModal) SetTerminalSize(width, height int) {
+	d.metadataSize(width, height)
 	d.sized = width > 0 && height > 0
 	d.viewport.Width = max(1, width-8)
-	d.viewport.Height = max(1, height*70/100-7)
+	d.viewport.Height = max(5, height*70/100-14)
 	d.viewport.SetContent(d.preview())
 }
 func (d *HotfixCloseModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
+	if handled, cmd := d.updateMetadata(msg); handled {
+		return d, cmd
+	}
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "esc":
+			if d.confirmMetadataDiscard() {
+				return d, nil
+			}
 			return d, func() tea.Msg { return CloseModalMsg{} }
 		case "pgdown", "pgup":
 			d.viewport.SetContent(d.preview())
@@ -87,6 +99,9 @@ func (d *HotfixCloseModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 			}
 			return d, nil
 		case "enter":
+			if d.tooSmall {
+				return d, nil
+			}
 			versions := map[string]string{}
 			for _, f := range d.versions {
 				version, err := semver.NewVersion(strings.TrimSpace(f.input.Value()))
@@ -99,7 +114,7 @@ func (d *HotfixCloseModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 				}
 			}
 			return d, func() tea.Msg {
-				return SubmitCloseTaskMsg{TaskID: d.plan.TaskID, Fingerprint: d.plan.Fingerprint, TagVersions: versions}
+				return SubmitCloseTaskMsg{TaskID: d.plan.TaskID, Fingerprint: d.plan.Fingerprint, TagVersions: versions, TagMessages: d.metadataTags(), ReviewTitle: d.metadataValue("title"), ReviewDescription: d.metadataValue("description")}
 			}
 		}
 	}
@@ -112,22 +127,18 @@ func (d *HotfixCloseModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	return d, nil
 }
 func (d *HotfixCloseModal) View() string {
+	if d.editing || d.discarding {
+		return d.MetadataView()
+	}
 	title := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	var b strings.Builder
-	b.WriteString(title.Render(d.Title()) + "\n\n")
-	if d.sized {
-		d.viewport.SetContent(d.preview())
-		b.WriteString(d.viewport.View())
-	} else {
-		b.WriteString(d.preview())
-	}
 	if len(d.versions) > 0 {
 		f := d.versions[d.selected]
 		label := strings.Join(f.services, ", ")
 		if d.plan.SharedVersion {
 			label = "All services"
 		}
-		fmt.Fprintf(&b, "\n%s — Tag version: %s", label, f.input.View())
+		fmt.Fprintf(&b, "\n%s — Tag version: %s", label, d.metadataInputView(f.input))
 		if f.locked {
 			b.WriteString(" (saved for retry)")
 		}
@@ -135,8 +146,72 @@ func (d *HotfixCloseModal) View() string {
 	if d.err != "" {
 		b.WriteString("\n" + d.err)
 	}
-	b.WriteString("\n\n[PgUp/PgDn] scroll  [Tab] version  [Enter] confirm  [Esc] cancel")
-	return b.String()
+	if !d.generating {
+		b.WriteString("\n\n[PgUp/PgDn] scroll  [Tab] version  [Enter] confirm  [Esc] cancel")
+	}
+	b.WriteString("\n\n" + d.MetadataView())
+	footer := b.String()
+	header := title.Render(d.Title()) + "\n\n"
+	if !d.sized {
+		return header + d.preview() + footer
+	}
+	d.viewport.Width = d.MetadataEditor.width
+	height := d.MetadataEditor.contentHeight
+	d.viewport.Height = height - 1 - wrappedHeight(footer, d.viewport.Width)
+	d.tooSmall = d.viewport.Height < 1
+	if d.tooSmall {
+		return "Resize terminal to review hotfix metadata.\n[Esc] cancel"
+	}
+	d.viewport.SetContent(ansi.Wrap(d.preview(), d.viewport.Width, " "))
+	return header + d.viewport.View() + footer
+}
+
+func (d *HotfixCloseModal) MetadataRequest() (task.MetadataRequest, bool) {
+	return task.MetadataRequest{Purpose: ai.PurposeTag, TaskIDs: []string{d.plan.TaskID}, Title: d.metadataValue("title"), Description: d.metadataValue("description")}, !d.discarding
+}
+
+func (d *HotfixCloseModal) ApplyMetadataDraft(draft ai.Draft) {
+	d.applyMetadata(draft)
+	for _, svc := range d.plan.Services {
+		for _, generated := range draft.Services {
+			if generated.Name != svc.ServiceName {
+				continue
+			}
+			if svc.TagPlan != nil && !svc.TagPlan.Locked {
+				d.setMetadataField("tag:"+svc.ServiceName, svc.ServiceName+" tag message", generated.TagDescription)
+			}
+		}
+	}
+	for i := range d.versions {
+		field := &d.versions[i]
+		if field.locked {
+			continue
+		}
+		version := ""
+		for _, name := range field.services {
+			for _, generated := range draft.Services {
+				if generated.Name != name {
+					continue
+				}
+				next, err := semver.NewVersion(generated.Version)
+				current, _ := semver.NewVersion(version)
+				if err == nil && (current == nil || next.GreaterThan(current)) {
+					version = generated.Version
+				}
+			}
+		}
+		if version != "" {
+			field.input.SetValue(version)
+			for _, generated := range draft.Services {
+				if generated.Version == version && slices.Contains(field.services, generated.Name) && generated.Reason != "" {
+					d.setMetadataField("reason:"+generated.Name, generated.Name+" version rationale", generated.Reason)
+				}
+			}
+		}
+	}
+	if d.editing {
+		d.editor.SetValue(d.fields[d.MetadataEditor.selected].value)
+	}
 }
 
 func (d *HotfixCloseModal) preview() string {

@@ -693,8 +693,9 @@ type forgePipelineStatusParams struct {
 }
 
 type forgeCreateMRParams struct {
-	Title string
-	Force bool
+	Description string
+	Title       string
+	Force       bool
 }
 
 func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, params any, generation uint64) tea.Cmd {
@@ -712,8 +713,8 @@ func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, 
 			if !ok {
 				return ForgeResultMsg{Generation: generation, TaskID: taskID, Op: op, Err: errors.New("invalid params for create_missing_mrs")}
 			}
-			result, err := mgr.ForgeCreateMissingMRs(ctx, taskID, p.Title, p.Force)
-			return ForgeResultMsg{Generation: generation, TaskID: taskID, Op: op, Data: result, Err: err}
+			result, err := mgr.ForgeCreateMissingMRs(ctx, taskID, p.Title, p.Force, p.Description)
+			return ForgeResultMsg{Generation: generation, TaskID: taskID, Op: op, Data: result, Err: err, Description: p.Description}
 
 		case "pipeline_status":
 			p, ok := params.(forgePipelineStatusParams)

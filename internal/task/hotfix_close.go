@@ -265,7 +265,15 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 			}
 			tag.Version = version
 			tag.TagName = m.renderTagName(version)
-			tag.Message = m.renderTagMessage(tag.TagName, p.TaskID)
+			if !tag.Locked {
+				tag.Message = m.renderTagMessage(tag.TagName, p.TaskID)
+			}
+		}
+		if message := p.TagMessages[sp.ServiceName]; strings.TrimSpace(message) != "" {
+			if tag.Locked && message != tag.Message {
+				return result, errors.New("tag message is already confirmed; retry with the saved message")
+			}
+			tag.Message = message
 		}
 		if normalizeVersion(tag.Version) == "" || tag.TagName == "" {
 			return result, errors.New("invalid tag version or format")
@@ -328,7 +336,11 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 						}
 						pushed = true
 					}
-					mr, err := client.CreateMR(ctx, forge.CreateMRParams{WorktreePath: svc.WorktreePath, Repo: repo, SourceBranch: sp.SourceBranch, TargetBranch: r.Target, Title: fmt.Sprintf("Close %s/%s", p.TaskID, svc.Name), RemoveSource: false})
+					title := fmt.Sprintf("Close %s/%s", p.TaskID, svc.Name)
+					if strings.TrimSpace(p.ReviewTitle) != "" {
+						title = p.ReviewTitle
+					}
+					mr, err := client.CreateMR(ctx, forge.CreateMRParams{WorktreePath: svc.WorktreePath, Repo: repo, SourceBranch: sp.SourceBranch, TargetBranch: r.Target, Title: title, Description: p.ReviewDescription, RemoveSource: false})
 					if err != nil {
 						return err
 					}

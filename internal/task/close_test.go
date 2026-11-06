@@ -738,7 +738,7 @@ func TestCloseTask_ReviewRequest_NeverRequestsSourceRemoval(t *testing.T) {
 		forge.ForgeProviderGitLab: forgeClient,
 	})
 
-	result, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
+	result, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID, ReviewTitle: "Accepted review", ReviewDescription: "Accepted review notes"})
 	if err != nil {
 		t.Fatalf("CloseTask error: %v", err)
 	}
@@ -750,6 +750,9 @@ func TestCloseTask_ReviewRequest_NeverRequestsSourceRemoval(t *testing.T) {
 	}
 	if createParams[0].RemoveSource {
 		t.Fatal("CreateMR RemoveSource = true, want false: close must not ask forge to auto-delete source branch")
+	}
+	if createParams[0].Title != "Accepted review" || createParams[0].Description != "Accepted review notes" {
+		t.Fatalf("accepted review metadata lost: %+v", createParams[0])
 	}
 
 	gitMock.mu.Lock()

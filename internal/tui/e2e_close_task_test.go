@@ -127,7 +127,7 @@ func (m *closeTaskE2EManager) ProposeReleaseVersions(_ context.Context, _ []stri
 	return nil, nil
 }
 
-func (m *closeTaskE2EManager) ForgeCreateMissingMRs(_ context.Context, taskID, _ string, _ bool) (task.TaskMRCreateResult, error) {
+func (m *closeTaskE2EManager) ForgeCreateMissingMRs(_ context.Context, taskID, _ string, _ bool, _ ...string) (task.TaskMRCreateResult, error) {
 	return task.TaskMRCreateResult{TaskID: taskID}, nil
 }
 

@@ -3,6 +3,8 @@ package modal
 import (
 	"strings"
 
+	"github.com/D1ssolve/wtui/internal/ai"
+	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -13,6 +15,7 @@ import (
 var _ Modal = (*ForgeMenuModal)(nil)
 
 type ForgeMenuModal struct {
+	MetadataEditor
 	taskID        string
 	serviceName   string
 	provider      forge.ForgeProvider
@@ -39,7 +42,7 @@ func NewForgeMenuModal(serviceName string, provider forge.ForgeProvider, width, 
 	titleInput.Prompt = ""
 	titleInput.Width = 45
 	titleInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(modalColorDim)
-	return &ForgeMenuModal{
+	menu := &ForgeMenuModal{
 		serviceName:   serviceName,
 		provider:      provider,
 		actions:       []forgeAction{forgeActionCreateMR, forgeActionMergeMR, forgeActionPipelineStatus, forgeActionListIssues},
@@ -47,6 +50,10 @@ func NewForgeMenuModal(serviceName string, provider forge.ForgeProvider, width, 
 		selectedIndex: 0,
 		titleInput:    titleInput,
 	}
+	menu.metadataSize(width, height)
+	menu.setMetadataField("title", "MR title", "")
+	menu.setMetadataField("description", "MR description", "")
+	return menu
 }
 
 func (m *ForgeMenuModal) Title() string { return "Forge Actions" }
@@ -55,9 +62,30 @@ func (m *ForgeMenuModal) SetTaskID(taskID string) {
 	m.taskID = taskID
 }
 
-func (m *ForgeMenuModal) SetTerminalSize(_, _ int) {}
+func (m *ForgeMenuModal) SetTerminalSize(width, height int) { m.metadataSize(width, height) }
+
+func (m *ForgeMenuModal) MetadataRequest() (task.MetadataRequest, bool) {
+	title := m.titleInput.Value()
+	if m.editing {
+		title = m.metadataValue("title")
+	}
+	return task.MetadataRequest{Purpose: ai.PurposeMR, TaskIDs: []string{m.taskID}, Title: title, Description: m.metadataValue("description")}, m.inTitleMode && !m.discarding
+}
+
+func (m *ForgeMenuModal) ApplyMetadataDraft(draft ai.Draft) {
+	m.applyMetadata(draft)
+	m.titleInput.SetValue(draft.Title)
+	m.titleInput.CursorEnd()
+	if m.editing {
+		m.editor.SetValue(m.fields[m.selected].value)
+	}
+}
 
 func (m *ForgeMenuModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
+	if m.discarding {
+		_, cmd := m.updateMetadata(msg)
+		return m, cmd
+	}
 	if m.inTitleMode {
 		return m.updateTitle(msg)
 	}
@@ -69,6 +97,9 @@ func (m *ForgeMenuModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 
 	switch keyMsg.String() {
 	case "esc":
+		if m.confirmMetadataDiscard() {
+			return m, nil
+		}
 		return m, func() tea.Msg { return CloseModalMsg{} }
 	case "up", "k":
 		if m.available {
@@ -89,8 +120,11 @@ func (m *ForgeMenuModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 		switch m.actions[m.selectedIndex] {
 		case forgeActionCreateMR:
 			m.inTitleMode = true
-			m.titleInput.SetValue(taskID)
-			m.titleInput.SetCursor(len([]rune(taskID)))
+			if m.titleInput.Value() == "" {
+				m.titleInput.SetValue(taskID)
+			}
+			m.setMetadataField("title", "MR title", m.titleInput.Value())
+			m.titleInput.CursorEnd()
 			m.titleInput.Focus()
 			return m, nil
 		case forgeActionMergeMR:
@@ -111,6 +145,19 @@ func (m *ForgeMenuModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 }
 
 func (m *ForgeMenuModal) updateTitle(msg tea.Msg) (Modal, tea.Cmd) {
+	if !m.editing {
+		m.setMetadataField("title", "MR title", m.titleInput.Value())
+		if len(m.fields) == 1 {
+			m.setMetadataField("description", "MR description", "")
+		}
+	}
+	if handled, cmd := m.updateMetadata(msg); handled {
+		if !m.editing {
+			m.titleInput.SetValue(m.metadataValue("title"))
+			m.titleInput.CursorEnd()
+		}
+		return m, cmd
+	}
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "esc":
@@ -126,7 +173,7 @@ func (m *ForgeMenuModal) updateTitle(msg tea.Msg) (Modal, tea.Cmd) {
 			}
 			taskID := m.taskID
 			return m, func() tea.Msg {
-				return ForgeCreateMRMsg{TaskID: taskID, Title: title}
+				return ForgeCreateMRMsg{TaskID: taskID, Title: title, Description: m.metadataValue("description")}
 			}
 		}
 	}
@@ -138,6 +185,9 @@ func (m *ForgeMenuModal) updateTitle(msg tea.Msg) (Modal, tea.Cmd) {
 }
 
 func (m *ForgeMenuModal) View() string {
+	if m.discarding {
+		return m.MetadataView()
+	}
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
 	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
@@ -146,15 +196,21 @@ func (m *ForgeMenuModal) View() string {
 	sb.WriteString(titleStyle.Render("Forge menu: " + m.serviceName))
 	sb.WriteString("\n\n")
 	if m.inTitleMode {
+		if m.editing {
+			return m.MetadataView()
+		}
 		sb.WriteString(normalStyle.Render("MR/PR title"))
 		sb.WriteString("\n")
-		sb.WriteString(m.titleInput.View())
+		sb.WriteString(m.metadataInputView(m.titleInput))
 		if m.titleError != "" {
 			sb.WriteString("\n")
 			sb.WriteString(lipgloss.NewStyle().Foreground(modalColorDanger).Render(m.titleError))
 		}
 		sb.WriteString("\n\n")
-		sb.WriteString(dimStyle.Render("[Enter] create  [Esc] back"))
+		if !m.generating {
+			sb.WriteString(dimStyle.Render("[Enter] create  [Esc] back"))
+		}
+		sb.WriteString("\n\n" + m.MetadataView())
 		return sb.String()
 	}
 

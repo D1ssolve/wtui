@@ -82,15 +82,19 @@ func runTUI() error {
 		logLevel = nil
 	}
 
-	deps := app.BuildDependencies(cfg, logger)
+	deps, err := app.BuildDependencies(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("build dependencies: %w", err)
+	}
 
 	model, err := tui.NewWithOptions(cfg, deps.Manager, logger, tui.Options{
-		LazygitAvailable: deps.LazygitAvailable,
-		GlabAvailable:    deps.GlabAvailable,
-		GhAvailable:      deps.GhAvailable,
-		ResolvedFlow:     deps.ResolvedFlow,
-		Version:          resolveVersion(),
-		LogLevel:         logLevel,
+		LazygitAvailable:  deps.LazygitAvailable,
+		GlabAvailable:     deps.GlabAvailable,
+		GhAvailable:       deps.GhAvailable,
+		ResolvedFlow:      deps.ResolvedFlow,
+		MetadataGenerator: deps.MetadataGenerator,
+		Version:           resolveVersion(),
+		LogLevel:          logLevel,
 	})
 	if err != nil {
 		return fmt.Errorf("create TUI model: %w", err)

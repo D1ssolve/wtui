@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os/exec"
 
@@ -17,14 +18,19 @@ import (
 )
 
 type Dependencies struct {
-	Manager          task.Manager
-	ResolvedFlow     *gitflow.ResolvedGitFlow
-	LazygitAvailable bool
-	GlabAvailable    bool
-	GhAvailable      bool
+	Manager           task.Manager
+	MetadataGenerator task.MetadataGenerator
+	ResolvedFlow      *gitflow.ResolvedGitFlow
+	LazygitAvailable  bool
+	GlabAvailable     bool
+	GhAvailable       bool
 }
 
-func BuildDependencies(cfg *config.Config, logger *slog.Logger) Dependencies {
+func BuildDependencies(cfg *config.Config, logger *slog.Logger) (Dependencies, error) {
+	provider, err := buildAIProvider(cfg.AI)
+	if err != nil {
+		return Dependencies{}, fmt.Errorf("configure AI generation: %w", err)
+	}
 	resolvedFlow, err := gitflow.EffectiveConfig(cfg.GitFlow)
 	if err != nil {
 		logger.Warn("invalid git flow config, using defaults", "err", err)
@@ -37,13 +43,15 @@ func BuildDependencies(cfg *config.Config, logger *slog.Logger) Dependencies {
 	forgeClients := buildForgeClients(cfg, glabAvailable, ghAvailable)
 	_, lazygitErr := exec.LookPath("lazygit")
 
+	manager := buildManager(cfg, logger, resolvedFlow, forgeClients)
 	return Dependencies{
-		Manager:          buildManager(cfg, logger, resolvedFlow, forgeClients),
-		ResolvedFlow:     resolvedFlow,
-		LazygitAvailable: lazygitErr == nil,
-		GlabAvailable:    glabAvailable,
-		GhAvailable:      ghAvailable,
-	}
+		Manager:           manager,
+		MetadataGenerator: task.NewMetadataGenerator(manager, git.NewCommandClient(logger), provider, resolvedFlow),
+		ResolvedFlow:      resolvedFlow,
+		LazygitAvailable:  lazygitErr == nil,
+		GlabAvailable:     glabAvailable,
+		GhAvailable:       ghAvailable,
+	}, nil
 }
 
 func buildManager(

@@ -190,6 +190,7 @@ func (m *manager) planReleaseTaskMergeRow(ctx context.Context, svc domain.Releas
 
 func releaseTaskMergeInput(plan releasePlan) string {
 	var b strings.Builder
+	b.WriteString(fmt.Sprintf("metadata\x00%q\x00%q\n", plan.Title, plan.Description))
 	for _, taskID := range plan.TaskIDs {
 		b.WriteString(fmt.Sprintf("task\x00%s\n", taskID))
 	}
@@ -252,5 +253,5 @@ func (m *manager) releaseServiceRemoteURL(ctx context.Context, svc domain.Releas
 }
 
 func releasePlanFromRelease(release domain.Release) releasePlan {
-	return releasePlan{TaskIDs: append([]string(nil), release.TaskIDs...), Tasks: append([]domain.ReleaseTaskRef(nil), release.Tasks...), Services: append([]domain.ReleaseService(nil), release.Services...)}
+	return releasePlan{Title: release.Title, Description: release.Description, TaskIDs: append([]string(nil), release.TaskIDs...), Tasks: append([]domain.ReleaseTaskRef(nil), release.Tasks...), Services: append([]domain.ReleaseService(nil), release.Services...)}
 }

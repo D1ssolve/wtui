@@ -29,10 +29,13 @@ import (
 )
 
 type Model struct {
-	cfg    *config.Config
-	logger *slog.Logger
-	mgr    task.Manager
-	flow   *gitflow.ResolvedGitFlow
+	MetadataGenerator  task.MetadataGenerator
+	metadataRequest    *metadataRequest
+	metadataGeneration uint64
+	cfg                *config.Config
+	logger             *slog.Logger
+	mgr                task.Manager
+	flow               *gitflow.ResolvedGitFlow
 
 	lazygitAvailable bool
 	glabAvailable    bool
@@ -163,12 +166,13 @@ type shellInputState struct {
 }
 
 type Options struct {
-	LogLevel         *slog.LevelVar
-	LazygitAvailable bool
-	GlabAvailable    bool
-	GhAvailable      bool
-	ResolvedFlow     *gitflow.ResolvedGitFlow
-	Version          string
+	MetadataGenerator task.MetadataGenerator
+	LogLevel          *slog.LevelVar
+	LazygitAvailable  bool
+	GlabAvailable     bool
+	GhAvailable       bool
+	ResolvedFlow      *gitflow.ResolvedGitFlow
+	Version           string
 }
 
 func New(cfg *config.Config, mgr task.Manager, logger *slog.Logger) (Model, error) {
@@ -194,25 +198,26 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 	logPath := filepath.Join(logutil.XDGStateDir("wtui"), "wtui.log")
 
 	m := Model{
-		cfg:              cfg,
-		logger:           logger,
-		mgr:              mgr,
-		flow:             opts.ResolvedFlow,
-		keymap:           DefaultKeyMap(),
-		styles:           NewStyles(),
-		focus:            FocusTasks,
-		rightPane:        FocusServices,
-		lazygitAvailable: opts.LazygitAvailable,
-		glabAvailable:    opts.GlabAvailable,
-		ghAvailable:      opts.GhAvailable,
-		spinner:          sp,
-		logPath:          logPath,
-		logLevel:         opts.LogLevel,
-		version:          strings.TrimSpace(opts.Version),
-		tasksPanel:       panels.NewTasksPanel(25, 10),
-		servicesPanel:    panels.NewServicesPanel(55, 10),
-		releasesPanel:    panels.NewReleasesPanel(25, 10),
-		outputPanel:      panels.NewOutputPanel(80, cfg.OutputPanelLines+2),
+		MetadataGenerator: opts.MetadataGenerator,
+		cfg:               cfg,
+		logger:            logger,
+		mgr:               mgr,
+		flow:              opts.ResolvedFlow,
+		keymap:            DefaultKeyMap(),
+		styles:            NewStyles(),
+		focus:             FocusTasks,
+		rightPane:         FocusServices,
+		lazygitAvailable:  opts.LazygitAvailable,
+		glabAvailable:     opts.GlabAvailable,
+		ghAvailable:       opts.GhAvailable,
+		spinner:           sp,
+		logPath:           logPath,
+		logLevel:          opts.LogLevel,
+		version:           strings.TrimSpace(opts.Version),
+		tasksPanel:        panels.NewTasksPanel(25, 10),
+		servicesPanel:     panels.NewServicesPanel(55, 10),
+		releasesPanel:     panels.NewReleasesPanel(25, 10),
+		outputPanel:       panels.NewOutputPanel(80, cfg.OutputPanelLines+2),
 	}
 
 	if opts.LogLevel != nil {
@@ -236,6 +241,9 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if handled, cmd := m.handleMetadata(msg); handled {
+		return m, cmd
+	}
 	if m.releaseCleanupWorktreeLocked() && releaseCleanupMutatingMessage(msg) {
 		return m, nil
 	}
@@ -897,12 +905,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.beginOpProgress(msg.TaskID, "CLOSE")
 		m.outputPanel.AppendLine("Closing task " + msg.TaskID + "...")
 		return m, tea.Batch(
-			closeTaskCmd(m.mgr, task.CloseTaskParams{TaskID: msg.TaskID, TagVersion: msg.TagVersion, Fingerprint: msg.Fingerprint, TagVersions: msg.TagVersions}, m.operationGeneration),
+			closeTaskCmd(m.mgr, task.CloseTaskParams{TaskID: msg.TaskID, TagVersion: msg.TagVersion, Fingerprint: msg.Fingerprint, TagVersions: msg.TagVersions, TagMessages: msg.TagMessages, ReviewTitle: msg.ReviewTitle, ReviewDescription: msg.ReviewDescription}, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
 	case modal.SubmitCreateReleaseMsg:
 		pending := modal.SubmitCreateReleaseMsg{
+			Description:     msg.Description,
 			Title:           strings.TrimSpace(msg.Title),
 			TaskIDs:         append([]string(nil), msg.TaskIDs...),
 			Versions:        copyVersionMap(msg.Versions),
@@ -923,6 +932,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.opRunning = true
 			m.outputPanel.AppendLine("Planning task MR merges...")
 			return m, tea.Batch(planReleaseTaskMergesCmd(m.mgr, task.CreateReleaseParams{
+				Description:            pending.Description,
 				Title:                  pending.Title,
 				TaskIDs:                append([]string(nil), pending.TaskIDs...),
 				ServiceVersions:        copyVersionMap(pending.Versions),
@@ -930,7 +940,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}, m.releaseTaskMergeGeneration), m.spinner.Tick)
 		}
 		m.releaseTaskMerge = nil
-		m.modal = modal.NewReleaseExecuteConfirmDialog(pending.Title, pending.TaskIDs, pending.Versions, preview)
+		m.modal = modal.NewReleaseExecuteConfirmDialog(pending.Title, pending.TaskIDs, pending.Versions, preview, pending.Description)
 		m.modal.SetTerminalSize(m.width, m.height)
 		return m, nil
 
@@ -950,7 +960,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		plan := msg.Plan
 		req.plan = &plan
 		submit := m.pendingReleaseSubmit
-		m.modal = modal.NewReleaseExecuteConfirmDialogWithTaskMerge(submit.Title, submit.TaskIDs, submit.Versions, req.preview, plan.Rows, req.generation)
+		m.modal = modal.NewReleaseExecuteConfirmDialogWithTaskMerge(submit.Title, submit.TaskIDs, submit.Versions, req.preview, plan.Rows, req.generation, submit.Description)
 		m.modal.SetTerminalSize(m.width, m.height)
 		return m, nil
 
@@ -1056,6 +1066,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: title does not match pending submit")
 			return m, nil
 		}
+		if msg.Description != submit.Description {
+			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: description does not match pending submit")
+			return m, nil
+		}
 		if !slices.Equal(msg.TaskIDs, submit.TaskIDs) {
 			m.logger.Warn("ConfirmReleaseExecuteMsg ignored: task IDs do not match pending submit")
 			return m, nil
@@ -1093,6 +1107,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.operationGeneration++
 		m.outputPanel.AppendLine("Creating release from selected tasks...")
 		return m, tea.Batch(createReleaseCmd(m.mgr, task.CreateReleaseParams{
+			Description:            submit.Description,
 			Title:                  submit.Title,
 			TaskIDs:                append([]string(nil), submit.TaskIDs...),
 			ServiceVersions:        copyVersionMap(submit.Versions),
@@ -1261,7 +1276,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.operationGeneration++
 		m.outputPanel.AppendLine("Creating missing review requests for " + msg.TaskID + "...")
 		return m, tea.Batch(
-			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", forgeCreateMRParams{Title: msg.Title}, m.operationGeneration),
+			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", forgeCreateMRParams{Title: msg.Title, Description: msg.Description}, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
@@ -1271,7 +1286,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.operationGeneration++
 		m.outputPanel.AppendLine("Creating confirmed review requests for " + msg.TaskID + "...")
 		return m, tea.Batch(
-			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", forgeCreateMRParams{Title: msg.Title, Force: true}, m.operationGeneration),
+			forgeOpCmd(m.mgr, "create_missing_mrs", msg.TaskID, "", forgeCreateMRParams{Title: msg.Title, Description: msg.Description, Force: true}, m.operationGeneration),
 			m.spinner.Tick,
 		)
 
@@ -1850,7 +1865,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.outputPanel.AppendLine(fmt.Sprintf("Create missing MR/PRs done: created=%d, existing=%d, failed=%d", created, existing, failed))
 			if len(confirmItems) > 0 {
-				m.modal = modal.NewMRCreateConfirmDialog(result.TaskID, result.Title, confirmItems)
+				m.modal = modal.NewMRCreateConfirmDialog(result.TaskID, result.Title, confirmItems, msg.Description)
 				m.modal.SetTerminalSize(m.width, m.height)
 			}
 			return m, nil

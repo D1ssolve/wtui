@@ -217,7 +217,7 @@ func (m *mockManager) ProposeReleaseVersions(_ context.Context, taskIDs []string
 	return m.proposedVersions, m.proposedVersionErr
 }
 
-func (m *mockManager) ForgeCreateMissingMRs(_ context.Context, _ string, title string, _ bool) (task.TaskMRCreateResult, error) {
+func (m *mockManager) ForgeCreateMissingMRs(_ context.Context, _ string, title string, _ bool, descriptions ...string) (task.TaskMRCreateResult, error) {
 	m.forgeCreateMRTitle = title
 	return m.forgeCreateMRResult, nil
 }

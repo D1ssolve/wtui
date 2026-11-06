@@ -693,9 +693,10 @@ func TestHotfixMerge_InspectRejectsEmptySourceOrHeadSHA(t *testing.T) {
 
 type hotfixForge struct {
 	mockForgeClient
-	requests []forge.MRReadiness
-	created  []string
-	merged   []int
+	requests      []forge.MRReadiness
+	created       []string
+	createdParams []forge.CreateMRParams
+	merged        []int
 }
 
 func (f *hotfixForge) MergeMR(_ context.Context, p forge.MergeMRParams) (forge.MRMergeResult, error) {
@@ -761,6 +762,7 @@ func (f *hotfixForge) MRReadinessByNumber(_ context.Context, n int, _, _ string)
 }
 func (f *hotfixForge) CreateMR(_ context.Context, p forge.CreateMRParams) (forge.MRInfo, error) {
 	f.created = append(f.created, p.TargetBranch)
+	f.createdParams = append(f.createdParams, p)
 	r := forge.MRReadiness{Number: len(f.requests) + 1, State: "opened", SourceBranch: p.SourceBranch, TargetBranch: p.TargetBranch, HeadSHA: "source", URL: "url"}
 	f.requests = append(f.requests, r)
 	return forge.MRInfo{Number: r.Number, URL: r.URL}, nil

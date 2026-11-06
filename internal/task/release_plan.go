@@ -12,9 +12,11 @@ import (
 )
 
 type releasePlan struct {
-	TaskIDs  []string
-	Tasks    []domain.ReleaseTaskRef
-	Services []domain.ReleaseService
+	Title       string
+	Description string
+	TaskIDs     []string
+	Tasks       []domain.ReleaseTaskRef
+	Services    []domain.ReleaseService
 }
 
 func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleaseParams) (releasePlan, error) {
@@ -183,9 +185,11 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 	})
 
 	return releasePlan{
-		TaskIDs:  append([]string(nil), selectedTaskIDs...),
-		Tasks:    plannedTasks,
-		Services: plannedServices,
+		Title:       strings.TrimSpace(params.Title),
+		Description: params.Description,
+		TaskIDs:     append([]string(nil), selectedTaskIDs...),
+		Tasks:       plannedTasks,
+		Services:    plannedServices,
 	}, nil
 }
 

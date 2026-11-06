@@ -92,12 +92,19 @@ func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Rel
 		return nil
 	}
 	sendStatus(statusCh, fmt.Sprintf("[%s][promote] creating %s -> %s MR", svc.Name, svc.ReleaseBranch, m.flow.ProductionBranch))
+	title, description := release.Title, release.Description
+	if strings.TrimSpace(title) == "" {
+		title = fmt.Sprintf("Release %s (%s)", svc.Version, svc.Name)
+	}
+	if strings.TrimSpace(description) == "" {
+		description = fmt.Sprintf("Release %s", release.ID)
+	}
 	mr, err := client.CreateMR(ctx, forge.CreateMRParams{
 		WorktreePath: worktreePath,
 		SourceBranch: svc.ReleaseBranch,
 		TargetBranch: m.flow.ProductionBranch,
-		Title:        fmt.Sprintf("Release %s (%s)", svc.Version, svc.Name),
-		Description:  fmt.Sprintf("Release %s", release.ID),
+		Title:        title,
+		Description:  description,
 		Repo:         repo,
 	})
 	if err != nil {

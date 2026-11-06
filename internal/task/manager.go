@@ -64,6 +64,7 @@ type ConvertHotfixParams struct {
 
 type CreateReleaseParams struct {
 	Title                  string
+	Description            string
 	TaskIDs                []string
 	ServiceVersions        map[string]string
 	ServiceTagDescriptions map[string]string
@@ -164,7 +165,7 @@ type Manager interface {
 	ListTags(ctx context.Context, taskID string) ([]domain.TagInfo, error)
 	ProposeReleaseVersions(ctx context.Context, taskIDs []string) (map[string]string, error)
 
-	ForgeCreateMissingMRs(ctx context.Context, taskID, title string, force bool) (TaskMRCreateResult, error)
+	ForgeCreateMissingMRs(ctx context.Context, taskID, title string, force bool, descriptions ...string) (TaskMRCreateResult, error)
 
 	ForgePipelineStatus(ctx context.Context, taskID, serviceName string, branch string) ([]forge.PipelineStatus, error)
 

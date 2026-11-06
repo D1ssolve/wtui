@@ -436,7 +436,7 @@ func (m *cmdManager) ListTags(_ context.Context, taskID string) ([]domain.TagInf
 	return m.tagResult, m.tagErr
 }
 
-func (m *cmdManager) ForgeCreateMissingMRs(_ context.Context, _ string, title string, _ bool) (task.TaskMRCreateResult, error) {
+func (m *cmdManager) ForgeCreateMissingMRs(_ context.Context, _ string, title string, _ bool, descriptions ...string) (task.TaskMRCreateResult, error) {
 	m.forgeCreateMRTitle = title
 	return m.forgeMRResult, m.forgeErr
 }

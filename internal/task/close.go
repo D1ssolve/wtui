@@ -201,6 +201,16 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 			return result, err
 		}
 	}
+	for _, service := range services {
+		if service.TagPlan == nil {
+			continue
+		}
+		if version, selected := params.TagVersions[service.ServiceName]; selected && normalizeVersion(version) == "" {
+			err = fmt.Errorf("invalid tag version for service %s; enter a SemVer version such as 1.2.3 and retry", service.ServiceName)
+			step(service.ServiceName+":tag-version", StepStatusFailed, err.Error())
+			return result, err
+		}
+	}
 
 	if params.DryRun {
 		step("validate", StepStatusOK, "plan ready")
@@ -463,12 +473,19 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				reviewVerified, reviewMergeSHA = true, mergeSHA
 				step(svc.Name+":review-request", StepStatusOK, "merged MR verified at "+mergeSHA)
 			default:
+				title, description := svcPlan.ForgePlan.Title, svcPlan.ForgePlan.Description
+				if strings.TrimSpace(params.ReviewTitle) != "" {
+					title = params.ReviewTitle
+				}
+				if strings.TrimSpace(params.ReviewDescription) != "" {
+					description = params.ReviewDescription
+				}
 				mr, createErr := forgeClient.CreateMR(ctx, forge.CreateMRParams{
 					WorktreePath: svc.WorktreePath,
 					SourceBranch: svcPlan.SourceBranch,
 					TargetBranch: target,
-					Title:        svcPlan.ForgePlan.Title,
-					Description:  svcPlan.ForgePlan.Description,
+					Title:        title,
+					Description:  description,
 					Repo:         repo,
 				})
 				if createErr != nil {
@@ -530,7 +547,11 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 			}
 
 			tagCreated := false
-			version, tagName, tagErr := m.proposeTag(ctx, params.TaskID, svc, gitflow.BranchTypeRule{TagSource: svcPlan.TagPlan.SourceRef}, svcPlan.SourceBranch, params.TagVersion)
+			explicitVersion := params.TagVersion
+			if version, selected := params.TagVersions[svc.Name]; selected {
+				explicitVersion = version
+			}
+			version, tagName, tagErr := m.proposeTag(ctx, params.TaskID, svc, gitflow.BranchTypeRule{TagSource: svcPlan.TagPlan.SourceRef}, svcPlan.SourceBranch, explicitVersion)
 			if tagErr != nil {
 				step(svc.Name+":tag", StepStatusFailed, tagErr.Error())
 				if !continueOnError {
@@ -571,7 +592,11 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 				continue
 			}
 			if !tagExists {
-				if createErr := m.git.CreateTag(ctx, svc.RepoPath, tagName, sourceSHA, m.renderTagMessage(tagName, params.TaskID)); createErr != nil {
+				message := m.renderTagMessage(tagName, params.TaskID)
+				if accepted := params.TagMessages[svc.Name]; strings.TrimSpace(accepted) != "" {
+					message = accepted
+				}
+				if createErr := m.git.CreateTag(ctx, svc.RepoPath, tagName, sourceSHA, message); createErr != nil {
 					step(svc.Name+":tag", StepStatusFailed, createErr.Error())
 					if !continueOnError {
 						return result, createErr

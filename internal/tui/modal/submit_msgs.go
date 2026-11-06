@@ -42,13 +42,15 @@ type ConfirmForceReleaseCleanupMsg struct {
 }
 
 type ForgeCreateMRMsg struct {
-	TaskID string
-	Title  string
+	Description string
+	TaskID      string
+	Title       string
 }
 
 type ForgeConfirmCreateMRMsg struct {
-	TaskID string
-	Title  string
+	Description string
+	TaskID      string
+	Title       string
 }
 
 type ForgePipelineStatusMsg struct {
@@ -68,6 +70,7 @@ type ForgeListIssuesMsg struct {
 }
 
 type SubmitCreateReleaseMsg struct {
+	Description     string
 	Title           string
 	TaskIDs         []string
 	Versions        map[string]string
@@ -79,6 +82,7 @@ type RequestReleaseVersionsMsg struct {
 }
 
 type ConfirmReleaseExecuteMsg struct {
+	Description     string
 	Title           string
 	TaskIDs         []string
 	Versions        map[string]string
