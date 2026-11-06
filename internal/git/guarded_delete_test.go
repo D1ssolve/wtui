@@ -112,5 +112,5 @@ exit 1
 func TestDeleteBranchIfUnchanged_WithoutGuardsKeepsSingleLeaseCommand(t *testing.T) {
 	assertGitArgs(t, func(client *CommandClient) error {
 		return client.DeleteBranchIfUnchanged(t.Context(), "/repo", "feature/ABC-1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	}, "-C /repo update-ref -d refs/heads/feature/ABC-1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
+	}, "-C /repo update-ref --no-deref -d refs/heads/feature/ABC-1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
 }

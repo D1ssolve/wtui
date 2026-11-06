@@ -229,6 +229,7 @@ func TestUpdate_ReleaseCleanupStateBlocksRepeatedAndMutatingReleaseActions(t *te
 				status domain.ReleaseStatus
 				msg    tea.Msg
 			}{
+				{status: domain.ReleaseStatusReleased, msg: panels.DeleteReleaseMsg{ReleaseID: "rel-1"}},
 				{status: domain.ReleaseStatusReleased, msg: panels.OpenCleanupDialogMsg{}},
 				{status: domain.ReleaseStatusDraft, msg: panels.OpenCreateReleaseDialogMsg{}},
 				{status: domain.ReleaseStatusPrepared, msg: tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("F")}},

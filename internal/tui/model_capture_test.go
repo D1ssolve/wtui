@@ -65,6 +65,14 @@ func TestCaptureWorkflowFullViews(t *testing.T) {
 		{"release-cleanup-80x24", 80, 24, captureReleaseCleanupModel, []string{"Cleanup release REL-1", "release worktrees", "worktree is dirty"}, nil},
 		{"release-cleanup-40x12", 40, 12, captureReleaseCleanupModel, []string{"Cleanup release REL-1", "worktree is dirty", "[Esc] cancel"}, nil},
 		{"release-cleanup-details-cjk-40x12", 40, 12, captureReleaseCleanupDetailsModel, []string{"Cleanup release REL-1", "タスク-101", "[g/G] details"}, nil},
+		{"release-deletion-120x40", 120, 40, captureReleaseDeletionModel, []string{"Delete release REL-1", "local and origin", "branches and tags", "retained", "release/1.2.3", "v1.2.3", "[Esc/n] cancel"}, nil},
+		{"release-deletion-60x24", 60, 24, captureReleaseDeletionModel, []string{"Delete release REL-1", "local and origin", "retained", "[Esc/n] cancel"}, nil},
+		{"release-deletion-origin-120x40", 120, 40, captureReleaseDeletionOriginModel, []string{"on origin?", "v1.2.3", "[Enter/y] DELETE release", "retained"}, nil},
+		{"release-deletion-origin-60x24", 60, 24, captureReleaseDeletionOriginModel, []string{"on origin?", "[Enter/y] DELETE release", "retained"}, nil},
+		{"release-deletion-blocked-60x24", 60, 24, captureReleaseDeletionBlockedModel, []string{"Delete release REL-1", "worktree is dirty", "Deletion blocked", "[Esc] cancel"}, []string{"[Space] toggle"}},
+		{"release-deletion-too-small-24x10", 24, 10, captureReleaseDeletionModel, []string{"DELETION", "BLOCKED", "cancel"}, []string{"[Enter/y]"}},
+		{"release-deletion-access-120x40", 120, 40, captureReleaseDeletionAccessModel, []string{"REL-1", "[x] delete release", "[d] cleanup"}, nil},
+		{"release-deletion-access-60x24", 60, 24, captureReleaseDeletionAccessModel, []string{"REL-1", "[x] delete release"}, nil},
 	}...)
 
 	summary := make([]captureMetadata, 0, len(scenarios))
@@ -227,6 +235,46 @@ func captureReleaseCleanupDetailsModel(t *testing.T, width, height int) Model {
 	m.modal = updated
 	updated, _ = m.modal.Update(tea.KeyMsg{Type: tea.KeyPgDown})
 	m.modal = updated
+	return m
+}
+
+func captureReleaseDeletionModel(t *testing.T, width, height int) Model {
+	t.Helper()
+	m := sendWindowSize(newTestModel(t, &mockManager{}), width, height)
+	preview := testCleanupPreview(task.ReleaseDeletionSelection())
+	preview.ReleaseID = "REL-1"
+	preview.Services[0].RepoPath = "/repos/api"
+	preview.Services[0].ReleaseBranch = "release/1.2.3"
+	preview.Services[0].Tag = "v1.2.3"
+	m.pendingReleaseCleanupPreview = preview
+	m.modal = tuimodal.NewReleaseCleanupConfirmModal(preview, 7)
+	m.modal.SetTerminalSize(width, height)
+	return m
+}
+
+func captureReleaseDeletionOriginModel(t *testing.T, width, height int) Model {
+	t.Helper()
+	m := captureReleaseDeletionModel(t, width, height)
+	m.modal = tuimodal.NewReleaseCleanupRemoteConfirmModal(m.pendingReleaseCleanupPreview, 7)
+	m.modal.SetTerminalSize(width, height)
+	return m
+}
+
+func captureReleaseDeletionBlockedModel(t *testing.T, width, height int) Model {
+	t.Helper()
+	m := captureReleaseDeletionModel(t, width, height)
+	preview := m.pendingReleaseCleanupPreview
+	preview.Blockers = []string{"api worktree is dirty"}
+	m.modal = tuimodal.NewReleaseCleanupChecklistModal(preview)
+	m.modal.SetTerminalSize(width, height)
+	return m
+}
+
+func captureReleaseDeletionAccessModel(t *testing.T, width, height int) Model {
+	t.Helper()
+	m := sendWindowSize(newTestModel(t, &mockManager{}), width, height)
+	m.setFocus(FocusReleases)
+	m.releasesPanel.SetReleases([]domain.Release{{ID: "REL-1", Status: domain.ReleaseStatusReleased}})
 	return m
 }
 

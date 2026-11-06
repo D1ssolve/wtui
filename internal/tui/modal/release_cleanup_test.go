@@ -50,6 +50,61 @@ func TestReleaseCleanupChecklist_ExposesRemoteBranchDeletionToggles(t *testing.T
 	}
 }
 
+func TestReleaseDeletionChecklist_PreservesFixedScopeAndBlockers(t *testing.T) {
+	m := NewReleaseCleanupChecklistModal(cleanupPreview(task.ReleaseDeletionSelection(), "api worktree is dirty"))
+	for _, key := range []tea.KeyMsg{sendKey("j"), sendKey(" "), sendKey("k")} {
+		m.Update(key)
+	}
+	if m.Selection() != task.ReleaseDeletionSelection() {
+		t.Fatalf("deletion scope changed: %+v", m.Selection())
+	}
+	if _, cmd := m.Update(sendSpecialKey(tea.KeyEnter)); cmd != nil {
+		t.Fatal("blocked deletion submitted")
+	}
+	if !strings.Contains(stripAnsi(m.View()), "api worktree is dirty") {
+		t.Fatal("deletion blocker missing")
+	}
+}
+
+func TestReleaseDeletionConfirm_RendersScopeAndFitsTerminal(t *testing.T) {
+	preview := cleanupPreview(task.ReleaseDeletionSelection())
+	preview.Services[0].Tag = "v1.2.3"
+	for _, remote := range []bool{false, true} {
+		for _, size := range []struct{ w, h int }{{120, 40}, {60, 24}, {40, 20}} {
+			var m Modal = NewReleaseCleanupConfirmModal(preview, 7)
+			if remote {
+				m = NewReleaseCleanupRemoteConfirmModal(preview, 7)
+			}
+			m.SetTerminalSize(size.w, size.h)
+			view := stripAnsi(m.View())
+			assertViewFitsContent(t, m.View(), size.w, size.h)
+			for _, want := range []string{"Delete release", "origin", "tags", "retained", "task branches", "develop/master", "cancel"} {
+				if !strings.Contains(strings.ReplaceAll(view, "\n", " "), want) {
+					t.Fatalf("%dx%d remote=%v missing %q:\n%s", size.w, size.h, remote, want, view)
+				}
+			}
+			if size.w == 120 && (!strings.Contains(view, "release/1.2.3") || !strings.Contains(view, "v1.2.3")) {
+				t.Fatalf("exact deletion refs missing:\n%s", view)
+			}
+		}
+	}
+}
+
+func TestReleaseDeletionConfirm_TooSmallCannotConfirm(t *testing.T) {
+	for _, m := range []Modal{
+		NewReleaseCleanupConfirmModal(cleanupPreview(task.ReleaseDeletionSelection()), 7),
+		NewReleaseCleanupRemoteConfirmModal(cleanupPreview(task.ReleaseDeletionSelection()), 7),
+	} {
+		m.SetTerminalSize(24, 10)
+		if _, cmd := m.Update(sendSpecialKey(tea.KeyEnter)); cmd != nil {
+			t.Fatal("too-small deletion confirmation submitted")
+		}
+		if _, cmd := m.Update(sendSpecialKey(tea.KeyEsc)); cmd == nil {
+			t.Fatal("too-small deletion confirmation cannot cancel")
+		}
+	}
+}
+
 func TestReleaseCleanupChecklist_LocalBranchFlagsNeverToggle(t *testing.T) {
 	m := NewReleaseCleanupChecklistModal(cleanupPreview(task.DefaultReleaseCleanupSelection()))
 	initial := m.Selection()

@@ -61,6 +61,9 @@ func renderFooter(m Model) string {
 			"[D] scan",
 		}
 		if rel := m.releasesPanel.SelectedRelease(); rel != nil {
+			if !m.releaseMutationBlocked() {
+				parts = append([]string{"[x] delete release"}, parts...)
+			}
 			if rel.Status == domain.ReleaseStatusReleased {
 				parts = append(parts, "[d] cleanup")
 			}

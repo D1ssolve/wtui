@@ -135,6 +135,10 @@ func (m *mockValidationGitClient) DeleteRemoteBranchIfUnchanged(context.Context,
 	return nil
 }
 
+func (m *mockValidationGitClient) DeleteRemoteRefIfUnchanged(context.Context, string, string, string, string) error {
+	return nil
+}
+
 func (m *mockValidationGitClient) PushRefWithLease(context.Context, string, string, string, string, string, string) error {
 	return nil
 }

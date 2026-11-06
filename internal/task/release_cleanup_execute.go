@@ -136,6 +136,8 @@ func (m *manager) executeReleaseCleanupStep(ctx context.Context, plan ReleaseCle
 			return err
 		}
 		return m.git.DeleteBranchIfUnchanged(ctx, step.repoPath, step.branch, step.expectedSHA, guards...)
+	case deleteReleaseRemoteRef, deleteReleaseLocalBranch, deleteReleaseLocalTag:
+		return m.executeReleaseRefDeletion(ctx, step)
 	case cleanupRemoteTaskBranch, cleanupRemoteReleaseBranch:
 		if err := m.recheckCleanupTargets(ctx, step); err != nil {
 			return err
@@ -159,11 +161,19 @@ func (m *manager) executeReleaseCleanupStep(ctx context.Context, plan ReleaseCle
 		if sha256.Sum256(data) != plan.manifestDigest {
 			return errors.New("release manifest changed")
 		}
+		if plan.preview.Selection.DeleteRelease {
+			if err := validateReleaseDeletionDirectory(step.path, plan.steps); err != nil {
+				return err
+			}
+		}
 		if err := m.ensureReleaseDirUnregistered(ctx, step.path, plan.repoPaths); err != nil {
 			return err
 		}
 		if err := ensureNoPresentCleanupPaths(plan.steps, cleanupReleaseWorktree, step.path); err != nil {
 			return err
+		}
+		if plan.preview.Selection.DeleteRelease {
+			return removeReleaseDeletionDirectory(step.path)
 		}
 		known := append(cleanupStepPaths(plan.steps, cleanupReleaseWorktree, step.path), filepath.Join(step.path, releaseManifestFileName))
 		if plan.preview.Selection.Force {

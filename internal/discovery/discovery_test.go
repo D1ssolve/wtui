@@ -138,6 +138,10 @@ func (m *mockGitClient) DeleteRemoteBranchIfUnchanged(context.Context, string, s
 	panic("mockGitClient.DeleteRemoteBranchIfUnchanged called unexpectedly")
 }
 
+func (m *mockGitClient) DeleteRemoteRefIfUnchanged(context.Context, string, string, string, string) error {
+	panic("mockGitClient.DeleteRemoteRefIfUnchanged called unexpectedly")
+}
+
 func (m *mockGitClient) PushRefWithLease(context.Context, string, string, string, string, string, string) error {
 	panic("mockGitClient.PushRefWithLease called unexpectedly")
 }

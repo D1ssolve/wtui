@@ -146,6 +146,11 @@ type Client interface {
 	DeleteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string, guards ...RefGuard) error
 	DeleteRemoteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error
 
+	// DeleteRemoteRefIfUnchanged deletes a full branch or tag ref on the
+	// captured remote URL only when it still points at the exact expectedOID.
+	// expectedOID must be nonempty; annotated tags require their tag object OID.
+	DeleteRemoteRefIfUnchanged(ctx context.Context, repoPath, capturedRemoteURL, ref, expectedOID string) error
+
 	// PushRefWithLease pushes exactOID to the full remote targetRef on the
 	// captured remote URL (never a mutable remote name) only when the lease
 	// holds: an empty leaseOID requires leaseRef to be absent, a non-empty
@@ -663,7 +668,7 @@ func (c *CommandClient) DeleteBranchIfUnchanged(ctx context.Context, repoPath, b
 		return fmt.Errorf("invalid expected SHA %q", expectedSHA)
 	}
 	if len(guards) == 0 {
-		_, err = c.execGit(ctx, "-C", repoPath, "update-ref", "-d", ref, expectedSHA)
+		_, err = c.execGit(ctx, "-C", repoPath, "update-ref", "--no-deref", "-d", ref, expectedSHA)
 		return err
 	}
 	if err := c.rejectSymbolicGuardRefs(ctx, repoPath, guards); err != nil {

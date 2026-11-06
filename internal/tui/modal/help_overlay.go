@@ -191,6 +191,8 @@ func (h *HelpOverlay) contentLines() []string {
 	sb.WriteString("\n")
 	sb.WriteString(h.shortcutRow("d", "Clean up selected released release (no scan)"))
 	sb.WriteString("\n")
+	sb.WriteString(h.shortcutRow("x", "Delete selected release at any status: worktrees, branches and tags on local + origin; retain tasks and merged history"))
+	sb.WriteString("\n")
 	sb.WriteString(h.shortcutRow("D", "Open cleanup review (scan, select, confirm)"))
 	sb.WriteString("\n\n")
 	sb.WriteString(sectionStyle.Render("Release Confirmation:"))

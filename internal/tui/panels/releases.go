@@ -123,6 +123,11 @@ func (p ReleasesPanel) Update(msg tea.Msg) (ReleasesPanel, tea.Cmd) {
 				id := selected.ID
 				return p, func() tea.Msg { return CleanupReleaseMsg{ReleaseID: id} }
 			}
+		case "x":
+			if selected := p.SelectedRelease(); selected != nil {
+				id := selected.ID
+				return p, func() tea.Msg { return DeleteReleaseMsg{ReleaseID: id} }
+			}
 		case "D", "P":
 			return p, func() tea.Msg { return OpenCleanupDialogMsg{} }
 		}
@@ -169,7 +174,7 @@ func (p ReleasesPanel) renderBody(width, height int) string {
 		return fitLines([]string{lipgloss.NewStyle().MaxWidth(width).Render(placeholder)}, height)
 	}
 
-	listHeight := max(2, height/2)
+	listHeight := min(height, max(3, height/2))
 	listView := p.renderList(width, listHeight)
 	detail := p.renderDetail(width)
 	return fitLines(strings.Split(lipgloss.JoinVertical(lipgloss.Left, listView, "", detail), "\n"), height)

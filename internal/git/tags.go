@@ -84,7 +84,7 @@ func (c *CommandClient) DeleteTagIfUnchanged(ctx context.Context, repoPath, tag,
 	if !validObjectID(expectedOID) {
 		return fmt.Errorf("invalid expected tag OID %q", expectedOID)
 	}
-	_, err = c.execGit(ctx, "-C", repoPath, "update-ref", "-d", ref, expectedOID)
+	_, err = c.execGit(ctx, "-C", repoPath, "update-ref", "--no-deref", "-d", ref, expectedOID)
 	return err
 }
 

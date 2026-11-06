@@ -17,6 +17,8 @@ import (
 
 // ReleaseCleanupSelection selects release cleanup scope.
 type ReleaseCleanupSelection struct {
+	// DeleteRelease explicitly discards release resources at any lifecycle stage.
+	DeleteRelease               bool
 	RemoveTasks                 bool
 	DeleteLocalTaskBranches     bool
 	DeleteRemoteTaskBranches    bool
@@ -31,6 +33,7 @@ type ReleaseCleanupServicePreview struct {
 	RepoPath      string
 	TaskBranches  []string
 	ReleaseBranch string
+	Tag           string
 	Worktrees     []string
 }
 
@@ -61,6 +64,9 @@ const (
 	cleanupRemoteTaskBranch
 	cleanupRemoteReleaseBranch
 	cleanupReleaseDirectory
+	deleteReleaseRemoteRef
+	deleteReleaseLocalBranch
+	deleteReleaseLocalTag
 )
 
 type releaseCleanupStep struct {
@@ -70,6 +76,7 @@ type releaseCleanupStep struct {
 	path        string
 	branch      string
 	expectedSHA string
+	remoteURL   string
 	noop        bool
 	// integratedSHA is the manifest-proven merged result (MergeRef) that
 	// authorizes ancestry rechecks for squash/rebase-merged branches whose
@@ -138,7 +145,7 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 	if release.ManifestVersion != releaseManifestVersion {
 		plan.block("unsupported release manifest version")
 	}
-	if release.Status != domain.ReleaseStatusReleased {
+	if !selection.DeleteRelease && release.Status != domain.ReleaseStatusReleased {
 		plan.block("release status must be released")
 	}
 	if !samePath(release.Dir, releaseDir) {
@@ -157,6 +164,9 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 	if len(plan.preview.Blockers) > 0 {
 		plan.finishFingerprint()
 		return plan, nil
+	}
+	if selection.DeleteRelease {
+		return m.planReleaseDeletion(ctx, plan, release)
 	}
 
 	tasks, taskServices := validateCleanupMappings(&plan, m.cfg.TasksRoot, release)

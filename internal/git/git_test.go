@@ -195,7 +195,7 @@ printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/v1.2.3^{}\n'
 func TestDeleteBranchIfUnchanged_UsesExpectedSHA(t *testing.T) {
 	assertGitArgs(t, func(client *CommandClient) error {
 		return client.DeleteBranchIfUnchanged(t.Context(), "/repo", "feature/ABC-1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	}, "-C /repo update-ref -d refs/heads/feature/ABC-1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
+	}, "-C /repo update-ref --no-deref -d refs/heads/feature/ABC-1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
 }
 
 func TestDeleteRemoteBranchIfUnchanged_UsesExactLease(t *testing.T) {
@@ -798,7 +798,7 @@ exit 0
 	if err != nil {
 		t.Fatalf("read args file: %v", err)
 	}
-	want := "-C /repo update-ref -d refs/tags/v1.2.0 " + oid + "\n"
+	want := "-C /repo update-ref --no-deref -d refs/tags/v1.2.0 " + oid + "\n"
 	if string(args) != want {
 		t.Fatalf("git args = %q, want %q", string(args), want)
 	}

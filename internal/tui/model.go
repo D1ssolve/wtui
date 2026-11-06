@@ -104,6 +104,7 @@ type Model struct {
 	releaseCleanupExecuting      uint64
 	releaseCleanupExecutingID    string
 	releaseCleanupSelection      task.ReleaseCleanupSelection
+	releaseCleanupStatus         domain.ReleaseStatus
 	failedReleaseCleanupID       string
 
 	taskCleanupGeneration     uint64
@@ -505,6 +506,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.startSelectedCleanup(cleanupQueueItem{kind: modal.CleanupKindRelease, id: msg.ReleaseID})
+
+	case panels.DeleteReleaseMsg:
+		if m.focus != FocusReleases || m.cleanupBusy() {
+			return m, nil
+		}
+		if selected := m.releasesPanel.SelectedRelease(); selected == nil || selected.ID != msg.ReleaseID {
+			return m, nil
+		}
+		return m.startReleaseCleanupPlan(msg.ReleaseID, task.ReleaseDeletionSelection(), true)
 
 	case panels.OpenInitDialogMsg:
 		flow := m.flow
@@ -1017,15 +1027,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modal.SubmitReleaseCleanupMsg:
 		checklist, ok := m.modal.(*modal.ReleaseCleanupChecklistModal)
-		selected := m.releasesPanel.SelectedRelease()
-		if !ok || m.focus != FocusReleases || m.opRunning || m.releaseCleanupRequest != nil || m.pendingReleaseCleanupPlan != nil || m.releaseCleanupExecuting != 0 || selected == nil || selected.ID != msg.ReleaseID || selected.Status != domain.ReleaseStatusReleased || checklist.ReleaseID() != msg.ReleaseID || checklist.Selection() != msg.Selection {
+		if !ok || m.focus != FocusReleases || m.opRunning || m.releaseCleanupRequest != nil || m.pendingReleaseCleanupPlan != nil || m.releaseCleanupExecuting != 0 || !m.releaseCleanupSelectionCurrent(msg.ReleaseID, msg.Selection) || checklist.ReleaseID() != msg.ReleaseID || checklist.Selection() != msg.Selection {
 			m.invalidateReleaseCleanupChecklist()
 			return m, nil
 		}
 		return m.startReleaseCleanupPlan(msg.ReleaseID, msg.Selection, true)
 
 	case modal.ConfirmReleaseCleanupMsg:
-		if m.cleanupQueueCurrent == nil || m.cleanupQueueCurrent.kind != modal.CleanupKindRelease || m.cleanupQueueCurrent.id != msg.ReleaseID {
+		if !m.releaseCleanupConfirmationQueueMatches(msg.ReleaseID) {
 			return m, nil
 		}
 		confirm, ok := m.modal.(*modal.ReleaseCleanupConfirmModal)
@@ -1040,7 +1049,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.startReleaseCleanupExecution(msg.Generation)
 
 	case modal.ConfirmRemoteReleaseCleanupMsg:
-		if m.cleanupQueueCurrent == nil || m.cleanupQueueCurrent.kind != modal.CleanupKindRelease || m.cleanupQueueCurrent.id != msg.ReleaseID {
+		if !m.releaseCleanupConfirmationQueueMatches(msg.ReleaseID) {
 			return m, nil
 		}
 		confirm, ok := m.modal.(*modal.ReleaseCleanupRemoteConfirmModal)
@@ -2419,6 +2428,9 @@ func (m *Model) invalidateReleaseTaskMergeDrift() {
 }
 
 func (m Model) startReleaseCleanupPlan(releaseID string, selection task.ReleaseCleanupSelection, confirm bool) (Model, tea.Cmd) {
+	if selected := m.releasesPanel.SelectedRelease(); selected != nil {
+		m.releaseCleanupStatus = selected.Status
+	}
 	m.releaseCleanupGeneration++
 	m.releaseCleanupRequest = &releaseCleanupRequest{
 		generation: m.releaseCleanupGeneration,
@@ -2438,19 +2450,33 @@ func (m Model) startReleaseCleanupPlan(releaseID string, selection task.ReleaseC
 }
 
 func (m Model) releaseCleanupRequestCurrent(request releaseCleanupRequest) bool {
+	return m.releaseCleanupSelectionCurrent(request.releaseID, request.selection)
+}
+
+func (m Model) releaseCleanupSelectionCurrent(releaseID string, selection task.ReleaseCleanupSelection) bool {
 	selected := m.releasesPanel.SelectedRelease()
-	return selected != nil && selected.ID == request.releaseID && selected.Status == domain.ReleaseStatusReleased
+	if selected == nil || selected.ID != releaseID {
+		return false
+	}
+	if selection.DeleteRelease {
+		return selected.Status == m.releaseCleanupStatus
+	}
+	return selected.Status == domain.ReleaseStatusReleased
+}
+
+func (m Model) releaseCleanupConfirmationQueueMatches(releaseID string) bool {
+	if m.pendingReleaseCleanupPreview.Selection.DeleteRelease {
+		return m.cleanupQueueCurrent == nil
+	}
+	return m.cleanupQueueCurrent != nil && m.cleanupQueueCurrent.kind == modal.CleanupKindRelease && m.cleanupQueueCurrent.id == releaseID
 }
 
 func (m Model) releaseCleanupConfirmationMatches(messageID string, messageGeneration uint64, modalID string, modalGeneration uint64) bool {
-	selected := m.releasesPanel.SelectedRelease()
 	return m.pendingReleaseCleanupPlan != nil &&
 		m.focus == FocusReleases &&
 		!m.opRunning &&
 		m.releaseCleanupExecuting == 0 &&
-		selected != nil &&
-		selected.ID == messageID &&
-		selected.Status == domain.ReleaseStatusReleased &&
+		m.releaseCleanupSelectionCurrent(messageID, m.pendingReleaseCleanupPreview.Selection) &&
 		messageGeneration == m.releaseCleanupGeneration &&
 		messageGeneration == modalGeneration &&
 		messageID == modalID &&
@@ -2470,9 +2496,13 @@ func (m Model) startReleaseCleanupExecution(generation uint64) (Model, tea.Cmd) 
 	m.releaseCleanupExecuting = generation
 	m.releaseCleanupExecutingID = releaseID
 	m.opRunning = true
-	m.modal = modal.NewCleanupProgressModal("Cleaning release "+releaseID+"...", m.spinner.View())
+	action := "Cleaning release "
+	if m.releaseCleanupSelection.DeleteRelease {
+		action = "Deleting release "
+	}
+	m.modal = modal.NewCleanupProgressModal(action+releaseID+"...", m.spinner.View())
 	m.modal.SetTerminalSize(m.width, m.height)
-	m.outputPanel.AppendLine("Cleaning release " + releaseID + "...")
+	m.outputPanel.AppendLine(action + releaseID + "...")
 	return m, tea.Batch(executeReleaseCleanupCmd(m.mgr, plan, releaseID, generation), m.spinner.Tick)
 }
 
@@ -2539,15 +2569,13 @@ func (m *Model) invalidateReleaseCleanupDrift() {
 	}
 	if m.pendingReleaseCleanupPlan == nil {
 		if checklist, ok := m.modal.(*modal.ReleaseCleanupChecklistModal); ok {
-			selected := m.releasesPanel.SelectedRelease()
-			if selected == nil || selected.ID != checklist.ReleaseID() || selected.Status != domain.ReleaseStatusReleased {
+			if !m.releaseCleanupSelectionCurrent(checklist.ReleaseID(), checklist.Selection()) {
 				m.invalidateReleaseCleanupChecklist()
 			}
 		}
 		return
 	}
-	selected := m.releasesPanel.SelectedRelease()
-	if selected == nil || selected.ID != m.pendingReleaseCleanupPreview.ReleaseID || selected.Status != domain.ReleaseStatusReleased {
+	if !m.releaseCleanupSelectionCurrent(m.pendingReleaseCleanupPreview.ReleaseID, m.pendingReleaseCleanupPreview.Selection) {
 		m.invalidateReleaseCleanupApproval()
 	}
 }
@@ -2569,6 +2597,7 @@ func releaseCleanupMutatingMessage(msg tea.Msg) bool {
 		panels.OpenCleanupDialogMsg,
 		panels.CleanupTaskMsg,
 		panels.CleanupReleaseMsg,
+		panels.DeleteReleaseMsg,
 		panels.ValidateTaskMsg,
 		panels.OpenTagBrowserMsg,
 		panels.PushTaskMsg,

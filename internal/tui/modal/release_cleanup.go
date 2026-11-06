@@ -53,6 +53,7 @@ const (
 
 func NewReleaseCleanupChecklistModal(preview task.ReleaseCleanupPreview) *ReleaseCleanupChecklistModal {
 	selection := task.ReleaseCleanupSelection{
+		DeleteRelease:               preview.Selection.DeleteRelease,
 		RemoveTasks:                 preview.Selection.RemoveTasks,
 		DeleteLocalTaskBranches:     preview.Selection.DeleteLocalTaskBranches,
 		DeleteRemoteTaskBranches:    preview.Selection.DeleteRemoteTaskBranches,
@@ -60,15 +61,24 @@ func NewReleaseCleanupChecklistModal(preview task.ReleaseCleanupPreview) *Releas
 		DeleteLocalReleaseBranches:  preview.Selection.DeleteLocalReleaseBranches,
 		DeleteRemoteReleaseBranches: preview.Selection.DeleteRemoteReleaseBranches,
 	}
+	rows := append([]releaseCleanupRow(nil), releaseCleanupRows...)
+	if preview.Selection.DeleteRelease {
+		rows = nil
+	}
 	return &ReleaseCleanupChecklistModal{
 		preview:   preview,
 		selection: selection,
-		rows:      append([]releaseCleanupRow(nil), releaseCleanupRows...),
+		rows:      rows,
 		viewport:  viewport.New(1, 1),
 	}
 }
 
-func (m *ReleaseCleanupChecklistModal) Title() string     { return "Release Cleanup" }
+func (m *ReleaseCleanupChecklistModal) Title() string {
+	if m.selection.DeleteRelease {
+		return "Release Deletion"
+	}
+	return "Release Cleanup"
+}
 func (m *ReleaseCleanupChecklistModal) ReleaseID() string { return m.preview.ReleaseID }
 func (m *ReleaseCleanupChecklistModal) Selection() task.ReleaseCleanupSelection {
 	return m.selection
@@ -110,12 +120,21 @@ func (m *ReleaseCleanupChecklistModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	}
 	switch keyMsg.String() {
 	case "up", "k":
+		if len(m.rows) == 0 {
+			break
+		}
 		m.selectedIndex = (m.selectedIndex - 1 + len(m.rows)) % len(m.rows)
 		return m, nil
 	case "down", "j":
+		if len(m.rows) == 0 {
+			break
+		}
 		m.selectedIndex = (m.selectedIndex + 1) % len(m.rows)
 		return m, nil
 	case " ":
+		if len(m.rows) == 0 {
+			return m, nil
+		}
 		m.toggle(m.rows[m.selectedIndex].option)
 		m.refreshViewport()
 		return m, nil
@@ -145,6 +164,12 @@ func (m *ReleaseCleanupChecklistModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
 	}
+	if m.selection.DeleteRelease {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }
 
 func (m *ReleaseCleanupChecklistModal) planSelection() task.ReleaseCleanupSelection {
@@ -196,7 +221,11 @@ func (m *ReleaseCleanupChecklistModal) header() string {
 	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Cleanup release " + m.preview.ReleaseID))
+	title := "Cleanup release "
+	if m.selection.DeleteRelease {
+		title = "Delete release "
+	}
+	b.WriteString(titleStyle.Render(title + m.preview.ReleaseID))
 	b.WriteString("\n")
 	for i, row := range m.rows {
 		cursor := "  "
@@ -228,7 +257,11 @@ func (m *ReleaseCleanupChecklistModal) body() string {
 	var b strings.Builder
 	b.WriteString(renderCleanupOwnership(m.preview, normalStyle, dimStyle))
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("Local task and release branches are removed. Remote deletion requires a separate confirmation."))
+	if m.selection.DeleteRelease {
+		b.WriteString(dimStyle.Render(releaseDeletionScope))
+	} else {
+		b.WriteString(dimStyle.Render("Local task and release branches are removed. Remote deletion requires a separate confirmation."))
+	}
 	b.WriteString("\n")
 	if len(m.preview.Blockers) > 0 {
 		b.WriteString("\n")
@@ -252,6 +285,12 @@ func (m *ReleaseCleanupChecklistModal) footer(withScrollHint bool) string {
 		status = "Change selection to replan, or [Esc] cancel"
 	}
 	footer := "[j/k] navigate  [Space] toggle\n" + status
+	if m.selection.DeleteRelease {
+		if len(m.preview.Blockers) > 0 {
+			status = "Deletion blocked. [Esc] cancel"
+		}
+		footer = status
+	}
 	if withScrollHint {
 		footer += "\n[g/G] details"
 	}
@@ -286,6 +325,10 @@ func renderCleanupOwnership(preview task.ReleaseCleanupPreview, normalStyle, dim
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render("  Release branch: " + valueOrNone(service.ReleaseBranch)))
 		b.WriteString("\n")
+		if preview.Selection.DeleteRelease {
+			b.WriteString(dimStyle.Render("  Tag: " + valueOrNone(service.Tag)))
+			b.WriteString("\n")
+		}
 	}
 	return b.String()
 }
@@ -307,29 +350,48 @@ func valueOrNone(value string) string {
 type ReleaseCleanupConfirmModal struct {
 	preview    task.ReleaseCleanupPreview
 	generation uint64
+	deletion   *releaseDeletionReview
 }
 
 func NewReleaseCleanupConfirmModal(preview task.ReleaseCleanupPreview, generation uint64) *ReleaseCleanupConfirmModal {
-	return &ReleaseCleanupConfirmModal{preview: preview, generation: generation}
+	return &ReleaseCleanupConfirmModal{preview: preview, generation: generation, deletion: newReleaseDeletionReview(preview, false)}
 }
 
-func (m *ReleaseCleanupConfirmModal) Title() string            { return "Confirm Release Cleanup" }
-func (m *ReleaseCleanupConfirmModal) SetTerminalSize(_, _ int) {}
-func (m *ReleaseCleanupConfirmModal) ReleaseID() string        { return m.preview.ReleaseID }
-func (m *ReleaseCleanupConfirmModal) Generation() uint64       { return m.generation }
+func (m *ReleaseCleanupConfirmModal) Title() string {
+	if m.deletion != nil {
+		return "Confirm Release Deletion"
+	}
+	return "Confirm Release Cleanup"
+}
+func (m *ReleaseCleanupConfirmModal) SetTerminalSize(w, h int) {
+	if m.deletion != nil {
+		m.deletion.setSize(w, h)
+	}
+}
+func (m *ReleaseCleanupConfirmModal) ReleaseID() string  { return m.preview.ReleaseID }
+func (m *ReleaseCleanupConfirmModal) Generation() uint64 { return m.generation }
 func (m *ReleaseCleanupConfirmModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "enter", "y":
+			if m.deletion != nil && !m.deletion.usable() {
+				return m, nil
+			}
 			result := ConfirmReleaseCleanupMsg{ReleaseID: m.preview.ReleaseID, Generation: m.generation}
 			return m, func() tea.Msg { return result }
 		case "esc", "n":
 			return m, func() tea.Msg { return CloseModalMsg{} }
 		}
 	}
+	if m.deletion != nil {
+		return m, m.deletion.update(msg)
+	}
 	return m, nil
 }
 func (m *ReleaseCleanupConfirmModal) View() string {
+	if m.deletion != nil {
+		return m.deletion.view()
+	}
 	warning := "Review cleanup for selected groups."
 	if cleanupHasRemoteSelection(m.preview.Selection) {
 		warning += " Remote branch deletion is unsupported and fails before any mutation."
@@ -340,29 +402,48 @@ func (m *ReleaseCleanupConfirmModal) View() string {
 type ReleaseCleanupRemoteConfirmModal struct {
 	preview    task.ReleaseCleanupPreview
 	generation uint64
+	deletion   *releaseDeletionReview
 }
 
 func NewReleaseCleanupRemoteConfirmModal(preview task.ReleaseCleanupPreview, generation uint64) *ReleaseCleanupRemoteConfirmModal {
-	return &ReleaseCleanupRemoteConfirmModal{preview: preview, generation: generation}
+	return &ReleaseCleanupRemoteConfirmModal{preview: preview, generation: generation, deletion: newReleaseDeletionReview(preview, true)}
 }
 
-func (m *ReleaseCleanupRemoteConfirmModal) Title() string            { return "Confirm Remote Branch Deletion" }
-func (m *ReleaseCleanupRemoteConfirmModal) SetTerminalSize(_, _ int) {}
-func (m *ReleaseCleanupRemoteConfirmModal) ReleaseID() string        { return m.preview.ReleaseID }
-func (m *ReleaseCleanupRemoteConfirmModal) Generation() uint64       { return m.generation }
+func (m *ReleaseCleanupRemoteConfirmModal) Title() string {
+	if m.deletion != nil {
+		return "Confirm Release Deletion on Origin"
+	}
+	return "Confirm Remote Branch Deletion"
+}
+func (m *ReleaseCleanupRemoteConfirmModal) SetTerminalSize(w, h int) {
+	if m.deletion != nil {
+		m.deletion.setSize(w, h)
+	}
+}
+func (m *ReleaseCleanupRemoteConfirmModal) ReleaseID() string  { return m.preview.ReleaseID }
+func (m *ReleaseCleanupRemoteConfirmModal) Generation() uint64 { return m.generation }
 func (m *ReleaseCleanupRemoteConfirmModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "enter", "y":
+			if m.deletion != nil && !m.deletion.usable() {
+				return m, nil
+			}
 			result := ConfirmRemoteReleaseCleanupMsg{ReleaseID: m.preview.ReleaseID, Generation: m.generation}
 			return m, func() tea.Msg { return result }
 		case "esc", "n":
 			return m, func() tea.Msg { return CloseModalMsg{} }
 		}
 	}
+	if m.deletion != nil {
+		return m, m.deletion.update(msg)
+	}
 	return m, nil
 }
 func (m *ReleaseCleanupRemoteConfirmModal) View() string {
+	if m.deletion != nil {
+		return m.deletion.view()
+	}
 	return cleanupConfirmView(m.preview, "Remote branches below will be deleted.", "[Enter/y] delete remote branches  [Esc/n] cancel", true)
 }
 

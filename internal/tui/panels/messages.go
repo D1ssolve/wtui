@@ -85,6 +85,7 @@ type CleanupTaskMsg struct{ TaskID string }
 type ForceCleanupTaskMsg struct{ TaskID string }
 
 type CleanupReleaseMsg struct{ ReleaseID string }
+type DeleteReleaseMsg struct{ ReleaseID string }
 
 type ValidateTaskMsg struct{ TaskID string }
 

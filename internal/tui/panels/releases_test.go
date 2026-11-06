@@ -225,18 +225,43 @@ func TestReleasesPanel_Keyd_EmitsCleanupReleaseMsg(t *testing.T) {
 	}
 }
 
+func TestReleasesPanel_Keyx_RequestsDeletionAtAnyStatus(t *testing.T) {
+	for _, status := range []domain.ReleaseStatus{
+		domain.ReleaseStatusDraft, domain.ReleaseStatusPrepared,
+		domain.ReleaseStatusAwaitingMasterMerge, domain.ReleaseStatusMasterMerged,
+		domain.ReleaseStatusReleased, domain.ReleaseStatusFailed,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			p := NewReleasesPanel(60, 20)
+			p.SetFocused(true)
+			p.SetReleases([]domain.Release{{ID: "rel-1", Status: status}})
+			_, cmd := p.Update(sendKey("x"))
+			if cmd == nil {
+				t.Fatal("x did not request release deletion")
+			}
+			if msg, ok := cmd().(DeleteReleaseMsg); !ok || msg.ReleaseID != "rel-1" {
+				t.Fatalf("deletion message = %#v", cmd())
+			}
+		})
+	}
+}
+
 func TestReleasesPanel_Keyd_NoSelection_Noop(t *testing.T) {
 	p := NewReleasesPanel(60, 20)
 	p.SetFocused(true)
 
-	if _, cmd := p.Update(sendKey("d")); cmd != nil {
-		t.Fatal("d with no releases should be a no-op")
+	for _, key := range []string{"d", "x"} {
+		if _, cmd := p.Update(sendKey(key)); cmd != nil {
+			t.Fatalf("%s with no releases should be a no-op", key)
+		}
 	}
 
 	p.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
 	p.SetFocused(false)
-	if _, cmd := p.Update(sendKey("d")); cmd != nil {
-		t.Fatal("d when unfocused should be a no-op")
+	for _, key := range []string{"d", "x"} {
+		if _, cmd := p.Update(sendKey(key)); cmd != nil {
+			t.Fatalf("%s when unfocused should be a no-op", key)
+		}
 	}
 }
 
@@ -257,6 +282,14 @@ func TestReleasesPanel_View_EmptyPlaceholder(t *testing.T) {
 	view := stripAnsi(p.View())
 	if !containsAll(view, "RELEASES", "No releases yet", "Press [N]") {
 		t.Fatalf("expected placeholder text in view, got: %q", view)
+	}
+}
+
+func TestReleasesPanel_View_ShortPanelKeepsSelectedReleaseVisible(t *testing.T) {
+	p := NewReleasesPanel(60, 7)
+	p.SetReleases([]domain.Release{{ID: "REL-1", Status: domain.ReleaseStatusReleased}})
+	if view := stripAnsi(p.View()); !strings.Contains(view, "REL-1") {
+		t.Fatalf("short release panel hides the deletion target:\n%s", view)
 	}
 }
 
