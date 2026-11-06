@@ -144,11 +144,26 @@ func (h *HelpOverlay) renderWorkflow() []string {
 	if message != "" {
 		lines = append(lines, wrapHelpLine(messageStyle.Render(message), width)...)
 	}
+	if wf.Blocker != "" && wf.NextAction != "" && wf.NextAction != wf.Blocker {
+		lines = append(lines, wrapHelpLine(dimStyle.Render("Next: "+wf.NextAction), width)...)
+	}
+	seenDetails := make(map[string]bool)
+	seenActions := make(map[string]bool)
 	for _, svc := range wf.Services {
-		if svc.Detail == "" {
-			continue
+		detail := svc.ServiceName + ": " + svc.Detail
+		if svc.Detail != "" && !seenDetails[detail] && wf.Blocker != svc.Detail && wf.Blocker != detail &&
+			!strings.HasPrefix(wf.Blocker, detail+"; ") && !strings.HasSuffix(wf.Blocker, "; "+detail) &&
+			!strings.Contains(wf.Blocker, "; "+detail+"; ") {
+			seenDetails[detail] = true
+			lines = append(lines, wrapHelpLine(dimStyle.Render("  "+detail), width)...)
 		}
-		lines = append(lines, wrapHelpLine(dimStyle.Render("  "+svc.ServiceName+": "+svc.Detail), width)...)
+		action := svc.ServiceName + ": " + svc.NextAction
+		if svc.NextAction != "" && !seenActions[action] && wf.NextAction != svc.NextAction &&
+			!strings.HasSuffix(wf.NextAction, ": "+svc.NextAction) &&
+			!strings.Contains(wf.NextAction, ": "+svc.NextAction+"; ") {
+			seenActions[action] = true
+			lines = append(lines, wrapHelpLine(dimStyle.Render("  "+svc.ServiceName+" next: "+svc.NextAction), width)...)
+		}
 	}
 	return lines
 }

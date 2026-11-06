@@ -23,16 +23,12 @@ var releaseWorkflowSteps = []domain.WorkflowStep{
 }
 
 func ReleaseWorkflow(release domain.Release) domain.WorkflowSummary {
-	current, next, _ := releaseServiceGuidance(release.Status, release.Error)
+	current, next, blocker := releaseServiceGuidance(release.Status, release.Error)
 	done := release.Status == domain.ReleaseStatusReleased
 	blocked := release.Status == domain.ReleaseStatusTaskMergeBlocked ||
 		release.Status == domain.ReleaseStatusTaskMergePartial ||
 		release.Status == domain.ReleaseStatusFailed ||
 		release.Status == domain.ReleaseStatusRejected
-	blocker := ""
-	if release.Error != nil {
-		blocker = release.Error.Message
-	}
 	rows := make([]domain.ServiceWorkflow, len(release.Services))
 	for i, service := range release.Services {
 		detail := ""
@@ -48,6 +44,9 @@ func ReleaseWorkflow(release domain.Release) domain.WorkflowSummary {
 			detail += summary
 		}
 		rowCurrent, rowNext, rowBlocker := releaseServiceGuidance(service.Status, service.Error)
+		if detail == "" && rowBlocker != "" {
+			detail = rowBlocker
+		}
 		rows[i] = domain.ServiceWorkflow{
 			ServiceName: service.Name,
 			Status:      string(service.Status),
@@ -56,6 +55,9 @@ func ReleaseWorkflow(release domain.Release) domain.WorkflowSummary {
 			NextAction:  rowNext,
 			Blocker:     rowBlocker,
 		}
+	}
+	if actions := workflowBlockerActions(rows); blocked && actions != "" {
+		next = actions
 	}
 	return workflowSummaryWithServices(releaseWorkflowSteps, current, next, blocker, done, blocked, rows)
 }
@@ -97,9 +99,18 @@ func releaseServiceGuidance(status domain.ReleaseStatus, serviceErr *domain.Rele
 	case domain.ReleaseStatusReleased:
 		return domain.ReleaseWorkflowTag, "release complete", blocker
 	case domain.ReleaseStatusFailed:
-		return domain.ReleaseWorkflowDevelop, "release failed", blocker
+		if blocker == "" {
+			blocker = "Release failed; completion is unverified"
+		}
+		if serviceErr != nil && serviceErr.Recoverable {
+			return domain.ReleaseWorkflowDevelop, "inspect failure and remote state; press R to review recovery", blocker
+		}
+		return domain.ReleaseWorkflowDevelop, "inspect failure and remote state; manual recovery required", blocker
 	case domain.ReleaseStatusRejected:
-		return domain.ReleaseWorkflowDevelop, "release rejected", blocker
+		if blocker == "" {
+			blocker = "Release was rejected"
+		}
+		return domain.ReleaseWorkflowDevelop, "review rejection; prepare a new release if intended", blocker
 	default:
 		return domain.ReleaseWorkflowDevelop, "prepare release", blocker
 	}

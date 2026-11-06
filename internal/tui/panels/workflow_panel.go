@@ -1,6 +1,7 @@
 package panels
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -60,6 +61,13 @@ func RenderWorkflowPanel(in WorkflowPanelInput) string {
 				kept = append(kept, row)
 			}
 		}
+		for _, sw := range wf.Services {
+			if len(workflowGuidanceLines(wf, sw.ServiceName, in.Width)) > 0 {
+				hint := lipgloss.NewStyle().Foreground(colorDim).Render("More service guidance: ? help")
+				kept = append(kept, ansi.Wrap(hint, in.Width, " "))
+				break
+			}
+		}
 		return strings.Join(kept, "\n")
 	}
 
@@ -88,14 +96,14 @@ func workflowPanelIdentity(in WorkflowPanelInput) string {
 	return ansi.Truncate(line, in.Width, "…")
 }
 
-// workflowGuidanceLines renders one dim `  <service>: <detail>` row per
-// workflow entry matching the selected service, Danger-tinted when the
-// service is blocked or failed.
+// workflowGuidanceLines adds selected-service context not already covered by
+// the summary, keeping the reason and recovery action separate.
 func workflowGuidanceLines(wf *domain.WorkflowSummary, service string, width int) []string {
 	if service == "" || width <= 0 {
 		return nil
 	}
 	var lines []string
+	seen := make(map[string]bool)
 	for _, sw := range wf.Services {
 		if sw.ServiceName != service {
 			continue
@@ -103,17 +111,50 @@ func workflowGuidanceLines(wf *domain.WorkflowSummary, service string, width int
 		detail := sw.Detail
 		if sw.Blocker != "" {
 			detail = sw.Blocker
-		} else if sw.NextAction != "" {
+		} else if detail == "" {
 			detail = sw.NextAction
-		}
-		if detail == "" {
-			continue
 		}
 		style := lipgloss.NewStyle().Foreground(colorDim)
 		if sw.Status == "blocked" || sw.Status == "failed" {
 			style = lipgloss.NewStyle().Foreground(workflowColorBlocked)
 		}
-		lines = append(lines, ansi.Truncate(style.Render("  "+sw.ServiceName+": "+detail), width, "…"))
+		for i, text := range []string{detail, sw.NextAction} {
+			if text == "" {
+				continue
+			}
+			message := sw.ServiceName + ": " + text
+			if seen[message] || workflowMessageCovered(wf.Blocker, message) ||
+				workflowMessageCovered(wf.NextAction, message) || wf.Blocker == text || wf.NextAction == text {
+				continue
+			}
+			if text == sw.NextAction {
+				var names []string
+				for _, row := range wf.Services {
+					if row.NextAction == text && (row.Blocker != "" || row.Status == "waiting") &&
+						!slices.Contains(names, row.ServiceName) {
+						names = append(names, row.ServiceName)
+					}
+				}
+				if workflowMessageCovered(wf.NextAction, strings.Join(names, ", ")+": "+text) {
+					continue
+				}
+			}
+			seen[message] = true
+			line := message
+			lineStyle := style
+			if i == 1 {
+				line = sw.ServiceName + " next: " + text
+				lineStyle = lipgloss.NewStyle().Foreground(colorDim)
+			}
+			indent := min(2, width-1)
+			wrapped := ansi.Wrap(lineStyle.Render(line), width-indent, " ")
+			lines = append(lines, lipgloss.NewStyle().PaddingLeft(indent).Render(wrapped))
+		}
 	}
 	return lines
+}
+
+func workflowMessageCovered(summary, message string) bool {
+	return summary == message || strings.HasPrefix(summary, message+"; ") ||
+		strings.HasSuffix(summary, "; "+message) || strings.Contains(summary, "; "+message+"; ")
 }

@@ -104,7 +104,7 @@ func TestTaskWorkflow_PhaseTransitions(t *testing.T) {
 				"feature/b": {Number: 2, State: "open", Blockers: []string{"checks pending"}},
 			},
 			want:       domain.TaskWorkflowReviewCI,
-			wantNext:   "wait for review/CI, then merge in forge and press M to reconcile",
+			wantNext:   "a, b: open review/checks in forge; satisfy requirements",
 			wantBlock:  "2 services waiting for approval/CI",
 			wantMRRead: 2,
 		},
@@ -170,7 +170,7 @@ func TestTaskWorkflow_IncludesPerServiceInspectionRows(t *testing.T) {
 			Status:      "waiting",
 			Detail:      "checks pending",
 			Current:     domain.TaskWorkflowReviewCI,
-			NextAction:  "wait for review/CI, then merge in forge and press M to reconcile",
+			NextAction:  "open review/checks in forge; satisfy requirements",
 		},
 	}
 	if !reflect.DeepEqual(summary.Services, want) {
@@ -186,11 +186,12 @@ func TestTaskWorkflow_ForgeFailureDoesNotReportMissingMR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "fix blockers, then merge in forge and press M to reconcile" {
+	if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "a: inspect MR readiness in forge and CLI diagnostics; refresh" {
 		t.Fatalf("summary = %#v, want blocked review workflow", summary)
 	}
-	if !strings.Contains(summary.Blocker, "a: forge unknown: ERROR") {
-		t.Fatalf("Blocker = %q, want forge error", summary.Blocker)
+	if summary.Blocker != "a: Could not verify review MR; see ? help for diagnostics" ||
+		!strings.Contains(summary.Services[0].Detail, "forge unknown: ERROR") {
+		t.Fatalf("summary = %#v, want a concise explanation and full forge diagnostics", summary)
 	}
 	if strings.Contains(summary.NextAction, "create MRs") {
 		t.Fatalf("NextAction = %q, must not report missing MR", summary.NextAction)
@@ -237,8 +238,8 @@ func TestTaskWorkflow_BlockedService_ShowsBlockerDetail(t *testing.T) {
 	if summary.Current != domain.TaskWorkflowReviewCI {
 		t.Fatalf("Current = %q, want %q", summary.Current, domain.TaskWorkflowReviewCI)
 	}
-	if summary.NextAction != "fix blockers, then merge in forge and press M to reconcile" {
-		t.Fatalf("NextAction = %q, want %q", summary.NextAction, "fix blockers, then merge in forge and press M to reconcile")
+	if summary.NextAction != "a: open the MR in forge; resolve its merge requirements; b: open review/checks in forge; satisfy requirements" {
+		t.Fatalf("NextAction = %q, want separate blocker and review recovery", summary.NextAction)
 	}
 	wantBlocker := "a: merge blocked: need rebase"
 	if summary.Blocker != wantBlocker {
@@ -284,8 +285,8 @@ func TestReleaseWorkflow_StatusMapping(t *testing.T) {
 		{domain.ReleaseStatusSyncingDevelop, domain.ReleaseWorkflowTag, "syncing develop", ""},
 		{domain.ReleaseStatusTagging, domain.ReleaseWorkflowTag, "tagging release", ""},
 		{domain.ReleaseStatusReleased, domain.ReleaseWorkflowTag, "release complete", ""},
-		{domain.ReleaseStatusFailed, domain.ReleaseWorkflowDevelop, "release failed", "tag push failed"},
-		{domain.ReleaseStatusRejected, domain.ReleaseWorkflowDevelop, "release rejected", ""},
+		{domain.ReleaseStatusFailed, domain.ReleaseWorkflowDevelop, "inspect failure and remote state; manual recovery required", "tag push failed"},
+		{domain.ReleaseStatusRejected, domain.ReleaseWorkflowDevelop, "review rejection; prepare a new release if intended", "Release was rejected"},
 	}
 
 	for _, tt := range tests {
@@ -362,7 +363,7 @@ func TestReleaseWorkflow_IncludesPerServiceRows(t *testing.T) {
 			Status:      "failed",
 			Detail:      "CI failed",
 			Current:     domain.ReleaseWorkflowDevelop,
-			NextAction:  "release failed",
+			NextAction:  "inspect failure and remote state; manual recovery required",
 			Blocker:     "CI failed",
 		},
 	}

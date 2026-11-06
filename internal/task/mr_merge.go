@@ -28,6 +28,8 @@ type ServiceMergeInspection struct {
 	Status      string
 	MR          forge.MRReadiness
 	Blockers    []string
+	NextAction  string
+	Explanation string
 }
 
 type TaskMergeResult struct {
@@ -67,7 +69,13 @@ func (m *manager) inspectTaskMerge(ctx context.Context, taskID string) (TaskMerg
 			if m.isHotfixReview(svc.Branch) {
 				rows, err := m.inspectHotfixMRs(ctx, svc)
 				if err != nil {
-					rows = []ServiceMergeInspection{{ServiceName: svc.Name, Status: "failed", Blockers: []string{err.Error()}}}
+					item := ServiceMergeInspection{ServiceName: svc.Name}
+					if len(rows) > 0 {
+						item = rows[0]
+					} else {
+						item.MR.TargetBranch = strings.Join(m.flow.BranchTypes[gitflow.BranchTypeHotfix].ReviewTargets, ", ")
+					}
+					rows = []ServiceMergeInspection{failedWorkflowInspection(item, err, "inspect hotfix MR history and repository; refresh")}
 				}
 				hotfixRows[i] = rows
 				return
@@ -289,16 +297,24 @@ func matchTargetMRs(rows []forge.MRInfo, branch, target string) (active, closed 
 // code, so only exact equality passes.
 func validateHotfixMRIdentity(svc domain.Service, currentSHA string, want forge.MRInfo, r forge.MRReadiness) error {
 	if currentSHA == "" {
-		return errors.New("empty current hotfix source SHA")
+		return withRecovery(errors.New("empty current hotfix source SHA"), "inspect the local hotfix branch; restore its commit")
 	}
 	if r.HeadSHA == "" {
-		return errors.New("empty MR head SHA")
+		return withRecovery(errors.New("empty MR head SHA"), "inspect MR head metadata in forge; refresh")
 	}
 	if r.Number != want.Number || r.SourceBranch != svc.Branch || r.TargetBranch != want.TargetBranch {
-		return errors.New("hotfix MR identity changed")
+		return withRecovery(errors.New("hotfix MR identity changed"), "inspect source/target in forge; select the correct hotfix MR")
 	}
 	if r.HeadSHA != currentSHA {
-		return fmt.Errorf("hotfix MR head %s does not match current source %s", r.HeadSHA, currentSHA)
+		action := "inspect the existing MR in forge; compare its head with published " + svc.Branch + " and refresh before retrying"
+		if mergedMRState(r.State) {
+			action = "compare " + svc.Branch + " with " + want.TargetBranch + "; create and merge a follow-up MR for intended remaining changes, then press r"
+		}
+		return &recoveryError{
+			err:         fmt.Errorf("hotfix MR head %s does not match current source %s", r.HeadSHA, currentSHA),
+			explanation: fmt.Sprintf("MR !%d covers a different source commit (MR head %.8s, current %.8s)", r.Number, r.HeadSHA, currentSHA),
+			action:      action,
+		}
 	}
 	return nil
 }
@@ -309,24 +325,24 @@ func validateHotfixMRIdentity(svc domain.Service, currentSHA string, want forge.
 // remote source or any local/remote divergence blocks the caller.
 func (m *manager) resolveFreshSourceSHA(ctx context.Context, svc domain.Service) (string, error) {
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
-		return "", err
+		return "", withRecovery(err, "check Git fetch access; refresh source verification")
 	}
 	sha, err := m.git.ResolveRef(ctx, svc.RepoPath, svc.Branch)
 	if err != nil {
-		return "", err
+		return "", withRecovery(err, "inspect the local source branch; restore its ref")
 	}
 	if sha == "" {
-		return "", errors.New("empty source SHA")
+		return "", withRecovery(errors.New("empty source SHA"), "inspect the local source branch; restore its commit")
 	}
 	remote, err := m.git.RemoteRefSHA(ctx, svc.RepoPath, "refs/heads/"+svc.Branch)
 	if err != nil {
-		return "", err
+		return "", withRecovery(err, "check remote source ref access; refresh verification")
 	}
 	if remote == "" {
-		return "", fmt.Errorf("source %s has no remote ref to verify against", svc.Branch)
+		return "", withRecovery(fmt.Errorf("source %s has no remote ref to verify against", svc.Branch), "check if forge deleted source; restore intended branch only")
 	}
 	if remote != sha {
-		return "", fmt.Errorf("source %s diverged from remote (local %s, remote %s)", svc.Branch, sha, remote)
+		return "", withRecovery(fmt.Errorf("source %s diverged from remote (local %s, remote %s)", svc.Branch, sha, remote), "compare local and remote source; reconcile intended changes")
 	}
 	return sha, nil
 }
@@ -342,14 +358,14 @@ func (m *manager) verifyHotfixMergeSHA(ctx context.Context, svc domain.Service, 
 	mergeSHA := r.MergedSHA
 	if mergeSHA == "" {
 		if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
-			return "", fmt.Errorf("fetch for merge verification: %w", err)
+			return "", withRecovery(fmt.Errorf("fetch for merge verification: %w", err), "check target fetch access; refresh merge verification")
 		}
 		targetSHA, err := m.git.ResolveRef(ctx, svc.RepoPath, "origin/"+target)
 		if err != nil {
-			return "", err
+			return "", withRecovery(err, "inspect target branch/ref; refresh merge verification")
 		}
 		if targetSHA != r.HeadSHA {
-			return "", fmt.Errorf("merge commit SHA unavailable for MR #%d", r.Number)
+			return "", withRecovery(fmt.Errorf("merge commit SHA unavailable for MR #%d", r.Number), "inspect merge SHA in forge; restore missing evidence")
 		}
 		mergeSHA = r.HeadSHA
 	}
@@ -366,21 +382,21 @@ func (m *manager) verifyHotfixMergeSHA(ctx context.Context, svc domain.Service, 
 // commit.
 func (m *manager) verifyMergedTaskMRContained(ctx context.Context, svc domain.Service, mergeSHA, target string) error {
 	if err := m.git.EnsureCommit(ctx, svc.RepoPath, mergeSHA); err != nil {
-		return fmt.Errorf("merged object %s unavailable: %w", mergeSHA, err)
+		return withRecovery(fmt.Errorf("merged object %s unavailable: %w", mergeSHA, err), "check merge object SHA and repository access in forge")
 	}
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
-		return fmt.Errorf("fetch for merge verification: %w", err)
+		return withRecovery(fmt.Errorf("fetch for merge verification: %w", err), "check target fetch access; refresh merge verification")
 	}
 	tip, err := m.git.ResolveRef(ctx, svc.RepoPath, "origin/"+target)
 	if err != nil {
-		return err
+		return withRecovery(err, "inspect target branch/ref; refresh merge verification")
 	}
 	contained, err := m.git.IsAncestor(ctx, svc.RepoPath, mergeSHA, tip)
 	if err != nil {
-		return err
+		return withRecovery(err, "inspect target history and Git objects; repair verification")
 	}
 	if !contained {
-		return fmt.Errorf("merged SHA %s is not contained in origin/%s", mergeSHA, target)
+		return withRecovery(fmt.Errorf("merged SHA %s is not contained in origin/%s", mergeSHA, target), "inspect target history and MR in forge; verify intended delivery")
 	}
 	return nil
 }
@@ -392,15 +408,15 @@ func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]S
 	}
 	history, ok := client.(forge.HistoryClient)
 	if !ok {
-		return nil, errors.New("forge does not support MR history")
+		return nil, withRecovery(errors.New("forge does not support MR history"), "use a forge client with MR history; inspect hotfix targets")
 	}
 	repo := forge.ExtractRepoPath(svc.RemoteURL)
 	if repo == "" {
-		return nil, errors.New("invalid forge repository")
+		return nil, withRecovery(errors.New("invalid forge repository"), "correct the service remote URL; refresh workflow")
 	}
 	rows, err := history.MRHistory(ctx, svc.Branch, repo)
 	if err != nil {
-		return nil, err
+		return nil, withRecovery(err, "inspect hotfix MR history in forge; restore access")
 	}
 	sha, err := m.resolveFreshSourceSHA(ctx, svc)
 	if err != nil {
@@ -411,28 +427,35 @@ func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]S
 		item := ServiceMergeInspection{ServiceName: svc.Name, Status: "no_mr", MR: forge.MRReadiness{TargetBranch: target}}
 		matches, _ := matchTargetMRs(rows, svc.Branch, target)
 		if len(matches) > 1 {
-			return nil, fmt.Errorf("%s: ambiguous MR history for %s", svc.Name, target)
+			return []ServiceMergeInspection{item}, withRecovery(fmt.Errorf("%s: ambiguous MR history for %s", svc.Name, target), "resolve duplicate hotfix MRs in forge; refresh")
 		}
 		if len(matches) == 1 {
-			item.MR, err = client.MRReadinessByNumber(ctx, matches[0].Number, repo, svc.WorktreePath)
+			item.MR.Number, item.MR.URL = matches[0].Number, matches[0].URL
+			mr, err := client.MRReadinessByNumber(ctx, matches[0].Number, repo, svc.WorktreePath)
 			if err != nil {
-				return nil, err
+				return []ServiceMergeInspection{item}, withRecovery(err, "inspect numbered hotfix MR in forge; restore detail access")
+			}
+			item.MR = mr
+			if item.MR.URL == "" {
+				item.MR.URL = matches[0].URL
 			}
 			if err := validateHotfixMRIdentity(svc, sha, matches[0], item.MR); err != nil {
-				return nil, err
+				return []ServiceMergeInspection{item}, err
 			}
 			if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &item.MR); err != nil {
-				return nil, err
+				return []ServiceMergeInspection{item}, withRecovery(err, "inspect saved merge proof and origin push destination")
 			}
 			item.Blockers = append([]string(nil), item.MR.Blockers...)
+			item.NextAction = item.MR.NextAction
 			switch {
 			case item.MR.State == "merged":
 				mergeSHA, err := m.verifyHotfixMergeSHA(ctx, svc, target, item.MR)
 				if err != nil {
-					return nil, err
+					return []ServiceMergeInspection{item}, err
 				}
 				item.MR.MergedSHA = mergeSHA
 				item.Status = "merged"
+				item.NextAction = ""
 			case item.MR.Ready && (item.MR.State == "open" || item.MR.State == "opened"):
 				item.Status = "ready"
 			case waitingBlockers(item.Blockers):
@@ -444,7 +467,7 @@ func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]S
 		result = append(result, item)
 	}
 	if len(result) == 0 {
-		return nil, ErrNoMergeTargets
+		return nil, withRecovery(ErrNoMergeTargets, "configure hotfix review targets; refresh workflow")
 	}
 	return result, nil
 }

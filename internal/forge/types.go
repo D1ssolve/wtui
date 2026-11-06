@@ -53,6 +53,7 @@ type MRReadiness struct {
 	Mergeable      bool
 	Ready          bool
 	Blockers       []string
+	NextAction     string
 	SupportsSHAPin bool
 	// SupportsTargetBinding reports atomic target-branch/repo binding during
 	// merge. gh/glab report false: callers can request a non-atomic branch

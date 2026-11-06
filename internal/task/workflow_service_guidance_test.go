@@ -33,7 +33,7 @@ func TestTaskWorkflow_ServiceGuidance_ReviewRows(t *testing.T) {
 		summary := mustTaskWorkflow(t, mgr)
 		for _, name := range []string{"a", "b"} {
 			row := findServiceRow(t, summary.Services, name)
-			if row.Current != domain.TaskWorkflowReviewCI || row.NextAction != "wait for review/CI, then merge in forge and press M to reconcile" {
+			if row.Current != domain.TaskWorkflowReviewCI || row.NextAction != "open review/checks in forge; satisfy requirements" {
 				t.Fatalf("%s guidance = current %q next %q, want review CI guidance", name, row.Current, row.NextAction)
 			}
 		}
@@ -51,16 +51,16 @@ func TestTaskWorkflow_ServiceGuidance_ReviewRows(t *testing.T) {
 		if row.Blocker != "merge blocked: need rebase" {
 			t.Fatalf("Blocker = %q, want rebase blocker", row.Blocker)
 		}
-		if row.NextAction != "" {
-			t.Fatalf("NextAction = %q, want empty for blocked service", row.NextAction)
+		if row.NextAction != "open the MR in forge; resolve its merge requirements" {
+			t.Fatalf("NextAction = %q, want blocker recovery", row.NextAction)
 		}
 	})
-	t.Run("missing MR service points at MR creation", func(t *testing.T) {
+	t.Run("missing MR without history support asks for history review", func(t *testing.T) {
 		mgr, _ := newWorkflowTestManager(t, map[string]forge.MRReadiness{}, false, true)
 		summary := mustTaskWorkflow(t, mgr)
 		for _, row := range summary.Services {
-			if row.Current != domain.TaskWorkflowMR || row.NextAction != "press C to create MRs" {
-				t.Fatalf("%s guidance = current %q next %q, want MR creation guidance", row.ServiceName, row.Current, row.NextAction)
+			if row.Current != domain.TaskWorkflowMR || row.NextAction != "inspect forge history; press C only if an MR is needed" {
+				t.Fatalf("%s guidance = current %q next %q, want history review before MR creation", row.ServiceName, row.Current, row.NextAction)
 			}
 		}
 	})
@@ -197,7 +197,7 @@ func TestReleaseWorkflow_ServiceGuidance(t *testing.T) {
 		t.Fatalf("api guidance = current %q next %q, want master MR guidance", api.Current, api.NextAction)
 	}
 	worker := findServiceRow(t, summary.Services, "worker")
-	if worker.Current != domain.ReleaseWorkflowDevelop || worker.NextAction != "release failed" || worker.Blocker != "CI failed" {
+	if worker.Current != domain.ReleaseWorkflowDevelop || worker.NextAction != "inspect failure and remote state; manual recovery required" || worker.Blocker != "CI failed" {
 		t.Fatalf("worker guidance = current %q next %q blocker %q, want failed guidance", worker.Current, worker.NextAction, worker.Blocker)
 	}
 	web := findServiceRow(t, summary.Services, "web")

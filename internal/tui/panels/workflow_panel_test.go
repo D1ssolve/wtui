@@ -82,8 +82,8 @@ func TestWorkflowPanel_BlockerAuthoritativeOverNextAction(t *testing.T) {
 	if !strings.Contains(got, "ⓘ CI failed on MR") {
 		t.Fatalf("blocker missing: %q", got)
 	}
-	if strings.Contains(got, "ⓘ request review") {
-		t.Fatalf("next action must yield to blocker: %q", got)
+	if !strings.Contains(got, "Next: request review") {
+		t.Fatalf("recovery action missing beside blocker: %q", got)
 	}
 }
 

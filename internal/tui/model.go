@@ -1421,7 +1421,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.taskWorkflowPending = false
 		if msg.Err != nil {
-			m.setServicesWorkflow(nil)
+			m.setServicesWorkflow(&domain.WorkflowSummary{
+				Blocker:    "Could not load task workflow; see OUTPUT for details",
+				NextAction: "check task configuration and repository access, then press r to retry",
+			})
 			m.logger.Error("Load task workflow failed", slog.String("task_id", msg.TaskID), slog.String("err", msg.Err.Error()))
 			m.outputPanel.AppendLine("Load task workflow failed: " + msg.Err.Error())
 			m.recalculateDimensions()

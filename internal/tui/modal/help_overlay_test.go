@@ -29,23 +29,27 @@ func TestHelpOverlay_WorkflowContext_ShowsIdentityStepsAndNextAction(t *testing.
 	}
 }
 
-func TestHelpOverlay_WorkflowContext_BlockerOverridesNextAction(t *testing.T) {
+func TestHelpOverlay_WorkflowContext_ShowsReasonAndRecoveryOnce(t *testing.T) {
 	h := NewHelpOverlayWithOptions(false)
 	h.SetWorkflow("Task PROJ-101", &domain.WorkflowSummary{
 		Steps: []domain.WorkflowStep{
 			{Label: "code", State: "done"},
 			{Label: "MR", State: "blocked"},
 		},
-		NextAction: "should be hidden",
-		Blocker:    "MR pipeline failed",
+		NextAction: "open failed checks and fix their cause",
+		Blocker:    "api: MR pipeline failed",
+		Services:   []domain.ServiceWorkflow{{ServiceName: "api", Detail: "MR pipeline failed"}},
 	})
 
 	view := stripAnsi(h.View())
-	if !strings.Contains(view, "ⓘ MR pipeline failed") {
+	if !strings.Contains(view, "ⓘ api: MR pipeline failed") {
 		t.Fatalf("help must show blocker, got %q", view)
 	}
-	if strings.Contains(view, "should be hidden") {
-		t.Fatalf("next action must be hidden when blocker present, got %q", view)
+	if !strings.Contains(view, "Next: open failed checks and fix their cause") {
+		t.Fatalf("recovery must stay visible beside the blocker, got %q", view)
+	}
+	if count := strings.Count(view, "MR pipeline failed"); count != 1 {
+		t.Fatalf("blocker rendered %d times, want 1: %q", count, view)
 	}
 	if !strings.Contains(view, "✗") {
 		t.Fatalf("blocked step must use ✗ marker, got %q", view)
@@ -68,6 +72,25 @@ func TestHelpOverlay_WorkflowContext_ShowsServiceTargetDetail(t *testing.T) {
 	}
 	if strings.Contains(view, "worker") {
 		t.Fatalf("services without detail must be omitted, got %q", view)
+	}
+}
+
+func TestHelpOverlay_WorkflowContext_ShowsDistinctTargetActions(t *testing.T) {
+	h := NewHelpOverlayWithOptions(false)
+	h.SetWorkflow("Task HOTFIX-1", &domain.WorkflowSummary{
+		Blocker:    "api: master: conflicts",
+		NextAction: "api: master: resolve conflicts",
+		Services: []domain.ServiceWorkflow{
+			{ServiceName: "api", Blocker: "master: conflicts", Detail: "master: conflicts", NextAction: "master: resolve conflicts"},
+			{ServiceName: "api", Detail: "develop: ready", NextAction: "develop: merge the ready MR"},
+		},
+	})
+	view := stripAnsi(h.View())
+	if !strings.Contains(view, "api next: develop: merge the ready MR") {
+		t.Fatalf("help must retain the distinct ready-target action:\n%s", view)
+	}
+	if count := strings.Count(view, "resolve conflicts"); count != 1 {
+		t.Fatalf("primary recovery rendered %d times, want 1:\n%s", count, view)
 	}
 }
 

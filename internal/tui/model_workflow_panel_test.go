@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -43,6 +44,25 @@ func TestModelView_WorkflowStrip_NoSelection_RendersNothing(t *testing.T) {
 	view := stripANSIForModel(m.View())
 	if strings.Contains(view, "ⓘ") {
 		t.Fatalf("no selection must render no workflow strip: %q", view)
+	}
+}
+
+func TestModelView_WorkflowFailureShowsRecovery(t *testing.T) {
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m = loadTaskWorkflow(t, m, domain.WorkflowSummary{NextAction: "merge now"})
+	updated, _ := m.Update(TaskWorkflowLoadedMsg{
+		TaskID: "TASK-1", Generation: 1, Err: errors.New("fetch origin failed"),
+	})
+	m = updated.(Model)
+
+	view := stripANSIForModel(m.View())
+	for _, text := range []string{"Could not load task workflow", "Next:", "press r", "fetch origin failed"} {
+		if !strings.Contains(view, text) {
+			t.Errorf("workflow failure missing %q:\n%s", text, view)
+		}
+	}
+	if strings.Contains(view, "merge now") {
+		t.Fatalf("stale merge guidance survived a failed inspection:\n%s", view)
 	}
 }
 

@@ -272,33 +272,48 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 	}
 
 	blockers := make([]string, 0, 4)
+	var actions []string
 	if state != "open" {
 		if state == "" {
 			blockers = append(blockers, "merge request state unknown")
+			actions = append(actions, "refresh MR state in forge")
 		} else {
 			blockers = append(blockers, "merge request is "+state)
+			if state == "merged" {
+				actions = append(actions, "press M to reconcile the merged MR")
+			} else {
+				actions = append(actions, "inspect MR state in forge; create an MR if still needed")
+			}
 		}
 	}
 	if !mergeable {
 		switch mergeStatus {
 		case "not_approved":
 			blockers = append(blockers, "not approved")
+			actions = append(actions, "request required reviewer approval in forge")
 		case "conflict", "conflicts", "cannot_be_merged":
 			blockers = append(blockers, "conflicts")
+			actions = append(actions, "resolve source/target conflicts; publish the resolution")
 		case "ci_must_pass", "ci_still_running", "checking", "unchecked", "blocked_status":
 			// ponytail: approval-only policy, CI statuses do not block merge readiness
 		case "status_checks_must_pass":
-			blockers = append(blockers, c.statusCheckBlockers(ctx, worktreePath, repo, number)...)
+			checkBlockers, action := c.statusCheckBlockers(ctx, worktreePath, repo, number)
+			blockers = append(blockers, checkBlockers...)
+			actions = append(actions, action)
 		case "":
 			blockers = append(blockers, "mergeability unknown")
+			actions = append(actions, "refresh mergeability in forge; inspect if still unknown")
 		default:
 			blockers = append(blockers, "merge blocked: "+strings.ReplaceAll(mergeStatus, "_", " "))
+			actions = append(actions, "open MR merge requirements in forge; satisfy "+strings.ReplaceAll(mergeStatus, "_", " "))
 		}
 	}
 	if detail.BlockingDiscussionsResolved == nil {
 		blockers = append(blockers, "discussion status unknown")
+		actions = append(actions, "inspect discussion access in forge; refresh MR detail")
 	} else if !*detail.BlockingDiscussionsResolved {
 		blockers = append(blockers, "unresolved discussions")
+		actions = append(actions, "address and resolve blocking discussions in forge")
 	}
 
 	return MRReadiness{
@@ -314,17 +329,18 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 		Mergeable:             mergeable,
 		Ready:                 len(blockers) == 0,
 		Blockers:              blockers,
+		NextAction:            strings.Join(actions, "; "),
 		SupportsSHAPin:        supportsSHAPin,
 		SupportsTargetBinding: false, // source head is server pinned; target preflight is non-atomic
 		StatusChecksBlocking:  mergeStatus == "status_checks_must_pass",
 	}, nil
 }
 
-func (c *GlabClient) statusCheckBlockers(ctx context.Context, worktreePath, repo string, number int) []string {
+func (c *GlabClient) statusCheckBlockers(ctx context.Context, worktreePath, repo string, number int) ([]string, string) {
 	endpoint := "projects/" + url.PathEscape(repo) + "/merge_requests/" + strconv.Itoa(number) + "/status_checks"
 	stdout, _, err := c.run(ctx, worktreePath, "api", endpoint)
 	if err != nil {
-		return []string{"status checks must pass (details unavailable: " + err.Error() + ")"}
+		return []string{"status checks must pass (details unavailable: " + err.Error() + ")"}, "inspect external checks in forge; restore API access"
 	}
 
 	var checks []struct {
@@ -332,7 +348,7 @@ func (c *GlabClient) statusCheckBlockers(ctx context.Context, worktreePath, repo
 		Status string `json:"status"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &checks); err != nil {
-		return []string{"status checks must pass (details unavailable: " + err.Error() + ")"}
+		return []string{"status checks must pass (details unavailable: " + err.Error() + ")"}, "inspect external checks in forge; check JSON/API access"
 	}
 
 	byStatus := map[string][]string{"failed": {}, "pending": {}}
@@ -344,6 +360,7 @@ func (c *GlabClient) statusCheckBlockers(ctx context.Context, worktreePath, repo
 	}
 
 	blockers := make([]string, 0, 2)
+	var actions []string
 	for _, status := range []string{"failed", "pending"} {
 		names := byStatus[status]
 		if len(names) == 0 {
@@ -354,11 +371,16 @@ func (c *GlabClient) statusCheckBlockers(ctx context.Context, worktreePath, repo
 			label += "s"
 		}
 		blockers = append(blockers, fmt.Sprintf("%d %s %s: %s", len(names), label, status, strings.Join(names, ", ")))
+		if status == "failed" {
+			actions = append(actions, "fix external checks "+strings.Join(names, ", ")+"; request reevaluation")
+		} else {
+			actions = append(actions, "open external checks "+strings.Join(names, ", ")+"; wait or complete required actions")
+		}
 	}
 	if len(blockers) == 0 {
-		return []string{"status checks must pass"}
+		return []string{"status checks must pass"}, "open required external checks in forge; satisfy them"
 	}
-	return blockers
+	return blockers, strings.Join(actions, "; ")
 }
 
 func (c *GlabClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMergeResult, error) {

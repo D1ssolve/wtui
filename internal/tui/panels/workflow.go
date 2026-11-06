@@ -68,6 +68,10 @@ func renderWorkflow(wf *domain.WorkflowSummary, width int) string {
 	if message != "" {
 		lines = append(lines, ansi.Wrap(style.Render(message), width, " "))
 	}
+	if wf.Blocker != "" && wf.NextAction != "" && wf.NextAction != wf.Blocker {
+		action := lipgloss.NewStyle().Foreground(colorDim).Render("Next: " + wf.NextAction)
+		lines = append(lines, ansi.Wrap(action, width, " "))
+	}
 
 	return strings.Join(lines, "\n")
 }

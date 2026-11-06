@@ -105,7 +105,8 @@ func (m *manager) reviewWorkflowSummary(ctx context.Context, plans []serviceWork
 			}
 			item := m.inspectWorkflowReviewMR(ctx, plan.svc, reviewTarget)
 			reviewItems = append(reviewItems, item)
-			rows = append(rows, reviewWorkflowRow(item))
+			row := reviewWorkflowRow(item)
+			rows = append(rows, row)
 			switch item.Status {
 			case "no_mr":
 				missingMR = true
@@ -115,7 +116,7 @@ func (m *manager) reviewWorkflowSummary(ctx context.Context, plans []serviceWork
 				// Externally merged MR proven independently of source
 				// ancestry (squash/rebase rewrites history): satisfied.
 			case "blocked", "failed":
-				detail := strings.Join(item.Blockers, "; ")
+				detail := row.Blocker
 				if detail == "" {
 					detail = item.Status
 				}
@@ -128,7 +129,7 @@ func (m *manager) reviewWorkflowSummary(ctx context.Context, plans []serviceWork
 
 	if len(blockedDetails) > 0 {
 		return workflowSummaryWithServices(taskWorkflowSteps, domain.TaskWorkflowReviewCI,
-			"fix blockers, then merge in forge and press M to reconcile", strings.Join(blockedDetails, "; "), false, true, rows), nil
+			workflowBlockerActions(rows), strings.Join(blockedDetails, "; "), false, true, rows), nil
 	}
 	allMerged := len(reviewItems) > 0
 	for _, item := range reviewItems {
@@ -160,7 +161,7 @@ func (m *manager) reviewWorkflowSummary(ctx context.Context, plans []serviceWork
 	if waiting == 1 {
 		blocker = "1 service waiting for approval/CI"
 	}
-	return workflowSummaryWithServices(taskWorkflowSteps, domain.TaskWorkflowReviewCI, "wait for review/CI, then merge in forge and press M to reconcile", blocker, false, false, rows), nil
+	return workflowSummaryWithServices(taskWorkflowSteps, domain.TaskWorkflowReviewCI, workflowBlockerActions(rows), blocker, false, false, rows), nil
 }
 
 func (m *manager) missingMRWorkflowSummary(ctx context.Context, plans []serviceWorkflowPlan, reviewItems []ServiceMergeInspection, rows []domain.ServiceWorkflow) (domain.WorkflowSummary, error) {
@@ -293,14 +294,21 @@ func reviewWorkflowRow(item ServiceMergeInspection) domain.ServiceWorkflow {
 	switch item.Status {
 	case "no_mr":
 		row.Current, row.NextAction = domain.TaskWorkflowMR, "press C to create MRs"
+		if item.NextAction != "" {
+			row.NextAction = item.NextAction
+		}
 	case "ready":
 		row.Current, row.NextAction = domain.TaskWorkflowMerge, "merge ready MRs in forge, then press M to reconcile"
 	case "blocked", "failed":
 		row.Blocker = strings.Join(item.Blockers, "; ")
+		if item.Explanation != "" {
+			row.Blocker = item.Explanation
+		}
+		row.NextAction = reviewInspectionAction(item)
 	case "merged":
 		row.Current = domain.TaskWorkflowReleaseEligible
 	default: // waiting
-		row.NextAction = "wait for review/CI, then merge in forge and press M to reconcile"
+		row.NextAction = reviewInspectionAction(item)
 	}
 	return row
 }

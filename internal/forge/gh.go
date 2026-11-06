@@ -169,23 +169,37 @@ func ghReadiness(pr ghPR, sourceBranch string) MRReadiness {
 	ciState := ghChecksState(pr.StatusCheckRollup)
 	mergeable := strings.EqualFold(pr.Mergeable, "MERGEABLE")
 	blockers := make([]string, 0, 4)
+	var actions []string
 	if state != "open" {
 		blockers = append(blockers, "pull request is "+state)
+		switch state {
+		case "merged":
+			actions = append(actions, "press M to reconcile the merged PR")
+		case "":
+			actions = append(actions, "refresh PR state in forge")
+		default:
+			actions = append(actions, "inspect PR state in forge; create a PR if still needed")
+		}
 	}
 	if !approved {
 		blockers = append(blockers, "not approved")
+		actions = append(actions, "request required reviewer approval in forge")
 	}
 	switch ciState {
 	case "pending":
 		blockers = append(blockers, "checks pending")
+		actions = append(actions, "open pending checks; wait or complete required actions")
 	case "failure":
 		blockers = append(blockers, "checks failing")
+		actions = append(actions, "open failed checks; fix the cause and rerun checks")
 	}
 	if !mergeable {
 		if strings.EqualFold(pr.Mergeable, "CONFLICTING") {
 			blockers = append(blockers, "conflicts")
+			actions = append(actions, "resolve source/target conflicts; publish the resolution")
 		} else {
 			blockers = append(blockers, "mergeability unknown")
+			actions = append(actions, "refresh mergeability in forge; inspect if still unknown")
 		}
 	}
 
@@ -202,6 +216,7 @@ func ghReadiness(pr ghPR, sourceBranch string) MRReadiness {
 		Mergeable:      mergeable,
 		Ready:          len(blockers) == 0,
 		Blockers:       blockers,
+		NextAction:     strings.Join(actions, "; "),
 		SupportsSHAPin: true,
 		// Source head is server pinned; target branch preflight is non-atomic.
 		SupportsTargetBinding: false,

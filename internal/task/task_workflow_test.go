@@ -339,7 +339,7 @@ func TestTaskWorkflow_ReviewFeature_RejectsWrongTargetReadyMR(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "fix blockers, then merge in forge and press M to reconcile" {
+		if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "a: correct MR target to staging in forge; refresh" {
 			t.Fatalf("summary = %#v, want blocked review phase without merge guidance", summary)
 		}
 		if !strings.Contains(summary.Blocker, "develop") || !strings.Contains(summary.Blocker, "staging") {
@@ -362,7 +362,7 @@ func TestTaskWorkflow_ReviewFeature_RejectsWrongTargetReadyMR(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "fix blockers, then merge in forge and press M to reconcile" {
+		if summary.Current != domain.TaskWorkflowReviewCI || summary.NextAction != "a: inspect MR source/target in forge; select the correct MR" {
 			t.Fatalf("summary = %#v, want blocked review phase", summary)
 		}
 		if !strings.Contains(summary.Blocker, "feature/other") {

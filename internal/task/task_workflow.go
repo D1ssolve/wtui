@@ -133,11 +133,15 @@ func (m *manager) hotfixReviewWorkflow(ctx context.Context, taskID string) (doma
 		allMerged = allMerged && item.Status == "merged"
 		missing = missing || item.Status == "no_mr"
 		ready = ready || item.Status == "ready"
-		if item.Status == "failed" || item.Status == "blocked" {
-			blockers = append(blockers, strings.Join(item.Blockers, "; "))
-		}
 		row := reviewWorkflowRow(item)
 		row.Detail = item.MR.TargetBranch + ": " + strings.Join(item.Blockers, "; ")
+		if row.Blocker != "" {
+			row.Blocker = item.MR.TargetBranch + ": " + row.Blocker
+			blockers = appendUnique(blockers, item.ServiceName+": "+row.Blocker)
+		}
+		if row.NextAction != "" {
+			row.NextAction = item.MR.TargetBranch + ": " + row.NextAction
+		}
 		rows = append(rows, row)
 	}
 	phase, next := domain.TaskWorkflowReviewCI, "Services → m → Merge MR"
@@ -147,6 +151,9 @@ func (m *manager) hotfixReviewWorkflow(ctx context.Context, taskID string) (doma
 		phase, next = domain.TaskWorkflowReleaseEligible, "press C to finalize hotfix"
 	} else if ready {
 		phase = domain.TaskWorkflowMerge
+	}
+	if len(blockers) > 0 || (!missing && !allMerged && !ready) {
+		next = workflowBlockerActions(rows)
 	}
 	return workflowSummaryWithServices(steps, phase, next, strings.Join(blockers, "; "), false, len(blockers) > 0, rows), nil
 }
