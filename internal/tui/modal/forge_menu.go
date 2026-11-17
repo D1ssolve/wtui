@@ -1,6 +1,7 @@
 package modal
 
 import (
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/ai"
@@ -208,7 +209,7 @@ func (m *ForgeMenuModal) View() string {
 		}
 		sb.WriteString("\n\n")
 		if !m.generating {
-			sb.WriteString(dimStyle.Render("[Enter] create  [Esc] back"))
+			sb.WriteString(theme.HintLine("[Enter] create  [Esc] back"))
 		}
 		sb.WriteString("\n\n" + m.MetadataView())
 		return sb.String()
@@ -217,7 +218,7 @@ func (m *ForgeMenuModal) View() string {
 	if !m.available {
 		sb.WriteString(dimStyle.Render("No forge CLI available"))
 		sb.WriteString("\n\n")
-		sb.WriteString(dimStyle.Render("[Enter/Esc] close"))
+		sb.WriteString(theme.HintLine("[Enter/Esc] close"))
 		return sb.String()
 	}
 
@@ -234,6 +235,6 @@ func (m *ForgeMenuModal) View() string {
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(dimStyle.Render("[j/k or arrows] navigate  [Enter] select  [Esc] cancel"))
+	sb.WriteString(theme.HintLine("[j/k, ↑/↓] navigate  [Enter] select  [Esc] cancel"))
 	return sb.String()
 }

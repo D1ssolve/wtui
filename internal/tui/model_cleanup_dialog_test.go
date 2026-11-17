@@ -167,7 +167,7 @@ func TestCleanupDialog_KeyDStartsReadOnlyScan(t *testing.T) {
 	if _, ok := m.modal.(*modal.CleanupCandidatesModal); !ok {
 		t.Fatalf("scan ready did not open dialog: %T", m.modal)
 	}
-	if view := stripANSIForModel(m.View()); !strings.Contains(view, "[Esc] cancel") {
+	if view := stripANSIForModel(m.View()); !strings.Contains(view, hint("[Esc] cancel")) {
 		t.Fatalf("cleanup modal controls wrapped unexpectedly:\n%s", view)
 	}
 }

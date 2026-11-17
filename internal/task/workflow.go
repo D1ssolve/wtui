@@ -81,11 +81,11 @@ func releaseServiceGuidance(status domain.ReleaseStatus, serviceErr *domain.Rele
 	case domain.ReleaseStatusAwaitingTaskMerge:
 		return domain.ReleaseWorkflowDevelop, "awaiting task MR confirmation", blocker
 	case domain.ReleaseStatusIntegratingTasks:
-		return domain.ReleaseWorkflowDevelop, "integrating task MRs (press R to review retry)", blocker
+		return domain.ReleaseWorkflowDevelop, "integrating task MRs (press ctrl+r to review retry)", blocker
 	case domain.ReleaseStatusTaskMergeBlocked:
-		return domain.ReleaseWorkflowDevelop, "press R to review blocked task MRs", blocker
+		return domain.ReleaseWorkflowDevelop, "press ctrl+r to review blocked task MRs", blocker
 	case domain.ReleaseStatusTaskMergePartial:
-		return domain.ReleaseWorkflowDevelop, "press R to review partial task MRs", blocker
+		return domain.ReleaseWorkflowDevelop, "press ctrl+r to review partial task MRs", blocker
 	case domain.ReleaseStatusPrepared:
 		return domain.ReleaseWorkflowRegression, "press F to create master MRs", blocker
 	case domain.ReleaseStatusAwaitingMasterMerge:
@@ -103,7 +103,7 @@ func releaseServiceGuidance(status domain.ReleaseStatus, serviceErr *domain.Rele
 			blocker = "Release failed; completion is unverified"
 		}
 		if serviceErr != nil && serviceErr.Recoverable {
-			return domain.ReleaseWorkflowDevelop, "inspect failure and remote state; press R to review recovery", blocker
+			return domain.ReleaseWorkflowDevelop, "inspect failure and remote state; press ctrl+r to review recovery", blocker
 		}
 		return domain.ReleaseWorkflowDevelop, "inspect failure and remote state; manual recovery required", blocker
 	case domain.ReleaseStatusRejected:

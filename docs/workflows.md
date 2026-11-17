@@ -26,7 +26,7 @@ flowchart LR
 
 1. В Tasks (`1`) нажмите `i`, укажите ID и сервисы. Для каждого сервиса wtui создаст `feature/<TASK>` и worktree в `<tasks_root>/<TASK>/<service>`.
 ![Диалог создания feature-задачи в wtui](images/workflows/feature-01-init.png)
-2. Нажмите `O` для редактора или `R` для Rider. Пишите код, запускайте тесты и делайте commits как обычно. В Services (`Enter` или `2`) можно добавить сервис клавишей `a` или открыть lazygit клавишей `g`.
+2. Нажмите `O` для редактора или `R` для Rider. Пишите код, запускайте тесты и делайте commits как обычно. В Services (`Enter` или `2`) можно добавить сервис клавишей `a` или открыть lazygit клавишей `Enter` на выбранном сервисе.
 ![Состояние feature-задачи в wtui перед работой во внешних инструментах](images/workflows/feature-02-overview.png)
 3. Нажмите `V`. Это проверка Git-состояния, а не тесты приложения. `S` синхронизирует ветки с remote.
 ![Ошибка проверки Git-состояния feature-задачи в wtui](images/workflows/feature-03-validation-error.png)
@@ -92,7 +92,7 @@ flowchart LR
 6. Очистите задачу только после завершения обоих merge и post-actions.
 ![Кандидаты на ручную очистку hotfix в wtui](images/workflows/cleanup-candidates-80x24.png)
 
-`F` на hotfix конвертирует задачу в feature: создаёт `feature/<TARGET>` от подтверждённого SHA, пушит ветки с lease и удаляет только неизменённые локальные hotfix-ветки. Remote source-ветка сохраняется.
+`H` на hotfix конвертирует задачу в feature: создаёт `feature/<TARGET>` от подтверждённого SHA, пушит ветки с lease и удаляет только неизменённые локальные hotfix-ветки. Remote source-ветка сохраняется.
 
 ## Ручная очистка
 
@@ -117,5 +117,5 @@ flowchart LR
 |---|---|
 | Close | Проверьте push и MR, затем повторите `C`. |
 | Merge check | После устранения blocker повторите `M`; он заново проверит MR перед merge. |
-| Release | При recoverable `failed` используйте `R` в Releases. После частичного production merge используйте `M`, не `R`. |
+| Release | При recoverable `failed` используйте `Ctrl+R` в Releases. После частичного production merge используйте `M`, не `Ctrl+R`. |
 | Cleanup | Уже удалённое не откатывается. Нажмите `D` или `P` и постройте новый план. |

@@ -8,6 +8,8 @@ type SubmitInitMsg struct {
 	BranchType   string
 	BranchPrefix string
 	BaseBranch   string
+	// FromRemoteBranch imports the existing origin branch BranchPrefix+TaskID.
+	FromRemoteBranch bool
 }
 
 type SubmitAddMsg struct {

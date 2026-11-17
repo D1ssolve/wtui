@@ -131,7 +131,7 @@ func TestUpdate_ReleaseTaskMergePlanReady_OpensConfirmWithRows(t *testing.T) {
 	if m.opRunning {
 		t.Fatal("planning done must clear opRunning")
 	}
-	if view := m.modal.View(); !strings.Contains(view, "abc12345") || !strings.Contains(view, "[Enter/y] execute") {
+	if view := m.modal.View(); !strings.Contains(view, "abc12345") || !strings.Contains(view, hint("[Enter/y] execute")) {
 		t.Fatalf("confirm view missing task MR rows or execute hint: %s", view)
 	}
 }
@@ -300,10 +300,10 @@ func TestUpdate_StartReleaseRetry_TaskMergeBlocked_LaunchesRetryPlanning(t *test
 	m.setFocus(FocusReleases)
 	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusTaskMergeBlocked}})
 
-	updated, cmd := m.Update(sendKey("R"))
+	updated, cmd := m.Update(keyMsgFor("ctrl+r"))
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("R on task_merge_blocked must start retry planning")
+		t.Fatal("ctrl+r on task_merge_blocked must start retry planning")
 	}
 	if !m.opRunning || m.releaseTaskMerge == nil || m.releaseTaskMerge.releaseID != "rel-1" {
 		t.Fatalf("retry planning state wrong: op=%v req=%+v", m.opRunning, m.releaseTaskMerge)
@@ -326,10 +326,10 @@ func TestUpdate_StartReleaseRetry_FailedRecoverable_UsesLegacyRetry(t *testing.T
 		Error: &domain.ReleaseError{Message: "tag push failed", Recoverable: true},
 	}})
 
-	updated, cmd := m.Update(sendKey("R"))
+	updated, cmd := m.Update(keyMsgFor("ctrl+r"))
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("R on failed recoverable must start legacy retry")
+		t.Fatal("ctrl+r on failed recoverable must start legacy retry")
 	}
 	runBatchCommands(cmd())
 	if mgr.retryReleaseCalls != 1 {
@@ -346,10 +346,10 @@ func TestUpdate_StartReleaseRetry_AwaitingTaskMerge_LaunchesRetryPlanning(t *tes
 	m.setFocus(FocusReleases)
 	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusAwaitingTaskMerge}})
 
-	updated, cmd := m.Update(sendKey("R"))
+	updated, cmd := m.Update(keyMsgFor("ctrl+r"))
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("R on awaiting_task_merge must start retry planning")
+		t.Fatal("ctrl+r on awaiting_task_merge must start retry planning")
 	}
 	if !m.opRunning || m.releaseTaskMerge == nil || m.releaseTaskMerge.releaseID != "rel-1" {
 		t.Fatalf("retry planning state wrong: op=%v req=%+v", m.opRunning, m.releaseTaskMerge)
@@ -370,10 +370,10 @@ func TestUpdate_RetryTaskMerge_Awaiting_ConfirmExecutesAndRefreshes(t *testing.T
 	m.setFocus(FocusReleases)
 	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusAwaitingTaskMerge}})
 
-	updated, cmd := m.Update(sendKey("R"))
+	updated, cmd := m.Update(keyMsgFor("ctrl+r"))
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("R on awaiting_task_merge must start retry planning")
+		t.Fatal("ctrl+r on awaiting_task_merge must start retry planning")
 	}
 	generation := m.releaseTaskMerge.generation
 
@@ -407,7 +407,7 @@ func TestUpdate_RetryTaskMerge_ConfirmExecutesAndRefreshes(t *testing.T) {
 	m.setFocus(FocusReleases)
 	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusTaskMergePartial}})
 
-	updated, cmd := m.Update(sendKey("R"))
+	updated, cmd := m.Update(keyMsgFor("ctrl+r"))
 	m = updated.(Model)
 	generation := m.releaseTaskMerge.generation
 
@@ -502,7 +502,7 @@ func TestUpdate_ConfirmReleaseTaskMergeRetry_StaleGeneration_DoesNotExecute(t *t
 	m.setFocus(FocusReleases)
 	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusTaskMergeBlocked}})
 
-	updated, cmd := m.Update(sendKey("R"))
+	updated, cmd := m.Update(keyMsgFor("ctrl+r"))
 	m = updated.(Model)
 	generation := m.releaseTaskMerge.generation
 
@@ -525,7 +525,7 @@ func TestUpdate_ReleaseTaskMergeRetryPlanReady_DriftedSelectionIgnored(t *testin
 	m.setFocus(FocusReleases)
 	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusTaskMergeBlocked}, {ID: "rel-2", Status: domain.ReleaseStatusTaskMergeBlocked}})
 
-	updated, cmd := m.Update(sendKey("R"))
+	updated, cmd := m.Update(keyMsgFor("ctrl+r"))
 	m = updated.(Model)
 	generation := m.releaseTaskMerge.generation
 	_ = cmd()

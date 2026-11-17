@@ -50,7 +50,7 @@ func TestView_TaskMergeConfirmOverlay_TransitionWidthKeepsGeometry(t *testing.T)
 					t.Fatalf("compact row missing at %d cols: %s", termW, view)
 				}
 			}
-			if !strings.Contains(view, "[Enter/y] execute") {
+			if !strings.Contains(view, hint("[Enter/y] execute")) {
 				t.Fatalf("execute action must be visible at %d cols: %s", termW, view)
 			}
 		})

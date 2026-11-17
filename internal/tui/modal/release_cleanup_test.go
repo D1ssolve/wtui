@@ -245,7 +245,7 @@ func TestReleaseCleanupChecklist_BlockedFooterKeepsSelectionControlsAndIndentedR
 	m := NewReleaseCleanupChecklistModal(cleanupPreview(task.DefaultReleaseCleanupSelection(), "blocked"))
 	m.SetTerminalSize(40, 20)
 	view := stripAnsi(m.View())
-	for _, want := range []string{"[j/k] navigate", "[Space] toggle", "Change selection to replan", "\n      task directories", "\n      manifest"} {
+	for _, want := range []string{hint("[j/k] navigate"), hint("[Space] toggle"), "Change selection to replan", "\n      task directories", "\n      manifest"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("narrow blocked view missing %q:\n%s", want, view)
 		}

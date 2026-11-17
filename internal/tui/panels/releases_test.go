@@ -37,13 +37,13 @@ func TestReleasesPanel_FolderActions_SelectedReleaseAllStatuses(t *testing.T) {
 			p.SetFocused(true)
 			p.SetReleases([]domain.Release{{ID: "first", Dir: "/first"}, {ID: "selected", Dir: "/release folder", Status: status}})
 			p, _ = p.Update(sendKey("j"))
-			for _, key := range []string{"O", "I"} {
+			for _, key := range []string{"O", "R"} {
 				_, cmd := p.Update(sendKey(key))
 				if cmd == nil {
 					t.Fatalf("%s: missing action", key)
 				}
 				var want tea.Msg = OpenReleaseEditorMsg{ReleaseID: "selected", ReleaseDir: "/release folder"}
-				if key == "I" {
+				if key == "R" {
 					want = OpenReleaseRiderMsg{ReleaseID: "selected", ReleaseDir: "/release folder"}
 				}
 				if got := cmd(); got != want {
@@ -65,7 +65,7 @@ func TestReleasesPanel_FolderActions_EmptyOrUnfocused(t *testing.T) {
 			if populated {
 				p.SetReleases([]domain.Release{{ID: "rel", Dir: "/rel"}})
 			}
-			for _, key := range []string{"O", "I", "R"} {
+			for _, key := range []string{"O", "R"} {
 				if _, cmd := p.Update(sendKey(key)); cmd != nil {
 					t.Fatalf("%s emitted action: focused=%v populated=%v", key, focused, populated)
 				}
@@ -280,7 +280,7 @@ func TestReleasesPanel_KeyD_Unfocused_Noop(t *testing.T) {
 func TestReleasesPanel_View_EmptyPlaceholder(t *testing.T) {
 	p := NewReleasesPanel(70, 12)
 	view := stripAnsi(p.View())
-	if !containsAll(view, "RELEASES", "No releases yet", "Press [N]") {
+	if !containsAll(view, "RELEASES", "No releases yet", hint("Press [N]")) {
 		t.Fatalf("expected placeholder text in view, got: %q", view)
 	}
 }

@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"slices"
 	"strings"
 
@@ -178,7 +179,8 @@ func (e *MetadataEditor) updateMetadata(msg tea.Msg) (bool, tea.Cmd) {
 func (e *MetadataEditor) MetadataView() string {
 	if e.discarding {
 		return lipgloss.NewStyle().Foreground(modalColorWarning).Render(ansi.Wrap(
-			"Discard draft and close?\nGenerated and edited metadata will be lost.\n[y] discard  [Esc/n] keep editing", max(24, e.width), " "))
+			"Discard draft and close?\nGenerated and edited metadata will be lost.", max(24, e.width), " ")) +
+			"\n" + theme.HintLine("[y] discard  [Esc/n] keep editing")
 	}
 	var b strings.Builder
 	if e.compact && !e.editing {

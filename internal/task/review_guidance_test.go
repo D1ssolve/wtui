@@ -165,7 +165,7 @@ func TestReviewGuidance_ReleaseFailureRecovery(t *testing.T) {
 		err    *domain.ReleaseError
 		action string
 	}{
-		{domain.ReleaseStatusFailed, &domain.ReleaseError{Message: "tag not verified", Recoverable: true}, "press R"},
+		{domain.ReleaseStatusFailed, &domain.ReleaseError{Message: "tag not verified", Recoverable: true}, "press ctrl+r"},
 		{domain.ReleaseStatusFailed, &domain.ReleaseError{Message: "unsafe state"}, "manual"},
 		{domain.ReleaseStatusFailed, nil, "inspect"},
 		{domain.ReleaseStatusRejected, nil, "new release"},

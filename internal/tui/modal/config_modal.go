@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -128,7 +129,7 @@ func (m *ConfigModal) View() string {
 	if maxOffset > 0 {
 		sb.WriteString(hintStyle.Render(fmt.Sprintf("[%d/%d] ", m.scrollOffset+1, maxOffset+1)))
 	}
-	sb.WriteString(hintStyle.Render("[j/k] scroll  [Esc] close"))
+	sb.WriteString(theme.HintLine("[j/k] scroll  [Esc] close"))
 
 	return sb.String()
 }

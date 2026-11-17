@@ -64,7 +64,7 @@ func TestReleaseExecuteConfirmDialog_FinalOverlay_TransitionWidths(t *testing.T)
 					t.Fatalf("compact row missing at %d cols: %s", termW, view)
 				}
 			}
-			if !strings.Contains(view, "[Enter/y] execute [Esc/n] cancel") {
+			if !strings.Contains(view, hint("[Enter/y] execute [Esc/n] cancel")) {
 				t.Fatalf("execute action must be visible at %d cols: %s", termW, view)
 			}
 		})
@@ -94,10 +94,10 @@ func TestReleaseExecuteConfirmDialog_FinalOverlay_BlockedExposesNoExecution(t *t
 			overlay := OverlayView(d.View(), termW, 40)
 			assertOverlayFitsTerminal(t, overlay, termW, 40)
 			view := stripAnsi(overlay)
-			if strings.Contains(view, "[Enter/y] execute") {
+			if strings.Contains(view, hint("[Enter/y] execute")) {
 				t.Fatalf("blocked state must not expose execute action at %d cols: %s", termW, view)
 			}
-			for _, want := range []string{"⚠", "MR is not ready", "Resolve blocked task MRs", "[Esc/n] cancel"} {
+			for _, want := range []string{"⚠", "MR is not ready", "Resolve blocked task MRs", hint("[Esc/n] cancel")} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("blocked overlay missing %q at %d cols: %s", want, termW, view)
 				}
@@ -121,7 +121,7 @@ func TestReleaseExecuteConfirmDialog_FinalOverlay_LongListScrollsToAction(t *tes
 	_, _ = d.Update(sendKey("G"))
 	overlay := OverlayView(d.View(), 110, 24)
 	assertOverlayFitsTerminal(t, overlay, 110, 24)
-	if !strings.Contains(stripAnsi(overlay), "[Enter/y] execute [Esc/n] cancel") {
+	if !strings.Contains(stripAnsi(overlay), hint("[Enter/y] execute [Esc/n] cancel")) {
 		t.Fatalf("scrolled overlay must show action hint: %s", stripAnsi(overlay))
 	}
 }
@@ -205,7 +205,7 @@ func TestReleaseTaskMergeRetryConfirmDialog_FinalOverlay_LongListScrollsToAction
 	_, _ = d.Update(sendKey("G"))
 	overlay := OverlayView(d.View(), 110, 24)
 	assertOverlayFitsTerminal(t, overlay, 110, 24)
-	if !strings.Contains(stripAnsi(overlay), "[Enter/y] retry merges [Esc/n] cancel") {
+	if !strings.Contains(stripAnsi(overlay), hint("[Enter/y] retry merges [Esc/n] cancel")) {
 		t.Fatalf("scrolled overlay must show retry hint: %s", stripAnsi(overlay))
 	}
 }
@@ -233,7 +233,7 @@ func TestReleaseTaskMergeRetryConfirmDialog_FinalOverlay_TransitionWidths(t *tes
 					t.Fatalf("compact row missing at %d cols: %s", termW, view)
 				}
 			}
-			if !strings.Contains(view, "[Enter/y] retry merges [Esc/n] cancel") {
+			if !strings.Contains(view, hint("[Enter/y] retry merges [Esc/n] cancel")) {
 				t.Fatalf("retry action must be visible at %d cols: %s", termW, view)
 			}
 		})
@@ -253,10 +253,10 @@ func TestReleaseTaskMergeRetryConfirmDialog_FinalOverlay_BlockedExposesNoRetry(t
 			overlay := OverlayView(d.View(), termW, 40)
 			assertOverlayFitsTerminal(t, overlay, termW, 40)
 			view := stripAnsi(overlay)
-			if strings.Contains(view, "[Enter/y]") {
+			if strings.Contains(view, hint("[Enter/y]")) {
 				t.Fatalf("blocked state must not expose retry action at %d cols: %s", termW, view)
 			}
-			for _, want := range []string{"⚠", "target moved since failed attempt", "[Esc/n] cancel"} {
+			for _, want := range []string{"⚠", "target moved since failed attempt", hint("[Esc/n] cancel")} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("blocked overlay missing %q at %d cols: %s", want, termW, view)
 				}

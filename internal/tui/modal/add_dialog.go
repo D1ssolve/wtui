@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -265,8 +266,6 @@ func (d *AddDialog) View() string {
 		Bold(true).
 		Foreground(modalColorBorder)
 
-	hintStyle := lipgloss.NewStyle().Foreground(modalColorDim)
-
 	var sb strings.Builder
 
 	sb.WriteString(titleStyle.Render(d.Title()))
@@ -307,9 +306,9 @@ func (d *AddDialog) View() string {
 
 	sb.WriteString("\n")
 	if d.hasRepos {
-		sb.WriteString(hintStyle.Render("[Space] toggle  [j/k] navigate  [h/l] page  [f] filter  [Enter] confirm  [Esc] cancel"))
+		sb.WriteString(theme.HintLine("[Space] toggle  [j/k] navigate  [h/l] page  [f] filter  [Enter] confirm  [Esc] cancel"))
 	} else {
-		sb.WriteString(hintStyle.Render("[Enter] confirm  [Esc] cancel"))
+		sb.WriteString(theme.HintLine("[Enter] confirm  [Esc] cancel"))
 	}
 
 	return sb.String()

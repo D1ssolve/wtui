@@ -36,7 +36,7 @@ func TestCaptureMetadataEdgeViews(t *testing.T) {
 				case "mr-long-confirm":
 					dialog := modal.NewMRCreateConfirmDialog("T-1", "Accepted title", []modal.MRCreateConfirmItem{{ServiceName: "api", Reason: "source is not pushed"}}, strings.Repeat("Accepted note\n", 100))
 					m = captureModalModel(t, width, height, dialog)
-					contains = []string{"source is not pushed", "[Esc/n] cancel"}
+					contains = []string{"source is not pushed", hint("[Esc/n] cancel")}
 				case "close-edited-version":
 					m = captureMetadataModel(t, width, height, "close")
 					dialog := m.modal.(metadataModal)

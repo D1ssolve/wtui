@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -56,7 +57,6 @@ func (d *ConvertHotfixDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 func (d *ConvertHotfixDialog) View() string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normal := lipgloss.NewStyle().Foreground(modalColorNormal)
-	dim := lipgloss.NewStyle().Foreground(modalColorDim)
 	danger := lipgloss.NewStyle().Foreground(modalColorDanger)
 
 	view := title.Render(fmt.Sprintf("Convert hotfix task %q", d.sourceTaskID)) + "\n\n" +
@@ -68,5 +68,5 @@ func (d *ConvertHotfixDialog) View() string {
 	if d.errorMsg != "" {
 		view += "\n\n" + danger.Render(d.errorMsg)
 	}
-	return view + "\n\n" + dim.Render("[Enter] Convert  [Esc] Cancel")
+	return view + "\n\n" + theme.HintLine("[Enter] Convert  [Esc] Cancel")
 }

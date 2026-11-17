@@ -138,7 +138,7 @@ func TestModelView_Narrow60x24RetainsOutputMarkerAndFooter(t *testing.T) {
 		m.outputPanel.AppendLine("OUTPUTMARKER cleanup failed")
 		assertModelViewBounds(t, m, 60, 24)
 		view := stripANSIForModel(m.View())
-		assertOrderedInView(t, view, "TASKS", "OUTPUT", "[q] quit")
+		assertOrderedInView(t, view, "TASKS", "OUTPUT", "commands")
 		if !strings.Contains(view, "OUTPUTMARKER") {
 			t.Fatalf("output marker cropped:\n%s", view)
 		}
@@ -157,7 +157,7 @@ func TestModelView_Narrow60x24RetainsOutputMarkerAndFooter(t *testing.T) {
 		m.outputPanel.AppendLine("OUTPUTMARKER cleanup failed")
 		assertModelViewBounds(t, m, 60, 24)
 		view := stripANSIForModel(m.View())
-		assertOrderedInView(t, view, "TASKS", "RELEASES", "OUTPUT", "[q] quit")
+		assertOrderedInView(t, view, "TASKS", "RELEASES", "OUTPUT", "commands")
 		if !strings.Contains(view, "OUTPUTMARKER") {
 			t.Fatalf("output marker cropped:\n%s", view)
 		}

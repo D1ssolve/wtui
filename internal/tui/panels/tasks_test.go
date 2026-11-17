@@ -352,7 +352,7 @@ func TestTasksPanel_KeyCUpper_EmitsPlanCloseTaskMsg(t *testing.T) {
 	}
 }
 
-func TestTasksPanel_KeyF_EmitsOpenConvertHotfixDialogMsg(t *testing.T) {
+func TestTasksPanel_KeyH_EmitsOpenConvertHotfixDialogMsg(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetFlow(&gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
 		gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
@@ -361,9 +361,9 @@ func TestTasksPanel_KeyF_EmitsOpenConvertHotfixDialogMsg(t *testing.T) {
 	p.SetTasks([]domain.Task{{ID: "IN-001-hotfix", Phase: "hotfix"}})
 	p.SetFocused(true)
 
-	_, cmd := p.Update(sendKey("F"))
+	_, cmd := p.Update(sendKey("H"))
 	if cmd == nil {
-		t.Fatal("F key should return a cmd")
+		t.Fatal("H key should return a cmd")
 	}
 	msg := cmd()
 	got, ok := msg.(OpenConvertHotfixDialogMsg)
@@ -378,7 +378,7 @@ func TestTasksPanel_KeyF_EmitsOpenConvertHotfixDialogMsg(t *testing.T) {
 	}
 }
 
-func TestTasksPanel_KeyF_NoFeatureRule_NoOp(t *testing.T) {
+func TestTasksPanel_KeyH_NoFeatureRule_NoOp(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetFlow(&gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
 		gitflow.BranchTypeHotfix: {Prefixes: []string{"hotfix/"}},
@@ -386,13 +386,13 @@ func TestTasksPanel_KeyF_NoFeatureRule_NoOp(t *testing.T) {
 	p.SetTasks([]domain.Task{{ID: "IN-001-hotfix", Phase: "hotfix"}})
 	p.SetFocused(true)
 
-	_, cmd := p.Update(sendKey("F"))
+	_, cmd := p.Update(sendKey("H"))
 	if cmd != nil {
 		t.Fatal("F key must be disabled without feature rule")
 	}
 }
 
-func TestTasksPanel_KeyF_BlankCanonicalFeaturePrefix_NoOp(t *testing.T) {
+func TestTasksPanel_KeyH_BlankCanonicalFeaturePrefix_NoOp(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetFlow(&gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
 		gitflow.BranchTypeFeature: {Prefixes: []string{"", "feature/"}},
@@ -401,13 +401,13 @@ func TestTasksPanel_KeyF_BlankCanonicalFeaturePrefix_NoOp(t *testing.T) {
 	p.SetTasks([]domain.Task{{ID: "IN-001-hotfix", Phase: "hotfix"}})
 	p.SetFocused(true)
 
-	_, cmd := p.Update(sendKey("F"))
+	_, cmd := p.Update(sendKey("H"))
 	if cmd != nil {
 		t.Fatal("F key must be disabled with blank canonical feature prefix")
 	}
 }
 
-func TestTasksPanel_KeyF_AllowsRetryForMixedHotfixFeatureBranches(t *testing.T) {
+func TestTasksPanel_KeyH_AllowsRetryForMixedHotfixFeatureBranches(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetFlow(&gitflow.ResolvedGitFlow{
 		DefaultBranchType: gitflow.BranchTypeFeature,
@@ -425,16 +425,16 @@ func TestTasksPanel_KeyF_AllowsRetryForMixedHotfixFeatureBranches(t *testing.T) 
 	}})
 	p.SetFocused(true)
 
-	_, cmd := p.Update(sendKey("F"))
+	_, cmd := p.Update(sendKey("H"))
 	if cmd == nil {
-		t.Fatal("F key should allow retry for mixed conversion branches")
+		t.Fatal("H key should allow retry for mixed conversion branches")
 	}
 	if _, ok := cmd().(OpenConvertHotfixDialogMsg); !ok {
 		t.Fatalf("expected OpenConvertHotfixDialogMsg, got %T", cmd())
 	}
 }
 
-func TestTasksPanel_KeyF_PendingConversionUsesManifestTarget(t *testing.T) {
+func TestTasksPanel_KeyH_PendingConversionUsesManifestTarget(t *testing.T) {
 	p := NewTasksPanel(40, 20)
 	p.SetFlow(&gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
 		gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
@@ -443,9 +443,9 @@ func TestTasksPanel_KeyF_PendingConversionUsesManifestTarget(t *testing.T) {
 	p.SetTasks([]domain.Task{{ID: "IN-001", Phase: "feature", PendingConversionTargetID: "IN-9000"}})
 	p.SetFocused(true)
 
-	_, cmd := p.Update(sendKey("F"))
+	_, cmd := p.Update(sendKey("H"))
 	if cmd == nil {
-		t.Fatal("F key should retry pending conversion")
+		t.Fatal("H key should retry pending conversion")
 	}
 	msg := cmd().(OpenConvertHotfixDialogMsg)
 	if msg.TargetTaskID != "IN-9000" {

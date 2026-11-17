@@ -38,7 +38,7 @@ func TestReleaseTaskMergeRetryConfirmDialog_RendersReleaseAndRows(t *testing.T) 
 		"rel-2026-09-21",
 		"api | APP-1 | !12 | abc12345 | develop@def67890 | merged",
 		"worker | APP-2 | !7 | 11112222 | develop@33334444 | ready",
-		"[Enter/y] retry merges [Esc/n] cancel",
+		hint("[Enter/y] retry merges [Esc/n] cancel"),
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q: %s", want, view)
@@ -73,7 +73,7 @@ func TestReleaseTaskMergeRetryConfirmDialog_NotReadyRowsDisableConfirm(t *testin
 	if !strings.Contains(view, "target moved since failed attempt") {
 		t.Fatalf("view missing blocker: %s", view)
 	}
-	if strings.Contains(view, "[Enter/y] retry") {
+	if strings.Contains(view, hint("[Enter/y] retry")) {
 		t.Fatalf("view must omit retry hint when a row is not ready: %s", view)
 	}
 	if _, cmd := d.Update(sendSpecialKey(tea.KeyEnter)); cmd != nil {

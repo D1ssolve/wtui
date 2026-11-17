@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -106,7 +107,7 @@ func (m *SystemInfoModal) View() string {
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(dimStyle.Render("[Esc] or [.] to close"))
+	sb.WriteString(theme.HintLine("[Esc] or [.] to close"))
 
 	return sb.String()
 }

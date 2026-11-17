@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 func (h *HelpOverlay) contentVisible() int {
@@ -78,14 +79,14 @@ func (h *HelpOverlay) SetWorkflow(title string, wf *domain.WorkflowSummary) {
 
 func (h *HelpOverlay) shortcutRow(key, desc string) string {
 	const keyColumn = 16
-	if pad := keyColumn - lipgloss.Width(key); pad > 0 {
-		key += strings.Repeat(" ", pad)
+	keys := theme.Keycaps(key)
+	if pad := keyColumn - lipgloss.Width(keys); pad > 0 {
+		keys += strings.Repeat(" ", pad)
 	} else {
-		key += " "
+		keys += " "
 	}
-	keyStyle := lipgloss.NewStyle().Foreground(modalColorInfo)
 	descStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
-	prefix := "  " + keyStyle.Render(key)
+	prefix := "  " + keys
 	line := prefix + descStyle.Render(desc)
 
 	width := 0

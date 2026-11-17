@@ -70,7 +70,7 @@ wtui
 
 4. Press `O` to open the task in your editor, write code, and commit as usual.
 
-Press `?` at any time for context-aware keyboard help.
+Press `?` at any time for keyboard help for the focused panel, or `:` / `Ctrl+P` to search and run any available action.
 
 ## Everyday flow
 

@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/ai"
@@ -239,7 +240,7 @@ func (m *CloseTaskConfirmModal) View() string {
 
 	sb.WriteString("\n")
 	if !m.generating {
-		sb.WriteString(dimStyle.Render("[Enter] confirm close  [Esc] cancel"))
+		sb.WriteString(theme.HintLine("[Enter] confirm close  [Esc] cancel"))
 	}
 	sb.WriteString("\n\n" + m.MetadataView())
 	return sb.String()

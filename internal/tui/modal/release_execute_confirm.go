@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"sort"
 	"strings"
 
@@ -180,7 +181,7 @@ func (d *ReleaseExecuteConfirmDialog) content() string {
 	if d.preview.Err != nil {
 		b.WriteString(warnStyle.Render("Cannot preview release: " + d.preview.Err.Error()))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("[Esc/n] cancel"))
+		b.WriteString(theme.HintLine("[Esc/n] cancel"))
 		return b.String()
 	}
 
@@ -228,11 +229,11 @@ func (d *ReleaseExecuteConfirmDialog) content() string {
 	b.WriteString(warnStyle.Bold(true).Render("Tags are NOT created yet. Use \"Finish Release\" after regression testing."))
 	b.WriteString("\n")
 	if d.canConfirm() {
-		b.WriteString(dimStyle.Render("[Enter/y] execute [Esc/n] cancel"))
+		b.WriteString(theme.HintLine("[Enter/y] execute [Esc/n] cancel"))
 	} else {
 		b.WriteString(warnStyle.Render("Resolve blocked task MRs before executing."))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("[Esc/n] cancel"))
+		b.WriteString(theme.HintLine("[Esc/n] cancel"))
 	}
 	return b.String()
 }

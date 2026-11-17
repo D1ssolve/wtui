@@ -68,7 +68,7 @@ func (v *PipelineView) View() string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(theme.Primary).Render("GitLab Pipeline")
 	service := lipgloss.NewStyle().Foreground(theme.Text).Render("  " + v.serviceName)
 	status := lipgloss.NewStyle().Bold(true).Foreground(color).Render("  " + marker + " " + strings.ToUpper(v.pipeline.Status))
-	hint := lipgloss.NewStyle().Foreground(theme.TextMuted).Render("[j/k] scroll  [g/G] top/bottom  [Esc] back")
+	hint := theme.HintLine("[j/k] scroll  [g/G] top/bottom  [Esc] back")
 	content := lipgloss.JoinVertical(lipgloss.Left, title+service+status, v.viewport.View(), hint)
 	boxed := theme.FocusedGlassBorder(theme.Primary).
 		Width(max(1, v.termW-4)).

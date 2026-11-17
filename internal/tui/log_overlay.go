@@ -304,7 +304,6 @@ func (o *LogOverlay) Update(msg tea.Msg) (*LogOverlay, tea.Cmd) {
 
 func (o *LogOverlay) chrome() (string, string) {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(logColorTitle)
-	hintStyle := lipgloss.NewStyle().Foreground(logColorHint)
 	filterStyle := lipgloss.NewStyle().Foreground(logColorFilter)
 
 	mode := "Commands"
@@ -344,7 +343,7 @@ func (o *LogOverlay) chrome() (string, string) {
 	}
 	hint += "\n[j/k] scroll  [g/G] top/bottom  [L/Esc] close"
 	return ansi.Hardwrap(titleStyle.Render(title), o.viewport.Width, true),
-		ansi.Hardwrap(hintStyle.Render(hint), o.viewport.Width, true)
+		ansi.Hardwrap(theme.HintLine(hint), o.viewport.Width, true)
 }
 
 func (o *LogOverlay) View() string {

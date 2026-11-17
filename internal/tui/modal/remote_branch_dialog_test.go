@@ -393,7 +393,7 @@ func TestRemoteBranchConflictDialog_View_SelectionMode_ContainsExpectedContent(t
 		t.Error("View should contain 'Cancel'")
 	}
 
-	if !strings.Contains(view, "j/k") {
+	if !strings.Contains(view, hint("[j/k, ↑/↓] navigate")) {
 		t.Error("View should contain 'j/k' navigation hint")
 	}
 	if !strings.Contains(view, "Enter") {

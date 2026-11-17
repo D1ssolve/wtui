@@ -110,10 +110,10 @@ func (p ReleasesPanel) Update(msg tea.Msg) (ReleasesPanel, tea.Cmd) {
 			return p, nil
 		case "N":
 			return p, func() tea.Msg { return OpenCreateReleaseDialogMsg{} }
-		case "O", "I":
+		case "O", "R":
 			if selected := p.SelectedRelease(); selected != nil {
 				id, dir := selected.ID, selected.Dir
-				if msg.String() == "I" {
+				if msg.String() == "R" {
 					return p, func() tea.Msg { return OpenReleaseRiderMsg{ReleaseID: id, ReleaseDir: dir} }
 				}
 				return p, func() tea.Msg { return OpenReleaseEditorMsg{ReleaseID: id, ReleaseDir: dir} }
@@ -170,7 +170,7 @@ func (p ReleasesPanel) renderBody(width, height int) string {
 	}
 
 	if len(p.releases) == 0 {
-		placeholder := lipgloss.NewStyle().Foreground(releasesColorDim).Render("No releases yet. Press [N] to create release.")
+		placeholder := uitheme.HintLine("No releases yet. Press [N] to create release.")
 		return fitLines([]string{lipgloss.NewStyle().MaxWidth(width).Render(placeholder)}, height)
 	}
 

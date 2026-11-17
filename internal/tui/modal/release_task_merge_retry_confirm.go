@@ -1,6 +1,7 @@
 package modal
 
 import (
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -107,7 +108,6 @@ func (d *ReleaseTaskMergeRetryConfirmDialog) View() string {
 func (d *ReleaseTaskMergeRetryConfirmDialog) content() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
-	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 	warnStyle := lipgloss.NewStyle().Foreground(modalColorWarning)
 
 	var b strings.Builder
@@ -122,11 +122,11 @@ func (d *ReleaseTaskMergeRetryConfirmDialog) content() string {
 	if d.allReady() {
 		b.WriteString(warnStyle.Bold(true).Render("⚠ This will merge the listed ready reviews sequentially, then continue the release prepare."))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("[Enter/y] retry merges [Esc/n] cancel"))
+		b.WriteString(theme.HintLine("[Enter/y] retry merges [Esc/n] cancel"))
 	} else {
 		b.WriteString(warnStyle.Render("Some task MRs are not retryable; resolve them before retrying."))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("[Esc/n] cancel"))
+		b.WriteString(theme.HintLine("[Esc/n] cancel"))
 	}
 	return b.String()
 }

@@ -87,10 +87,10 @@ func TestE2E_ReleaseRetryRequiresRecoverableFailure(t *testing.T) {
 		Error:  &domain.ReleaseError{Recoverable: true},
 	}})
 
-	updated, cmd := m.Update(sendKey("R"))
+	updated, cmd := m.Update(keyMsgFor("ctrl+r"))
 	m = updated.(Model)
 	if cmd == nil || !m.opRunning || !strings.Contains(m.outputPanel.View(), "Retrying release rel-1") {
-		t.Fatal("R on recoverable failed release must start retry")
+		t.Fatal("ctrl+r on recoverable failed release must start retry")
 	}
 
 	m.opRunning = false
@@ -99,16 +99,16 @@ func TestE2E_ReleaseRetryRequiresRecoverableFailure(t *testing.T) {
 		Status: domain.ReleaseStatusFailed,
 		Error:  &domain.ReleaseError{Recoverable: false},
 	}})
-	updated, cmd = m.Update(sendKey("R"))
+	updated, cmd = m.Update(keyMsgFor("ctrl+r"))
 	m = updated.(Model)
 	if cmd != nil || m.opRunning || !strings.Contains(m.outputPanel.View(), "release must be failed and recoverable") {
-		t.Fatal("R on non-recoverable failed release must emit hint only")
+		t.Fatal("ctrl+r on non-recoverable failed release must emit hint only")
 	}
 
 	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-3", Status: domain.ReleaseStatusPrepared}})
-	updated, cmd = m.Update(sendKey("R"))
+	updated, cmd = m.Update(keyMsgFor("ctrl+r"))
 	m = updated.(Model)
 	if cmd != nil || m.opRunning {
-		t.Fatal("R on non-failed release must not start retry")
+		t.Fatal("ctrl+r on non-failed release must not start retry")
 	}
 }

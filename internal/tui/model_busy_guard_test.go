@@ -44,6 +44,7 @@ func TestUpdate_MutatingStartMsg_IgnoredWhileBusy(t *testing.T) {
 		"open stash dialog":          func() tea.Msg { return panels.OpenStashDialogMsg{TaskID: "T-1", ServiceName: "api"} },
 		"open remove service dialog": func() tea.Msg { return panels.OpenRemoveServiceDialogMsg{TaskID: "T-1", ServiceName: "api"} },
 		"open create release dialog": func() tea.Msg { return panels.OpenCreateReleaseDialogMsg{} },
+		"open import remote branch":  func() tea.Msg { return panels.OpenImportRemoteBranchDialogMsg{} },
 		"submit init":                func() tea.Msg { return modal.SubmitInitMsg{TaskID: "T-1"} },
 		"submit add":                 func() tea.Msg { return modal.SubmitAddMsg{TaskID: "T-1"} },
 		"submit convert hotfix":      func() tea.Msg { return modal.SubmitConvertHotfixMsg{SourceTaskID: "T-1", TargetTaskID: "T-2"} },

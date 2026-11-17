@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"regexp"
 	"strings"
 
@@ -202,7 +203,7 @@ func (d *RemoteBranchConflictDialog) View() string {
 			sb.WriteString("\n\n")
 		}
 
-		sb.WriteString(dimStyle.Render("[Enter] confirm  [Esc] back"))
+		sb.WriteString(theme.HintLine("[Enter] confirm  [Esc] back"))
 	} else {
 
 		for i, opt := range remoteBranchOptions {
@@ -224,7 +225,7 @@ func (d *RemoteBranchConflictDialog) View() string {
 			sb.WriteString("\n\n")
 		}
 
-		sb.WriteString(dimStyle.Render("[j/k or arrows] navigate  [Enter] confirm  [Esc] cancel"))
+		sb.WriteString(theme.HintLine("[j/k, ↑/↓] navigate  [Enter] confirm  [Esc] cancel"))
 	}
 
 	return sb.String()

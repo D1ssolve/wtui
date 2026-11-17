@@ -61,7 +61,7 @@ func TestMetadata_ReleaseTagEditorLoadingShowsOnlyAvailableControls(t *testing.T
 
 	view := stripAnsi(dialog.View())
 
-	if strings.Contains(view, "[Ctrl+S] save") || strings.Contains(view, "[Esc] cancel") ||
+	if strings.Contains(view, hint("[Ctrl+S] save")) || strings.Contains(view, hint("[Esc] cancel")) ||
 		!strings.Contains(view, "Generating with AI... Esc cancels") {
 		t.Fatalf("loading tag editor advertises unavailable controls:\n%s", view)
 	}
@@ -69,7 +69,7 @@ func TestMetadata_ReleaseTagEditorLoadingShowsOnlyAvailableControls(t *testing.T
 		t.Fatal("rendering loading state must preserve focus for cancellation")
 	}
 	dialog.SetMetadataStatus(false, "")
-	if !strings.Contains(stripAnsi(dialog.View()), "[Ctrl+S] save") {
+	if !strings.Contains(stripAnsi(dialog.View()), hint("[Ctrl+S] save")) {
 		t.Fatal("editor controls were not restored after generation")
 	}
 }
@@ -164,7 +164,7 @@ func TestMetadata_LongMRConfirmationKeepsReasonsAndActionsVisible(t *testing.T) 
 	view := dialog.View()
 
 	_, height := overlayContentSize(80, 40)
-	if lipgloss.Height(view) > height || !strings.Contains(view, "source is not pushed") || !strings.Contains(view, "[Esc/n] cancel") {
+	if lipgloss.Height(view) > height || !strings.Contains(view, "source is not pushed") || !strings.Contains(view, hint("[Esc/n] cancel")) {
 		t.Fatalf("confirmation reasons or actions are hidden:\n%s", view)
 	}
 	_, submit := dialog.Update(tea.KeyMsg{Type: tea.KeyEnter})

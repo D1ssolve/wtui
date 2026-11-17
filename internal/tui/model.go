@@ -90,6 +90,10 @@ type Model struct {
 
 	pendingInitParams *task.InitParams
 
+	// IDs of just-created items to select once their list reloads.
+	selectTaskOnLoad    string
+	selectReleaseOnLoad string
+
 	pendingAddParams     *task.AddParams
 	pendingPushSubmit    *modal.SubmitPushMsg
 	pendingReleaseSubmit *modal.SubmitCreateReleaseMsg
@@ -372,7 +376,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keymap.Help):
-			help := modal.NewHelpOverlayWithOptions(m.lazygitAvailable)
+			help := modal.NewHelpOverlay(helpSections(m))
 			help.SetWorkflow(m.helpWorkflowContext())
 			m.modal = help
 			m.modal.SetTerminalSize(m.width, m.height)
@@ -380,6 +384,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case msg.String() == ".":
 			m.modal = m.newSystemInfoModal()
+			return m, nil
+
+		case msg.String() == ":" || msg.String() == "ctrl+p":
+			m.modal = modal.NewCommandPalette(paletteItems(m))
+			m.modal.SetTerminalSize(m.width, m.height)
 			return m, nil
 
 		case key.Matches(msg, m.keymap.ToggleLogs):
@@ -405,7 +414,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.focus == FocusReleases && key.Matches(msg, m.keymap.ReleaseAction):
 			return m.startReleaseAction()
 
-		case m.focus == FocusReleases && msg.String() == "R":
+		case m.focus == FocusReleases && msg.String() == "ctrl+r":
 			return m.startReleaseRetry()
 		}
 
@@ -428,7 +437,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 
 		case FocusReleases:
-			if (msg.String() == "O" || msg.String() == "I") && m.releaseMutationBlocked() {
+			if (msg.String() == "O" || msg.String() == "R") && m.releaseMutationBlocked() {
 				return m, nil
 			}
 			before := selectedReleaseID(m.releasesPanel.SelectedRelease())
@@ -525,6 +534,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.outputPanel.AppendLine("Loading repository cache for init dialog...")
 		m.initDialogPending = true
 		return m, loadReposCmd(m.mgr, false)
+
+	case panels.OpenImportRemoteBranchDialogMsg:
+		m.modal = modal.NewImportRemoteBranchDialog(m.flow, m.cfg.BranchPrefix)
+		return m, nil
 
 	case panels.OpenCloneDialogMsg:
 		m.outputPanel.AppendLine("Loading source task " + msg.TaskID + " services for clone...")
@@ -734,6 +747,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.outputPanel.AppendLine("Opening task " + msg.TaskID + " in " + m.cfg.Editor + " from " + msg.TaskDir + "...")
 		return m, tea.Batch(editorTaskCmd(m.cfg.Editor, msg.TaskID, msg.TaskDir, m.operationGeneration), m.spinner.Tick)
 
+	case modal.RunPaletteItemMsg:
+		return m.runPaletteAction(msg.ID)
+
 	case modal.CloseModalMsg:
 		switch m.modal.(type) {
 		case *modal.ReleaseCleanupChecklistModal, *modal.ReleaseCleanupConfirmModal, *modal.ReleaseCleanupRemoteConfirmModal:
@@ -864,13 +880,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = nil
 		m.opRunning = true
 		m.operationGeneration++
-		m.outputPanel.AppendLine("Initializing task " + msg.TaskID + "...")
+		if msg.FromRemoteBranch {
+			m.outputPanel.AppendLine("Importing remote branch " + msg.BranchPrefix + msg.TaskID + " as task " + msg.TaskID + "...")
+		} else {
+			m.outputPanel.AppendLine("Initializing task " + msg.TaskID + "...")
+		}
 		m.pendingInitParams = &task.InitParams{
-			TaskID:       msg.TaskID,
-			Services:     msg.Services,
-			BranchType:   msg.BranchType,
-			BranchPrefix: msg.BranchPrefix,
-			BaseBranch:   msg.BaseBranch,
+			TaskID:           msg.TaskID,
+			Services:         msg.Services,
+			BranchType:       msg.BranchType,
+			BranchPrefix:     msg.BranchPrefix,
+			BaseBranch:       msg.BaseBranch,
+			FromRemoteBranch: msg.FromRemoteBranch,
 		}
 		m.pendingAddParams = nil
 		return m, tea.Batch(
@@ -1342,6 +1363,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TasksLoadedMsg:
 		m.tasks = append([]domain.Task(nil), msg.Tasks...)
 		m.tasksPanel.SetTasks(msg.Tasks)
+		if m.selectTaskOnLoad != "" {
+			m.tasksPanel.SelectTask(m.selectTaskOnLoad)
+			m.selectTaskOnLoad = ""
+		}
 		if m.refreshing {
 			m.outputPanel.AppendLine("Tasks refreshed.")
 		}
@@ -1371,6 +1396,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.releasesPanel.SetReleases(msg.Releases)
+		if m.selectReleaseOnLoad != "" {
+			m.releasesPanel.SelectRelease(m.selectReleaseOnLoad)
+			m.selectReleaseOnLoad = ""
+		}
 		m.invalidateReleaseCleanupDrift()
 		m.invalidateReleaseTaskMergeDrift()
 		var cancelCmd tea.Cmd
@@ -1914,6 +1943,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if releaseID == "" {
 				releaseID = "(unknown)"
 			}
+			m.selectReleaseOnLoad = msg.Release.ID
 			m.outputPanel.AppendLine("Release prepared: " + releaseID + " — run Finish Release after regression testing.")
 		}
 		return m, loadReleasesCmd(m.mgr)
@@ -1963,6 +1993,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingAddParams = nil
 		} else {
 			m.outputPanel.AppendLine(msg.Op + " done.")
+			if m.pendingInitParams != nil {
+				m.selectTaskOnLoad = m.pendingInitParams.TaskID
+			}
 
 			m.pendingInitParams = nil
 			m.pendingAddParams = nil
@@ -1985,6 +2018,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outputPanel.AppendLine(op + " failed: " + msg.Err.Error())
 			m.logger.Error("conversion failed", slog.String("err", msg.Err.Error()))
 		} else {
+			m.selectTaskOnLoad = msg.TargetTaskID
 			m.outputPanel.AppendLine(op + " done.")
 		}
 		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())
@@ -2009,6 +2043,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					RepoPath:    conflictErr.RepoPath,
 				}
 			}
+		}
+		if m.pendingInitParams != nil {
+			m.selectTaskOnLoad = m.pendingInitParams.TaskID
 		}
 		m.pendingInitParams = nil
 		m.pendingAddParams = nil
@@ -2587,6 +2624,7 @@ func (m Model) releaseCleanupWorktreeLocked() bool {
 func releaseCleanupMutatingMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panels.OpenInitDialogMsg,
+		panels.OpenImportRemoteBranchDialogMsg,
 		panels.OpenCloneDialogMsg,
 		panels.OpenAddServiceMsg,
 		panels.OpenConvertHotfixDialogMsg,

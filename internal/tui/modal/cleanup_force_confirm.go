@@ -1,6 +1,7 @@
 package modal
 
 import (
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -36,5 +37,5 @@ func (m *CleanupForceConfirmModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
 func (m *CleanupForceConfirmModal) View() string {
 	warning := lipgloss.NewStyle().Bold(true).Foreground(modalColorDanger)
 	return warning.Render("Normal cleanup failed for "+m.id+".") + "\n\n" +
-		"Force cleanup removes remaining local files.\n\n[Enter/y] force cleanup  [Esc/n] cancel"
+		"Force cleanup removes remaining local files.\n\n" + theme.HintLine("[Enter/y] force cleanup  [Esc/n] cancel")
 }

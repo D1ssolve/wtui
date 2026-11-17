@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"slices"
 	"strings"
 
@@ -147,7 +148,7 @@ func (d *HotfixCloseModal) View() string {
 		b.WriteString("\n" + d.err)
 	}
 	if !d.generating {
-		b.WriteString("\n\n[PgUp/PgDn] scroll  [Tab] version  [Enter] confirm  [Esc] cancel")
+		b.WriteString("\n\n" + theme.HintLine("[PgUp/PgDn] scroll  [Tab] version  [Enter] confirm  [Esc] cancel"))
 	}
 	b.WriteString("\n\n" + d.MetadataView())
 	footer := b.String()

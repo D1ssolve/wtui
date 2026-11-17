@@ -37,7 +37,7 @@ func TestPushConfirmDialog_ViewShowsTaskAndWarnings(t *testing.T) {
 		"Warnings:",
 		"blank branch name",
 		"protected branch",
-		"Push? [Enter/y] confirm [Esc/n] cancel",
+		hint("Push? [Enter/y] confirm [Esc/n] cancel"),
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q: %s", want, view)

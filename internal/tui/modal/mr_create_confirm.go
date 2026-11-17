@@ -1,6 +1,7 @@
 package modal
 
 import (
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -73,7 +74,6 @@ func (d *MRCreateConfirmDialog) View() string {
 	}
 	title := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normal := lipgloss.NewStyle().Foreground(modalColorNormal)
-	dim := lipgloss.NewStyle().Foreground(modalColorDim)
 	warn := lipgloss.NewStyle().Foreground(modalColorWarning)
 
 	var b strings.Builder
@@ -96,7 +96,7 @@ func (d *MRCreateConfirmDialog) View() string {
 		b.WriteString(normal.Render(ansi.Wrap("- "+service.ServiceName+": "+service.Reason, width, " ")))
 		b.WriteString("\n")
 	}
-	footer := "\n" + dim.Render("[PgUp/PgDn] scroll reasons\n[Enter/y] create anyway  [Esc/n] cancel")
+	footer := "\n" + theme.HintLine("[PgUp/PgDn] scroll reasons\n[Enter/y] create anyway  [Esc/n] cancel")
 	d.reasons.Width = width
 	d.reasons.Height = max(1, height-lipgloss.Height(header)-lipgloss.Height(footer)+2)
 	d.reasons.SetContent(strings.TrimSuffix(b.String(), "\n"))

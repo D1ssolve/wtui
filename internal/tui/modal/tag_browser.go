@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"slices"
 	"strings"
 
@@ -70,7 +71,7 @@ func (m *TagBrowserModal) View() string {
 	if len(m.tags) == 0 {
 		sb.WriteString(dimStyle.Render("No tags found."))
 		sb.WriteString("\n\n")
-		sb.WriteString(dimStyle.Render("[Enter/Esc] close"))
+		sb.WriteString(theme.HintLine("[Enter/Esc] close"))
 		return sb.String()
 	}
 
@@ -89,6 +90,6 @@ func (m *TagBrowserModal) View() string {
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(dimStyle.Render("* annotated tag  [Enter/Esc] close"))
+	sb.WriteString(theme.HintLine("* annotated tag  [Enter/Esc] close"))
 	return sb.String()
 }

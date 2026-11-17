@@ -1,6 +1,7 @@
 package modal
 
 import (
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -140,7 +141,7 @@ func (d *SyncStrategyDialog) View() string {
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString(dimStyle.Render("[j/k or arrows] navigate  [Enter] confirm  [Esc] cancel"))
+	sb.WriteString(theme.HintLine("[j/k, ↑/↓] navigate  [Enter] confirm  [Esc] cancel"))
 
 	return sb.String()
 }

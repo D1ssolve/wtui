@@ -10,6 +10,8 @@ type FocusTasksMsg struct{}
 
 type OpenInitDialogMsg struct{}
 
+type OpenImportRemoteBranchDialogMsg struct{}
+
 type OpenCloneDialogMsg struct{ TaskID string }
 
 type OpenConvertHotfixDialogMsg struct {

@@ -63,7 +63,7 @@ func TestReleaseExecuteConfirmDialog_ViewShowsDetails(t *testing.T) {
 		"push tags: true",
 		"Stage 1: This will verify feature branches are merged into the integration branch, create release branches, and push release branches if enabled.",
 		"Tags are NOT created yet. Use \"Finish Release\" after regression testing.",
-		"[Enter/y] execute [Esc/n] cancel",
+		hint("[Enter/y] execute [Esc/n] cancel"),
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q: %s", want, view)
@@ -135,7 +135,7 @@ func TestReleaseExecuteConfirmDialog_WithPreviewError_DisablesConfirm(t *testing
 	if !strings.Contains(view, "Cannot preview release") {
 		t.Fatalf("view should show preview error, got: %s", view)
 	}
-	if strings.Contains(view, "[Enter/y] execute") {
+	if strings.Contains(view, hint("[Enter/y] execute")) {
 		t.Fatalf("view should not show execute prompt on preview error")
 	}
 
@@ -215,7 +215,7 @@ func TestReleaseExecuteConfirmDialog_ScrollsLongPreviewWithinTerminal(t *testing
 	}
 
 	_, _ = d.Update(sendKey("G"))
-	if !strings.Contains(stripAnsi(d.View()), "[Enter/y] execute [Esc/n] cancel") {
+	if !strings.Contains(stripAnsi(d.View()), hint("[Enter/y] execute [Esc/n] cancel")) {
 		t.Fatal("bottom hint must be visible after scrolling to end")
 	}
 }
@@ -254,7 +254,7 @@ func TestReleaseExecuteConfirmDialog_TaskMergeRowsRenderUnderReleaseRows(t *test
 		"api | APP-1 | !12 | abc12345 | develop@def67890 | ready",
 		"worker | APP-2 | !7 | 11112222 | develop@33334444 | ready",
 		"Tags are NOT created yet",
-		"[Enter/y] execute [Esc/n] cancel",
+		hint("[Enter/y] execute [Esc/n] cancel"),
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q: %s", want, view)
@@ -276,7 +276,7 @@ func TestReleaseExecuteConfirmDialog_TaskMergeBlockedDisablesConfirm(t *testing.
 	if !strings.Contains(view, "MR is not ready") {
 		t.Fatalf("view missing blocker: %s", view)
 	}
-	if strings.Contains(view, "[Enter/y] execute") {
+	if strings.Contains(view, hint("[Enter/y] execute")) {
 		t.Fatalf("view must omit execute hint when a row is blocked: %s", view)
 	}
 	if _, cmd := d.Update(sendSpecialKey(tea.KeyEnter)); cmd != nil {
@@ -322,7 +322,7 @@ func TestReleaseExecuteConfirmDialog_TaskMergeNarrowWidthShowsBlockers(t *testin
 			t.Fatalf("narrow view missing %q: %s", want, view)
 		}
 	}
-	if strings.Contains(view, "[Enter/y] execute") {
+	if strings.Contains(view, hint("[Enter/y] execute")) {
 		t.Fatalf("narrow view must omit execute hint when blocked: %s", view)
 	}
 }
@@ -364,7 +364,7 @@ func TestReleaseExecuteConfirmDialog_TaskMergeScrollsWithRows(t *testing.T) {
 		t.Fatalf("view height = %d, want <= 15", got)
 	}
 	_, _ = d.Update(sendKey("G"))
-	if !strings.Contains(stripAnsi(d.View()), "[Enter/y] execute [Esc/n] cancel") {
+	if !strings.Contains(stripAnsi(d.View()), hint("[Enter/y] execute [Esc/n] cancel")) {
 		t.Fatal("bottom hint must be visible after scrolling to end")
 	}
 }

@@ -213,6 +213,26 @@ func (p *TasksPanel) SelectedTask() *domain.Task {
 	return nil
 }
 
+// SelectTask moves the cursor to the task with the given ID.
+func (p *TasksPanel) SelectTask(id string) bool {
+	if p.treeMode {
+		for i := range p.rows {
+			if p.rows[i].kind == treeRowKindTask && p.rows[i].task.ID == id {
+				p.selectedIdx = i
+				return true
+			}
+		}
+		return false
+	}
+	for i, item := range p.list.Items() {
+		if ti, ok := item.(taskItem); ok && ti.task.ID == id {
+			p.list.Select(i)
+			return true
+		}
+	}
+	return false
+}
+
 func (p *TasksPanel) selectionChangedCmd() tea.Cmd {
 	t := p.SelectedTask()
 	if t == nil {
@@ -244,186 +264,63 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 		if !p.focused {
 			return p, nil
 		}
-
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			if p.list.FilterState() == list.Filtering {
-				switch msg.String() {
-				case "esc":
-					p.list.ResetFilter()
-					p.rebuildRows()
-					return p, nil
-				case "enter":
-					if strings.TrimSpace(p.list.FilterValue()) == "" || len(p.rows) == 0 {
-						p.list.ResetFilter()
-					} else {
-						p.list.SetFilterState(list.FilterApplied)
-					}
-					p.rebuildRows()
-					return p, nil
-				}
-
-				var cmd tea.Cmd
-				p.list, cmd = p.list.Update(msg)
-				p.rebuildRows()
-				return p, cmd
-			}
-
-			switch msg.String() {
-			case "j", "down":
-				if p.moveSelection(1) {
-					return p, p.selectionChangedCmd()
-				}
-				return p, nil
-
-			case "k", "up":
-				if p.moveSelection(-1) {
-					return p, p.selectionChangedCmd()
-				}
-				return p, nil
-
-			case "g":
-				if p.selectFirstTaskRow() {
-					return p, p.selectionChangedCmd()
-				}
-				return p, nil
-
-			case "G":
-				if p.selectLastTaskRow() {
-					return p, p.selectionChangedCmd()
-				}
-				return p, nil
-
-			case "enter":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				return p, func() tea.Msg { return FocusServicesMsg{TaskID: task.ID} }
-
-			case "h":
-				if p.treePageJump(-1) {
-					return p, p.selectionChangedCmd()
-				}
-				return p, nil
-
-			case "l":
-				if p.treePageJump(1) {
-					return p, p.selectionChangedCmd()
-				}
-				return p, nil
-
-			case "i":
-				return p, func() tea.Msg { return OpenInitDialogMsg{} }
-
-			case "c":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				id := task.ID
-				return p, func() tea.Msg { return OpenCloneDialogMsg{TaskID: id} }
-
-			case "d":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				id := task.ID
-				return p, func() tea.Msg { return CleanupTaskMsg{TaskID: id} }
-			case "X":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				return p, func() tea.Msg { return ForceCleanupTaskMsg{TaskID: task.ID} }
-
-			case "S":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				id := task.ID
-				return p, func() tea.Msg { return OpenSyncStrategyDialogMsg{TaskID: id} }
-
-			case "D", "P":
-				return p, func() tea.Msg { return OpenCleanupDialogMsg{} }
-
-			case ";":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				dir := task.Dir
-				return p, func() tea.Msg { return ShellExecMsg{TaskDir: dir} }
-
-			case "R":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				taskID := task.ID
-				dir := task.Dir
-				return p, func() tea.Msg { return RiderTaskMsg{TaskID: taskID, TaskDir: dir} }
-
-			case "C":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				return p, func() tea.Msg { return PlanCloseTaskMsg{TaskID: task.ID} }
-
-			case "F":
-				task := p.SelectedTask()
-				if !CanConvertHotfixTask(task, p.flow) {
-					return p, nil
-				}
-				targetID := task.PendingConversionTargetID
-				if targetID == "" {
-					targetID = task.ID
-				}
-				return p, func() tea.Msg { return OpenConvertHotfixDialogMsg{TaskID: task.ID, TargetTaskID: targetID} }
-
-			case "O":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				taskID := task.ID
-				dir := task.Dir
-				return p, func() tea.Msg { return CodeWorkspaceTaskMsg{TaskID: taskID, TaskDir: dir} }
-
-			case "V":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				return p, func() tea.Msg { return ValidateTaskMsg{TaskID: task.ID} }
-
-			case "T":
-				task := p.SelectedTask()
-				if task == nil {
-					return p, nil
-				}
-				return p, func() tea.Msg { return OpenTagBrowserMsg{TaskID: task.ID} }
-
-			case ",":
-				return p, func() tea.Msg { return OpenConfigModalMsg{} }
-
-			case "f", "/":
-				p.list.SetFilterState(list.Filtering)
-				p.rebuildRows()
-				return p, nil
-
+		keyMsg, ok := msg.(tea.KeyMsg)
+		if !ok {
+			return p, nil
+		}
+		if p.list.FilterState() == list.Filtering {
+			switch keyMsg.String() {
 			case "esc":
-				if p.list.FilterState() == list.FilterApplied {
+				p.list.ResetFilter()
+				p.rebuildRows()
+				return p, nil
+			case "enter":
+				if strings.TrimSpace(p.list.FilterValue()) == "" || len(p.rows) == 0 {
 					p.list.ResetFilter()
-					p.rebuildRows()
+				} else {
+					p.list.SetFilterState(list.FilterApplied)
 				}
+				p.rebuildRows()
 				return p, nil
 			}
+
+			var cmd tea.Cmd
+			p.list, cmd = p.list.Update(msg)
+			p.rebuildRows()
+			return p, cmd
 		}
 
+		changed := false
+		switch keyMsg.String() {
+		case "j", "down":
+			changed = p.moveSelection(1)
+		case "k", "up":
+			changed = p.moveSelection(-1)
+		case "g":
+			changed = p.selectFirstTaskRow()
+		case "G":
+			changed = p.selectLastTaskRow()
+		case "h":
+			changed = p.treePageJump(-1)
+		case "l":
+			changed = p.treePageJump(1)
+		case "f", "/":
+			p.list.SetFilterState(list.Filtering)
+			p.rebuildRows()
+			return p, nil
+		case "esc":
+			if p.list.FilterState() == list.FilterApplied {
+				p.list.ResetFilter()
+				p.rebuildRows()
+			}
+			return p, nil
+		default:
+			cmd, _ := p.actionCmd(keyMsg.String())
+			return p, cmd
+		}
+		if changed {
+			return p, p.selectionChangedCmd()
+		}
 		return p, nil
 	}
 
@@ -433,180 +330,120 @@ func (p TasksPanel) Update(msg tea.Msg) (TasksPanel, tea.Cmd) {
 		return p, cmd
 	}
 
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		if p.list.FilterState() == list.Filtering {
-			switch msg.String() {
-			case "esc":
+			if keyMsg.String() == "esc" {
 				p.list.ResetFilter()
 				return p, nil
-			default:
-				var cmd tea.Cmd
-				p.list, cmd = p.list.Update(msg)
-				return p, cmd
 			}
+			var cmd tea.Cmd
+			p.list, cmd = p.list.Update(msg)
+			return p, cmd
 		}
 
-		switch msg.String() {
+		switch keyMsg.String() {
 		case "j", "down":
 			p.list.CursorDown()
 			return p, p.selectionChangedCmd()
-
 		case "k", "up":
 			p.list.CursorUp()
 			return p, p.selectionChangedCmd()
-
 		case "g":
 			if len(p.tasks) > 0 {
 				p.list.Select(0)
 			}
 			return p, p.selectionChangedCmd()
-
 		case "G":
 			if n := len(p.tasks); n > 0 {
 				p.list.Select(n - 1)
 			}
 			return p, p.selectionChangedCmd()
-
-		case "enter":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			return p, func() tea.Msg { return FocusServicesMsg{TaskID: task.ID} }
-
-		case "i":
-			return p, func() tea.Msg { return OpenInitDialogMsg{} }
-
-		case "c":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			id := task.ID
-			return p, func() tea.Msg { return OpenCloneDialogMsg{TaskID: id} }
-
-		case "d":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			id := task.ID
-			return p, func() tea.Msg { return CleanupTaskMsg{TaskID: id} }
-		case "X":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			return p, func() tea.Msg { return ForceCleanupTaskMsg{TaskID: task.ID} }
-
-		case "S":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			id := task.ID
-			return p, func() tea.Msg { return OpenSyncStrategyDialogMsg{TaskID: id} }
-
-		case "D", "P":
-			return p, func() tea.Msg { return OpenCleanupDialogMsg{} }
-
-		case ";":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			dir := task.Dir
-			return p, func() tea.Msg { return ShellExecMsg{TaskDir: dir} }
-
 		case "h":
 			listMovePage(&p.list, -1)
 			return p, p.selectionChangedCmd()
-
 		case "l":
 			listMovePage(&p.list, 1)
 			return p, p.selectionChangedCmd()
-
-		case "R":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			taskID := task.ID
-			dir := task.Dir
-			return p, func() tea.Msg { return RiderTaskMsg{TaskID: taskID, TaskDir: dir} }
-
-		case "C":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			return p, func() tea.Msg { return PlanCloseTaskMsg{TaskID: task.ID} }
-
-		case "F":
-			task := p.SelectedTask()
-			if !CanConvertHotfixTask(task, p.flow) {
-				return p, nil
-			}
-			targetID := task.PendingConversionTargetID
-			if targetID == "" {
-				targetID = task.ID
-			}
-			return p, func() tea.Msg { return OpenConvertHotfixDialogMsg{TaskID: task.ID, TargetTaskID: targetID} }
-
-		case "O":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			taskID := task.ID
-			dir := task.Dir
-			return p, func() tea.Msg { return CodeWorkspaceTaskMsg{TaskID: taskID, TaskDir: dir} }
-
-		case "V":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			return p, func() tea.Msg { return ValidateTaskMsg{TaskID: task.ID} }
-
-		case "T":
-			task := p.SelectedTask()
-			if task == nil {
-				return p, nil
-			}
-			return p, func() tea.Msg { return OpenTagBrowserMsg{TaskID: task.ID} }
-
-		case ",":
-			return p, func() tea.Msg { return OpenConfigModalMsg{} }
-
-		case "f":
-
-			if p.list.FilterState() == list.Filtering {
-				p.list.ResetFilter()
-				return p, nil
-			}
-
+		case "f", "/":
 			filterKey := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
 			var cmd tea.Cmd
 			p.list, cmd = p.list.Update(filterKey)
 			return p, cmd
-
 		case "esc":
-			if p.list.FilterState() == list.Filtering {
-				p.list.ResetFilter()
-				return p, nil
-			}
 			if p.list.FilterState() == list.FilterApplied {
 				p.list.ResetFilter()
-				return p, nil
 			}
+			return p, nil
+		}
+		if cmd, handled := p.actionCmd(keyMsg.String()); handled {
+			return p, cmd
 		}
 	}
 
 	var cmd tea.Cmd
 	p.list, cmd = p.list.Update(msg)
 	return p, cmd
+}
+
+// actionCmd maps task action keys shared by tree and list modes; handled is
+// true for every action key, even when no task is selected, so the key never
+// falls through to the list's own bindings.
+func (p *TasksPanel) actionCmd(key string) (cmd tea.Cmd, handled bool) {
+	task := p.SelectedTask()
+	var msg tea.Msg
+	forTask := func(build func(t domain.Task) tea.Msg) {
+		if task != nil {
+			msg = build(*task)
+		}
+	}
+	switch key {
+	case "i":
+		msg = OpenInitDialogMsg{}
+	case "I":
+		msg = OpenImportRemoteBranchDialogMsg{}
+	case "D", "P":
+		msg = OpenCleanupDialogMsg{}
+	case ",":
+		msg = OpenConfigModalMsg{}
+	case "enter":
+		forTask(func(t domain.Task) tea.Msg { return FocusServicesMsg{TaskID: t.ID} })
+	case "c":
+		forTask(func(t domain.Task) tea.Msg { return OpenCloneDialogMsg{TaskID: t.ID} })
+	case "d":
+		forTask(func(t domain.Task) tea.Msg { return CleanupTaskMsg{TaskID: t.ID} })
+	case "X":
+		forTask(func(t domain.Task) tea.Msg { return ForceCleanupTaskMsg{TaskID: t.ID} })
+	case "S":
+		forTask(func(t domain.Task) tea.Msg { return OpenSyncStrategyDialogMsg{TaskID: t.ID} })
+	case ";":
+		forTask(func(t domain.Task) tea.Msg { return ShellExecMsg{TaskDir: t.Dir} })
+	case "R":
+		forTask(func(t domain.Task) tea.Msg { return RiderTaskMsg{TaskID: t.ID, TaskDir: t.Dir} })
+	case "C":
+		forTask(func(t domain.Task) tea.Msg { return PlanCloseTaskMsg{TaskID: t.ID} })
+	case "O":
+		forTask(func(t domain.Task) tea.Msg { return CodeWorkspaceTaskMsg{TaskID: t.ID, TaskDir: t.Dir} })
+	case "V":
+		forTask(func(t domain.Task) tea.Msg { return ValidateTaskMsg{TaskID: t.ID} })
+	case "T":
+		forTask(func(t domain.Task) tea.Msg { return OpenTagBrowserMsg{TaskID: t.ID} })
+	case "H":
+		if CanConvertHotfixTask(task, p.flow) {
+			forTask(func(t domain.Task) tea.Msg {
+				target := t.PendingConversionTargetID
+				if target == "" {
+					target = t.ID
+				}
+				return OpenConvertHotfixDialogMsg{TaskID: t.ID, TargetTaskID: target}
+			})
+		}
+	default:
+		return nil, false
+	}
+	if msg == nil {
+		return nil, true
+	}
+	return func() tea.Msg { return msg }, true
 }
 
 func (p TasksPanel) View() string {

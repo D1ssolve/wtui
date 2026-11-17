@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 	"unicode"
 
@@ -449,7 +450,6 @@ func (d *CreateReleaseDialog) View() string {
 
 func (d *CreateReleaseDialog) descriptionEditorView() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
-	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 	serviceName := ""
 	if d.editingRow >= 0 && d.editingRow < len(d.inputRows) {
 		serviceName = d.inputRows[d.editingRow].serviceName
@@ -463,7 +463,7 @@ func (d *CreateReleaseDialog) descriptionEditorView() string {
 	}
 	return titleStyle.Render(releaseLine("Tag description — "+serviceName, width)) + "\n" +
 		editor.View() + "\n" +
-		dimStyle.Render(releaseLine(controls, width)) + "\n" + d.MetadataView()
+		theme.HintLine(releaseLine(controls, width)) + "\n" + d.MetadataView()
 }
 
 func (d *CreateReleaseDialog) applyVersions(versions map[string]string) {

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"log/slog"
 	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -559,12 +561,21 @@ func TestView_DoesNotRenderBackgroundColors(t *testing.T) {
 	m.releasesPanel.SetWorkflow(workflow)
 	m = sendWindowSize(m, 140, 40)
 
+	// Keycaps are the only surface allowed a background (DESIGN.md §7).
+	background := regexp.MustCompile(`48;2;(\d+;\d+;\d+)`)
+	keycap := background.FindStringSubmatch(theme.Keycaps("x"))
+	if keycap == nil {
+		t.Fatal("keycap must render a background")
+	}
+
 	views := map[string]string{"services": m.View()}
 	m.setFocus(FocusReleases)
 	views["releases"] = m.View()
 	for name, view := range views {
-		if strings.Contains(view, "\x1b[48;2;") {
-			t.Errorf("%s view contains ANSI background color", name)
+		for _, match := range background.FindAllStringSubmatch(view, -1) {
+			if match[1] != keycap[1] {
+				t.Errorf("%s view contains non-keycap ANSI background %s", name, match[1])
+			}
 		}
 	}
 }
@@ -781,7 +792,7 @@ func releaseFolderTestModel(t *testing.T, dir string) Model {
 }
 
 func TestUpdate_ReleaseFolderActions_TargetAndDuplicateGuard(t *testing.T) {
-	for _, key := range []string{"O", "I"} {
+	for _, key := range []string{"O", "R"} {
 		t.Run(key, func(t *testing.T) {
 			executable, record := fakeIDE(t, "rider")
 			t.Setenv("PATH", filepath.Dir(executable)+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -807,7 +818,7 @@ func TestUpdate_ReleaseFolderActions_TargetAndDuplicateGuard(t *testing.T) {
 				t.Fatal(done.Err)
 			}
 			wantIDE := executable
-			if key == "I" {
+			if key == "R" {
 				wantIDE = "rider"
 			}
 			if !strings.Contains(done.Op, "Open "+wantIDE+" for release selected") {
@@ -836,7 +847,7 @@ func TestUpdate_ReleaseFolderActions_Guards(t *testing.T) {
 		{"cleanup planning", func(m *Model) { m.releaseCleanupRequest = &releaseCleanupRequest{} }},
 		{"cleanup preview", func(m *Model) { m.pendingReleaseCleanupPlan = &task.ReleaseCleanupPlan{} }},
 		{"cleanup executing", func(m *Model) { m.releaseCleanupExecuting = 1 }},
-		{"modal", func(m *Model) { m.modal = modal.NewHelpOverlayWithOptions(false) }},
+		{"modal", func(m *Model) { m.modal = modal.NewHelpOverlay(nil) }},
 		{"shell", func(m *Model) { m.shellInput = &shellInputState{} }},
 		{"logs", func(m *Model) { m.logOverlay = NewLogOverlay("", 80, 24, "") }},
 		{"pipeline", func(m *Model) { m.pipelineView = NewPipelineView("api", forge.PipelineStatus{}, 80, 24) }},
@@ -894,7 +905,7 @@ func TestUpdate_KeyO_OnTasksPreservesWorkspaceAction(t *testing.T) {
 }
 
 func TestUpdate_ReleaseFolderActions_StaleSelection(t *testing.T) {
-	for _, key := range []string{"O", "I"} {
+	for _, key := range []string{"O", "R"} {
 		for _, changeDir := range []bool{false, true} {
 			m := releaseFolderTestModel(t, t.TempDir())
 			_, dispatch := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
@@ -1013,7 +1024,7 @@ func TestUpdate_HelpKey_AfterResize_AllowsScrollToBottom(t *testing.T) {
 	m = updated.(Model)
 
 	view := stripANSIForModel(m.modal.View())
-	if !strings.Contains(view, "[Esc] or [?] to close") {
+	if !strings.Contains(view, hint("[Esc] or [?] to close")) {
 		t.Fatalf("scrolled help view must show bottom close hint, got: %q", view)
 	}
 	if strings.Contains(view, "Keyboard Shortcuts") {
@@ -1523,7 +1534,7 @@ func TestUpdate_CreateRelease_IntegratedOverlayFlow(t *testing.T) {
 	update(tea.KeyMsg{Type: tea.KeyEnter})
 	update(sendKey("second line"))
 	resizeMatrix("description draft")
-	requireView("Tag description", "second line", "Ctrl+S")
+	requireView("Tag description", "second line", hint("[Ctrl+S] save"))
 	update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	cmd := update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1739,6 +1750,28 @@ func TestUpdate_CreateReleaseDone_AppendsOutputAndRefreshesReleases(t *testing.T
 	_ = cmd()
 	if mgr.listReleasesCalls != 1 {
 		t.Fatalf("create completion should refresh releases once, got %d", mgr.listReleasesCalls)
+	}
+}
+
+func TestUpdate_CreateDone_SelectsCreatedItemAfterReload(t *testing.T) {
+	m := newTestModel(t, &mockManager{})
+	m = sendWindowSize(m, 120, 40)
+
+	updated, _ := m.Update(CreateReleaseDoneMsg{Release: domain.Release{ID: "rel-2"}})
+	m = updated.(Model)
+	updated, _ = m.Update(ReleasesLoadedMsg{Releases: []domain.Release{{ID: "rel-1"}, {ID: "rel-2"}}})
+	m = updated.(Model)
+	if got := m.releasesPanel.SelectedRelease(); got == nil || got.ID != "rel-2" {
+		t.Fatalf("selected release = %+v, want rel-2", got)
+	}
+
+	m.pendingInitParams = &task.InitParams{TaskID: "T-2"}
+	updated, _ = m.Update(CommandDoneMsg{Op: "Init task T-2"})
+	m = updated.(Model)
+	updated, _ = m.Update(TasksLoadedMsg{Tasks: []domain.Task{{ID: "T-1"}, {ID: "T-2"}}})
+	m = updated.(Model)
+	if got := m.tasksPanel.SelectedTask(); got == nil || got.ID != "T-2" {
+		t.Fatalf("selected task = %+v, want T-2", got)
 	}
 }
 
@@ -2049,7 +2082,7 @@ func TestUpdate_OpenConvertHotfixDialogMsg_OpensModal(t *testing.T) {
 	}
 }
 
-func TestUpdate_KeyFOnHotfixTask_OpensConvertDialog(t *testing.T) {
+func TestUpdate_KeyHOnHotfixTask_OpensConvertDialog(t *testing.T) {
 	flow := &gitflow.ResolvedGitFlow{BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
 		gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}},
 		gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
@@ -2057,9 +2090,9 @@ func TestUpdate_KeyFOnHotfixTask_OpensConvertDialog(t *testing.T) {
 	m := newTestModelWithOptions(t, &mockManager{}, Options{ResolvedFlow: flow})
 	m.tasksPanel.SetTasks([]domain.Task{{ID: "IN-001-hotfix", Phase: "hotfix"}})
 
-	_, cmd := m.Update(sendKey("F"))
+	_, cmd := m.Update(sendKey("H"))
 	if cmd == nil {
-		t.Fatal("F on hotfix task must open conversion dialog")
+		t.Fatal("H on hotfix task must open conversion dialog")
 	}
 	msg := cmd()
 	if _, ok := msg.(panels.OpenConvertHotfixDialogMsg); !ok {
@@ -2329,7 +2362,7 @@ func TestUpdate_SubmitPushMsg_WithoutActivePushModal_DoesNotExecute(t *testing.T
 	mgr := &mockManager{}
 	m := newTestModel(t, mgr)
 	m = sendWindowSize(m, 120, 40)
-	m.modal = modal.NewHelpOverlayWithOptions(false)
+	m.modal = modal.NewHelpOverlay(nil)
 	m.pendingPushSubmit = &modal.SubmitPushMsg{TaskID: "IN-001", ServiceName: "svc-a"}
 
 	updated, cmd := m.Update(modal.SubmitPushMsg{TaskID: "IN-001", ServiceName: "svc-a"})

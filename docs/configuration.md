@@ -164,7 +164,7 @@ The complete example shows every key, not a recommended starting point. Prefer t
 | `output_panel_lines` | integer | `12` | Preferred output panel height, clamped to `3..40`. |
 | `log_level` | string | `INFO` | File logger level. |
 
-Zed opens tasks and release folders in a new window with `--new`; VS Code and the compatible editors listed above use `--new-window`. Other editors receive only the folder path and use their own window preferences. `R` on Tasks remains a separate action that opens `<taskID>.sln` in Rider.
+Zed opens tasks and release folders in a new window with `--new`; VS Code and the compatible editors listed above use `--new-window`. Other editors receive only the folder path and use their own window preferences. `R` is a separate action that opens Rider: `<taskID>.sln` on Tasks, the release folder on Releases.
 
 ## Environment Overrides
 

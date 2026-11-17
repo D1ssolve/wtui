@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"io"
 	"sort"
 	"strings"
@@ -366,12 +367,11 @@ func (d *InitDialog) View() string {
 		sb.WriteString("\n")
 	}
 
-	hintStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 	sb.WriteString("\n")
 	if d.hasRepos {
-		sb.WriteString(hintStyle.Render("[Space] toggle  [j/k] navigate  [h/l] page  [f] filter  [Enter] next field  [Esc] cancel"))
+		sb.WriteString(theme.HintLine("[Space] toggle  [j/k] navigate  [h/l] page  [f] filter  [Enter] next field  [Esc] cancel"))
 	} else {
-		sb.WriteString(hintStyle.Render("[Enter] confirm  [Esc] cancel"))
+		sb.WriteString(theme.HintLine("[Enter] confirm  [Esc] cancel"))
 	}
 
 	return sb.String()

@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -129,7 +130,7 @@ func (m *TaskCleanupConfirmModal) tooSmallNotice() string {
 	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 	notice := warningStyle.Render("CLEANUP CONFIRMATION BLOCKED") + "\n\n" +
 		dimStyle.Render("Terminal too small to confirm.") + "\n\n" +
-		dimStyle.Render("[Esc/n] cancel")
+		theme.HintLine("[Esc/n] cancel")
 	lines := strings.Split(ansi.Wrap(notice, m.contentWidth, " "), "\n")
 	if len(lines) > m.contentHeight {
 		lines = lines[:m.contentHeight]
@@ -199,7 +200,8 @@ func (m *TaskCleanupConfirmModal) footer(withScrollHint bool) string {
 	if m.force {
 		force = "[x] Force local files"
 	}
-	return "\n\n" + dimStyle.Render(remote+"  [Space]\n"+force+"  [f]\n[Enter/y] confirm cleanup  [Esc/n] cancel"+hint)
+	return "\n\n" + dimStyle.Render(remote) + theme.HintLine("  [Space]") + "\n" +
+		dimStyle.Render(force) + theme.HintLine("  [f]\n[Enter/y] confirm cleanup  [Esc/n] cancel"+hint)
 }
 
 type TaskCleanupRemoteConfirmModal struct {
@@ -240,7 +242,7 @@ func (m *TaskCleanupRemoteConfirmModal) View() string {
 	}
 	return style.Render("Delete remote branches for task "+m.preview.TaskID) + "\n\n" +
 		dim.Render(valueList(branches)) + "\n\n" +
-		dim.Render("[Enter/y] delete remote branches  [Esc/n] cancel")
+		theme.HintLine("[Enter/y] delete remote branches  [Esc/n] cancel")
 }
 
 func shortSHA(sha string) string {

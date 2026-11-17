@@ -275,7 +275,7 @@ func TestSyncStrategyDialog_View_ContainsExpectedContent(t *testing.T) {
 		t.Error("View should contain Rebase description hint")
 	}
 
-	if !strings.Contains(view, "j/k") {
+	if !strings.Contains(view, hint("[j/k, ↑/↓] navigate")) {
 		t.Error("View should contain 'j/k' navigation hint")
 	}
 	if !strings.Contains(view, "Enter") {

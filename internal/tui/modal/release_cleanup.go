@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -276,7 +277,6 @@ func (m *ReleaseCleanupChecklistModal) body() string {
 }
 
 func (m *ReleaseCleanupChecklistModal) footer(withScrollHint bool) string {
-	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 	status := "[Enter] review  [Esc] cancel"
 	switch {
 	case !m.selection.RemoveTasks && !m.selection.RemoveRelease:
@@ -294,7 +294,7 @@ func (m *ReleaseCleanupChecklistModal) footer(withScrollHint bool) string {
 	if withScrollHint {
 		footer += "\n[g/G] details"
 	}
-	return "\n" + dimStyle.Render(footer)
+	return "\n" + theme.HintLine(footer)
 }
 
 func (m *ReleaseCleanupChecklistModal) tooSmallNotice() string {
@@ -302,7 +302,7 @@ func (m *ReleaseCleanupChecklistModal) tooSmallNotice() string {
 	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 	notice := warningStyle.Render("RELEASE CLEANUP BLOCKED") + "\n\n" +
 		dimStyle.Render("Terminal too small to review safely.") + "\n\n" +
-		dimStyle.Render("[Esc] cancel")
+		theme.HintLine("[Esc] cancel")
 	lines := strings.Split(ansi.Wrap(notice, m.contentWidth, " "), "\n")
 	if len(lines) > m.contentHeight {
 		lines = lines[:m.contentHeight]
@@ -450,7 +450,6 @@ func (m *ReleaseCleanupRemoteConfirmModal) View() string {
 func cleanupConfirmView(preview task.ReleaseCleanupPreview, warning, footer string, danger bool) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
-	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 	warningStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorWarning)
 	if danger {
 		warningStyle = warningStyle.Foreground(modalColorDanger)
@@ -468,7 +467,7 @@ func cleanupConfirmView(preview task.ReleaseCleanupPreview, warning, footer stri
 		b.WriteString(normalStyle.Render(remoteReleaseBranches(preview)))
 	}
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render(footer))
+	b.WriteString(theme.HintLine(footer))
 	return b.String()
 }
 

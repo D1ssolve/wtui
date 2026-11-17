@@ -1,6 +1,7 @@
 package modal
 
 import (
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -43,5 +44,5 @@ func (m *ForceTaskCleanupModal) View() string {
 	return warning.Render("Force cleanup: "+m.taskID) + "\n\n" +
 		"Deletes task worktrees, local branches, and all task files.\n" +
 		"Bypasses normal completion and dirty-worktree checks.\n\n" +
-		check + " Delete remote branches\n\n[Enter/y] force cleanup  [Esc/n] cancel"
+		check + " Delete remote branches\n\n" + theme.HintLine("[Enter/y] force cleanup  [Esc/n] cancel")
 }

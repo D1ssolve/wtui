@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -58,18 +59,16 @@ func (d *RemoveServiceDialog) Update(msg tea.Msg) (Modal, tea.Cmd) {
 
 func (d *RemoveServiceDialog) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
-	normalStyle := lipgloss.NewStyle().Foreground(modalColorNormal)
-	dimStyle := lipgloss.NewStyle().Foreground(modalColorDim)
 
 	var sb strings.Builder
 
 	sb.WriteString(titleStyle.Render(fmt.Sprintf("Remove service %q (%q)?", d.serviceName, d.branch)))
 	sb.WriteString("\n\n")
-	sb.WriteString(normalStyle.Render("[f] Remove worktree + branch"))
+	sb.WriteString(theme.HintLine("[f] Remove worktree + branch"))
 	sb.WriteString("\n")
-	sb.WriteString(normalStyle.Render("[y] Remove worktree only"))
+	sb.WriteString(theme.HintLine("[y] Remove worktree only"))
 	sb.WriteString("\n")
-	sb.WriteString(dimStyle.Render("[n/Esc] Cancel"))
+	sb.WriteString(theme.HintLine("[n/Esc] Cancel"))
 
 	return sb.String()
 }

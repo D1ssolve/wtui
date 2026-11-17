@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -161,7 +162,7 @@ func (m *CleanupCandidatesModal) View() string {
 	if len(m.rows) == 0 {
 		sb.WriteString(m.fit(dimStyle.Render("No cleanup candidates found.")))
 		sb.WriteString("\n\n")
-		sb.WriteString(m.fit(dimStyle.Render("[Esc] close")))
+		sb.WriteString(m.fit(theme.HintLine("[Esc] close")))
 		return sb.String()
 	}
 
@@ -209,7 +210,7 @@ func (m *CleanupCandidatesModal) View() string {
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(ansi.Wrap(dimStyle.Render(m.controls()), max(1, m.contentWidth), " "))
+	sb.WriteString(ansi.Wrap(theme.HintLine(m.controls()), max(1, m.contentWidth), " "))
 	if visible := m.visibleRows(); visible > 0 && len(m.rows) > visible {
 		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render(fmt.Sprintf("Showing %d-%d of %d", start+1, end, len(m.rows))))

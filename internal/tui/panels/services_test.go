@@ -177,7 +177,7 @@ func TestServicesPanel_DirectGitKeysDoNothing(t *testing.T) {
 	}
 }
 
-func TestServicesPanel_KeyG_WhenLazygitAvailable_EmitsOpenLazygitServiceMsg(t *testing.T) {
+func TestServicesPanel_KeyEnter_WhenLazygitAvailable_EmitsOpenLazygitServiceMsg(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	p.SetLazygitAvailable(true)
 	tid, svcs := makeServices("IN-001", "collection", "databridge")
@@ -185,9 +185,9 @@ func TestServicesPanel_KeyG_WhenLazygitAvailable_EmitsOpenLazygitServiceMsg(t *t
 	p.SetServices(tid, svcs)
 	p.SetFocused(true)
 
-	_, cmd := p.Update(sendKey("g"))
+	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("g key should return a cmd when lazygit is available")
+		t.Fatal("enter key should return a cmd when lazygit is available")
 	}
 
 	msg := cmd()
@@ -209,15 +209,15 @@ func TestServicesPanel_KeyG_WhenLazygitAvailable_EmitsOpenLazygitServiceMsg(t *t
 	}
 }
 
-func TestServicesPanel_KeyG_WhenLazygitAvailableNoServiceSelected_EmitsNoSelectionMessage(t *testing.T) {
+func TestServicesPanel_KeyEnter_WhenLazygitAvailableNoServiceSelected_EmitsNoSelectionMessage(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	p.SetLazygitAvailable(true)
 	p.SetServices("IN-001", nil)
 	p.SetFocused(true)
 
-	_, cmd := p.Update(sendKey("g"))
+	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("g key should return a cmd when lazygit is available but no service is selected")
+		t.Fatal("enter key should return a cmd when lazygit is available but no service is selected")
 	}
 
 	msg := cmd()
@@ -236,13 +236,13 @@ func TestServicesPanel_KeyG_WhenLazygitAvailableNoServiceSelected_EmitsNoSelecti
 	}
 }
 
-func TestServicesPanel_KeyG_WhenLazygitUnavailable_EmitsNoLazygitMessage(t *testing.T) {
+func TestServicesPanel_KeyEnter_WhenLazygitUnavailable_EmitsNoLazygitMessage(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	tid, svcs := makeServices("IN-001", "collection")
 	p.SetServices(tid, svcs)
 	p.SetFocused(true)
 
-	_, cmd := p.Update(sendKey("g"))
+	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		return
 	}
@@ -251,7 +251,7 @@ func TestServicesPanel_KeyG_WhenLazygitUnavailable_EmitsNoLazygitMessage(t *test
 	}
 }
 
-func TestServicesPanel_KeyG_FilterMode_DoesNotEmitLazygitMessage(t *testing.T) {
+func TestServicesPanel_KeyEnter_FilterMode_DoesNotEmitLazygitMessage(t *testing.T) {
 	p := NewServicesPanel(60, 20)
 	p.SetLazygitAvailable(true)
 	tid, svcs := makeServices("IN-001", "collection")
@@ -259,7 +259,7 @@ func TestServicesPanel_KeyG_FilterMode_DoesNotEmitLazygitMessage(t *testing.T) {
 	p.SetFocused(true)
 	p, _ = p.Update(sendKey("f"))
 
-	_, cmd := p.Update(sendKey("g"))
+	_, cmd := p.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		return
 	}
@@ -335,7 +335,7 @@ func TestServicesPanel_View_TaskSelectedNoServices_ShowsAddHint(t *testing.T) {
 	if !strings.Contains(view, "No services in this task") {
 		t.Errorf("expected no-services placeholder, got: %q", view)
 	}
-	if !strings.Contains(view, "[a]") {
+	if !strings.Contains(view, hint("[a]")) {
 		t.Errorf("expected [a] hint in placeholder, got: %q", view)
 	}
 }

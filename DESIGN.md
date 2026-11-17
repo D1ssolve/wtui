@@ -161,6 +161,10 @@ columns. It summarizes the selected task or release without ever taking focus.
 - Three levels: terminal Background → panel Surface (glass border) → raised cards
   (SurfaceRaised, per-state border colors).
 - No blur, no translucency, no box-shadow effects beyond the two-tone border.
+- Background fills are not used, with one exception: keycaps. Shortcut keys in the
+  footer, help, command palette and dialog hints render as Zed-style keycaps
+  (`theme.Keycaps` / `theme.HintLine`) on `KeycapBackground`; macOS shows modifiers
+  as symbols (`⌃R`), other platforms as words (`Ctrl+R`).
 - The Workflow Panel sits at panel level, one step below the header in emphasis
   (dimmer text, no focus treatment).
 

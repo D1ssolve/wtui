@@ -215,98 +215,8 @@ func TestConvertHotfixDialog_EnterSubmitsEditableTargetID(t *testing.T) {
 	}
 }
 
-func TestHelpOverlay_ViewContainsKeyText(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
-	view := stripAnsi(h.View())
-
-	mustContain := []string{
-		"Keyboard Shortcuts",
-		"Tasks Panel",
-		"Services Panel",
-		"Releases Panel",
-		"Release Confirmation",
-		"Output Panel",
-		"Global",
-		"Move focus: next / Tasks / Services / Releases / Output",
-		"Move selection",
-		"First/last task, previous/next page",
-		"Init new task group",
-		"Clone selected task group",
-		"Clean up selected task (no scan)",
-		"Plan close selected task",
-		"Open cleanup review",
-		"Clean up selected released release (no scan)",
-		"Validate selected task",
-		"Browse task tags",
-		"Add service to task",
-		"Open <taskID>.sln in Rider",
-		"Open selected release folder in configured editor",
-		"Open selected release folder in Rider",
-		"Open selected task in configured editor",
-		"Run shell command in selected task directory",
-		"Open sync strategy selection",
-		"Refresh tasks and repository cache",
-		"Open forge action menu",
-		"Validate current task",
-		"Remove service from task",
-		"Create release",
-		"Retry failed recoverable release",
-		"Scroll preview; top/bottom",
-		"Execute release",
-		"Cancel",
-		"Scroll up/down",
-		"Toggle this help",
-		"System status",
-		"Quit",
-	}
-	for _, forbidden := range []string{"Push service", "Sync service", "Stash service changes", "Unstash service changes"} {
-		if strings.Contains(view, forbidden) {
-			t.Errorf("HelpOverlay.View() advertises removed action %q", forbidden)
-		}
-	}
-	for _, want := range mustContain {
-		if !strings.Contains(view, want) {
-			t.Errorf("HelpOverlay.View() missing expected text %q", want)
-		}
-	}
-	if strings.Contains(view, "Show pipeline status") {
-		t.Fatal("help must not advertise direct pipeline shortcut")
-	}
-
-	for _, forbidden := range []string{"1", "2", "3"} {
-		if strings.Contains(view, forbidden+"  ") || strings.Contains(view, forbidden+"\t") {
-			t.Errorf("HelpOverlay.View() should not advertise fast navigation key %q", forbidden)
-		}
-	}
-}
-
-func TestHelpOverlay_CleanupHintAlwaysShown(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
-	if !strings.Contains(stripAnsi(h.View()), "Open cleanup review") {
-		t.Fatal("cleanup help missing")
-	}
-}
-
-func TestHelpOverlay_LazygitAvailableIncludesServiceRow(t *testing.T) {
-	h := NewHelpOverlayWithOptions(true)
-	view := stripAnsi(h.View())
-
-	if !strings.Contains(view, "Open lazygit for selected service") {
-		t.Fatalf("help overlay should include lazygit service row when available, got %q", view)
-	}
-}
-
-func TestHelpOverlay_LazygitUnavailableExcludesServiceRow(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
-	view := stripAnsi(h.View())
-
-	if strings.Contains(view, "Open lazygit for selected service") || strings.Contains(view, "lazygit") {
-		t.Fatalf("help overlay should omit lazygit service row when unavailable, got %q", view)
-	}
-}
-
 func TestHelpOverlay_Esc_Closes(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	_, cmd := h.Update(sendSpecialKey(tea.KeyEsc))
 	if cmd == nil {
 		t.Fatal("Esc must return a cmd")
@@ -318,7 +228,7 @@ func TestHelpOverlay_Esc_Closes(t *testing.T) {
 }
 
 func TestHelpOverlay_QuestionMark_Closes(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	_, cmd := h.Update(sendKey("?"))
 	if cmd == nil {
 		t.Fatal("? must return a cmd")
@@ -330,7 +240,7 @@ func TestHelpOverlay_QuestionMark_Closes(t *testing.T) {
 }
 
 func TestHelpOverlay_ScrollDownUp_AdjustsOffset(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(80, 10)
 
 	if h.scrollOffset != 0 {
@@ -349,7 +259,7 @@ func TestHelpOverlay_ScrollDownUp_AdjustsOffset(t *testing.T) {
 }
 
 func TestHelpOverlay_ScrollPgDownAndEnd_ClampToBottom(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(80, 10)
 
 	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyPgDown})
@@ -369,7 +279,7 @@ func TestHelpOverlay_ScrollPgDownAndEnd_ClampToBottom(t *testing.T) {
 }
 
 func TestHelpOverlay_View_RendersVisibleSliceAfterScroll(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(80, 10)
 
 	top := stripAnsi(h.View())
@@ -379,7 +289,7 @@ func TestHelpOverlay_View_RendersVisibleSliceAfterScroll(t *testing.T) {
 
 	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	bottom := stripAnsi(h.View())
-	if !strings.Contains(bottom, "[Esc] or [?] to close") {
+	if !strings.Contains(bottom, hint("[Esc] or [?] to close")) {
 		t.Fatalf("bottom view must contain close hint, got %q", bottom)
 	}
 	if strings.Contains(bottom, "Keyboard Shortcuts") {
@@ -422,7 +332,7 @@ func TestCreateReleaseDialog_OverlayBoundsIncludeFrame(t *testing.T) {
 }
 
 func TestOverlayView_NormalModals_PreserveRendering(t *testing.T) {
-	for _, m := range []Modal{NewHelpOverlayWithOptions(false), NewInitDialog("feature/", nil, 120, 40), NewReleaseCleanupChecklistModal(task.ReleaseCleanupPreview{ReleaseID: "REL-1"})} {
+	for _, m := range []Modal{NewHelpOverlay(testHelpSections()), NewInitDialog("feature/", nil, 120, 40), NewReleaseCleanupChecklistModal(task.ReleaseCleanupPreview{ReleaseID: "REL-1"})} {
 		t.Run(m.Title(), func(t *testing.T) {
 			m.SetTerminalSize(120, 40)
 			content := m.View()
@@ -445,7 +355,7 @@ func TestOverlayView_PopulatedCleanup_PreservesBlockerFooterAndBorder(t *testing
 	m.SetTerminalSize(80, 24)
 	got := OverlayView(m.View(), 80, 24)
 	border := boxStyle(50).GetBorderStyle()
-	for _, text := range []string{"api worktree is dirty", "Change selection to replan, or [Esc] cancel", border.BottomLeft, border.BottomRight} {
+	for _, text := range []string{"api worktree is dirty", hint("Change selection to replan, or [Esc] cancel"), border.BottomLeft, border.BottomRight} {
 		if !strings.Contains(stripAnsi(got), text) {
 			t.Errorf("cleanup overlay missing %q", text)
 		}
@@ -686,7 +596,7 @@ func TestConfigModal_ViewContainsConfigValues(t *testing.T) {
 		"6",
 		"log_level:",
 		"INFO",
-		"[Esc] close",
+		hint("[Esc] close"),
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("ConfigModal.View() missing %q", want)
@@ -1427,10 +1337,10 @@ func TestInitDialog_View_ShowsFilterModeHints(t *testing.T) {
 	d = m.(*InitDialog)
 
 	view := d.View()
-	if !strings.Contains(view, "[Space] toggle") {
+	if !strings.Contains(view, hint("[Space] toggle")) {
 		t.Error("View should contain '[Space] toggle' hint (normal hint always shown)")
 	}
-	if !strings.Contains(view, "[f] filter") {
+	if !strings.Contains(view, hint("[f] filter")) {
 		t.Error("View should contain '[f] filter' hint (normal hint always shown)")
 	}
 }
@@ -1439,13 +1349,13 @@ func TestInitDialog_View_ShowsNormalModeHints(t *testing.T) {
 	d := newInitDialogWithRepos("alpha", "beta")
 
 	view := d.View()
-	if !strings.Contains(view, "[Space] toggle") {
+	if !strings.Contains(view, hint("[Space] toggle")) {
 		t.Error("View should contain '[Space] toggle' hint when not in filter mode")
 	}
-	if !strings.Contains(view, "[j/k] navigate") {
+	if !strings.Contains(view, hint("[j/k] navigate")) {
 		t.Error("View should contain '[j/k] navigate' hint when not in filter mode")
 	}
-	if !strings.Contains(view, "[f] filter") {
+	if !strings.Contains(view, hint("[f] filter")) {
 		t.Error("View should contain '[f] filter' hint when not in filter mode")
 	}
 }
@@ -1476,10 +1386,10 @@ func TestAddDialog_View_ShowsFilterModeHints(t *testing.T) {
 	d = m.(*AddDialog)
 
 	view := d.View()
-	if !strings.Contains(view, "[Space] toggle") {
+	if !strings.Contains(view, hint("[Space] toggle")) {
 		t.Error("View should contain '[Space] toggle' hint (normal hint always shown)")
 	}
-	if !strings.Contains(view, "[f] filter") {
+	if !strings.Contains(view, hint("[f] filter")) {
 		t.Error("View should contain '[f] filter' hint (normal hint always shown)")
 	}
 }
@@ -1488,13 +1398,13 @@ func TestAddDialog_View_ShowsNormalModeHints(t *testing.T) {
 	d := newAddDialogWithRepos("alpha", "beta")
 
 	view := d.View()
-	if !strings.Contains(view, "[Space] toggle") {
+	if !strings.Contains(view, hint("[Space] toggle")) {
 		t.Error("View should contain '[Space] toggle' hint when not in filter mode")
 	}
-	if !strings.Contains(view, "[j/k] navigate") {
+	if !strings.Contains(view, hint("[j/k] navigate")) {
 		t.Error("View should contain '[j/k] navigate' hint when not in filter mode")
 	}
-	if !strings.Contains(view, "[f] filter") {
+	if !strings.Contains(view, hint("[f] filter")) {
 		t.Error("View should contain '[f] filter' hint when not in filter mode")
 	}
 }

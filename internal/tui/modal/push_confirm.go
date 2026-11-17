@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"sort"
 	"strings"
 
@@ -106,7 +107,7 @@ func (d *PushConfirmDialog) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("Push? [Enter/y] confirm [Esc/n] cancel"))
+	b.WriteString(theme.HintLine("Push? [Enter/y] confirm [Esc/n] cancel"))
 	return b.String()
 }
 

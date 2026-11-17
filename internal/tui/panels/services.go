@@ -312,6 +312,16 @@ func (p ServicesPanel) Update(msg tea.Msg) (ServicesPanel, tea.Cmd) {
 			return p, func() tea.Msg { return OpenAddServiceMsg{TaskID: tid, ExistingServices: existing} }
 
 		case "g":
+			p.list.Select(0)
+			return p, nil
+
+		case "G":
+			if n := len(p.list.Items()); n > 0 {
+				p.list.Select(n - 1)
+			}
+			return p, nil
+
+		case "enter":
 			if !p.lazygitAvailable {
 				return p, nil
 			}
@@ -431,8 +441,7 @@ func (p ServicesPanel) View() string {
 
 	case len(p.list.Items()) == 0:
 		body = lipgloss.NewStyle().MaxWidth(inner.w).
-			Foreground(svcColorDim).
-			Render("No services in this task. Press [a] to add.")
+			Render(uitheme.HintLine("No services in this task. Press [a] to add."))
 
 	default:
 		listCopy := p.list

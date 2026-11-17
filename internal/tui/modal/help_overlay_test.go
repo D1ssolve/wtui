@@ -1,17 +1,45 @@
 package modal
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
+func testHelpSections() []HelpSection {
+	global := HelpSection{Title: "Global", Rows: []HelpRow{
+		{Key: "Tab / 1 / 2 / 3 / 0", Desc: "Move focus: next / Tasks / Services / Releases / Output"},
+		{Key: "q / Ctrl+C", Desc: "Quit"},
+	}}
+	tasks := HelpSection{Title: "Tasks Panel", Rows: []HelpRow{{Key: "R", Desc: "Open <taskID>.sln in Rider"}}}
+	services := HelpSection{Title: "Services Panel", Rows: []HelpRow{{Key: "a", Desc: "Add service to task"}}}
+	for i := range 30 {
+		tasks.Rows = append(tasks.Rows, HelpRow{Key: fmt.Sprintf("k%d", i), Desc: fmt.Sprintf("Task action %d", i)})
+	}
+	return []HelpSection{global, tasks, services}
+}
+
+func TestHelpOverlay_RendersSectionsInGivenOrder(t *testing.T) {
+	h := NewHelpOverlay([]HelpSection{
+		{Title: "Services Panel (current)", Rows: []HelpRow{{Key: "a", Desc: "add"}}},
+		{Title: "Global", Rows: []HelpRow{{Key: "?", Desc: "help"}}},
+	})
+	view := stripAnsi(h.View())
+	current, global := strings.Index(view, "Services Panel (current):"), strings.Index(view, "Global:")
+	if current < 0 || global < 0 || current > global {
+		t.Fatalf("sections must render in the given order, got %q", view)
+	}
+}
+
 func TestHelpOverlay_WorkflowContext_ShowsIdentityStepsAndNextAction(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetWorkflow("Task PROJ-101", &domain.WorkflowSummary{
 		Steps: []domain.WorkflowStep{
 			{Label: "code", State: "done"},
@@ -30,7 +58,7 @@ func TestHelpOverlay_WorkflowContext_ShowsIdentityStepsAndNextAction(t *testing.
 }
 
 func TestHelpOverlay_WorkflowContext_ShowsReasonAndRecoveryOnce(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetWorkflow("Task PROJ-101", &domain.WorkflowSummary{
 		Steps: []domain.WorkflowStep{
 			{Label: "code", State: "done"},
@@ -57,7 +85,7 @@ func TestHelpOverlay_WorkflowContext_ShowsReasonAndRecoveryOnce(t *testing.T) {
 }
 
 func TestHelpOverlay_WorkflowContext_ShowsServiceTargetDetail(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetWorkflow("Release REL-1", &domain.WorkflowSummary{
 		Steps: []domain.WorkflowStep{{Label: "develop", State: "now"}},
 		Services: []domain.ServiceWorkflow{
@@ -76,7 +104,7 @@ func TestHelpOverlay_WorkflowContext_ShowsServiceTargetDetail(t *testing.T) {
 }
 
 func TestHelpOverlay_WorkflowContext_ShowsDistinctTargetActions(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetWorkflow("Task HOTFIX-1", &domain.WorkflowSummary{
 		Blocker:    "api: master: conflicts",
 		NextAction: "api: master: resolve conflicts",
@@ -95,7 +123,7 @@ func TestHelpOverlay_WorkflowContext_ShowsDistinctTargetActions(t *testing.T) {
 }
 
 func TestHelpOverlay_SetWorkflowNil_ClearsContext(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetWorkflow("Task PROJ-101", &domain.WorkflowSummary{
 		Steps:      []domain.WorkflowStep{{Label: "code", State: "now"}},
 		NextAction: "merge now",
@@ -109,7 +137,7 @@ func TestHelpOverlay_SetWorkflowNil_ClearsContext(t *testing.T) {
 }
 
 func TestHelpOverlay_WorkflowContext_WrapsWithinOverlayWidth(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(50, 40)
 	h.SetWorkflow("Task PROJ-101", &domain.WorkflowSummary{
 		Steps: []domain.WorkflowStep{
@@ -132,7 +160,7 @@ func TestHelpOverlay_WorkflowContext_WrapsWithinOverlayWidth(t *testing.T) {
 }
 
 func TestHelpOverlay_WorkflowContext_ScrollStaysClamped(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(80, 12)
 	h.SetWorkflow("Task PROJ-101", &domain.WorkflowSummary{
 		Steps:      []domain.WorkflowStep{{Label: "code", State: "now"}},
@@ -147,7 +175,7 @@ func TestHelpOverlay_WorkflowContext_ScrollStaysClamped(t *testing.T) {
 }
 
 func TestHelpOverlay_WorkflowContext_StepsEmptyStillShowsIdentityAndNextAction(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetWorkflow("Task PROJ-101", &domain.WorkflowSummary{
 		NextAction: "no close action configured",
 	})
@@ -162,7 +190,7 @@ func TestHelpOverlay_WorkflowContext_StepsEmptyStillShowsIdentityAndNextAction(t
 }
 
 func TestHelpOverlay_FullView_FitsOverlayWidthAtNarrowTerminal(t *testing.T) {
-	h := NewHelpOverlayWithOptions(true)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(50, 200)
 	h.SetWorkflow("Task PROJ-101", &domain.WorkflowSummary{
 		Steps: []domain.WorkflowStep{
@@ -180,18 +208,26 @@ func TestHelpOverlay_FullView_FitsOverlayWidthAtNarrowTerminal(t *testing.T) {
 	}
 }
 
+// helpRowLine reports whether one rendered line holds both the key's keycaps
+// and the start of its description.
+func helpRowLine(view, key, descStart string) bool {
+	keys := ansi.Strip(theme.Keycaps(key))
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, keys) && strings.Contains(line, descStart) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestHelpOverlay_FullView_WideLayoutKeepsRowsOnOneLine(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(120, 200)
 
 	view := stripAnsi(h.View())
-	for _, want := range []string{
-		"  q / Ctrl+C      Quit",
-		"  R               Open <taskID>.sln in Rider",
-		"  a               Add service to task",
-	} {
-		if !strings.Contains(view, want) {
-			t.Errorf("wide layout must keep fitting rows on one line, missing %q in %q", want, view)
+	for _, row := range []HelpRow{{Key: "q / Ctrl+C", Desc: "Quit"}, {Key: "R", Desc: "Open <taskID>.sln in Rider"}, {Key: "a", Desc: "Add service to task"}} {
+		if !helpRowLine(view, row.Key, row.Desc) {
+			t.Errorf("wide layout must keep %q and %q on one line in %q", row.Key, row.Desc, view)
 		}
 	}
 	width, _ := overlayContentSize(120, 40)
@@ -203,11 +239,10 @@ func TestHelpOverlay_FullView_WideLayoutKeepsRowsOnOneLine(t *testing.T) {
 }
 
 func TestHelpOverlay_NarrowView_KeepsKeyWithDescriptionStart(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(50, 40)
 
-	view := stripAnsi(h.View())
-	if !strings.Contains(view, "Tab / 1 / 2 / 3 / 0 Move focus:") {
+	if view := stripAnsi(h.View()); !helpRowLine(view, "Tab / 1 / 2 / 3 / 0", "Move focus:") {
 		t.Fatalf("long key must stay on the same line as its description start, got %q", view)
 	}
 }
@@ -217,7 +252,7 @@ func helpViewLines(h *HelpOverlay) []string {
 }
 
 func TestHelpOverlay_Scrollable_ShowsScrollFooter(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(80, 20)
 	if h.maxScrollOffset() == 0 {
 		t.Fatal("precondition: help must be scrollable at 80x20")
@@ -240,7 +275,7 @@ func TestHelpOverlay_Scrollable_ShowsScrollFooter(t *testing.T) {
 }
 
 func TestHelpOverlay_ScrollFooter_TracksIntermediateAndBottom(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(80, 20)
 
 	_, _ = h.Update(sendKey("j"))
@@ -254,13 +289,13 @@ func TestHelpOverlay_ScrollFooter_TracksIntermediateAndBottom(t *testing.T) {
 	if !strings.Contains(footer, "more above") || strings.Contains(footer, "more below") {
 		t.Fatalf("final footer must cue upward only, got %q", footer)
 	}
-	if !strings.Contains(helpViewLines(h)[h.visibleLines()-2], "[Esc] or [?] to close") {
+	if !strings.Contains(helpViewLines(h)[h.visibleLines()-2], hint("[Esc] or [?] to close")) {
 		t.Fatalf("bottom view must still show close hint as last content line, got %q", helpViewLines(h))
 	}
 }
 
 func TestHelpOverlay_ScrollFooter_FitsOverlayWidth(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(50, 20)
 	width, _ := overlayContentSize(50, 20)
 
@@ -275,12 +310,12 @@ func TestHelpOverlay_ScrollFooter_FitsOverlayWidth(t *testing.T) {
 }
 
 func TestHelpOverlay_NonScrollable_NoFooter(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(120, 200)
 
 	lines := helpViewLines(h)
 	last := lines[len(lines)-1]
-	if !strings.Contains(last, "[Esc] or [?] to close") {
+	if !strings.Contains(last, hint("[Esc] or [?] to close")) {
 		t.Fatalf("non-scrollable view must end with close hint, got %q", last)
 	}
 	if strings.Contains(stripAnsi(h.View()), "more below") {
@@ -289,7 +324,7 @@ func TestHelpOverlay_NonScrollable_NoFooter(t *testing.T) {
 }
 
 func TestHelpOverlay_ScrollFooter_NarrowTopMiddleBottomKeepCloseLabel(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
+	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(50, 20)
 
 	footerAt := func(offset int) string {
@@ -331,7 +366,7 @@ func TestHelpOverlay_QuitKeys_QuitApplication(t *testing.T) {
 		{Type: tea.KeyRunes, Runes: []rune{'q'}},
 		{Type: tea.KeyCtrlC},
 	} {
-		h := NewHelpOverlayWithOptions(false)
+		h := NewHelpOverlay(testHelpSections())
 		_, cmd := h.Update(key)
 		if cmd == nil {
 			t.Fatalf("%q must return a cmd", key.String())
@@ -339,13 +374,5 @@ func TestHelpOverlay_QuitKeys_QuitApplication(t *testing.T) {
 		if _, ok := cmd().(tea.QuitMsg); !ok {
 			t.Fatalf("%q while help open must quit the application, got %T", key.String(), cmd())
 		}
-	}
-}
-
-func TestHelpOverlay_TasksPanel_IncludesMergeShortcutRow(t *testing.T) {
-	h := NewHelpOverlayWithOptions(false)
-	view := stripAnsi(h.View())
-	if !strings.Contains(view, "Inspect and merge ready task MRs") {
-		t.Fatalf("Tasks Panel section must explain M shortcut, got %q", view)
 	}
 }

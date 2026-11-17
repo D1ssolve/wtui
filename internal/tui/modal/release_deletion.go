@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -45,7 +46,7 @@ func (m *releaseDeletionReview) footer() string {
 	if m.remote {
 		action = "[Enter/y] DELETE release"
 	}
-	return "\n" + lipgloss.NewStyle().Foreground(modalColorDim).Render(action+"\n[Esc/n] cancel  [j/k/g/G] refs")
+	return "\n" + theme.HintLine(action+"\n[Esc/n] cancel  [j/k/g/G] refs")
 }
 
 func (m *releaseDeletionReview) body() string {

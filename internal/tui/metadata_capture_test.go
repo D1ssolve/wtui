@@ -56,7 +56,7 @@ func TestCaptureMetadataFullViews(t *testing.T) {
 					plain := stripANSIForModel(raw)
 					contains := []string{"Ctrl+G"}
 					if state == "discard" {
-						contains = []string{"Discard draft", "[Esc/n] keep editing"}
+						contains = []string{"Discard draft", hint("[Esc/n] keep editing")}
 					}
 					switch state {
 					case "editing":

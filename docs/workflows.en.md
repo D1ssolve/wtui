@@ -26,7 +26,7 @@ flowchart LR
 
 1. In Tasks (`1`), press `i`, enter an ID and select services. wtui creates `feature/<TASK>` and a worktree at `<tasks_root>/<TASK>/<service>` for every service.
 ![Feature task creation dialog in wtui](images/workflows/feature-01-init.png)
-2. Press `O` for your editor or `R` for Rider. Write code, run application tests, and commit normally. In Services (`Enter` or `2`), press `a` to add a service or `g` to open lazygit.
+2. Press `O` for your editor or `R` for Rider. Write code, run application tests, and commit normally. In Services (`Enter` or `2`), press `a` to add a service or `Enter` on a service to open lazygit.
 ![Feature task state before working in external tools](images/workflows/feature-02-overview.png)
 3. Press `V`. This checks Git state, not application tests. `S` synchronizes branches with the remote.
 ![Feature task Git-state validation error in wtui](images/workflows/feature-03-validation-error.png)
@@ -92,7 +92,7 @@ flowchart LR
 6. Clean up only after both merges and post-actions finish.
 ![Manual hotfix cleanup candidates in wtui](images/workflows/cleanup-candidates-80x24.png)
 
-`F` on a hotfix converts it to a feature task: wtui creates `feature/<TARGET>` from the confirmed SHA, pushes branches with a lease, and deletes only unchanged local hotfix branches. The remote source branch remains.
+`H` on a hotfix converts it to a feature task: wtui creates `feature/<TARGET>` from the confirmed SHA, pushes branches with a lease, and deletes only unchanged local hotfix branches. The remote source branch remains.
 
 ## Manual Cleanup
 
@@ -117,5 +117,5 @@ More detail: [cleanup.md](cleanup.md). All keys and constraints: [configuration.
 |---|---|
 | Close | Check the push and MRs/PRs, then repeat `C`. |
 | Merge check | After review and CI pass, repeat `M`. |
-| Release | For a recoverable `failed`, use `R` in Releases. After a partial production merge, use `M`, not `R`. |
+| Release | For a recoverable `failed`, use `Ctrl+R` in Releases. After a partial production merge, use `M`, not `Ctrl+R`. |
 | Cleanup | Removed items are not restored. Press `D` or `P` and create a new plan. |

@@ -2,6 +2,7 @@ package modal
 
 import (
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -79,7 +80,6 @@ func (d *MergeConfirmDialog) Confirmation() ConfirmMergeMsg {
 func (d *MergeConfirmDialog) View() string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	normal := lipgloss.NewStyle().Foreground(modalColorNormal)
-	dim := lipgloss.NewStyle().Foreground(modalColorDim)
 
 	var b strings.Builder
 	b.WriteString(title.Render(d.Title()))
@@ -108,9 +108,9 @@ func (d *MergeConfirmDialog) View() string {
 	}
 	b.WriteString("\n")
 	if d.serviceName != "" {
-		b.WriteString(dim.Render("[j/k] select target  [Enter/y] merge selected  [Esc/n] cancel"))
+		b.WriteString(theme.HintLine("[j/k] select target  [Enter/y] merge selected  [Esc/n] cancel"))
 	} else {
-		b.WriteString(dim.Render("[Enter/y] merge ready  [Esc/n] cancel"))
+		b.WriteString(theme.HintLine("[Enter/y] merge ready  [Esc/n] cancel"))
 	}
 	return b.String()
 }

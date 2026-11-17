@@ -21,7 +21,7 @@ func TestPipelineView_RendersPipelineStagesAndJobs(t *testing.T) {
 	}, 100, 30)
 
 	plain := stripANSIForModel(view.View())
-	for _, want := range []string{"GitLab Pipeline", "paymentservice", "#146529", "develop", "BUILD", "compile", "TEST", "unit", "[Esc] back"} {
+	for _, want := range []string{"GitLab Pipeline", "paymentservice", "#146529", "develop", "BUILD", "compile", "TEST", "unit", hint("[Esc] back")} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("pipeline view missing %q: %q", want, plain)
 		}

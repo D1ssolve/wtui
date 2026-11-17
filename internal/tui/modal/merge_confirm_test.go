@@ -14,7 +14,7 @@ func TestMergeConfirmDialog_ViewListsStatusesAndBlockers(t *testing.T) {
 	})
 
 	view := stripAnsi(d.View())
-	for _, want := range []string{"Confirm Merge Ready MRs", "Task: TASK-1", "api | ready", "worker | blocked | CI failed; approval required", "[Enter/y] merge ready  [Esc/n] cancel"} {
+	for _, want := range []string{"Confirm Merge Ready MRs", "Task: TASK-1", "api | ready", "worker | blocked | CI failed; approval required", hint("[Enter/y] merge ready  [Esc/n] cancel")} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q: %s", want, view)
 		}
