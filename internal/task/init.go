@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 	"golang.org/x/sync/semaphore"
 )
@@ -21,13 +22,6 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 	}
 
 	taskDir := m.taskDir(params.TaskID)
-	if _, err := os.Stat(taskDir); err == nil {
-		if len(params.RemoteBranchStrategies) == 0 {
-			return PartialFailureResult{}, fmt.Errorf("%w: %s", ErrTaskExists, params.TaskID)
-		}
-	} else if err := os.MkdirAll(taskDir, 0o755); err != nil {
-		return PartialFailureResult{}, fmt.Errorf("init: create task directory %s: %w", taskDir, err)
-	}
 
 	branchType, rule := m.resolveInitRule(params.BranchType)
 	branchPrefix := strings.TrimSpace(params.BranchPrefix)
@@ -35,6 +29,30 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 		branchPrefix = strings.TrimSpace(rule.Prefixes[0])
 	}
 	branchName := m.resolveBranchName(branchPrefix, params.TaskID)
+
+	if params.FromRemoteBranch {
+		if _, err := os.Stat(taskDir); err == nil {
+			return PartialFailureResult{}, fmt.Errorf("%w: %s", ErrTaskExists, params.TaskID)
+		}
+		repos, err := m.reposWithRemoteBranch(ctx, branchName, params.StatusCh)
+		if err != nil {
+			return PartialFailureResult{}, err
+		}
+		params.Services = make([]string, 0, len(repos))
+		params.RemoteBranchStrategies = make(map[string]RemoteBranchStrategy, len(repos))
+		for _, repo := range repos {
+			params.Services = append(params.Services, repo.Name)
+			params.RemoteBranchStrategies[filepath.Base(repo.Path)] = StrategyFetchAndSwitch
+		}
+	}
+
+	if _, err := os.Stat(taskDir); err == nil {
+		if len(params.RemoteBranchStrategies) == 0 {
+			return PartialFailureResult{}, fmt.Errorf("%w: %s", ErrTaskExists, params.TaskID)
+		}
+	} else if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		return PartialFailureResult{}, fmt.Errorf("init: create task directory %s: %w", taskDir, err)
+	}
 
 	baseBranch := strings.TrimSpace(params.BaseBranch)
 	if baseBranch == "" {
@@ -76,6 +94,51 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 	}
 
 	return PartialFailureResult{}, nil
+}
+
+// reposWithRemoteBranch returns discovered repositories whose origin has branch.
+func (m *manager) reposWithRemoteBranch(ctx context.Context, branch string, statusCh chan<- string) ([]domain.Repo, error) {
+	repos, err := m.discoverer.FindAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("init: list repositories: %w", err)
+	}
+
+	found := make([]bool, len(repos))
+	errs := make([]error, len(repos))
+	sem := semaphore.NewWeighted(int64(m.concurrency()))
+	var wg sync.WaitGroup
+	for i, repo := range repos {
+		if err := sem.Acquire(ctx, 1); err != nil {
+			wg.Wait()
+			return nil, fmt.Errorf("init: look up remote branch %s: %w", branch, err)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer sem.Release(1)
+			found[i], errs[i] = m.git.RemoteBranchExists(ctx, repo.Path, branch)
+		}()
+	}
+	wg.Wait()
+
+	var out []domain.Repo
+	for i, repo := range repos {
+		if errs[i] != nil {
+			errs[i] = fmt.Errorf("%s: %w", repo.Name, errs[i])
+			sendStatus(statusCh, "Warning: could not check origin of "+repo.Name+" for "+branch+": "+errs[i].Error())
+			continue
+		}
+		if found[i] {
+			out = append(out, repo)
+		}
+	}
+	if len(out) == 0 {
+		if err := errors.Join(errs...); err != nil {
+			return nil, fmt.Errorf("init: look up remote branch %s (check network access to origin and retry): %w", branch, err)
+		}
+		return nil, fmt.Errorf("%w: %s is not on origin in any repository; check the branch name and that it is pushed", ErrRemoteBranchNotFound, branch)
+	}
+	return out, nil
 }
 
 type serviceResult struct {

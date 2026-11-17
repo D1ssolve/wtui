@@ -3175,6 +3175,70 @@ func TestInit_RemoteBranchConflict_StrategyFetchAndSwitch(t *testing.T) {
 	}
 }
 
+func TestInit_FromRemoteBranch_ImportsOnlyReposWithBranch(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	makeGitDir(t, filepath.Join(rootDir, "svc-a"))
+	makeGitDir(t, filepath.Join(rootDir, "svc-b"))
+
+	gitMock := &mockGitClient{
+		baseBranchResult: "main",
+		remoteBranchExistsFn: func(repoPath, branch string) (bool, error) {
+			return filepath.Base(repoPath) == "svc-a" && branch == "feature/ZA-1", nil
+		},
+	}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	if _, err := mgr.Init(context.Background(), InitParams{TaskID: "ZA-1", BranchPrefix: "feature/", FromRemoteBranch: true}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	gitMock.mu.Lock()
+	calls := gitMock.addWorktreeWithTrackingCalls
+	addCalls := gitMock.addWorktreeCalls
+	gitMock.mu.Unlock()
+	if len(calls) != 1 || filepath.Base(calls[0].RepoPath) != "svc-a" || calls[0].RemoteBranch != "feature/ZA-1" {
+		t.Fatalf("AddWorktreeWithTracking calls = %+v, want one for svc-a feature/ZA-1", calls)
+	}
+	if len(addCalls) != 0 {
+		t.Fatalf("AddWorktree calls = %d, want 0", len(addCalls))
+	}
+}
+
+func TestInit_FromRemoteBranch_NotFound_ReturnsErrorWithoutTaskDir(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	makeGitDir(t, filepath.Join(rootDir, "svc-a"))
+
+	gitMock := &mockGitClient{baseBranchResult: "main"}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	_, err := mgr.Init(context.Background(), InitParams{TaskID: "ZA-404", BranchPrefix: "feature/", FromRemoteBranch: true})
+	if !errors.Is(err, ErrRemoteBranchNotFound) {
+		t.Fatalf("Init error = %v, want ErrRemoteBranchNotFound", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(tasksRoot, "ZA-404")); !os.IsNotExist(statErr) {
+		t.Fatalf("task dir must not be created, stat err = %v", statErr)
+	}
+}
+
+func TestInit_FromRemoteBranch_ExistingTask_ReturnsErrTaskExists(t *testing.T) {
+	rootDir := t.TempDir()
+	tasksRoot := filepath.Join(rootDir, ".tasks")
+	makeGitDir(t, filepath.Join(rootDir, "svc-a"))
+	if err := os.MkdirAll(filepath.Join(tasksRoot, "ZA-1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	gitMock := &mockGitClient{baseBranchResult: "main", remoteBranchExistsRes: true}
+	mgr := newTestManager(t, tasksRoot, rootDir, gitMock)
+
+	_, err := mgr.Init(context.Background(), InitParams{TaskID: "ZA-1", BranchPrefix: "feature/", FromRemoteBranch: true})
+	if !errors.Is(err, ErrTaskExists) {
+		t.Fatalf("Init error = %v, want ErrTaskExists", err)
+	}
+}
+
 func TestInit_RemoteBranchConflict_StrategyNewBranch(t *testing.T) {
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")

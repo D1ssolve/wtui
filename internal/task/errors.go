@@ -10,6 +10,8 @@ var (
 
 	ErrTaskExists = errors.New("task already exists")
 
+	ErrRemoteBranchNotFound = errors.New("remote branch not found")
+
 	ErrServiceNotFound = errors.New("service not found")
 
 	ErrValidationFailed = errors.New("task validation failed")
