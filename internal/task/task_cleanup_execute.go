@@ -26,7 +26,8 @@ type TaskCleanupResult struct {
 }
 
 type TaskCleanupExecutionSelection struct {
-	Force bool
+	Force        bool
+	trainSidecar os.FileInfo
 }
 
 // ExecuteTaskCleanup revalidates an approved task cleanup plan and executes
@@ -86,6 +87,11 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 		}
 	}
 	plan = fresh
+	trainSidecar, err := m.verifyTaskTrainCleanup(ctx, plan.preview.TaskID)
+	if err != nil {
+		return result, fmt.Errorf("%w: verify recorded train delivery: %w", ErrTaskCleanupBlocked, err)
+	}
+	selection.trainSidecar = trainSidecar
 
 	ordered := taskCleanupExecutionOrder(plan.steps)
 	for _, step := range ordered {
@@ -257,20 +263,15 @@ func (m *manager) executeTaskCleanupStep(ctx context.Context, plan TaskCleanupPl
 		if err := removeGeneratedTaskFiles(step.path, plan.preview.TaskID); err != nil {
 			return false, err
 		}
-		entries, err := os.ReadDir(step.path)
-		if errors.Is(err, os.ErrNotExist) {
-			return true, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		if len(entries) > 0 && !selection.Force {
-			return false, fmt.Errorf("task directory %s is not empty", step.path)
-		}
 		if selection.Force {
+			if _, err := os.ReadDir(step.path); errors.Is(err, os.ErrNotExist) {
+				return true, nil
+			} else if err != nil {
+				return false, err
+			}
 			return false, os.RemoveAll(step.path)
 		}
-		return false, os.Remove(step.path)
+		return removeTaskDirectoryAfterCleanup(ctx, step.path, selection.trainSidecar)
 	default:
 		return false, fmt.Errorf("unknown cleanup step %d", step.kind)
 	}
