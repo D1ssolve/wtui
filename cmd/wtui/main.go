@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"runtime/debug"
@@ -42,49 +44,125 @@ func resolveVersion() string {
 	return "dev"
 }
 
-func main() {
-	if versionRequested(os.Args[1:]) {
-		fmt.Print(versionOutput(resolveVersion()))
-		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "flow" {
-		format := ""
-		if len(os.Args) > 2 {
-			format = os.Args[2]
-		}
-		var out string
-		var err error
-		switch {
-		case format == "--draft" && len(os.Args) == 4 && strings.TrimSpace(os.Args[3]) != "":
-			out, err = draftCommand(os.Args[3])
-		case format == "" || format == "--mermaid" || format == "--html":
-			out, err = flowCommand(format)
-		default:
-			fmt.Fprintln(os.Stderr, "usage: wtui flow [--mermaid | --html | --draft \"<how your team works>\"]")
-			os.Exit(2)
-		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "wtui flow:", err)
-			os.Exit(1)
-		}
-		fmt.Print(out)
-		return
-	}
+const usageText = `usage:
+  wtui [--config PATH]
+  wtui [--config PATH] flow [--mermaid | --html | --draft "TEXT"]
+  wtui -h | --help
+  wtui -v | --version
+`
 
-	if err := runTUI(); err != nil {
-		slog.Error("TUI failed", "err", err)
-		os.Exit(1)
-	}
+// cliArgs is the parsed command line.
+type cliArgs struct {
+	help, version bool
+	flow          bool
+	config        string
+	format, draft string // flow output: "" (describe), "--mermaid" or "--html"; or a --draft description
 }
 
-func versionRequested(args []string) bool {
-	for _, arg := range args {
-		if arg == "--version" || arg == "-v" {
-			return true
+// parseArgs reads the whole command line in one pass. An unknown argument wins over every other
+// error; --config PATH and --config=PATH may appear before or after flow, and the token after
+// --config is always its value.
+func parseArgs(args []string) (cliArgs, error) {
+	var c cliArgs
+	var bad error // first structural error; reported only if no unknown argument follows
+	fail := func(msg string) {
+		if bad == nil {
+			bad = errors.New(msg)
 		}
 	}
+	modes := 0 // how many of --mermaid, --html, --draft were given
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-h" || arg == "--help":
+			c.help = true
+		case arg == "-v" || arg == "--version":
+			c.version = true
+		case arg == "flow":
+			if c.flow {
+				fail("flow given more than once")
+			}
+			c.flow = true
+		case arg == "--config" || strings.HasPrefix(arg, "--config="):
+			if c.config != "" {
+				fail("--config given more than once")
+			}
+			value, ok := strings.CutPrefix(arg, "--config=")
+			if !ok {
+				if i+1 >= len(args) {
+					fail("--config requires a path")
+					continue
+				}
+				i++
+				value = args[i]
+			}
+			if value == "" {
+				fail("--config requires a non-empty path")
+			}
+			c.config = value
+		case arg == "--mermaid" || arg == "--html":
+			c.format = arg
+			modes++
+		case arg == "--draft":
+			modes++
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				fail("--draft requires a description of how your team works")
+				i++
+				continue
+			}
+			i++
+			c.draft = args[i]
+		default:
+			return c, fmt.Errorf("unknown argument %q", arg)
+		}
+	}
+	if modes > 1 {
+		fail("--mermaid, --html and --draft cannot be combined")
+	}
+	if modes > 0 && !c.flow {
+		fail("--mermaid, --html and --draft only apply to the flow subcommand")
+	}
+	return c, bad
+}
 
-	return false
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// run executes the command line and returns the process exit code.
+func run(args []string, stdout, stderr io.Writer) int {
+	c, err := parseArgs(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "wtui: %v\n%s", err, usageText)
+		return 2
+	}
+	if c.help {
+		fmt.Fprint(stdout, usageText)
+		return 0
+	}
+	if c.version {
+		fmt.Fprint(stdout, versionOutput(resolveVersion()))
+		return 0
+	}
+	if c.flow {
+		var out string
+		if c.draft != "" {
+			out, err = draftCommand(c.draft, c.config)
+		} else {
+			out, err = flowCommand(c.format, c.config)
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, "wtui flow:", err)
+			return 1
+		}
+		fmt.Fprint(stdout, out)
+		return 0
+	}
+	if err := runTUI(c.config); err != nil {
+		slog.Error("TUI failed", "err", err)
+		return 1
+	}
+	return 0
 }
 
 func versionOutput(version string) string {
@@ -92,8 +170,8 @@ func versionOutput(version string) string {
 }
 
 // flowCommand validates the configured workflow and describes what wtui will do with it.
-func flowCommand(format string) (string, error) {
-	cfg, err := config.Load("")
+func flowCommand(format, configPath string) (string, error) {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return "", err
 	}
@@ -115,8 +193,8 @@ func flowCommand(format string) (string, error) {
 
 // draftCommand asks the configured AI provider for a workflow block and keeps it only once
 // the workflow compiler accepts it, feeding validation errors back for a bounded number of fixes.
-func draftCommand(description string) (string, error) {
-	cfg, err := config.Load("")
+func draftCommand(description, configPath string) (string, error) {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return "", err
 	}
@@ -158,8 +236,8 @@ func draftWorkflow(ctx context.Context, drafter interface {
 	}
 }
 
-func runTUI() error {
-	cfg, err := config.Load("")
+func runTUI(configPath string) error {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
