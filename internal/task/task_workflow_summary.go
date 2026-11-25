@@ -118,7 +118,12 @@ func (m *manager) reviewWorkflowSummary(ctx context.Context, plans []serviceWork
 			if len(plan.rule.ReviewTargets) > 0 {
 				reviewTarget = plan.rule.ReviewTargets[0]
 			}
-			item := m.inspectWorkflowReviewMR(ctx, plan.svc, reviewTarget)
+			var item ServiceMergeInspection
+			if pinned := states[i].pinned; pinned != nil {
+				item = *pinned
+			} else {
+				item = m.inspectWorkflowReviewMR(ctx, plan.svc, reviewTarget)
+			}
 			reviewItems = append(reviewItems, item)
 			row := reviewWorkflowRow(item)
 			rows = append(rows, row)

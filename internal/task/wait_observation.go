@@ -154,7 +154,7 @@ func (m *manager) ObserveTaskWait(ctx context.Context, selected domain.Task, sta
 		}
 		return WaitObservation{}, err
 	case gitflow.WaitReviewMerged:
-		holds, err := m.taskReviewWaitHolds(ctx, tf.services)
+		holds, err := m.taskReviewWaitHolds(ctx, tf)
 		if holds {
 			return WaitObservation{Ready: true, Key: waitRecheckKey(st, "")}, nil
 		}
@@ -167,8 +167,12 @@ func (m *manager) ObserveTaskWait(ctx context.Context, selected domain.Task, sta
 type taskReviewRefs struct{ sourceSHA, targetBranch, targetSHA string }
 
 // Both observation and manual re-check prove delivery against exact live refs.
-func (m *manager) taskReviewWaitHolds(ctx context.Context, services []domain.Service) (bool, error) {
-	plans, _, _, err := m.workflowPlans(services)
+func (m *manager) taskReviewWaitHolds(ctx context.Context, tf *taskFlow) (bool, error) {
+	plans, _, _, err := m.workflowPlans(tf.services)
+	if err != nil {
+		return false, err
+	}
+	pins, err := m.loadTaskTrainPins(tf.taskID)
 	if err != nil {
 		return false, err
 	}
@@ -184,6 +188,20 @@ func (m *manager) taskReviewWaitHolds(ctx context.Context, services []domain.Ser
 		published, err := m.git.RemoteRefSHA(ctx, plan.svc.RepoPath, source)
 		if err != nil || published == "" || published != local {
 			return false, err
+		}
+		if recorded := takeTaskTrainPins(pins, plan.svc.Name); len(recorded) > 0 {
+			if len(recorded) != len(m.taskTrainTargets(plan.svc)) {
+				return false, nil
+			}
+			for _, pin := range recorded {
+				if pin.Head != published {
+					return false, nil
+				}
+				if ok, err := m.pinnedTrainAtLiveTarget(ctx, plan.svc, pin); err != nil || !ok {
+					return false, err
+				}
+			}
+			continue
 		}
 		target := plan.rule.ReviewTargets[0]
 		tip, err := m.git.RemoteRefSHA(ctx, plan.svc.RepoPath, "refs/heads/"+target)
@@ -201,7 +219,9 @@ func (m *manager) taskReviewWaitHolds(ctx context.Context, services []domain.Ser
 			return false, err
 		}
 	}
-	return len(plans) > 0, nil
+	// Leftover pins belong to a service or target no longer in this flow.
+	err = ctx.Err()
+	return len(plans) > 0 && len(pins) == 0 && err == nil, err
 }
 
 func (m *manager) taskReviewAtTarget(ctx context.Context, svc domain.Service, refs taskReviewRefs) (bool, error) {
