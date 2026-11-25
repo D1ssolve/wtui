@@ -182,7 +182,7 @@ var actionRegistry = []action{
 	{scope: scopeTasks, keyLabel: "j/k, arrows", help: "Move selection", nav: true},
 	{scope: scopeTasks, keyLabel: "g/G, h/l", help: "First/last task, previous/next page", nav: true},
 	{scope: scopeTasks, keys: []string{"enter"}, short: "services", help: "View services of selected task", when: hasTask},
-	{scope: scopeTasks, keys: []string{"i"}, short: "init", help: "Init new task group"},
+	{scope: scopeTasks, keys: initTaskKey.Keys(), short: "init", help: "Init new task group"},
 	{scope: scopeTasks, keys: []string{"C"}, short: "close", help: "Plan close selected task", when: hasTask},
 	{scope: scopeTasks, keys: []string{"M"}, short: "merge MRs", help: "Inspect and merge ready task MRs", when: hasTask},
 	{scope: scopeTasks, keys: []string{"S"}, short: "sync", help: "Sync selected task (choose strategy)", when: hasTask},

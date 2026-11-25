@@ -2,6 +2,10 @@ package tui
 
 import "github.com/charmbracelet/bubbles/key"
 
+// initTaskKey opens the init dialog. The Tasks panel matches it and names it in
+// its empty state; the action registry takes its help and palette keys from it.
+var initTaskKey = key.NewBinding(key.WithKeys("i"))
+
 type KeyMap struct {
 	Tab key.Binding
 

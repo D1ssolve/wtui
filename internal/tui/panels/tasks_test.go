@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/paginator"
 	tea "github.com/charmbracelet/bubbletea"
@@ -266,6 +267,7 @@ func TestTasksPanel_KeyEnter_EmptyList_NoOp(t *testing.T) {
 
 func TestTasksPanel_KeyI_EmitsOpenInitDialogMsg(t *testing.T) {
 	p := NewTasksPanel(40, 20)
+	p.SetInitKey(key.NewBinding(key.WithKeys("i")))
 	p.SetFocused(true)
 
 	_, cmd := p.Update(sendKey("i"))
@@ -661,6 +663,104 @@ func TestTasksPanel_View_ContainsTitle(t *testing.T) {
 	view := p.View()
 	if !strings.Contains(stripAnsi(view), "TASKS") {
 		t.Error("View should contain 'TASKS' in title")
+	}
+}
+
+func TestTasksPanel_EmptyView_GuidesTaskCreation(t *testing.T) {
+	for _, tree := range []bool{false, true} {
+		p := NewTasksPanel(60, 20)
+		flow := makeFlow(gitflow.BranchTypeFeature)
+		if tree {
+			flow = makeFlow(gitflow.BranchTypeRelease)
+		}
+		p.SetFlow(flow)
+		p.SetInitKey(key.NewBinding(key.WithKeys("Z")))
+		view := stripAnsi(p.View())
+		if !strings.Contains(view, "[Z]") || !strings.Contains(view, "No tasks yet.") {
+			t.Errorf("tree=%t empty view should guide task creation, got %q", tree, view)
+		}
+	}
+}
+
+func TestTasksPanel_EmptyView_ShowsMissingRepositories(t *testing.T) {
+	for _, width := range []int{30, 40, 60} {
+		for _, tree := range []bool{false, true} {
+			p := NewTasksPanel(width, 20)
+			if tree {
+				p.SetFlow(makeFlow(gitflow.BranchTypeRelease))
+			}
+			p.SetInitKey(key.NewBinding(key.WithKeys("Z")))
+			p.SetDiscovery("/work/a/long/repository/root/path", 0)
+			view := stripAnsi(p.View())
+			var plain strings.Builder
+			for _, r := range view {
+				if !strings.ContainsRune("\n│╭╰─┏┗", r) {
+					plain.WriteRune(r)
+				}
+			}
+			normalized := strings.Join(strings.Fields(plain.String()), " ")
+			for _, want := range []string{
+				"No tasks yet. Press [Z] to create one.",
+				"No repositories found under /work/a/long/repository/root/path.",
+				"Set root_dir in the config (see wtui --help).",
+			} {
+				if !strings.Contains(normalized, want) {
+					t.Errorf("tree=%t width=%d empty view missing %q: %q", tree, width, want, view)
+				}
+			}
+			if strings.Contains(view, "…") {
+				t.Errorf("tree=%t width=%d empty view truncated: %q", tree, width, view)
+			}
+			if !strings.Contains(plain.String(), "/work/a/long/repository/root/path") {
+				t.Errorf("tree=%t width=%d missing full root path: %q", tree, width, view)
+			}
+		}
+	}
+	for _, tree := range []bool{false, true} {
+		p := NewTasksPanel(40, 20)
+		if tree {
+			p.SetFlow(makeFlow(gitflow.BranchTypeRelease))
+		}
+		p.SetDiscovery("/work/repos", 1)
+		if view := stripAnsi(p.View()); strings.Contains(view, "No repositories") {
+			t.Errorf("tree=%t repoCount=1 should suppress missing-repository hint: %q", tree, view)
+		}
+	}
+}
+
+func TestTasksPanel_FilteredNoMatchesDoesNotShowFirstRunHint(t *testing.T) {
+	for _, tree := range []bool{false, true} {
+		p := NewTasksPanel(60, 20)
+		flow := makeFlow(gitflow.BranchTypeFeature)
+		if tree {
+			flow = makeFlow(gitflow.BranchTypeRelease)
+		}
+		p.SetFlow(flow)
+		p.SetInitKey(key.NewBinding(key.WithKeys("Z")))
+		p.SetFocused(true)
+		if view := stripAnsi(p.View()); !strings.Contains(view, "[Z]") || !strings.Contains(view, "No tasks yet.") {
+			t.Errorf("tree=%t zero tasks should show first-run hint: %q", tree, view)
+		}
+		p.SetTasks(makeTasks("DEMO"))
+		p.list.SetFilterText("zzzzz")
+		p.rebuildRows()
+		view := stripAnsi(p.View())
+		if strings.Contains(view, "No tasks yet.") || !strings.Contains(view, `No tasks match "zzzzz".`) {
+			t.Errorf("tree=%t filtered view should report no matches only: %q", tree, view)
+		}
+	}
+}
+
+func TestTasksPanel_EmptyView_RepositoryHintOnlyWhenNoneDiscovered(t *testing.T) {
+	p := NewTasksPanel(40, 12)
+	p.SetInitKey(key.NewBinding(key.WithKeys("Z")))
+	p.SetDiscovery("/work/repos", 0)
+	if view := stripAnsi(p.View()); !strings.Contains(view, "/work/repos") {
+		t.Fatalf("zero repositories should show configured root: %q", view)
+	}
+	p.SetDiscovery("/work/repos", 1)
+	if view := stripAnsi(p.View()); strings.Contains(view, "No repositories") {
+		t.Fatalf("discovered repository should hide missing-repository hint: %q", view)
 	}
 }
 

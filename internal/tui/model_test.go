@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
@@ -1073,6 +1074,36 @@ func TestUpdate_OpenInitDialogMsg_OpensInitDialog(t *testing.T) {
 	}
 	if _, ok := m.modal.(*modal.InitDialog); !ok {
 		t.Errorf("expected *modal.InitDialog, got %T", m.modal)
+	}
+}
+
+func TestNewWithOptions_InitKeyDrivesDialogAndEmptyHint(t *testing.T) {
+	prev := initTaskKey
+	initTaskKey = key.NewBinding(key.WithKeys("Z"))
+	t.Cleanup(func() { initTaskKey = prev })
+
+	press := func(m Model, k string) Model {
+		updated, cmd := m.Update(keyMsgFor(k))
+		m = updated.(Model)
+		if cmd != nil {
+			if msg, ok := cmd().(panels.OpenInitDialogMsg); ok {
+				updated, _ = m.Update(msg)
+				m = updated.(Model)
+			}
+		}
+		return m
+	}
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 40)
+	m.repos = []domain.Repo{{Name: "svc1", Path: "/tmp/svc1"}}
+
+	if view := stripANSIForModel(m.View()); !strings.Contains(view, "Press [Z]") || strings.Contains(view, "[i]") {
+		t.Fatalf("empty Tasks panel must name the init binding, got %q", view)
+	}
+	if after := press(m, "i"); after.modal != nil {
+		t.Fatalf("default i must not open a dialog once init is rebound, got %T", after.modal)
+	}
+	if _, ok := press(m, "Z").modal.(*modal.InitDialog); !ok {
+		t.Fatal("the rebound init key must open the init dialog")
 	}
 }
 

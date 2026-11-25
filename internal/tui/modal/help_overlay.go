@@ -45,9 +45,9 @@ func (h *HelpOverlay) SetTerminalSize(width, height int) {
 func (h *HelpOverlay) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
-		case "esc", "?":
+		case "esc", "?", "q":
 			return h, func() tea.Msg { return CloseModalMsg{} }
-		case "q", "ctrl+c":
+		case "ctrl+c":
 			return h, tea.Quit
 		case "up", "k":
 			h.scrollOffset--
@@ -104,7 +104,7 @@ func (h *HelpOverlay) contentLines() []string {
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString(theme.HintLine("[Esc] or [?] to close"))
+	sb.WriteString(theme.HintLine("[Esc] or [?] to close with [q]"))
 
 	return strings.Split(sb.String(), "\n")
 }

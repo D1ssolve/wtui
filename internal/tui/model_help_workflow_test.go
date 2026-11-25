@@ -30,22 +30,34 @@ func openHelp(t *testing.T, m Model) Model {
 	return m
 }
 
-func TestHelpModal_QuitKeys_QuitApplication(t *testing.T) {
-	for _, key := range []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune{'q'}},
-		{Type: tea.KeyCtrlC},
+func TestHelpModal_QuitKeys(t *testing.T) {
+	for _, tc := range []struct {
+		key  tea.KeyMsg
+		quit bool
+	}{
+		{key: tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}},
+		{key: tea.KeyMsg{Type: tea.KeyCtrlC}, quit: true},
 	} {
 		m := openHelp(t, sendWindowSize(newTestModel(t, &mockManager{}), 120, 40))
-		updated, cmd := m.Update(key)
+		updated, cmd := m.Update(tc.key)
 		m = updated.(Model)
 		if cmd == nil {
-			t.Fatalf("%q with help open must return a cmd", key.String())
+			t.Fatalf("%q with help open must return a cmd", tc.key.String())
 		}
-		if _, ok := cmd().(tea.QuitMsg); !ok {
-			t.Fatalf("%q with help open must quit, got %T", key.String(), cmd())
-		}
-		if m.modal == nil {
-			t.Fatalf("%q must quit without only closing help", key.String())
+		if tc.quit {
+			if _, ok := cmd().(tea.QuitMsg); !ok {
+				t.Fatalf("%q with help open must quit, got %T", tc.key.String(), cmd())
+			}
+		} else {
+			closeMsg, ok := cmd().(modal.CloseModalMsg)
+			if !ok {
+				t.Fatalf("%q must only close help, got %T", tc.key.String(), cmd())
+			}
+			updated, _ = m.Update(closeMsg)
+			m = updated.(Model)
+			if m.modal != nil {
+				t.Fatalf("%q must close help, got modal %T", tc.key.String(), m.modal)
+			}
 		}
 	}
 }
