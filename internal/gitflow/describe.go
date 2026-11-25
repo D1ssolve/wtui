@@ -41,6 +41,9 @@ func (flow *ResolvedGitFlow) Describe() string {
 			marker = " (default)"
 		}
 		fmt.Fprintf(&b, "  %s%s: prefixes %s, from %s\n    close: %s\n", name, marker, prefixes, rule.BaseBranch, DescribeSteps(rule.Close, ", "))
+		if policy := rule.MR.Describe(); policy != "" {
+			fmt.Fprintf(&b, "    mr: %s\n", policy)
+		}
 		if rule.Machine != nil {
 			fmt.Fprintf(&b, "    machine, starts in %s (C closes, M merges only where an event offers it):\n", rule.Machine.Initial)
 			describeMachine(&b, rule.Machine, "      ")
@@ -52,6 +55,9 @@ func (flow *ResolvedGitFlow) Describe() string {
 	}
 	m := flow.Release.Machine
 	fmt.Fprintf(&b, "release: branch %s<version>, starts in %s\n", flow.Release.BranchPrefix, m.Initial)
+	if policy := flow.Release.MR.Describe(); policy != "" {
+		fmt.Fprintf(&b, "  mr: %s\n", policy)
+	}
 	describeMachine(&b, m, "  ")
 	return b.String()
 }
@@ -241,7 +247,8 @@ mermaid.initialize({startOnLoad: true, securityLevel: "strict"});
 // embedded presets, so a model drafting configuration sees exactly what wtui accepts.
 func FormatReference() string {
 	var b strings.Builder
-	b.WriteString("Top level: workflow: {extends, branches: {production, integration}, default_type, task_types: {<name>: {prefixes, from, shared, requires_clean, close: [steps]}}, release: {branch: <prefix>{{.Version}}, steps: [steps] | machine}}\n")
+	b.WriteString("Top level: workflow: {extends, branches: {production, integration}, default_type, task_types: {<name>: {prefixes, from, shared, requires_clean, close: [steps], mr}}, release: {branch: <prefix>{{.Version}}, steps: [steps] | machine, mr}}\n")
+	b.WriteString("mr (optional MR defaults): {draft: bool, labels: [..], reviewers: [..], assignees: [..], remove_source_branch: bool}; remove_source_branch only on a single-target review close with no tag, cherry_pick, pipeline or machine, never on release; GitHub cannot remove branches per pull request.\n")
 	b.WriteString("Branch references: production, integration, a literal branch name; in release states also release (the release branch).\n")
 	b.WriteString("A step is a single-key mapping {kind: {params}}. Kinds and params by context:\n")
 	kinds := make([]string, 0, len(stepSpecs))

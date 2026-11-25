@@ -351,6 +351,13 @@ func validateHotfixMRIdentity(svc domain.Service, currentSHA string, want forge.
 // and requires the fresh remote source ref to equal it exactly. An absent
 // remote source or any local/remote divergence blocks the caller.
 func (m *manager) resolveFreshSourceSHA(ctx context.Context, svc domain.Service) (string, error) {
+	return m.freshSourceSHA(ctx, svc, false)
+}
+
+// freshSourceSHA is resolveFreshSourceSHA; removedOnMerge additionally accepts a remote
+// source the server reports as absent (never a fetch or ls-remote failure) and returns the
+// local head, which callers must still prove equal to the merged MR's head.
+func (m *manager) freshSourceSHA(ctx context.Context, svc domain.Service, removedOnMerge bool) (string, error) {
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 		return "", withRecovery(err, "check Git fetch access; refresh source verification")
 	}
@@ -366,6 +373,9 @@ func (m *manager) resolveFreshSourceSHA(ctx context.Context, svc domain.Service)
 		return "", withRecovery(err, "check remote source ref access; refresh verification")
 	}
 	if remote == "" {
+		if removedOnMerge {
+			return sha, nil
+		}
 		return "", withRecovery(fmt.Errorf("source %s has no remote ref to verify against", svc.Branch), "check if forge deleted source; restore intended branch only")
 	}
 	if remote != sha {

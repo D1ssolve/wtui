@@ -214,6 +214,9 @@ func (m *CloseTaskConfirmModal) View() string {
 			forgeValue := "-"
 			if svc.ForgePlan != nil {
 				forgeValue = svc.ForgePlan.TargetBranch
+				if policy := svc.MR.Describe(); policy != "" {
+					forgeValue += " (" + policy + ")"
+				}
 			}
 			cols = append(cols, forgeValue)
 		}

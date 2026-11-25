@@ -198,6 +198,14 @@ func TestResolve_WorkflowErrors(t *testing.T) {
 		{"release_branch after review", "extends: git-flow\n  release:\n    steps:\n      - cut_branch: {from: integration}\n      - review: {from: release, into: production}\n      - tag: {on: release_branch}", "must use on: accepted_merge"},
 		{"bad release branch", "extends: git-flow\n  release:\n    branch: \"rel-{{.Version}}-x\"", "workflow.release.branch"},
 		{"missing production", "task_types:\n    f:\n      from: main", "branches.production is required"},
+		{"empty mr label", "extends: git-flow\n  task_types:\n    feature:\n      prefixes: [feature/]\n      from: integration\n      close:\n        - review: {into: integration}\n      mr: {labels: [\"\"]}", "workflow.task_types.feature.mr.labels[0]: must not be empty"},
+		{"blank mr assignee", "extends: git-flow\n  task_types:\n    feature:\n      prefixes: [feature/]\n      from: integration\n      close:\n        - review: {into: integration}\n      mr: {assignees: [\" \"]}", "feature.mr.assignees[0]"},
+		{"remove source on direct merge", "extends: git-flow\n  task_types:\n    feature:\n      prefixes: [feature/]\n      from: integration\n      close:\n        - merge: {into: integration}\n      mr: {remove_source_branch: true}", "feature.mr.remove_source_branch: needs a review close"},
+		{"remove source on multi-target review", "extends: git-flow\n  task_types:\n    hotfix:\n      prefixes: [hotfix/]\n      from: production\n      close:\n        - review: {into: [production, integration]}\n      mr: {remove_source_branch: true}", "hotfix.mr.remove_source_branch: the source branch is reviewed into several targets"},
+		{"remove source before tag", "extends: git-flow\n  task_types:\n    feature:\n      prefixes: [feature/]\n      from: integration\n      close:\n        - review: {into: integration}\n        - tag: {on: integration}\n      mr: {remove_source_branch: true}", "feature.mr.remove_source_branch: wtui verifies the merged review"},
+		{"remove source on shared type", "extends: git-flow\n  task_types:\n    feature:\n      prefixes: [feature/]\n      from: integration\n      shared: true\n      close:\n        - review: {into: integration}\n      mr: {remove_source_branch: true}", "feature.mr.remove_source_branch: shared branches"},
+		{"remove source on release", "extends: git-flow\n  release:\n    mr: {remove_source_branch: true}", "workflow.release.mr.remove_source_branch"},
+		{"empty release reviewer", "extends: git-flow\n  release:\n    mr: {reviewers: [\"\"]}", "workflow.release.mr.reviewers[0]"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -207,6 +215,44 @@ func TestResolve_WorkflowErrors(t *testing.T) {
 				t.Fatalf("error = %v, want containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolve_MRPolicyCompilesPerTypeAndRelease(t *testing.T) {
+	t.Parallel()
+
+	flow, err := resolveYAML(t, `
+workflow:
+  extends: git-flow
+  task_types:
+    feature:
+      prefixes: ["feature/"]
+      from: integration
+      close:
+        - review: {into: integration}
+      mr: {draft: true, labels: [x, y], reviewers: [r], assignees: [z], remove_source_branch: true}
+  release:
+    mr: {labels: [release]}
+`)
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	want := MRPolicy{Draft: true, Labels: []string{"x", "y"}, Reviewers: []string{"r"}, Assignees: []string{"z"}, RemoveSourceBranch: true}
+	if got := flow.BranchTypes[BranchTypeFeature].MR; got.Describe() != want.Describe() || !slices.Equal(got.Labels, want.Labels) || !slices.Equal(got.Assignees, want.Assignees) {
+		t.Fatalf("feature MR = %+v, want %+v", got, want)
+	}
+	if got := flow.BranchTypes[BranchTypeHotfix].MR; got.Describe() != "" {
+		t.Fatalf("hotfix MR = %+v, want no policy without mr", got)
+	}
+	if !slices.Equal(flow.Release.MR.Labels, []string{"release"}) || !slices.Equal(flow.BranchTypes[BranchTypeRelease].MR.Labels, []string{"release"}) {
+		t.Fatalf("release MR = %+v / rule %+v, want labels [release]", flow.Release.MR, flow.BranchTypes[BranchTypeRelease].MR)
+	}
+	preset, err := resolveYAML(t, "workflow:\n  extends: git-flow\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := DescribeSteps(flow.Release.Steps, ", "), DescribeSteps(preset.Release.Steps, ", "); got != want {
+		t.Fatalf("release steps = %s, want preset %s: release.mr must not replace them", got, want)
 	}
 }
 

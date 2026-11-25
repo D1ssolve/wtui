@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -461,5 +462,154 @@ func TestCloseTask_CherryPick_AcceptedReleaseIsReportedNotPicked(t *testing.T) {
 	}
 	if !reported {
 		t.Fatalf("steps = %+v, want an explicit not-picked report for rel-1.0", res.Steps)
+	}
+}
+
+func TestCloseTask_ReviewRequest_ForgeRemovedSourceNeedsExactEvidence(t *testing.T) {
+	networkErr := errors.New("ls-remote: network unreachable")
+	cases := []struct {
+		name               string
+		remove, postAction bool
+		remoteSource       string
+		remoteErr, fetch   error
+		mrHead             string
+		contained          bool
+		want               string // empty: the merged MR is verified
+	}{
+		{name: "removal requested, source removed, exact evidence", remove: true, mrHead: "task-head", contained: true},
+		{name: "no removal policy keeps retained-source guard", mrHead: "task-head", contained: true, want: "has no remote ref"},
+		{name: "removal with post-actions keeps retained-source guard", remove: true, postAction: true, mrHead: "task-head", contained: true, want: "has no remote ref"},
+		{name: "ls-remote failure is not a removed ref", remove: true, remoteErr: networkErr, mrHead: "task-head", contained: true, want: "network unreachable"},
+		{name: "fetch failure blocks", remove: true, fetch: errors.New("fetch: host unreachable"), mrHead: "task-head", contained: true, want: "host unreachable"},
+		{name: "MR head differs from local task head", remove: true, mrHead: "other-head", contained: true, want: "does not match"},
+		{name: "merge not contained in fresh target", remove: true, mrHead: "task-head", want: "not contained"},
+		{name: "source present but diverged", remove: true, remoteSource: "moved-head", mrHead: "task-head", contained: true, want: "diverged"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := "IN-REV-RM"
+			mgr, _, forgeClient := reviewCloseEnv(t, taskID, func(g *mockGitClient) {
+				g.remoteRefSHAFn = func(_ string, ref string) (string, error) {
+					if ref == "refs/heads/feature/"+taskID {
+						return tc.remoteSource, tc.remoteErr
+					}
+					return "", nil
+				}
+				g.fetchErr = tc.fetch
+				g.isAncestorFn = func(_, _, _ string) (bool, error) { return tc.contained, nil }
+			})
+			rule := mgr.flow.BranchTypes["feature"]
+			rule.TagOnClose, rule.TriggerPipelineOnClose = tc.postAction, tc.postAction
+			rule.MR.RemoveSourceBranch = tc.remove
+			mgr.flow.BranchTypes["feature"] = rule
+			forgeClient.mrHistoryFn = func(context.Context, string, string) ([]forge.MRInfo, error) {
+				return []forge.MRInfo{{Number: 7, State: "merged", SourceBranch: "feature/" + taskID, TargetBranch: "develop", URL: "https://gitlab.example/7"}}, nil
+			}
+			forgeClient.mrReadinessByNumberFn = func(_ context.Context, n int, _, _ string) (forge.MRReadiness, error) {
+				return forge.MRReadiness{Number: n, State: "merged", SourceBranch: "feature/" + taskID, TargetBranch: "develop", HeadSHA: tc.mrHead, MergedSHA: "squash-sha", URL: "https://gitlab.example/7"}, nil
+			}
+
+			res, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
+			var review CloseTaskStep
+			for _, step := range res.Steps {
+				if step.Name == "svc-a:review-request" {
+					review = step
+				}
+			}
+			if tc.want == "" {
+				if err != nil || !res.Success || !strings.Contains(review.Message, "merged MR verified at squash-sha") {
+					t.Fatalf("CloseTask = %+v, err %v; want the merged MR verified at squash-sha", res, err)
+				}
+				return
+			}
+			blocked := err != nil && strings.Contains(err.Error(), tc.want)
+			for _, step := range res.Steps {
+				blocked = blocked || step.Status == StepStatusFailed && strings.Contains(step.Message, tc.want)
+			}
+			if res.Success || !blocked {
+				t.Fatalf("CloseTask = %+v, err %v; want a failure containing %q", res, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestCloseTask_ReviewRequest_RemovalPolicyClassifiesBeforePublishingSource(t *testing.T) {
+	const taskID = "IN-REV-PUB"
+	branch := "feature/" + taskID
+	mr := func(state, target string) forge.MRInfo {
+		return forge.MRInfo{Number: 7, State: state, SourceBranch: branch, TargetBranch: target, URL: "https://gitlab.example/7"}
+	}
+	cases := []struct {
+		name                string
+		remove              bool
+		history             []forge.MRInfo
+		state, mrTarget     string
+		mrHead, remoteHead  string
+		ancestor            bool
+		leaseErr            error
+		want                string // substring of the review-request step message
+		wantFailed          bool
+		wantPush, wantPush2 int // git push calls, lease-guarded pushes
+	}{
+		{name: "merged with exact evidence verifies without publishing", remove: true, history: []forge.MRInfo{mr("merged", "develop")}, state: "merged", mrHead: "task-head", ancestor: true, want: "merged MR verified at squash-sha"},
+		{name: "merged with another head publishes nothing", remove: true, history: []forge.MRInfo{mr("merged", "develop")}, state: "merged", mrHead: "other-head", ancestor: true, want: "does not match", wantFailed: true},
+		{name: "merged into an unexpected target publishes nothing", remove: true, history: []forge.MRInfo{mr("merged", "develop")}, state: "merged", mrTarget: "master", mrHead: "task-head", ancestor: true, want: "identity changed", wantFailed: true},
+		{name: "ambiguous history publishes nothing", remove: true, history: []forge.MRInfo{mr("merged", "develop"), {Number: 9, State: "opened", SourceBranch: branch, TargetBranch: "develop"}}, want: "ambiguous", wantFailed: true},
+		{name: "first review publishes then creates", remove: true, want: "created", wantPush: 1},
+		{name: "open MR at the local head needs no publication", remove: true, history: []forge.MRInfo{mr("opened", "develop")}, state: "open", mrHead: "task-head", remoteHead: "task-head", want: "waiting for merge"},
+		{name: "open MR behind the local head is updated under lease", remove: true, history: []forge.MRInfo{mr("opened", "develop")}, state: "open", mrHead: "old-head", remoteHead: "old-head", ancestor: true, want: "waiting for merge", wantPush2: 1},
+		{name: "open MR whose source vanished is not recreated", remove: true, history: []forge.MRInfo{mr("opened", "develop")}, state: "open", mrHead: "old-head", want: "absent on the remote", wantFailed: true},
+		{name: "open MR with rewritten remote is not overwritten", remove: true, history: []forge.MRInfo{mr("opened", "develop")}, state: "open", mrHead: "other-head", remoteHead: "other-head", want: "fast-forward", wantFailed: true},
+		{name: "lease rejected after a concurrent merge fails", remove: true, history: []forge.MRInfo{mr("opened", "develop")}, state: "open", mrHead: "old-head", remoteHead: "old-head", ancestor: true, leaseErr: errors.New("stale info"), want: "stale info", wantFailed: true, wantPush2: 1},
+		{name: "no policy keeps the legacy publish-then-verify order", history: []forge.MRInfo{mr("merged", "develop")}, state: "merged", mrHead: "task-head", remoteHead: "task-head", ancestor: true, want: "merged MR verified at squash-sha", wantPush: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, gitMock, forgeClient := reviewCloseEnv(t, taskID, func(g *mockGitClient) {
+				g.remoteRefSHAFn = func(_ string, ref string) (string, error) {
+					if ref == "refs/heads/"+branch {
+						return tc.remoteHead, nil
+					}
+					return "", nil
+				}
+				g.isAncestorFn = func(_, _, _ string) (bool, error) { return tc.ancestor, nil }
+				g.pushRefWithLeaseFn = func(_, _, _, _, _, _ string) error { return tc.leaseErr }
+			})
+			mgr.cfg.Close.PushSourceBeforeReview = true
+			rule := mgr.flow.BranchTypes["feature"]
+			rule.TagOnClose, rule.TriggerPipelineOnClose = false, false
+			rule.MR.RemoveSourceBranch = tc.remove
+			mgr.flow.BranchTypes["feature"] = rule
+			if tc.history != nil {
+				forgeClient.mrHistoryFn = func(context.Context, string, string) ([]forge.MRInfo, error) { return tc.history, nil }
+			}
+			target := tc.mrTarget
+			if target == "" {
+				target = "develop"
+			}
+			forgeClient.mrReadinessByNumberFn = func(_ context.Context, n int, _, _ string) (forge.MRReadiness, error) {
+				return forge.MRReadiness{Number: n, State: tc.state, SourceBranch: branch, TargetBranch: target, HeadSHA: tc.mrHead, MergedSHA: "squash-sha", URL: "https://gitlab.example/7"}, nil
+			}
+
+			res, _ := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
+			var review CloseTaskStep
+			for _, step := range res.Steps {
+				if step.Name == "svc-a:review-request" || (review.Name == "" && step.Status == StepStatusFailed) {
+					review = step
+				}
+			}
+			if !strings.Contains(review.Message, tc.want) || (review.Status == StepStatusFailed) != tc.wantFailed {
+				t.Fatalf("steps = %+v; want %q (failed=%v)", res.Steps, tc.want, tc.wantFailed)
+			}
+			gitMock.mu.Lock()
+			pushes, leases := len(gitMock.pushCalls), append([]pushRefWithLeaseCall(nil), gitMock.pushRefWithLeaseCalls...)
+			gitMock.mu.Unlock()
+			if pushes != tc.wantPush || len(leases) != tc.wantPush2 {
+				t.Fatalf("git push calls = %d, lease pushes = %+v; want %d and %d", pushes, leases, tc.wantPush, tc.wantPush2)
+			}
+			if tc.wantPush2 == 1 && (leases[0].TargetRef != "refs/heads/"+branch || leases[0].ExactOID != "task-head" || leases[0].LeaseRef != "refs/heads/"+branch || leases[0].LeaseOID != "old-head") {
+				t.Fatalf("lease push = %+v; want task-head onto %s leased at old-head", leases[0], branch)
+			}
+		})
 	}
 }

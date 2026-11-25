@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -697,72 +698,82 @@ func TestCloseTask_DirectMergeClose_DoesNotDeleteBranch(t *testing.T) {
 	}
 }
 
-func TestCloseTask_ReviewRequest_NeverRequestsSourceRemoval(t *testing.T) {
-	rootDir := t.TempDir()
-	tasksRoot := filepath.Join(rootDir, ".tasks")
-	taskID := "IN-CLOSE-REVIEW"
-	svcPath := filepath.Join(tasksRoot, taskID, "svc-a")
-	if err := osMkdirAll(svcPath); err != nil {
-		t.Fatal(err)
-	}
+func TestCloseTask_ReviewRequest_AppliesTaskTypeMRPolicy(t *testing.T) {
+	for _, policy := range []gitflow.MRPolicy{{}, {Draft: true, Labels: []string{"x"}, Reviewers: []string{"y"}, Assignees: []string{"z"}, RemoveSourceBranch: true}} {
+		t.Run("policy "+policy.Describe(), func(t *testing.T) {
+			rootDir := t.TempDir()
+			tasksRoot := filepath.Join(rootDir, ".tasks")
+			taskID := "IN-CLOSE-REVIEW"
+			svcPath := filepath.Join(tasksRoot, taskID, "svc-a")
+			if err := osMkdirAll(svcPath); err != nil {
+				t.Fatal(err)
+			}
 
-	fakeCommonDir := filepath.Join(rootDir, "repos", "svc-a", ".git")
-	if err := osMkdirAll(fakeCommonDir); err != nil {
-		t.Fatal(err)
-	}
+			fakeCommonDir := filepath.Join(rootDir, "repos", "svc-a", ".git")
+			if err := osMkdirAll(fakeCommonDir); err != nil {
+				t.Fatal(err)
+			}
 
-	gitMock := &mockGitClient{
-		commonDirFn:      func(path string) (string, error) { return fakeCommonDir, nil },
-		listWorktreesRes: []git.WorktreeEntry{{Path: svcPath, Branch: "refs/heads/feature/IN-CLOSE-REVIEW"}},
-		repoStatusFn:     func(path string) (git.RawStatus, error) { return git.RawStatus{Branch: "feature/IN-CLOSE-REVIEW"}, nil },
-		remoteURLRes:     "git@gitlab.com:group/svc-a.git",
-	}
+			gitMock := &mockGitClient{
+				commonDirFn:      func(path string) (string, error) { return fakeCommonDir, nil },
+				listWorktreesRes: []git.WorktreeEntry{{Path: svcPath, Branch: "refs/heads/feature/IN-CLOSE-REVIEW"}},
+				repoStatusFn:     func(path string) (git.RawStatus, error) { return git.RawStatus{Branch: "feature/IN-CLOSE-REVIEW"}, nil },
+				remoteURLRes:     "git@gitlab.com:group/svc-a.git",
+			}
 
-	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	cfg.Close.PushSourceBeforeReview = false
-	flow, _ := closeTestFlow(cfg, func(flow *gitflow.ResolvedGitFlow) {
-		flow.BranchTypes["feature"] = gitflow.BranchTypeRule{
-			Prefixes:      []string{"feature/"},
-			BaseBranch:    "develop",
-			MergeTargets:  []string{"develop"},
-			ReviewTargets: []string{"develop"},
-			CloseStrategy: gitflow.CloseStrategyReviewRequest,
-			MergeStrategy: gitflow.MergeStrategyMerge,
-			RequiresClean: true,
-		}
-	})
+			cfg := newCloseTestConfig(rootDir, tasksRoot)
+			cfg.Close.PushSourceBeforeReview = false
+			flow, _ := closeTestFlow(cfg, func(flow *gitflow.ResolvedGitFlow) {
+				flow.BranchTypes["feature"] = gitflow.BranchTypeRule{
+					Prefixes:      []string{"feature/"},
+					BaseBranch:    "develop",
+					MergeTargets:  []string{"develop"},
+					ReviewTargets: []string{"develop"},
+					CloseStrategy: gitflow.CloseStrategyReviewRequest,
+					MergeStrategy: gitflow.MergeStrategyMerge,
+					RequiresClean: true,
+					MR:            policy,
+				}
+			})
 
-	var createParams []forge.CreateMRParams
-	forgeClient := &mockForgeClient{createMRFn: func(_ context.Context, params forge.CreateMRParams) (forge.MRInfo, error) {
-		createParams = append(createParams, params)
-		return forge.MRInfo{Number: 1, URL: "https://gitlab.example/group/svc-a/1"}, nil
-	}}
-	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, map[forge.ForgeProvider]forge.ForgeClient{
-		forge.ForgeProviderGitLab: forgeClient,
-	})
+			var createParams []forge.CreateMRParams
+			forgeClient := &mockForgeClient{createMRFn: func(_ context.Context, params forge.CreateMRParams) (forge.MRInfo, error) {
+				createParams = append(createParams, params)
+				return forge.MRInfo{Number: 1, URL: "https://gitlab.example/group/svc-a/1"}, nil
+			}}
+			mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, map[forge.ForgeProvider]forge.ForgeClient{
+				forge.ForgeProviderGitLab: forgeClient,
+			})
 
-	result, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID, ReviewTitle: "Accepted review", ReviewDescription: "Accepted review notes"})
-	if err != nil {
-		t.Fatalf("CloseTask error: %v", err)
-	}
-	if !result.Success {
-		t.Fatal("CloseTask result.Success = false, want true")
-	}
-	if len(createParams) != 1 {
-		t.Fatalf("CreateMR calls = %d, want 1", len(createParams))
-	}
-	if createParams[0].RemoveSource {
-		t.Fatal("CreateMR RemoveSource = true, want false: close must not ask forge to auto-delete source branch")
-	}
-	if createParams[0].Title != "Accepted review" || createParams[0].Description != "Accepted review notes" {
-		t.Fatalf("accepted review metadata lost: %+v", createParams[0])
-	}
+			plan, err := mgr.PlanCloseTask(context.Background(), taskID)
+			if err != nil || plan.Services[0].MR.Describe() != policy.Describe() {
+				t.Fatalf("plan MR = %+v (err %v), want preview of %+v", plan.Services, err, policy)
+			}
+			result, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID, ReviewTitle: "Accepted review", ReviewDescription: "Accepted review notes"})
+			if err != nil {
+				t.Fatalf("CloseTask error: %v", err)
+			}
+			if !result.Success {
+				t.Fatal("CloseTask result.Success = false, want true")
+			}
+			if len(createParams) != 1 {
+				t.Fatalf("CreateMR calls = %d, want 1", len(createParams))
+			}
+			got := createParams[0]
+			if got.Draft != policy.Draft || got.RemoveSource != policy.RemoveSourceBranch || !slices.Equal(got.Labels, policy.Labels) || !slices.Equal(got.Reviewers, policy.Reviewers) || !slices.Equal(got.Assignees, policy.Assignees) {
+				t.Fatalf("CreateMR params = %+v, want task type policy %+v (no policy: no forge-side source removal)", got, policy)
+			}
+			if createParams[0].Title != "Accepted review" || createParams[0].Description != "Accepted review notes" {
+				t.Fatalf("accepted review metadata lost: %+v", createParams[0])
+			}
 
-	gitMock.mu.Lock()
-	deleteCalls := gitMock.deleteBranchCalls
-	gitMock.mu.Unlock()
-	if deleteCalls != 0 {
-		t.Fatalf("DeleteBranch call count = %d, want 0", deleteCalls)
+			gitMock.mu.Lock()
+			deleteCalls := gitMock.deleteBranchCalls
+			gitMock.mu.Unlock()
+			if deleteCalls != 0 {
+				t.Fatalf("DeleteBranch call count = %d, want 0", deleteCalls)
+			}
+		})
 	}
 }
 

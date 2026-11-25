@@ -119,7 +119,7 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 		if err != nil {
 			return plan, err
 		}
-		sp := ServiceClosePlan{ServiceName: svc.Name, SourceBranch: svc.Branch, SourceSHA: sha, RepoPath: svc.RepoPath, RemoteURL: svc.RemoteURL, CloseStrategy: rule.CloseStrategy, MergeStrategy: rule.MergeStrategy, ReviewTargets: appendUnique(nil, rule.ReviewTargets...), TargetBranches: appendUnique(nil, rule.ReviewTargets...)}
+		sp := ServiceClosePlan{ServiceName: svc.Name, SourceBranch: svc.Branch, SourceSHA: sha, RepoPath: svc.RepoPath, RemoteURL: svc.RemoteURL, CloseStrategy: rule.CloseStrategy, MergeStrategy: rule.MergeStrategy, ReviewTargets: appendUnique(nil, rule.ReviewTargets...), TargetBranches: appendUnique(nil, rule.ReviewTargets...), MR: rule.MR}
 		if len(sp.ReviewTargets) == 0 {
 			return plan, ErrNoMergeTargets
 		}
@@ -331,7 +331,10 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 					if strings.TrimSpace(p.ReviewTitle) != "" {
 						title = p.ReviewTitle
 					}
-					mr, err := client.CreateMR(ctx, forge.CreateMRParams{WorktreePath: svc.WorktreePath, Repo: repo, SourceBranch: sp.SourceBranch, TargetBranch: r.Target, Title: title, Description: p.ReviewDescription, RemoveSource: false})
+					params := withMRPolicy(forge.CreateMRParams{WorktreePath: svc.WorktreePath, Repo: repo, SourceBranch: sp.SourceBranch, TargetBranch: r.Target, Title: title, Description: p.ReviewDescription}, sp.MR)
+					// The source must survive until every target's MR merges.
+					params.RemoveSource = false
+					mr, err := client.CreateMR(ctx, params)
 					if err != nil {
 						return err
 					}

@@ -70,6 +70,61 @@ printf 'https://github.com/org/repo/pull/15\n'
 	}
 }
 
+func TestGhCreateMR_MapsMRPolicyFlags(t *testing.T) {
+	base := "pr create --base main --head feature/A-1 --title t --body d --repo org/repo"
+	for _, tc := range []struct {
+		name   string
+		params CreateMRParams
+		want   string
+	}{
+		{"no policy keeps legacy argv", CreateMRParams{}, base},
+		{"policy", CreateMRParams{Draft: true, Labels: []string{"x", "y"}, Reviewers: []string{"r"}, Assignees: []string{"z"}}, base + " --draft --label x --label y --reviewer r --assignee z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			argsFile := filepath.Join(t.TempDir(), "args")
+			script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$ARGS_FILE\"\nprintf 'https://github.com/org/repo/pull/3\\n'\n"
+			if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(script), 0o755); err != nil {
+				t.Fatalf("write fake gh: %v", err)
+			}
+			t.Setenv("PATH", binDir)
+			t.Setenv("ARGS_FILE", argsFile)
+
+			params := tc.params
+			params.SourceBranch, params.TargetBranch, params.Title, params.Description, params.Repo = "feature/A-1", "main", "t", "d", "org/repo"
+			if _, err := NewGhClient(t.TempDir()).CreateMR(t.Context(), params); err != nil {
+				t.Fatalf("CreateMR() err = %v", err)
+			}
+			args, err := os.ReadFile(argsFile)
+			if err != nil {
+				t.Fatalf("read args: %v", err)
+			}
+			if got := strings.TrimSpace(string(args)); got != tc.want {
+				t.Fatalf("argv = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGhCreateMR_RemoveSourceRefusedWithoutRunningGh(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args")
+	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$ARGS_FILE\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("ARGS_FILE", argsFile)
+
+	_, err := NewGhClient(t.TempDir()).CreateMR(t.Context(), CreateMRParams{Repo: "org/repo", RemoveSource: true})
+	var ferr *ForgeError
+	if !errors.As(err, &ferr) {
+		t.Fatalf("CreateMR() err = %v, want *ForgeError", err)
+	}
+	if _, statErr := os.Stat(argsFile); !os.IsNotExist(statErr) {
+		t.Fatalf("gh was invoked (stat err %v); the PR must not be created", statErr)
+	}
+}
+
 func TestGhCreateMR_AuthError(t *testing.T) {
 	binDir := t.TempDir()
 	fake := filepath.Join(binDir, "gh")
