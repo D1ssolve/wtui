@@ -27,12 +27,17 @@ func (e *LockedError) Unwrap() error { return ErrLocked }
 
 // Lock takes a non-blocking exclusive lock. Never unlink the sidecar: an opener
 // racing unlink could otherwise acquire a different inode for the same state.
-func Lock(path string) (func(), error) {
+func Lock(path string) (func(), error) { return lock(path, false) }
+
+// LockShared takes a non-blocking shared lock without claiming the PID record.
+func LockShared(path string) (func(), error) { return lock(path, true) }
+
+func lock(path string, shared bool) (func(), error) {
 	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
-	if err := tryLock(f); err != nil {
+	if err := tryLock(f, shared); err != nil {
 		if errors.Is(err, ErrLocked) {
 			var record [32]byte
 			n, _ := f.ReadAt(record[:], 0)
@@ -46,9 +51,11 @@ func Lock(path string) (func(), error) {
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
 	// One fixed-size write, so a shorter PID never leaves digits from a previous owner.
-	if _, err := fmt.Fprintf(f, "%20d\n", os.Getpid()); err != nil {
-		f.Close()
-		return nil, err
+	if !shared {
+		if _, err := fmt.Fprintf(f, "%20d\n", os.Getpid()); err != nil {
+			f.Close()
+			return nil, err
+		}
 	}
 	return func() { f.Close() }, nil
 }

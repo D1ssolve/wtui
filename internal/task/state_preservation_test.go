@@ -172,7 +172,7 @@ func TestMisfiledReleaseCannotRedirectMutation(t *testing.T) {
 	}
 }
 
-func TestLongTaskNamesRemainIndependent(t *testing.T) {
+func TestLongTaskNamesShareNamespaceGuard(t *testing.T) {
 	m, g := newReleasePlanTestManager(t, &mockGitClient{})
 	m.flow.BranchTypes[m.flow.DefaultBranchType] = taskMachineRule(t, filepath.Join(t.TempDir(), "log"))
 	prefix := strings.Repeat("a", 239)
@@ -194,17 +194,18 @@ func TestLongTaskNamesRemainIndependent(t *testing.T) {
 		t.Fatalf("new flow mode: %v, want %v; err %v", got, want.Mode(), err)
 	}
 	t.Logf("AdvanceTask: %d-byte ID, flow mode %v", len(id), got.Mode().Perm())
-	for _, id := range []string{prefix + "1", prefix + "2"} {
-		if err := os.MkdirAll(m.taskDir(id), 0700); err != nil {
-			t.Fatal(err)
-		}
-		unlock, err := m.lockTask(t.Context(), id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer unlock()
-		if _, err := m.ForceTaskCleanup(t.Context(), id, false, nil); !errors.Is(err, fsutil.ErrLocked) {
-			t.Fatalf("long task contention: %v", err)
+	other := prefix + "2"
+	if err := os.MkdirAll(m.taskDir(other), 0700); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockTaskIDs(t.Context(), m.cfg.TasksRoot, "task", []string{id, other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	for _, name := range []string{id, other, strings.ToUpper(id), "SHORT"} {
+		if _, err := m.Init(t.Context(), InitParams{TaskID: name}); !errors.Is(err, fsutil.ErrLocked) {
+			t.Fatalf("Init(%q) under long-name guard: %v", name, err)
 		}
 	}
 }

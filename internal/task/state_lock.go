@@ -2,7 +2,6 @@ package task
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -35,7 +34,7 @@ func (m *manager) lockTask(ctx context.Context, id string) (func(), error) {
 		}
 		return nil, err
 	}
-	unlock, err := lockState(ctx, m.cfg.TasksRoot, "task", id)
+	unlock, err := lockTaskIDs(ctx, m.cfg.TasksRoot, "task", []string{id})
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
 	}
@@ -58,7 +57,22 @@ func lockTaskIDs(ctx context.Context, root, kind string, ids []string) (func(), 
 			return nil, err
 		}
 	}
-	var held []func()
+	if len(ordered) == 0 {
+		return func() {}, nil
+	}
+	// A long alias may be short in another spelling. Ordinary IDs share this gate;
+	// a batch containing any exceptional ID owns it exclusively, even before creation.
+	gate := filepath.Join(root, ".wtui-"+kind+"..long..")
+	for _, id := range ordered {
+		if len(".wtui-"+kind+".."+id+".lock") > 255 {
+			return takeStateLock(ctx, gate, kind, id, fsutil.Lock)
+		}
+	}
+	u, err := takeStateLock(ctx, gate, kind, ordered[0], fsutil.LockShared)
+	if err != nil {
+		return nil, err
+	}
+	held := []func(){u}
 	unlock := func() {
 		for _, release := range slices.Backward(held) {
 			release()
@@ -86,14 +100,13 @@ func (m *manager) reserveMembership(ctx context.Context, ids []string) (func(), 
 // Sibling files survive removal/recreation of the directory they guard. Scans
 // enumerate directories only, and '..' cannot occur in a valid task/release ID.
 func lockState(ctx context.Context, root, kind, id string) (func(), error) {
+	return takeStateLock(ctx, filepath.Join(root, ".wtui-"+kind+".."+id), kind, id, fsutil.Lock)
+}
+func takeStateLock(ctx context.Context, path, kind, id string, acquire func(string) (func(), error)) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	name := ".wtui-" + kind + ".." + id
-	if len(name)+len(".lock") > 255 {
-		name = fmt.Sprintf(".wtui-%s..sha256..%x", kind, sha256.Sum256([]byte(id)))
-	}
-	unlock, err := fsutil.Lock(filepath.Join(root, name))
+	unlock, err := acquire(path)
 	var holder *fsutil.LockedError
 	if errors.As(err, &holder) {
 		return nil, &stateBusyError{kind, id, holder}

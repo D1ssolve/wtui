@@ -9,9 +9,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func tryLock(f *os.File) error {
+func tryLock(f *os.File, shared bool) error {
+	mode := unix.LOCK_EX
+	if shared {
+		mode = unix.LOCK_SH
+	}
 	for {
-		err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		err := unix.Flock(int(f.Fd()), mode|unix.LOCK_NB)
 		switch err {
 		case unix.EINTR:
 			continue

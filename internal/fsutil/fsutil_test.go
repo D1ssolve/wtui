@@ -84,7 +84,7 @@ func TestLockRecordIsOnlyAdvisory(t *testing.T) {
 			if _, err := f.WriteString(record); err != nil {
 				t.Fatal(err)
 			}
-			if err := tryLock(f); err != nil {
+			if err := tryLock(f, false); err != nil {
 				t.Fatal(err)
 			}
 			_, err = Lock(path)

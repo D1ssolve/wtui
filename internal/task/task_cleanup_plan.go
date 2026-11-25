@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
@@ -81,6 +83,7 @@ type TaskCleanupPlan struct {
 	fingerprint           [32]byte
 	steps                 []releaseCleanupStep
 	closePostActionProofs []string
+	firstScope            func() (map[string]os.FileInfo, error)
 }
 
 func (p TaskCleanupPlan) Preview() TaskCleanupPreview { return cloneTaskCleanupPreview(p.preview) }
@@ -181,10 +184,18 @@ func (p TaskCleanupPlan) fingerprintAuthentic() bool {
 // the exact task/service/branch identity. Remote branches are deleted only when the
 // request explicitly selects remote task branch deletion.
 func (m *manager) PlanTaskCleanup(ctx context.Context, request TaskCleanupRequest) (TaskCleanupPlan, error) {
-	return m.planTaskCleanup(ctx, request, false)
+	plan, err := m.planTaskCleanup(ctx, request, nil)
+	if err == nil && !plan.Blocked() {
+		root := m.taskDir(request.TaskID)
+		steps := plan.steps
+		// Capture at first execution: force may include existing extras, but a retry
+		// of that approval must not recursively delete newly arrived files.
+		plan.firstScope = sync.OnceValues(func() (map[string]os.FileInfo, error) { return cleanupDirectoryScope(root, steps) })
+	}
+	return plan, err
 }
 
-func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupRequest, allowDirty bool) (TaskCleanupPlan, error) {
+func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupRequest, retry *TaskCleanupPlan) (TaskCleanupPlan, error) {
 	plan := TaskCleanupPlan{preview: TaskCleanupPreview{TaskID: request.TaskID}}
 	if err := validateTaskID(request.TaskID); err != nil {
 		return plan, err
@@ -198,6 +209,26 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 	services, err := m.ListServices(ctx, request.TaskID)
 	if err != nil {
 		return plan, err
+	}
+	// A removed worktree no longer appears in ListServices. Restore its approved
+	// identity for validation only; never infer that its branches were removed too.
+	absent := map[string]string{}
+	if retry != nil {
+		for _, step := range retry.steps {
+			if step.kind != cleanupTaskWorktree || slices.ContainsFunc(services, func(s domain.Service) bool { return s.WorktreePath == step.path }) {
+				continue
+			}
+			if _, err := os.Lstat(step.path); !errors.Is(err, os.ErrNotExist) {
+				return plan, fmt.Errorf("%w: cannot prove worktree %s absent", ErrTaskCleanupBlocked, step.path)
+			}
+			url, err := m.git.RemoteURL(ctx, step.repoPath, "origin")
+			if err != nil {
+				return plan, err
+			}
+			services = append(services, domain.Service{Name: filepath.Base(step.path), RepoPath: step.repoPath, Branch: step.branch, WorktreePath: step.path, RemoteURL: url})
+			absent[step.path] = step.expectedSHA
+		}
+		slices.SortFunc(services, func(a, b domain.Service) int { return strings.Compare(a.Name, b.Name) })
 	}
 	if len(services) == 0 {
 		taskDir := m.taskDir(request.TaskID)
@@ -254,7 +285,17 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 			continue
 		}
 
-		sourceSHA, err := m.git.ResolveRef(ctx, svc.RepoPath, "refs/heads/"+svc.Branch)
+		removedSHA, removed := absent[svc.WorktreePath]
+		local, err := m.git.BranchExists(ctx, svc.RepoPath, svc.Branch)
+		if err != nil {
+			return plan, err
+		}
+		var sourceSHA string
+		if removed && !local {
+			sourceSHA = removedSHA
+		} else {
+			sourceSHA, err = m.git.ResolveRef(ctx, svc.RepoPath, "refs/heads/"+svc.Branch)
+		}
 		if err != nil {
 			return plan, err
 		}
@@ -264,8 +305,16 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 		}
 
 		worktreeStep := releaseCleanupStep{kind: cleanupTaskWorktree, description: "remove task worktree " + svc.WorktreePath, repoPath: svc.RepoPath, path: svc.WorktreePath, branch: svc.Branch, expectedSHA: sourceSHA}
-		m.validateCleanupWorktree(ctx, &plan, entries, worktreeStep, allowDirty)
-		m.validateTaskCleanupOperations(ctx, &plan, svc, allowDirty)
+		if removed {
+			for _, entry := range entries {
+				if samePath(entry.Path, svc.WorktreePath) || entry.Branch == "refs/heads/"+svc.Branch {
+					plan.block("removed worktree %s is still registered", svc.WorktreePath)
+				}
+			}
+		} else {
+			m.validateCleanupWorktree(ctx, &plan, entries, worktreeStep, retry != nil)
+			m.validateTaskCleanupOperations(ctx, &plan, svc, retry != nil)
+		}
 
 		branchType := gitflow.DetectBranchType(svc.Branch, m.flow)
 		var closeRule gitflow.BranchTypeRule
@@ -287,7 +336,11 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 				plan.closePostActionProofs = append(plan.closePostActionProofs, proofDigest)
 			}
 		}
-		targetBranches, warning := m.effectiveMergeTargets(ctx, svc, branchType, m.taskCleanupMergeTargetBranches(branchType))
+		repoService := svc
+		if removed {
+			repoService.WorktreePath = svc.RepoPath
+		}
+		targetBranches, warning := m.effectiveMergeTargets(ctx, repoService, branchType, m.taskCleanupMergeTargetBranches(branchType))
 		if warning != "" {
 			plan.block("service %s target resolution failed: %s", svc.Name, warning)
 		}
@@ -327,7 +380,7 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 		if hasCloseRule && closeRule.CloseStrategy == gitflow.CloseStrategyReviewRequest {
 			// Review targets prove independently: live source ancestry when
 			// present, otherwise authoritative merged-MR evidence per target.
-			targets, err = m.resolveReviewCleanupTargets(ctx, &plan, svc, refs, targetBranches, sourceSHA, "task branch "+svc.Branch)
+			targets, err = m.resolveReviewCleanupTargets(ctx, &plan, repoService, refs, targetBranches, sourceSHA, "task branch "+svc.Branch)
 			if err != nil {
 				return plan, err
 			}
@@ -353,7 +406,8 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 
 	if len(plan.preview.Blockers) == 0 {
 		for _, r := range ready {
-			plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupTaskWorktree, description: "remove task worktree " + r.svc.WorktreePath, repoPath: r.svc.RepoPath, path: r.svc.WorktreePath, branch: r.svc.Branch, expectedSHA: r.source})
+			_, removed := absent[r.svc.WorktreePath]
+			plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupTaskWorktree, description: "remove task worktree " + r.svc.WorktreePath, repoPath: r.svc.RepoPath, path: r.svc.WorktreePath, branch: r.svc.Branch, noop: removed, expectedSHA: r.source})
 			local, err := m.git.BranchExists(ctx, r.svc.RepoPath, r.svc.Branch)
 			if err != nil {
 				return plan, err

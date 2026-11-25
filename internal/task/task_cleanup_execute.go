@@ -53,16 +53,36 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 		return result, err
 	}
 	defer unlock()
-	fresh, err := m.planTaskCleanup(ctx, TaskCleanupRequest{TaskID: plan.preview.TaskID, DeleteRemoteTaskBranches: taskCleanupDeletesRemoteBranches(plan.steps)}, selection.Force)
+	var retry *TaskCleanupPlan
+	if selection.Force {
+		retry = &plan
+	}
+	fresh, err := m.planTaskCleanup(ctx, TaskCleanupRequest{TaskID: plan.preview.TaskID, DeleteRemoteTaskBranches: taskCleanupDeletesRemoteBranches(plan.steps)}, retry)
 	if err != nil {
 		return result, err
 	}
-	// After a partial cleanup only the directory may remain. In force mode the
-	// original branch steps still recheck their pinned refs before deletion.
-	directoryOnly := selection.Force && len(fresh.steps) == 1 && fresh.steps[0].kind == cleanupTaskDirectory
-	if fresh.Blocked() || (!directoryOnly && fresh.fingerprint != plan.fingerprint) {
-		return result, fmt.Errorf("%w: approved plan is stale", ErrTaskCleanupBlocked)
+	if fresh.Blocked() || !approvedCleanupRemainder(plan, fresh, selection.Force) {
+		return result, fmt.Errorf("%w: approved plan is stale: %s", ErrTaskCleanupBlocked, strings.Join(fresh.preview.Blockers, "; "))
 	}
+	if plan.firstScope != nil {
+		initial, err := plan.firstScope()
+		if err != nil {
+			return result, err
+		}
+		if selection.Force {
+			current, err := cleanupDirectoryScope(m.taskDir(plan.preview.TaskID), plan.steps)
+			if err != nil {
+				return result, err
+			}
+			for path, info := range current {
+				before := initial[path]
+				if before == nil || !os.SameFile(before, info) {
+					return result, fmt.Errorf("%w: new or replaced cleanup entry %s", ErrTaskCleanupBlocked, path)
+				}
+			}
+		}
+	}
+	plan = fresh
 
 	ordered := taskCleanupExecutionOrder(plan.steps)
 	for _, step := range ordered {
@@ -90,6 +110,34 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 		}
 	}
 	return result, nil
+}
+
+// Compare the same authorization minus remote deletions already completed. A
+// proven absent step may become a no-op, never the other way around.
+func approvedCleanupRemainder(approved, fresh TaskCleanupPlan, force bool) bool {
+	if !force {
+		return fresh.fingerprint == approved.fingerprint
+	}
+	steps := make([]releaseCleanupStep, 0, len(approved.steps))
+	remote := slices.Clone(approved.preview.Remote)
+	for _, step := range approved.steps {
+		if step.kind == cleanupRemoteTaskBranch && !slices.ContainsFunc(fresh.preview.Remote, func(r TaskCleanupRemoteCandidate) bool { return r.RepoPath == step.repoPath && r.Branch == step.branch }) {
+			remote = slices.DeleteFunc(remote, func(r TaskCleanupRemoteCandidate) bool { return r.RepoPath == step.repoPath && r.Branch == step.branch })
+			continue
+		}
+		steps = append(steps, step)
+	}
+	if !slices.Equal(remote, fresh.preview.Remote) || !slices.Equal(approved.preview.DeferredRemote, fresh.preview.DeferredRemote) || len(steps) != len(fresh.steps) {
+		return false
+	}
+	for i, s := range steps {
+		if s.noop && !fresh.steps[i].noop {
+			return false
+		}
+	}
+	approved.steps = steps
+	approved.finishFingerprint()
+	return approved.fingerprint == fresh.fingerprint
 }
 
 // runTaskCleanupStep executes one local cleanup step.
