@@ -599,7 +599,7 @@ func TestValidateTaskCmdReturnsValidationResult(t *testing.T) {
 func TestPlanCloseTaskCmdReturnsClosePlanReadyMsg(t *testing.T) {
 	mgr := &cmdManager{planResult: task.ClosePlan{TaskID: "T14"}}
 
-	msg := planCloseTaskCmd(mgr, "T14", 7)()
+	msg := planCloseTaskCmd(t.Context(), mgr, "T14", 7)()
 	got, ok := msg.(ClosePlanReadyMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want ClosePlanReadyMsg", msg)

@@ -331,16 +331,6 @@ func validateTaskCmd(parent context.Context, mgr task.Manager, taskID string, ge
 	}
 }
 
-func planCloseTaskCmd(mgr task.Manager, taskID string, generation uint64) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
-		defer cancel()
-
-		plan, err := mgr.PlanCloseTask(ctx, taskID)
-		return ClosePlanReadyMsg{Generation: generation, Plan: plan, Err: err}
-	}
-}
-
 func closeTaskCmd(mgr task.Manager, params task.CloseTaskParams, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan CloseTaskFinishedMsg, 1)
