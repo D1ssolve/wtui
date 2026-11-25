@@ -77,12 +77,13 @@ func InitLogger(app string, level slog.Leveler) (*slog.Logger, error) {
 		return fallbackLogger(), fmt.Errorf("open log file %s: %w", logPath, err)
 	}
 
-	inner := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: level})
+	inner := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: level, ReplaceAttr: redactAttr})
 	return slog.New(&taskIDHandler{inner: inner}), nil
 }
 
 func fallbackLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelWarn,
+		Level:       slog.LevelWarn,
+		ReplaceAttr: redactAttr,
 	}))
 }

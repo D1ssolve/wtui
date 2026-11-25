@@ -3140,20 +3140,20 @@ func (m Model) resolveCloseTask(taskID string) domain.Task {
 func (m Model) failureRequest() (string, ai.FailureRequest) {
 	request := ai.FailureRequest{Output: m.outputPanel.RecentText(40)}
 	if m.flow != nil {
-		request.Workflow = m.flow.Describe()
+		request.Workflow = logutil.RedactURLUserinfo(m.flow.Describe())
 	}
 	subject := "the last operation"
 	if r := m.releasesPanel.SelectedRelease(); r != nil && m.focus == FocusReleases {
 		summary := task.ReleaseWorkflow(*r, m.flow)
 		subject = "release " + r.ID
-		request.Operation = "release " + r.ID + " (status " + string(r.Status) + ")"
-		request.State, request.Guidance = string(summary.Current), summary.NextAction
+		request.Operation = logutil.RedactURLUserinfo("release " + r.ID + " (status " + string(r.Status) + ")")
+		request.State, request.Guidance = logutil.RedactURLUserinfo(string(summary.Current)), logutil.RedactURLUserinfo(summary.NextAction)
 		if r.Error != nil {
-			request.Error = strings.TrimSpace(r.Error.Message + "\n" + r.Error.Cause)
+			request.Error = logutil.RedactURLUserinfo(strings.TrimSpace(r.Error.Message + "\n" + r.Error.Cause))
 		}
 	} else if t := m.tasksPanel.SelectedTask(); t != nil {
 		subject = "task " + t.ID
-		request.Operation = "task " + t.ID
+		request.Operation = logutil.RedactURLUserinfo(subject)
 	}
 	return subject, request
 }
