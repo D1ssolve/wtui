@@ -17,15 +17,29 @@ import (
 	"github.com/D1ssolve/wtui/internal/ai/internal/cliprocess"
 )
 
+// Available checks for the native executable without starting it or checking login.
+func (c *Client) Available() bool {
+	_, err := findExecutable()
+	return err == nil
+}
+
+func findExecutable() (string, error) {
+	binary, err := exec.LookPath("claude")
+	if err != nil || (runtime.GOOS == "windows" && !strings.EqualFold(filepath.Ext(binary), ".exe")) {
+		return "", fmt.Errorf("%w: install the native Claude Code CLI and add claude to PATH", ai.ErrUnavailable)
+	}
+	return binary, nil
+}
+
 func complete[T requestPayload](ctx context.Context, c *Client, instructions, schema string, request T) (data []byte, resultErr error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return nil, cancelled(err)
 	}
-	binary, err := exec.LookPath("claude")
-	if err != nil || (runtime.GOOS == "windows" && !strings.EqualFold(filepath.Ext(binary), ".exe")) {
-		return nil, fmt.Errorf("%w: install the native Claude Code CLI and add claude to PATH", ai.ErrUnavailable)
+	binary, err := findExecutable()
+	if err != nil {
+		return nil, err
 	}
 	payload, err := json.Marshal(request)
 	if err != nil {

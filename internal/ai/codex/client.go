@@ -32,6 +32,14 @@ func New(model string, timeout time.Duration) *Client {
 
 var _ ai.Assistant = (*Client)(nil)
 
+const executable = "codex"
+
+// Available checks for the executable without starting it or checking login.
+func (c *Client) Available() bool {
+	_, err := exec.LookPath(executable)
+	return err == nil
+}
+
 func (c *Client) Generate(ctx context.Context, request ai.Request) (ai.Draft, error) {
 	payload, err := json.Marshal(request)
 	if err != nil {
@@ -89,7 +97,7 @@ func (c *Client) complete(ctx context.Context, instructions string, payload []by
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("Codex generation cancelled: %w", err)
 	}
-	binary, err := exec.LookPath("codex")
+	binary, err := exec.LookPath(executable)
 	if err != nil {
 		return nil, fmt.Errorf("%w: install Codex CLI and add codex to PATH", ai.ErrUnavailable)
 	}

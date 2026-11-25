@@ -1,6 +1,7 @@
 package logutil
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -63,7 +64,7 @@ func TestInitLogger_CreatesLogFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", tmp)
 
-	logger, err := InitLogger("testapp", slog.LevelDebug)
+	logger, logPath, err := InitLogger("testapp", slog.LevelDebug)
 	if err != nil {
 		t.Fatalf("InitLogger returned unexpected error: %v", err)
 	}
@@ -71,7 +72,9 @@ func TestInitLogger_CreatesLogFile(t *testing.T) {
 		t.Fatal("InitLogger returned nil logger")
 	}
 
-	logPath := filepath.Join(tmp, "testapp", "testapp.log")
+	if want := filepath.Join(tmp, "testapp", "testapp.log"); logPath != want {
+		t.Fatalf("active file path = %q, want %q", logPath, want)
+	}
 	if _, statErr := os.Stat(logPath); statErr != nil {
 		t.Errorf("expected log file at %s, got stat error: %v", logPath, statErr)
 	}
@@ -81,7 +84,7 @@ func TestInitLogger_RuntimeLevelControlsRecording(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	level := new(slog.LevelVar)
 	level.Set(slog.LevelWarn)
-	logger, err := InitLogger("runtime", level)
+	logger, logPath, err := InitLogger("runtime", level)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +95,7 @@ func TestInitLogger_RuntimeLevelControlsRecording(t *testing.T) {
 	logger.Debug("after-debug")
 	logger.Info("after-info")
 	logger.Warn("after-warn")
-	data, err := os.ReadFile(filepath.Join(XDGStateDir("runtime"), "runtime.log"))
+	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,5 +103,32 @@ func TestInitLogger_RuntimeLevelControlsRecording(t *testing.T) {
 	if !strings.Contains(text, "during-debug") || !strings.Contains(text, "after-warn") ||
 		strings.Contains(text, "before-debug") || strings.Contains(text, "after-debug") || strings.Contains(text, "after-info") {
 		t.Fatalf("runtime level did not control actual recording: %s", text)
+	}
+}
+
+func TestInitLogger_WriteOnlyFileFallsBack(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := XDGStateDir("testapp")
+	if err := os.Mkdir(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "testapp.log")
+	if err := os.WriteFile(path, nil, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err == nil {
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		t.Skip("this environment allows reads of mode-0200 files")
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("read probe failed for an unexpected reason: %v", err)
+	}
+
+	logger, activePath, err := InitLogger("testapp", slog.LevelInfo)
+	if !errors.Is(err, os.ErrPermission) || logger == nil || activePath != "" {
+		t.Fatalf("write-only file should not become the active sink: path=%q, err=%v", activePath, err)
 	}
 }
