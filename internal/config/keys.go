@@ -57,18 +57,22 @@ func unsupportedKey(key *yaml.Node, path string) *keyError {
 }
 
 // keyName is the key as yaml.v3 decodes it into a string: aliases followed, !!binary
-// decoded. Only string keys are usable; ok is false for any other key.
+// decoded, an untagged number, bool or timestamp named by its source text (so a service
+// or state may be called 123). ok is false for null keys, which yaml.v3 silently drops
+// from maps, for explicit non-string tags and for sequence or mapping keys.
 func keyName(key *yaml.Node) (name string, ok bool) {
 	key = resolve(key)
 	if key.Kind != yaml.ScalarNode {
 		return "", false
 	}
-	switch key.ShortTag() {
-	case "!!str":
+	switch tag := key.ShortTag(); {
+	case tag == "!!str":
 		return key.Value, true
-	case "!!binary":
+	case tag == "!!binary":
 		data, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(key.Value), ""))
 		return string(data), err == nil
+	case key.Style&yaml.TaggedStyle == 0 && tag != "!!null":
+		return key.Value, true
 	}
 	return "", false
 }

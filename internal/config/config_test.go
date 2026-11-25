@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -303,8 +304,17 @@ func TestLoad_KeysAreDecodedStrings(t *testing.T) {
 		{name: "integer root key", src: "!!int 1: x\n", wantErr: "line 1: unsupported key !!int 1; keys must be plain strings"},
 		{name: "custom tag key", src: "!foo bar: x\n", wantErr: "line 1: unsupported key !foo bar; keys must be plain strings"},
 		{name: "sequence key", src: "? [a, b]\n: x\n", wantErr: "line 1: unsupported key [a, b]; keys must be plain strings"},
-		{name: "bool key in a block", src: "tag: {true: x}\n", wantErr: "line 1: unsupported key true in tag; keys must be plain strings"},
-		{name: "integer service name", src: "workflow: {release: {depends_on: {123: [api]}}}\n", wantErr: "line 1: unsupported key 123 in workflow.release.depends_on; keys must be plain strings"},
+		{name: "bool key in a block", src: "tag: {true: x}\n", wantErr: `line 1: unknown key "true" in tag; expected one of`},
+		{name: "integer key in a block", src: "tag: {123: x}\n", wantErr: `line 1: unknown key "123" in tag; expected one of`},
+		{name: "names keep their source text, as on base", src: "workflow:\n  task_types: {1.0: {from: a}, true: {from: b}, 2024-01-01: {from: c}, 0x1F: {from: d}}\n  release: {depends_on: {123: [456, true]}}\n",
+			check: func(c *Config) bool {
+				types := c.Workflow.TaskTypes
+				return types["1.0"].From == "a" && types["true"].From == "b" && types["2024-01-01"].From == "c" && types["0x1F"].From == "d" &&
+					slices.Equal(c.Workflow.Release.DependsOn["123"], []string{"456", "true"})
+			}},
+		{name: "explicitly tagged service name", src: "workflow: {release: {depends_on: {!!int 123: [api]}}}\n", wantErr: "line 1: unsupported key !!int 123 in workflow.release.depends_on; keys must be plain strings"},
+		{name: "complex task type name", src: "workflow:\n  task_types:\n    ? [a]\n    : {from: x}\n", wantErr: "line 3: unsupported key [a] in workflow.task_types; keys must be plain strings"},
+		{name: "null task type name, which base silently dropped", src: "workflow: {task_types: {~: {from: x}}}\n", wantErr: "line 1: unsupported key ~ in workflow.task_types; keys must be plain strings"},
 		{name: "null state name", src: "workflow: {release: {machine: {states: {~: {final: released}}}}}\n", wantErr: "line 1: unsupported key ~ in workflow.release.machine.states; keys must be plain strings"},
 		{name: "aliased event key typo", src: "x-k: &l labl\nworkflow: {release: {machine: {states: {s: {on: {go: {*l : x}}}}}}}\n",
 			wantErr: `line 2: unknown key "labl" in workflow.release.machine.states.s.on.go, did you mean "label"?`},

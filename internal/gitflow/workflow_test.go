@@ -1,8 +1,10 @@
 package gitflow
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -110,6 +112,43 @@ func TestResolve_ExtensionKeyHolder_CompilesLikeInline(t *testing.T) {
 	inline := describe("workflow:\n  extends: git-flow\n  task_types:\n    ops: {prefixes: [ops/], from: integration, close: [{review: {into: integration}}]}\n")
 	if holder != inline || !strings.Contains(holder, "ops: prefixes ops/") {
 		t.Fatalf("holder flow:\n%s\ninline flow:\n%s", holder, inline)
+	}
+}
+
+func TestResolve_NumericNames_CompileLikeQuotedNames(t *testing.T) {
+	t.Parallel()
+
+	resolveFile := func(t *testing.T, src string) *ResolvedGitFlow {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if cfg, err = cfg.Effective(); err != nil {
+			t.Fatalf("Effective() error: %v", err)
+		}
+		flow, err := Resolve(cfg)
+		if err != nil {
+			t.Fatalf("Resolve() error: %v", err)
+		}
+		return flow
+	}
+	machine := "workflow:\n  extends: git-flow\n  release:\n    machine:\n      initial: %[1]s\n      states:\n        %[1]s: {run: [{cut_branch: {from: integration}}], next: %[2]s}\n        %[2]s: {wait: manual, on: {%[3]s: {key: F, to: %[4]s}}}\n        %[4]s: {final: released}\n"
+	for name, srcs := range map[string][2]string{
+		"service name":   {"workflow: {extends: git-flow, release: {depends_on: {123: [api]}}}\n", "workflow: {extends: git-flow, release: {depends_on: {\"123\": [api]}}}\n"},
+		"task type name": {"workflow: {extends: git-flow, task_types: {123: {prefixes: [n/], from: integration}}}\n", "workflow: {extends: git-flow, task_types: {\"123\": {prefixes: [n/], from: integration}}}\n"},
+		"state name":     {fmt.Sprintf(machine, "1", "2", "go", "3"), fmt.Sprintf(machine, `"1"`, `"2"`, "go", `"3"`)},
+		"event name":     {fmt.Sprintf(machine, "s1", "s2", "7", "s3"), fmt.Sprintf(machine, "s1", "s2", `"7"`, "s3")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			plain, quoted := resolveFile(t, srcs[0]), resolveFile(t, srcs[1])
+			if !reflect.DeepEqual(plain, quoted) {
+				t.Fatalf("plain:\n%s\nquoted:\n%s", plain.Describe(), quoted.Describe())
+			}
+		})
 	}
 }
 
