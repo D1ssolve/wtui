@@ -583,7 +583,7 @@ func TestCmdManager_ImplementsTaskManager(t *testing.T) {
 func TestValidateTaskCmdReturnsValidationResult(t *testing.T) {
 	mgr := &cmdManager{validateResult: domain.TaskValidation{TaskID: "T14", Blocking: true}}
 
-	msg := validateTaskCmd(mgr, "T14", 7)()
+	msg := validateTaskCmd(t.Context(), mgr, "T14", 7)()
 	got, ok := msg.(ValidationResultMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want ValidationResultMsg", msg)

@@ -687,10 +687,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(planCloseTaskCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
 
 	case panels.ValidateTaskMsg:
-		m.opRunning = true
-		m.operationGeneration++
+		ctx := m.startOperation("validation for task "+msg.TaskID, true)
 		m.outputPanel.AppendLine("Validating task " + msg.TaskID + "...")
-		return m, tea.Batch(validateTaskCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
+		return m, tea.Batch(validateTaskCmd(ctx, m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
 
 	case panels.OpenTagBrowserMsg:
 		ctx := m.startOperation("tag inspection for task "+msg.TaskID, true)
@@ -800,10 +799,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		pending := msg
 		m.pendingSyncTask = &pending
-		m.opRunning = true
-		m.operationGeneration++
+		ctx := m.startOperation("sync", false)
 		m.outputPanel.AppendLine("Validating task " + msg.TaskID + " before sync...")
-		return m, tea.Batch(validateTaskCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
+		return m, tea.Batch(validateTaskCmd(ctx, m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
 
 	case modal.SubmitSyncServiceStrategyMsg:
 		m.modal = nil
@@ -1924,6 +1922,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.opRunning = false
+		_, cancelled := m.finishOperationCancellation(msg.Err)
+		if msg.Err != nil {
+			m.pendingSyncTask = nil
+			if cancelled {
+				m.outputPanel.AppendLine("Validation cancelled for task " + msg.TaskID + ".")
+				return m, nil
+			}
+			return m.Update(CommandDoneMsg{Generation: msg.Generation, Err: msg.Err, Op: "Validate task " + msg.TaskID})
+		}
 		if msg.Validation.Blocking {
 			m.pendingSyncTask = nil
 			m.modal = modal.NewValidationErrorModal(msg.Validation, m.width, m.height)

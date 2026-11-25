@@ -273,7 +273,7 @@ func TestE2E_CloseTask_DirtyTask_ShowsValidationModalAndDoesNotExecuteClose(t *t
 		t.Fatalf("expected no close confirm modal on dirty task, got %T", m.modal)
 	}
 
-	validationMsg := validateTaskCmd(mgr, "IN-200", m.operationGeneration)()
+	validationMsg := validateTaskCmd(t.Context(), mgr, "IN-200", m.operationGeneration)()
 	updated, _ = m.Update(validationMsg)
 	m = updated.(Model)
 

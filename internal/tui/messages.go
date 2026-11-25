@@ -9,7 +9,9 @@ import (
 
 type ValidationResultMsg struct {
 	Generation uint64
+	TaskID     string
 	Validation domain.TaskValidation
+	Err        error
 }
 
 type ClosePlanReadyMsg struct {

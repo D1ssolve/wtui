@@ -316,17 +316,18 @@ func removeServiceCmd(mgr task.Manager, taskID, serviceName string, removeBranch
 	}
 }
 
-func validateTaskCmd(mgr task.Manager, taskID string, generation uint64) tea.Cmd {
+func validateTaskCmd(parent context.Context, mgr task.Manager, taskID string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(parent, taskID), 30*time.Second)
 		defer cancel()
 
 		validation, err := mgr.ValidateTask(ctx, taskID)
-		if err != nil {
-			return CommandDoneMsg{Generation: generation, Err: err, Op: "Validate task " + taskID}
+		if err == nil {
+			// Cancellation during service discovery can leave an empty result.
+			err = ctx.Err()
 		}
 
-		return ValidationResultMsg{Generation: generation, Validation: validation}
+		return ValidationResultMsg{Generation: generation, TaskID: taskID, Validation: validation, Err: err}
 	}
 }
 
