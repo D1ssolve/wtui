@@ -50,14 +50,20 @@ func TestExecTeaProcessReturnsOriginalErrorAndOp(t *testing.T) {
 	}
 }
 
-func TestShellExecCommandUsesShAndTaskDir(t *testing.T) {
-	cmd := shellExecCommand("git status", "/tmp/.tasks/IN-001")
+func TestShellExecCommandUsesPlatformShellAndTaskDir(t *testing.T) {
+	cmd := shellExecCommand("echo hi", "/tmp/.tasks/IN-001")
 
-	if filepath.Base(cmd.Path) != "sh" {
-		t.Fatalf("Path = %q, want sh", cmd.Path)
+	wantPath := "sh"
+	wantArgs := []string{"sh", "-c", "echo hi"}
+	if runtime.GOOS == "windows" {
+		wantPath = "cmd"
+		wantArgs = []string{"cmd"}
 	}
-	if strings.Join(cmd.Args, "\x00") != strings.Join([]string{"sh", "-c", "git status"}, "\x00") {
-		t.Fatalf("Args = %v, want [sh -c git status]", cmd.Args)
+	if filepath.Base(cmd.Path) != wantPath {
+		t.Fatalf("Path = %q, want %s", cmd.Path, wantPath)
+	}
+	if !slices.Equal(cmd.Args, wantArgs) {
+		t.Fatalf("Args = %v, want %v", cmd.Args, wantArgs)
 	}
 	if cmd.Dir != "/tmp/.tasks/IN-001" {
 		t.Fatalf("Dir = %q, want /tmp/.tasks/IN-001", cmd.Dir)
