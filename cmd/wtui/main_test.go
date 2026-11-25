@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -128,5 +131,60 @@ func TestDraftWorkflow_GivesUpAfterThreeInvalidDrafts(t *testing.T) {
 	d := &scriptedDrafter{drafts: []string{bad, bad, bad}}
 	if _, err := draftWorkflow(t.Context(), d, "x"); err == nil || !strings.Contains(err.Error(), "after 3 attempts") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRun_HelpAndUnknownArguments(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantCode   int
+		wantStdout string
+		wantStderr string
+	}{
+		{name: "long help", args: []string{"--help"}, wantStdout: "--config"},
+		{name: "short help", args: []string{"-h"}, wantStdout: "--config"},
+		{name: "help after flow", args: []string{"flow", "--help"}, wantStdout: "wtui flow"},
+		{name: "unknown flag", args: []string{"--bogus"}, wantCode: 2, wantStderr: `unknown argument "--bogus"`},
+		{name: "unknown positional", args: []string{"nope"}, wantCode: 2, wantStderr: `unknown argument "nope"`},
+		{name: "mermaid outside flow", args: []string{"--mermaid"}, wantCode: 2, wantStderr: `unknown argument "--mermaid"`},
+		{name: "second flow", args: []string{"flow", "flow"}, wantCode: 2, wantStderr: `unknown argument "flow"`},
+		{name: "config without value", args: []string{"--config"}, wantCode: 2, wantStderr: "--config requires a path"},
+		{name: "config empty value", args: []string{"--config="}, wantCode: 2, wantStderr: "--config requires a non-empty path"},
+		{name: "empty separate value", args: []string{"--config", ""}, wantCode: 2, wantStderr: "--config requires a non-empty path"},
+		{name: "draft without text", args: []string{"flow", "--draft"}, wantCode: 2, wantStderr: "--draft requires"},
+		{name: "missing config file", args: []string{"flow", "--config", "/nonexistent/wtui.yaml"}, wantCode: 1, wantStderr: "--config path not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(tt.args, &stdout, &stderr); code != tt.wantCode {
+				t.Fatalf("code = %d, want %d (stderr %q)", code, tt.wantCode, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), tt.wantStdout) || !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Fatalf("stdout %q / stderr %q missing %q / %q", stdout.String(), stderr.String(), tt.wantStdout, tt.wantStderr)
+			}
+			if tt.wantCode == 2 && !strings.Contains(stderr.String(), "usage:") {
+				t.Fatalf("stderr lacks usage: %q", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRun_ConfigFlagBeforeAndAfterFlow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(path, []byte("workflow:\n  extends: trunk-based\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"flow", "--config", path},
+		{"--config", path, "flow"},
+		{"flow", "--config=" + path},
+		{"--config=" + path, "flow"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "workflow: trunk-based") {
+			t.Fatalf("run(%v) = %d, stdout %q, stderr %q", args, code, stdout.String(), stderr.String())
+		}
 	}
 }

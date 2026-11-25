@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"runtime/debug"
@@ -42,39 +44,99 @@ func resolveVersion() string {
 	return "dev"
 }
 
-func main() {
-	if versionRequested(os.Args[1:]) {
-		fmt.Print(versionOutput(resolveVersion()))
-		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "flow" {
-		format := ""
-		if len(os.Args) > 2 {
-			format = os.Args[2]
-		}
-		var out string
-		var err error
+const usageText = `usage:
+  wtui [--config PATH]
+  wtui flow [--mermaid | --html | --draft "<how your team works>"] [--config PATH]
+
+options:
+  --config PATH   use this config file instead of the default lookup
+  -h, --help      show this help
+  -v, --version   print the version
+`
+
+// cliArgs is the parsed command line.
+type cliArgs struct {
+	help, flow    bool
+	config        string
+	format, draft string // flow output: "" (describe), "--mermaid" or "--html"; or a --draft description
+}
+
+// parseArgs accepts --config PATH or --config=PATH before or after the flow subcommand.
+func parseArgs(args []string) (cliArgs, error) {
+	var c cliArgs
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		switch {
-		case format == "--draft" && len(os.Args) == 4 && strings.TrimSpace(os.Args[3]) != "":
-			out, err = draftCommand(os.Args[3])
-		case format == "" || format == "--mermaid" || format == "--html":
-			out, err = flowCommand(format)
+		case arg == "-h" || arg == "--help":
+			c.help = true
+		case arg == "flow" && !c.flow:
+			c.flow = true
+		case arg == "--config" || strings.HasPrefix(arg, "--config="):
+			value, ok := strings.CutPrefix(arg, "--config=")
+			if !ok {
+				if i+1 >= len(args) {
+					return c, errors.New("--config requires a path")
+				}
+				i++
+				value = args[i]
+			}
+			if value == "" {
+				return c, errors.New("--config requires a non-empty path")
+			}
+			c.config = value
+		case c.flow && (arg == "--mermaid" || arg == "--html"):
+			c.format = arg
+		case c.flow && arg == "--draft":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return c, errors.New("--draft requires a description of how your team works")
+			}
+			i++
+			c.draft = args[i]
 		default:
-			fmt.Fprintln(os.Stderr, "usage: wtui flow [--mermaid | --html | --draft \"<how your team works>\"]")
-			os.Exit(2)
+			return c, fmt.Errorf("unknown argument %q", arg)
+		}
+	}
+	return c, nil
+}
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// run executes the command line and returns the process exit code.
+func run(args []string, stdout, stderr io.Writer) int {
+	if versionRequested(args) {
+		fmt.Fprint(stdout, versionOutput(resolveVersion()))
+		return 0
+	}
+	c, err := parseArgs(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "wtui: %v\n%s", err, usageText)
+		return 2
+	}
+	if c.help {
+		fmt.Fprint(stdout, usageText)
+		return 0
+	}
+	if c.flow {
+		var out string
+		if c.draft != "" {
+			out, err = draftCommand(c.draft, c.config)
+		} else {
+			out, err = flowCommand(c.format, c.config)
 		}
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "wtui flow:", err)
-			os.Exit(1)
+			fmt.Fprintln(stderr, "wtui flow:", err)
+			return 1
 		}
-		fmt.Print(out)
-		return
+		fmt.Fprint(stdout, out)
+		return 0
 	}
-
-	if err := runTUI(); err != nil {
+	if err := runTUI(c.config); err != nil {
 		slog.Error("TUI failed", "err", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func versionRequested(args []string) bool {
@@ -92,8 +154,8 @@ func versionOutput(version string) string {
 }
 
 // flowCommand validates the configured workflow and describes what wtui will do with it.
-func flowCommand(format string) (string, error) {
-	cfg, err := config.Load("")
+func flowCommand(format, configPath string) (string, error) {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return "", err
 	}
@@ -115,8 +177,8 @@ func flowCommand(format string) (string, error) {
 
 // draftCommand asks the configured AI provider for a workflow block and keeps it only once
 // the workflow compiler accepts it, feeding validation errors back for a bounded number of fixes.
-func draftCommand(description string) (string, error) {
-	cfg, err := config.Load("")
+func draftCommand(description, configPath string) (string, error) {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return "", err
 	}
@@ -158,8 +220,8 @@ func draftWorkflow(ctx context.Context, drafter interface {
 	}
 }
 
-func runTUI() error {
-	cfg, err := config.Load("")
+func runTUI(configPath string) error {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
