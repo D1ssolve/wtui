@@ -60,12 +60,16 @@ type serviceFailure struct {
 }
 
 // reportServiceNext follows per-service cause lines with one Next per distinct action, naming its services.
-func (m *Model) reportServiceNext(failures []serviceFailure) {
+// retry, when set, replaces the generic E/L diagnosis with the operation's own way to try again.
+func (m *Model) reportServiceNext(failures []serviceFailure, retry string) {
 	actions := m.failureActions()
 	var order []string
 	services := map[string][]string{}
 	for _, f := range failures {
 		_, action := guidance(f.err, actions)
+		if retry != "" && action == diagnoseAction(actions) {
+			action = retry
+		}
 		m.logger.Error("service operation failed", "service", f.name, "err", f.err.Error())
 		if _, seen := services[action]; !seen {
 			order = append(order, action)
@@ -173,7 +177,16 @@ func guidance(err error, actions failureActions) (cause, action string) {
 			return cause[:best] + rest, sentence(instruction)
 		}
 	}
-	return cause, kindAction(err, actions, condensed)
+	action = kindAction(err, actions, condensed)
+	// A login instruction visible in the cause decides the step, whatever the error's category; condensed stderr may hide it.
+	if strings.HasPrefix(action, "Run gh auth login") || strings.HasPrefix(action, "Run glab auth login") || action == diagnoseAction(actions) {
+		for _, cli := range []string{"glab", "gh"} {
+			if strings.Contains(cause, cli+" auth login") {
+				return cause, "Authenticate " + cli + " as its message above says, then retry."
+			}
+		}
+	}
+	return cause, action
 }
 
 func kindAction(err error, actions failureActions, condensed bool) string {
@@ -191,9 +204,6 @@ func kindAction(err error, actions failureActions, condensed bool) string {
 		return "Install gh (GitHub) or glab (GitLab) and add it to PATH, then retry."
 	case errors.As(err, &forgeErr) && forgeErr.Category == forge.ErrCategoryAuthError, forgeAuthFailure(err):
 		if cli := forgeCLI(err); cli != "" {
-			if strings.Contains(err.Error(), cli+" auth login") {
-				return "Authenticate " + cli + " as its message above says, then retry."
-			}
 			return "Run " + cli + " auth login, then retry."
 		}
 		return "Run gh auth login or glab auth login, then retry."

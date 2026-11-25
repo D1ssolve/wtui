@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -227,6 +228,46 @@ func TestReleaseMerge_HeadDriftFailsServiceAndContinues(t *testing.T) {
 	}
 	if len(client.merges) != 2 || got.Services[0].ProductionMR.State != "open" || got.Services[1].ProductionMR.State != "merged" {
 		t.Fatalf("merges = %#v, services = %#v", client.merges, got.Services)
+	}
+}
+
+func TestReleaseMerge_EveryFailedServiceKeepsItsCauseInTheResult(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		progress chan string
+	}{
+		{"progress never read", make(chan string)},
+		{"progress fully buffered", make(chan string, 128)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, client := newReleaseMergeTestManager(t)
+			client.readiness = map[int]forge.MRReadiness{1: openProductionMR(1, "api-01", "api-01-source")}
+			client.mergeErrs = map[int]error{1: errors.New("head SHA changed")}
+			services := []domain.ReleaseService{releaseMergeService("api-01", 1)}
+			for i := 2; i <= 34; i++ {
+				svc := releaseMergeService(fmt.Sprintf("api-%02d", i), i)
+				svc.ProductionMR = nil
+				services = append(services, svc)
+			}
+			release := writePromoteRelease(t, m, domain.ReleaseStatusAwaitingMasterMerge, services...)
+
+			_, result, err := m.MergeReleaseMRs(t.Context(), release.ID, tc.progress)
+			if err != nil {
+				t.Fatalf("MergeReleaseMRs() error = %v", err)
+			}
+			if len(result.Failed) != 34 || len(result.Errs) != 34 {
+				t.Fatalf("failed = %d, causes = %d, want 34 each", len(result.Failed), len(result.Errs))
+			}
+			if !strings.Contains(fmt.Sprint(result.Errs["api-01"]), "head SHA changed") || !strings.Contains(fmt.Sprint(result.Errs["api-34"]), "production MR is not recorded") {
+				t.Fatalf("causes = %v", result.Errs)
+			}
+			close(tc.progress)
+			for line := range tc.progress {
+				if strings.Contains(line, "head SHA changed") || strings.Contains(line, "production MR is not recorded") {
+					t.Fatalf("progress %q repeats a cause the result reports", line)
+				}
+			}
+		})
 	}
 }
 

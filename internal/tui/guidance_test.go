@@ -42,6 +42,7 @@ func TestGuidance_ErrorKind_CauseAndAction(t *testing.T) {
 		{"forge cli missing", &forge.ForgeError{Category: forge.ErrCategoryNotInstalled, Cause: fmt.Errorf("%w: glab", forge.ErrForgeUnavailable)}, all, "forge not_installed: forge CLI not available: glab", "Install gh (GitHub) or glab (GitLab) and add it to PATH, then retry."},
 		{"forge auth keeps stderr once", &forge.ForgeError{Category: forge.ErrCategoryAuthError, Cause: glabAuth, Stderr: "401 Unauthorized"}, all, "forge auth_error: glab mr list: exit 1: 401 Unauthorized", "Run glab auth login, then retry."},
 		{"gh auth stderr", &execerr.ExecError{Argv: []string{"gh", "pr", "list"}, ExitCode: 4, Stderr: "To get started with GitHub CLI, please run:  gh auth login"}, all, "gh pr list: exit 4: To get started with GitHub CLI, please run:  gh auth login", "Authenticate gh as its message above says, then retry."},
+		{"gh auth instruction hidden in condensed stderr", &execerr.ExecError{Argv: []string{"gh", "pr", "list"}, ExitCode: 4, Stderr: "Authentication required.\nTo get started, please run:  gh auth login"}, all, "gh pr list: exit 4: Authentication required. …", "Run gh auth login, then retry."},
 		{"config value", fmt.Errorf("reload: %w", errors.New(`config: tag.bump: expected manual or conventional, got "bad"`)), all, `reload: config: tag.bump: expected manual or conventional, got "bad"`, "Fix the config value named above, check it with wtui flow, then restart wtui."},
 		{"instruction stops at a line break", errors.New("blocked; press F to retry\nother service failed"), all, "blocked\nother service failed", "Press F to retry."},
 		{"forge network", &forge.ForgeError{Category: forge.ErrCategoryNetwork, Cause: errors.New("dial tcp: i/o timeout")}, all, "forge network: dial tcp: i/o timeout", "Check the network connection to the forge host, then retry."},
@@ -106,6 +107,15 @@ func TestUpdate_Failure_PrintsCauseAndOneNextLine(t *testing.T) {
 		{"forge auth said once", nil, func(m Model) tea.Msg {
 			return ForgeResultMsg{Generation: m.operationGeneration, Op: "list", ServiceName: "api", Err: &execerr.ExecError{Argv: []string{"gh", "pr", "list"}, ExitCode: 4, Stderr: "To get started with GitHub CLI, please run:  gh auth login"}}
 		}, "Forge list for api failed: gh pr list: exit 4: To get started with GitHub CLI, please run:  gh auth login", "Next: Authenticate gh as its message above says, then retry."},
+		{"forge auth from hidden stderr line", nil, func(m Model) tea.Msg {
+			return ForgeResultMsg{Generation: m.operationGeneration, Op: "list", ServiceName: "api", Err: &execerr.ExecError{Argv: []string{"gh", "pr", "list"}, ExitCode: 4, Stderr: "Authentication required.\nTo get started, please run:  gh auth login"}}
+		}, "Forge list for api failed: gh pr list: exit 4: Authentication required. …", "Next: Run gh auth login, then retry."},
+		{"forge auth as the gh client reports it", nil, func(m Model) tea.Msg {
+			return ForgeResultMsg{Generation: m.operationGeneration, Op: "list", ServiceName: "api", Err: &forge.ForgeError{Category: forge.ErrCategoryAuthError, Cause: errors.New("exit status 4"), Stderr: "Authentication required.\nTo get started, please run:  gh auth login"}}
+		}, "Forge list for api failed: forge auth_error: exit status 4: Authentication required.", "Next: Authenticate gh as its message above says, then retry."},
+		{"uncategorized forge failure that shows a login instruction", &fakeAssistant{}, func(m Model) tea.Msg {
+			return ForgeResultMsg{Generation: m.operationGeneration, Op: "list_issues", ServiceName: "api", Err: &forge.ForgeError{Category: forge.ErrCategoryUnknown, Cause: errors.New("exit status 4"), Stderr: "Authentication required.\nTo get started, please run:  gh auth login"}}
+		}, "Forge list_issues for api failed: forge unknown: exit status 4: Authentication required.", "Next: Authenticate gh as its message above says, then retry."},
 		{"forge unavailable", nil, func(m Model) tea.Msg {
 			return ForgeResultMsg{Generation: m.operationGeneration, Op: "list", ServiceName: "api", Err: &forge.ForgeError{Category: forge.ErrCategoryNotInstalled, Cause: fmt.Errorf("%w: gh", forge.ErrForgeUnavailable)}}
 		}, "Forge list for api failed: forge not_installed: forge CLI not available: gh", "Next: Install gh (GitHub) or glab (GitLab) and add it to PATH, then retry."},
@@ -137,8 +147,8 @@ func TestUpdate_Failure_PrintsCauseAndOneNextLine(t *testing.T) {
 			if len(next) != 1 || next[0] != tc.wantNext {
 				t.Errorf("Next lines = %q, want exactly [%q]", next, tc.wantNext)
 			}
-			if strings.Count(text, "gh auth login") > 1 {
-				t.Errorf("auth command repeated:\n%s", text)
+			if n := strings.Count(text, "gh auth login"); n > 1 || strings.Contains(tc.name, "auth") && n != 1 {
+				t.Errorf("auth command shown %d times, want once:\n%s", n, text)
 			}
 		})
 	}
@@ -211,7 +221,7 @@ func TestFailure_RecommendedKeyWorksFromItsContext(t *testing.T) {
 
 func TestFailure_CredentialNeverReachesOutputOrExplainRequest(t *testing.T) {
 	const canary = "CANARY-6f1d"
-	url := "https://alice:" + canary + "@example.invalid/repo"
+	url := "https://alice:O'" + canary + "@example.invalid/repo"
 	gitErr := &execerr.ExecError{Argv: []string{"git", "fetch", url}, ExitCode: 128, Stderr: "fatal: Authentication failed for '" + url + "'\ntrace: second line"}
 	assistant := &fakeAssistant{}
 	m := sendWindowSize(newTestModelWithOptions(t, &mockManager{}, Options{Assistant: assistant}), 140, 40)
@@ -236,27 +246,42 @@ func TestMergeDone_PartialFailureScopesNextToFailedServices(t *testing.T) {
 		events   []task.ReleaseEvent
 		msg      func(m Model) tea.Msg
 		wantNext []string
+		wantOnce []string
 	}{
 		{"release merge can be repeated", mergeEvent, func(m Model) tea.Msg {
-			return ReleaseMergeDoneMsg{Generation: m.operationGeneration, Release: domain.Release{ID: "rel-1"}, Result: task.ReleaseMergeResult{ReleaseID: "rel-1", Merged: []string{"web"}, Failed: []string{"api"}}}
-		}, []string{"Next for api: Fix the MR failure shown in the [service][merge] lines above, then press M on the release to merge again."}},
+			return ReleaseMergeDoneMsg{Generation: m.operationGeneration, Release: domain.Release{ID: "rel-1"}, Result: task.ReleaseMergeResult{ReleaseID: "rel-1", Merged: []string{"web"}, Failed: []string{"api"}, Errs: map[string]error{"api": errors.New("head SHA changed")}}}
+		}, []string{"Next for api: Fix the cause shown above, then press M on the release to merge again."}, []string{"api: head SHA changed"}},
 		{"release merge no longer offered", noEvents, func(m Model) tea.Msg {
-			return ReleaseMergeDoneMsg{Generation: m.operationGeneration, Release: domain.Release{ID: "rel-1"}, Result: task.ReleaseMergeResult{ReleaseID: "rel-1", Failed: []string{"api", "worker"}}}
-		}, []string{"Next for api, worker: Press L to read the logs."}},
+			return ReleaseMergeDoneMsg{Generation: m.operationGeneration, Release: domain.Release{ID: "rel-1"}, Result: task.ReleaseMergeResult{ReleaseID: "rel-1", Failed: []string{"api", "worker"}, Errs: map[string]error{"api": errors.New("production MR is not recorded"), "worker": fmt.Errorf("recheck: %w", context.DeadlineExceeded)}}}
+		}, []string{"Next for api: Press L to read the logs.", "Next for worker: Check the network connection and the remote host, then retry."}, []string{"api: production MR is not recorded", "worker: recheck: context deadline exceeded"}},
+		{"release merge with 34 failures", mergeEvent, func(m Model) tea.Msg {
+			result := task.ReleaseMergeResult{ReleaseID: "rel-1", Errs: map[string]error{}}
+			for i := 1; i <= 34; i++ {
+				name := fmt.Sprintf("api-%02d", i)
+				result.Failed = append(result.Failed, name)
+				result.Errs[name] = errors.New("production MR is not recorded")
+			}
+			return ReleaseMergeDoneMsg{Generation: m.operationGeneration, Release: domain.Release{ID: "rel-1"}, Result: result}
+		}, nil, []string{"api-01: production MR is not recorded", "api-34: production MR is not recorded"}},
 		{"task merge per service", nil, func(m Model) tea.Msg {
 			return TaskMergeDoneMsg{Generation: m.operationGeneration, Result: task.TaskMergeResult{Errs: map[string]error{"api": errors.New("blocked; press F to retry"), "web": errors.New("other service failed")}}}
-		}, []string{"Next for api: Press F to retry.", "Next for web: Press L to read the logs."}},
+		}, []string{"Next for api: Press F to retry.", "Next for web: Press L to read the logs."}, []string{"api: blocked"}},
 		{"partial init per service", nil, func(m Model) tea.Msg {
 			return PartialInitDoneMsg{Generation: m.operationGeneration, Op: "Init task T-1", Result: task.PartialFailureResult{SucceededServices: []string{"svc-a"}, FailedServices: []task.FailedService{{Name: "svc-b", Cause: fmt.Errorf("svc-b: %w", context.DeadlineExceeded)}}}, Err: errors.New("partial")}
-		}, []string{"Next for svc-b: Check the network connection and the remote host, then retry."}},
+		}, []string{"Next for svc-b: Check the network connection and the remote host, then retry."}, nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			m := sendWindowSize(newTestModel(t, &mockManager{releaseEvents: tc.events}), 140, 40)
 			m = drive(t, m, tc.msg(m))
-			text := m.outputPanel.RecentText(40)
-			if got := nextLines(text); !slices.Equal(got, tc.wantNext) {
+			text := m.outputPanel.RecentText(200)
+			if got := nextLines(text); tc.wantNext != nil && !slices.Equal(got, tc.wantNext) || len(got) != 1 && tc.wantNext == nil {
 				t.Fatalf("Next lines = %q, want %q in:\n%s", got, tc.wantNext, text)
+			}
+			for _, line := range tc.wantOnce {
+				if strings.Count(text, line+"\n") != 1 {
+					t.Fatalf("want %q exactly once in:\n%s", line, text)
+				}
 			}
 			if strings.Count(strings.ToLower(text), "press f to retry") > 1 {
 				t.Fatalf("retry instruction repeated:\n%s", text)

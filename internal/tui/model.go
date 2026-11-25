@@ -1683,7 +1683,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				failures = append(failures, serviceFailure{name: service, err: msg.Result.Errs[service]})
 			}
 			m.outputPanel.AppendLine("Merge task MRs finished with errors.")
-			m.reportServiceNext(failures)
+			m.reportServiceNext(failures, "")
 		default:
 			m.outputPanel.AppendLine("Merge task MRs done.")
 		}
@@ -1699,13 +1699,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			if failed := msg.Result.Failed; len(failed) > 0 {
 				m.outputPanel.AppendLine("Merge release MRs failed for: " + strings.Join(failed, ", "))
-				m.logger.Error("operation failed", "op", "Merge release MRs", "release", msg.Release.ID, "failed", failed)
-				// Each service's cause was already streamed as its [service][merge] line.
-				action := m.inContext(diagnoseAction(m.failureActions()))
-				if slices.ContainsFunc(m.mgr.ReleaseEvents(msg.Release), func(ev task.ReleaseEvent) bool { return ev.Action == gitflow.EventActionMergeReviews }) {
-					action = "Fix the MR failure shown in the [service][merge] lines above, then press M on the release to merge again."
+				failures := make([]serviceFailure, 0, len(failed))
+				for _, name := range failed {
+					cause := msg.Result.Errs[name]
+					if cause == nil {
+						cause = errors.New("no cause reported")
+					}
+					m.outputPanel.AppendLine(name + ": " + failureCause(cause))
+					failures = append(failures, serviceFailure{name: name, err: cause})
 				}
-				m.outputPanel.AppendLine("Next for " + strings.Join(failed, ", ") + ": " + action)
+				retry := ""
+				if slices.ContainsFunc(m.mgr.ReleaseEvents(msg.Release), func(ev task.ReleaseEvent) bool { return ev.Action == gitflow.EventActionMergeReviews }) {
+					retry = "Fix the cause shown above, then press M on the release to merge again."
+				}
+				m.reportServiceNext(failures, retry)
 			}
 			if skipped := msg.Result.Skipped; len(skipped) > 0 {
 				m.outputPanel.AppendLine("Merge release MRs skipped: " + strings.Join(skipped, ", "))
@@ -2083,7 +2090,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modal = modal.NewMRCreateConfirmDialog(result.TaskID, result.Title, confirmItems, msg.Description)
 				m.modal.SetTerminalSize(m.width, m.height)
 			}
-			m.reportServiceNext(serviceErrs)
+			m.reportServiceNext(serviceErrs, "")
 			return m, nil
 		}
 		if msg.Err != nil {
@@ -2214,7 +2221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		m.reportServiceNext(partialServiceFailures(msg.Result, msg.Err))
+		m.reportServiceNext(partialServiceFailures(msg.Result, msg.Err), "")
 		if m.pendingInitParams != nil {
 			m.selectTaskOnLoad = m.pendingInitParams.TaskID
 		}
@@ -2243,7 +2250,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		m.reportServiceNext(partialServiceFailures(msg.Result, msg.Err))
+		m.reportServiceNext(partialServiceFailures(msg.Result, msg.Err), "")
 		m.pendingInitParams = nil
 		m.pendingAddParams = nil
 		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())

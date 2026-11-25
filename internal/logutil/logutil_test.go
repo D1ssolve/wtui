@@ -18,6 +18,9 @@ func TestRedact_URLUserinfo(t *testing.T) {
 		{"push ssh://git:p@ss" + canary + "@host.invalid:22/r", "push ssh://***@host.invalid:22/r"},
 		{"git@github.com:org/repo.git and https://example.invalid/a@b", "git@github.com:org/repo.git and https://example.invalid/a@b"},
 		{"no url here", "no url here"},
+		{"failed for <https://alice:O'" + canary + "@example.invalid/repo>", "failed for <https://***@example.invalid/repo>"},
+		{"failed for 'https://alice:O'" + canary + "@example.invalid/repo'", "failed for 'https://***@example.invalid/repo'"},
+		{"see https://example.invalid/a?q=x@y#z", "see https://example.invalid/a?q=x@y#z"},
 	}
 	for _, tc := range cases {
 		if got := Redact(tc.in); got != tc.want {
@@ -32,7 +35,7 @@ func TestInitLogger_RedactsURLCredentialsInEveryField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	url := "https://alice:" + canary + "@example.invalid/repo"
+	url := "https://alice:O'" + canary + "@example.invalid/repo"
 	logger.With("remote", url).WithGroup("op").Error("push "+url+" failed",
 		"err", errors.New("fatal: Authentication failed for '"+url+"'"),
 		"argv", []string{"git", "push", url},

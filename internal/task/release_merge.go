@@ -29,6 +29,18 @@ type ReleaseMergeResult struct {
 	Merged    []string
 	Skipped   []string
 	Failed    []string
+	Errs      map[string]error
+}
+
+// fail records a failed service with its cause. Progress only marks the state: it is
+// best-effort and may be dropped, so the result is the one place the cause is reported.
+func (r *ReleaseMergeResult) fail(service string, cause error, statusCh chan<- string) {
+	r.Failed = append(r.Failed, service)
+	if r.Errs == nil {
+		r.Errs = map[string]error{}
+	}
+	r.Errs[service] = cause
+	sendStatus(statusCh, fmt.Sprintf("[%s][merge] failed", service))
 }
 
 func (m *manager) InspectReleaseMerge(ctx context.Context, releaseID string) (ReleaseMergeInspection, error) {
@@ -136,8 +148,7 @@ func (m *manager) mergeReleaseReviews(ctx context.Context, release *domain.Relea
 				if persistErr := m.markReleaseMergeServiceFailed(release, svc, serviceErr); persistErr != nil {
 					return result, persistErr
 				}
-				result.Failed = append(result.Failed, svc.Name)
-				sendStatus(statusCh, fmt.Sprintf("[%s][merge] failed: %v", svc.Name, serviceErr))
+				result.fail(svc.Name, serviceErr, statusCh)
 				continue
 			}
 			result.Skipped = append(result.Skipped, svc.Name)
@@ -154,17 +165,14 @@ func (m *manager) mergeReleaseReviews(ctx context.Context, release *domain.Relea
 				if persistErr := m.markReleaseMergeServiceFailed(release, svc, err); persistErr != nil {
 					return result, persistErr
 				}
-				result.Failed = append(result.Failed, svc.Name)
-				sendStatus(statusCh, fmt.Sprintf("[%s][merge] failed: %v", svc.Name, err))
+				result.fail(svc.Name, err, statusCh)
 				continue
 			}
 			result.Merged = append(result.Merged, svc.Name)
+		case item.Status == "failed":
+			result.fail(svc.Name, errors.New(strings.Join(item.Blockers, "; ")), statusCh)
 		default:
-			if item.Status == "failed" {
-				result.Failed = append(result.Failed, svc.Name)
-			} else {
-				result.Skipped = append(result.Skipped, svc.Name)
-			}
+			result.Skipped = append(result.Skipped, svc.Name)
 			sendStatus(statusCh, fmt.Sprintf("[%s][merge] %s: %s", svc.Name, item.Status, strings.Join(item.Blockers, "; ")))
 		}
 	}

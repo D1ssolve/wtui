@@ -47,7 +47,8 @@ func (h *taskIDHandler) WithGroup(name string) slog.Handler {
 
 // urlUserinfo matches the userinfo of scheme://user:password@host up to the last '@' before the path.
 // ponytail: an unencoded '/' inside a password ends the match early; percent-encoded ones are covered.
-var urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s/'"]*@`)
+// The authority ends at '/', '?', '#' or a character URIs never contain unencoded; an apostrophe is a legal sub-delim.
+var urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s/?#<>"]*@`)
 
 // Redact removes URL credentials from diagnostic text, keeping scheme, host and path.
 func Redact(s string) string {
