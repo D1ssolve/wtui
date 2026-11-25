@@ -39,6 +39,11 @@ func (m *manager) GetRelease(ctx context.Context, releaseID string) (domain.Rele
 }
 
 func (m *manager) RejectRelease(ctx context.Context, releaseID string) (domain.Release, error) {
+	unlock, err := m.lockRelease(ctx, releaseID)
+	if err != nil {
+		return domain.Release{}, err
+	}
+	defer unlock()
 	release, err := m.GetRelease(ctx, releaseID)
 	if err != nil {
 		return domain.Release{}, err
@@ -59,6 +64,11 @@ func (m *manager) RejectRelease(ctx context.Context, releaseID string) (domain.R
 }
 
 func (m *manager) RemoveRelease(ctx context.Context, releaseID string) error {
+	unlock, err := m.lockRelease(ctx, releaseID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	release, err := m.GetRelease(ctx, releaseID)
 	if err != nil {
 		return err

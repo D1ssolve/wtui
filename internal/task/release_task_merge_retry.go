@@ -109,6 +109,11 @@ func awaitingTaskMergeMetadataState(release domain.Release) (hasAny, allComplete
 }
 
 func (m *manager) RetryReleaseTaskMerges(ctx context.Context, releaseID string, confirmed *ReleaseTaskMergePlan) (domain.Release, error) {
+	unlock, err := m.lockRelease(ctx, releaseID)
+	if err != nil {
+		return domain.Release{}, err
+	}
+	defer unlock()
 	release, err := m.GetRelease(ctx, releaseID)
 	if err != nil {
 		return domain.Release{}, err

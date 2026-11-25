@@ -26,6 +26,11 @@ func (m *manager) ExecuteReleaseCleanup(ctx context.Context, plan ReleaseCleanup
 	if !plan.fingerprintAuthentic() {
 		return result, fmt.Errorf("%w: approved plan fingerprint mismatch", ErrReleaseCleanupBlocked)
 	}
+	unlock, err := m.lockRelease(ctx, plan.preview.ReleaseID)
+	if err != nil {
+		return result, err
+	}
+	defer unlock()
 	fresh, err := m.PlanReleaseCleanup(ctx, plan.preview.ReleaseID, plan.preview.Selection)
 	if err != nil {
 		return result, err

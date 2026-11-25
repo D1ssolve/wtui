@@ -191,6 +191,11 @@ func (m *manager) advanceByKey(ctx context.Context, releaseID, key string, run *
 }
 
 func (m *manager) advanceRelease(ctx context.Context, releaseID string, match func(gitflow.Event) bool, event string, run *releaseRun) (domain.Release, *gitflow.Event, error) {
+	unlock, err := m.lockRelease(ctx, releaseID)
+	if err != nil {
+		return domain.Release{}, nil, err
+	}
+	defer unlock()
 	release, err := m.GetRelease(ctx, releaseID)
 	if err != nil {
 		return domain.Release{}, nil, err

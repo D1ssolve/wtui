@@ -57,16 +57,33 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 
 	release.Tag = sharedTagOrEmpty(release.Services)
 
+	if err := m.ensureReleasesRoot(); err != nil {
+		return domain.Release{}, err
+	}
 	baseReleaseID := release.ID
 	for suffix := 1; ; suffix++ {
 		if suffix > 1 {
 			release.ID = fmt.Sprintf("%s-%d", baseReleaseID, suffix)
 		}
-		if _, err := m.ensureReleaseDir(release.ID, false); errors.Is(err, ErrReleaseTargetExists) {
+		// Skip allocated IDs even if their owner is still preparing the release.
+		if _, err := os.Lstat(filepath.Join(m.releasesRootDir(), release.ID)); err == nil {
 			continue
-		} else if err != nil {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return domain.Release{}, err
 		}
+		unlock, err := m.lockRelease(ctx, release.ID)
+		if err != nil {
+			return domain.Release{}, err
+		}
+		// Exclusive creation under the lock rechecks absence before the first write.
+		if _, err := m.ensureReleaseDir(release.ID, false); err != nil {
+			unlock()
+			if errors.Is(err, ErrReleaseTargetExists) {
+				continue
+			}
+			return domain.Release{}, err
+		}
+		defer unlock()
 		break
 	}
 

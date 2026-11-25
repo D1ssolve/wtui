@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/D1ssolve/wtui/internal/fsutil"
 )
 
 const (
@@ -107,21 +109,8 @@ func writeConversionFile(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("conversion: create manifest directory: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".conversion-*")
-	if err != nil {
-		return fmt.Errorf("conversion: create manifest: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+	if err := fsutil.WriteFileAtomic(path, data, 0o600); err != nil {
 		return fmt.Errorf("conversion: write manifest: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("conversion: close manifest: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("conversion: replace manifest: %w", err)
 	}
 	return nil
 }

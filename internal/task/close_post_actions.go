@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/fsutil"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
@@ -183,23 +184,7 @@ func (m *manager) saveClosePostActionProof(taskID string, proof closePostActionP
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(m.taskDir(taskID), ".close-post-actions-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), m.closePostActionsProofPath(taskID))
+	return fsutil.WriteFileAtomic(m.closePostActionsProofPath(taskID), data, 0o600)
 }
 
 // proveClosePostAction durably records one completed close post-action for a
