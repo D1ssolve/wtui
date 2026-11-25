@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -37,11 +38,11 @@ func (m *manager) publishReleases(ctx context.Context, release *domain.Release, 
 	for _, p := range pending {
 		svc := &release.Services[p.index]
 		sendStatus(statusCh, fmt.Sprintf("[%s][publish] publishing %s on %s", svc.Name, p.params.Tag, p.params.Repo))
-		url, err := p.publisher.PublishRelease(ctx, p.params)
+		link, err := p.publisher.PublishRelease(ctx, p.params)
 		if err != nil {
 			return serviceFailure(svc, fmt.Errorf("publish release %s for service=%s: %w", p.params.Tag, svc.Name, err))
 		}
-		svc.ReleaseURL = url
+		svc.ReleaseURL = link
 		if err := m.persistCheckpoint(release, "publish_release", nil); err != nil {
 			return err
 		}
@@ -61,6 +62,10 @@ func (m *manager) preparePublish(ctx context.Context, releaseID string, svc doma
 	pushURL, err := m.verifiedRepoPushURL(ctx, svc.Name, svc.RepoPath)
 	if err != nil {
 		return pendingPublish{}, err
+	}
+	// Forge hosts are addressed without a port; an explicit one would silently become the default.
+	if u, err := url.Parse(pushURL); err == nil && strings.Contains(pushURL, "://") && u.Port() != "" {
+		return pendingPublish{}, fmt.Errorf("service=%s pushes to %s on a non-default port; publishing cannot address that forge without dropping the port, so it is refused", svc.Name, u.Host)
 	}
 	if got := forge.ExtractRepoPath(pushURL); got != repo {
 		return pendingPublish{}, fmt.Errorf("%w: service=%s pushes to %q, not the project %s", ErrReleaseRetryUnsafe, svc.Name, got, repo)
