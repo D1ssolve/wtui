@@ -188,19 +188,58 @@ func TestLoad_XDGConfigHome_UsedWhenSet(t *testing.T) {
 	}
 }
 
-func TestLoad_UnknownYAMLKeys_NoError(t *testing.T) {
-	path := writeTempConfig(t, `
-log_level: DEBUG
-completely_unknown_field: some_value
-another_unknown: 42
-`)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("unknown YAML keys caused error: %v", err)
+func TestLoad_UnknownKeys_ReturnLinePathAndSuggestion(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{"top level typo", "log_level: DEBUG\nrelase: {}\n", []string{"line 2", `"relase"`, `did you mean "release"?`}},
+		{"nested typo", "tag: {formt: x}\n", []string{"line 1", `"tag.formt"`, `did you mean "format"?`}},
+		{"no close match", "release:\n  keep_promote_key: true\n", []string{"line 2", `"release.keep_promote_key"`, "delete it"}},
+		{"map value", "workflow:\n  task_types:\n    feature:\n      prefixs: [x/]\n", []string{"line 4", `"workflow.task_types.feature.prefixs"`, `did you mean "prefixes"?`}},
+		{"custom decoder", "workflow:\n  release:\n    machine:\n      states:\n        done: {nxt: x}\n", []string{"workflow.release.machine", "states.done", `"nxt"`}},
 	}
-	if cfg.LogLevel != "DEBUG" {
-		t.Errorf("LogLevel: got %q, want DEBUG", cfg.LogLevel)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeTempConfig(t, tt.src))
+			if err == nil {
+				t.Fatal("Load() error = nil, want unknown key error")
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Load() error = %q, want it to contain %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestLoad_RemovedKeyHint_TakesPrecedenceOverUnknownKey(t *testing.T) {
+	_, err := Load(writeTempConfig(t, "relase: {}\ngit_flow:\n  preset: git-flow\n"))
+	if err == nil || !strings.Contains(err.Error(), "git_flow is no longer supported") {
+		t.Fatalf("Load() error = %v, want the git_flow migration hint", err)
+	}
+}
+
+func TestLoad_EmptyOrCommentOnly_UsesDefaults(t *testing.T) {
+	for name, src := range map[string]string{"empty": "", "comments only": "# nothing here\n# yet\n"} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, src))
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			mustEffective(t, cfg)
+			if cfg.Concurrency != 4 || cfg.Tag.Format != "v{{.Version}}" {
+				t.Fatalf("cfg = %+v, want defaults", cfg)
+			}
+		})
+	}
+}
+
+func TestLoad_DuplicateKey_ReturnsError(t *testing.T) {
+	if _, err := Load(writeTempConfig(t, "editor: vim\neditor: zed\n")); err == nil {
+		t.Fatal("Load() error = nil, want duplicate key error")
 	}
 }
 
@@ -364,7 +403,6 @@ func TestEffective_DiscoveryDepth(t *testing.T) {
 		label string
 	}{
 		{0, 4, "zero → default 4"},
-		{1, 2, "1 → clamped to 2"},
 		{2, 2, "2 → minimum 2"},
 		{5, 5, "5 → unchanged"},
 		{10, 10, "10 → unchanged"},
@@ -392,14 +430,10 @@ func TestEffective_OutputPanelLines(t *testing.T) {
 		label string
 	}{
 		{0, 12, "zero → default 12"},
-		{1, 3, "1 → clamped to 3"},
-		{2, 3, "2 → clamped to 3"},
 		{3, 3, "3 → minimum"},
 		{6, 6, "6 → unchanged"},
 		{20, 20, "20 → unchanged"},
 		{40, 40, "40 → maximum"},
-		{41, 40, "41 → clamped to 40"},
-		{100, 40, "100 → clamped to 40"},
 	}
 
 	for _, tc := range cases {
@@ -421,7 +455,6 @@ func TestEffective_Concurrency(t *testing.T) {
 	}{
 		{name: "zero defaults to four", input: 0, want: 4},
 		{name: "positive preserved", input: 7, want: 7},
-		{name: "negative defaults to four", input: -3, want: 4},
 	}
 
 	for _, tc := range cases {
@@ -430,6 +463,28 @@ func TestEffective_Concurrency(t *testing.T) {
 			mustEffective(t, cfg)
 			if cfg.Concurrency != tc.want {
 				t.Fatalf("Concurrency(%d): got %d, want %d", tc.input, cfg.Concurrency, tc.want)
+			}
+		})
+	}
+}
+
+func TestEffective_InvalidNumbers_ReturnError(t *testing.T) {
+	tests := []struct {
+		key string
+		cfg *Config
+	}{
+		{"concurrency", &Config{Concurrency: -1}},
+		{"validation.concurrency", &Config{Validation: &ValidationConfig{Concurrency: -2}}},
+		{"prune.concurrency", &Config{Prune: &PruneConfig{Concurrency: -3}}},
+		{"discovery_depth", &Config{DiscoveryDepth: 1}},
+		{"discovery_depth", &Config{DiscoveryDepth: -4}},
+		{"output_panel_lines", &Config{OutputPanelLines: 2}},
+		{"output_panel_lines", &Config{OutputPanelLines: 99}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			if _, err := tt.cfg.Effective(); err == nil || !strings.Contains(err.Error(), tt.key) {
+				t.Fatalf("Effective() error = %v, want an error naming %s", err, tt.key)
 			}
 		})
 	}
@@ -613,24 +668,6 @@ func TestEffective_ReleaseDefaults(t *testing.T) {
 	}
 	if cfg.Release.RequireCleanBeforeMerge == nil || !*cfg.Release.RequireCleanBeforeMerge {
 		t.Errorf("Release.RequireCleanBeforeMerge default: got %v, want true", cfg.Release.RequireCleanBeforeMerge)
-	}
-}
-
-func TestLoad_ReleaseKeepPromoteKey_IgnoredAsUnknown(t *testing.T) {
-	path := writeTempConfig(t, `
-release:
-  keep_promote_key: true
-`)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load returned error: %v", err)
-	}
-
-	mustEffective(t, cfg)
-
-	if cfg.Release == nil {
-		t.Fatal("Release defaults missing")
 	}
 }
 

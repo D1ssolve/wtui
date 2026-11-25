@@ -1,10 +1,14 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -117,9 +121,19 @@ func Load(flagPath string) (*Config, error) {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
 
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	if err := checkKeys(&doc, reflect.TypeFor[Config](), ""); err != nil {
+		return nil, fmt.Errorf("config: %s: %w", path, err)
+	}
+
 	// Pre-filled blocks keep their defaults for fields a partial YAML block omits.
 	cfg.Tag, cfg.Validation, cfg.Close, cfg.Prune = defaultTag(), defaultValidation(), defaultClose(), defaultPrune()
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 
@@ -193,6 +207,9 @@ func (c *Config) Effective() (*Config, error) {
 		c.Editor = v
 	}
 
+	if err := c.checkNumbers(); err != nil {
+		return nil, err
+	}
 	c.effectivePaths()
 	if c.Workflow == nil {
 		c.Workflow = &WorkflowConfig{Extends: "git-flow"}
@@ -215,6 +232,30 @@ func (c *Config) Effective() (*Config, error) {
 	}
 
 	return c, nil
+}
+
+// Zero means "use the default"; any other out-of-range value is a mistake worth stopping for.
+func (c *Config) checkNumbers() error {
+	if c.Concurrency < 0 {
+		return negativeError("concurrency", c.Concurrency)
+	}
+	if c.Validation != nil && c.Validation.Concurrency < 0 {
+		return negativeError("validation.concurrency", c.Validation.Concurrency)
+	}
+	if c.Prune != nil && c.Prune.Concurrency < 0 {
+		return negativeError("prune.concurrency", c.Prune.Concurrency)
+	}
+	if c.DiscoveryDepth != 0 && c.DiscoveryDepth < 2 {
+		return fmt.Errorf("config: discovery_depth must be at least 2, got %d; omit it to use the default of 4", c.DiscoveryDepth)
+	}
+	if c.OutputPanelLines != 0 && (c.OutputPanelLines < 3 || c.OutputPanelLines > 40) {
+		return fmt.Errorf("config: output_panel_lines must be between 3 and 40, got %d; omit it to use the default of 12", c.OutputPanelLines)
+	}
+	return nil
+}
+
+func negativeError(key string, value int) error {
+	return fmt.Errorf("config: %s must be a positive number, got %d; omit it to use the default", key, value)
 }
 
 func (c *Config) effectiveWorktree() error {
@@ -312,27 +353,16 @@ func (c *Config) effectivePaths() {
 		c.Editor = "code"
 	}
 
-	// Top-level concurrency accepts missing/zero/negative input and falls back
-	// to safe default until strict config validation is introduced.
-	if c.Concurrency <= 0 {
+	if c.Concurrency == 0 {
 		c.Concurrency = 4
 	}
 
 	if c.DiscoveryDepth == 0 {
 		c.DiscoveryDepth = 4
 	}
-	if c.DiscoveryDepth < 2 {
-		c.DiscoveryDepth = 2
-	}
 
 	if c.OutputPanelLines == 0 {
 		c.OutputPanelLines = 12
-	}
-	if c.OutputPanelLines < 3 {
-		c.OutputPanelLines = 3
-	}
-	if c.OutputPanelLines > 40 {
-		c.OutputPanelLines = 40
 	}
 
 	if c.LogLevel == "" {
@@ -397,7 +427,7 @@ func (c *Config) effectiveValidation() {
 	if c.Validation.CommandTimeout == "" {
 		c.Validation.CommandTimeout = "10s"
 	}
-	if c.Validation.Concurrency <= 0 {
+	if c.Validation.Concurrency == 0 {
 		c.Validation.Concurrency = 8
 	}
 
@@ -415,7 +445,7 @@ func (c *Config) effectivePrune() {
 		return
 	}
 
-	if c.Prune.Concurrency <= 0 {
+	if c.Prune.Concurrency == 0 {
 		c.Prune.Concurrency = 4
 	}
 }
