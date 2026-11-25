@@ -792,7 +792,7 @@ func TestScanCleanupCandidatesCmdPlansTenTasksConcurrently(t *testing.T) {
 func TestListTagsCmdReturnsTagListMsg(t *testing.T) {
 	mgr := &cmdManager{tagResult: []domain.TagInfo{{Name: "v1.2.3"}}}
 
-	msg := listTagsCmd(mgr, "T14", 7)()
+	msg := listTagsCmd(t.Context(), mgr, "T14", 7)()
 	got, ok := msg.(TagListMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want TagListMsg", msg)

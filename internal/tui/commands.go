@@ -440,9 +440,9 @@ func scanCleanupCandidatesCmd(mgr task.Manager, generation uint64) tea.Cmd {
 	}
 }
 
-func listTagsCmd(mgr task.Manager, taskID string, generation uint64) tea.Cmd {
+func listTagsCmd(parent context.Context, mgr task.Manager, taskID string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(logutil.WithTaskID(context.Background(), taskID), 30*time.Second)
+		ctx, cancel := context.WithTimeout(logutil.WithTaskID(parent, taskID), 30*time.Second)
 		defer cancel()
 
 		tags, err := mgr.ListTags(ctx, taskID)
@@ -857,6 +857,7 @@ func explainFailureCmd(assistant ai.Assistant, subject string, request ai.Failur
 type TaskAdvanceDoneMsg struct {
 	Generation uint64
 	TaskID     string
+	Outcome    string
 	Err        error
 }
 
@@ -868,7 +869,17 @@ func advanceTaskCmd(parent context.Context, mgr task.Manager, taskID, event stri
 		defer cancel()
 		err := mgr.AdvanceTask(ctx, taskID, event, statusCh)
 		close(statusCh)
-		doneCh <- TaskAdvanceDoneMsg{Generation: generation, TaskID: taskID, Err: err}
+		done := TaskAdvanceDoneMsg{Generation: generation, TaskID: taskID, Err: err}
+		if err == nil {
+			readCtx, stopRead := context.WithTimeout(context.WithoutCancel(parent), 30*time.Second)
+			workflow, readErr := mgr.TaskWorkflow(readCtx, taskID)
+			stopRead()
+			done.Outcome = workflow.Outcome
+			if readErr != nil {
+				done.Err = fmt.Errorf("operation returned successfully; could not confirm its saved workflow: %w", readErr)
+			}
+		}
+		doneCh <- done
 		close(doneCh)
 	}()
 	return readStatusOrDone(statusCh, doneCh)

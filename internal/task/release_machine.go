@@ -299,6 +299,11 @@ func (m *manager) runReleaseMachine(ctx context.Context, release domain.Release,
 			if st.Wait != gitflow.WaitManual {
 				holds, err := m.releaseWaitHolds(ctx, release, st)
 				if err != nil {
+					if workflowInterrupted(err) {
+						// The transition was already persisted, but the wait check did not finish.
+						stored, saveErr := m.writeReleaseManifest(release)
+						return stored, errors.Join(err, saveErr)
+					}
 					sendStatus(run.statusCh, fmt.Sprintf("[release][%s] %v", st.ID, err))
 				} else if holds {
 					if err := m.enterReleaseState(&release, st.Next, st.Wait); err != nil {
@@ -313,6 +318,9 @@ func (m *manager) runReleaseMachine(ctx context.Context, release domain.Release,
 			err := m.runReleaseState(ctx, &release, st, run)
 			run.retry = false
 			if err != nil {
+				if workflowInterrupted(err) {
+					return m.saveReleaseInterruption(release, err)
+				}
 				var svcErr *releaseServiceError
 				var svc *domain.ReleaseService
 				if errors.As(err, &svcErr) {
@@ -603,7 +611,6 @@ func (m *manager) runReleaseHook(ctx context.Context, release *domain.Release, s
 		hookCtx, cancel := context.WithTimeout(ctx, timeout)
 		cmd := shell.Command(hookCtx, step.Command)
 		cmd.Dir = dir
-		cmd.WaitDelay = 5 * time.Second // a child holding stdout open must not outlive the timeout
 		cmd.Env = append(os.Environ(),
 			"WTUI_RELEASE_ID="+release.ID,
 			"WTUI_STATE="+stateID,
@@ -613,7 +620,7 @@ func (m *manager) runReleaseHook(ctx context.Context, release *domain.Release, s
 			"WTUI_TAG="+svc.Tag,
 			"WTUI_RELEASE_BRANCH="+svc.ReleaseBranch,
 		)
-		out, runErr := cmd.CombinedOutput()
+		out, runErr := shell.HookOutput(hookCtx, cmd)
 		cancel()
 		lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
 		if len(lines) > hookOutputLines {
@@ -625,7 +632,7 @@ func (m *manager) runReleaseHook(ctx context.Context, release *domain.Release, s
 			}
 		}
 		if runErr != nil {
-			if hookCtx.Err() == context.DeadlineExceeded {
+			if errors.Is(runErr, context.DeadlineExceeded) && ctx.Err() == nil {
 				runErr = fmt.Errorf("timed out after %s", timeout)
 			}
 			return serviceFailure(svc, fmt.Errorf("hook %s failed for %s: %w", step.Name, svc.Name, runErr))

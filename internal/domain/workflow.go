@@ -31,10 +31,11 @@ type ServiceWorkflow struct {
 
 // WorkflowEvent is a key the user can press in the current workflow state.
 type WorkflowEvent struct {
-	Name   string
-	Key    string
-	Label  string
-	Action string
+	Name        string
+	Key         string
+	Label       string
+	Action      string
+	Cancellable bool
 }
 
 type WorkflowSummary struct {
@@ -46,4 +47,5 @@ type WorkflowSummary struct {
 	Current    WorkflowPhase
 	NextAction string
 	Blocker    string
+	Outcome    string
 }

@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"os/exec"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/gitflow"
@@ -34,10 +33,19 @@ func (m *Model) startOperation(label string, cancellable bool) context.Context {
 
 func (m *Model) handleOperationCancelKey(msg tea.KeyMsg) bool {
 	op := &m.operationCancellation
-	if !m.opRunning || op.cancel == nil || op.generation != m.operationGeneration || op.requested {
+	if !m.opRunning {
 		return false
 	}
 	escape := key.Matches(msg, m.keymap.Escape)
+	if op.cancel == nil || op.generation != m.operationGeneration {
+		if escape {
+			m.outputPanel.AppendLine("This operation cannot be interrupted safely. Wait for it to finish.")
+		}
+		return escape
+	}
+	if op.requested {
+		return escape
+	}
 	if !op.confirm {
 		op.confirm = escape
 		return escape
@@ -64,13 +72,7 @@ func (m *Model) finishOperationCancellation(err error) (requested, cancelled boo
 	}
 	m.operationCancellation = operationCancellation{}
 	op.cancel()
-	if !op.requested || err == nil {
-		return op.requested, false
-	}
-	// The workflow hook runner can return the killed child instead of ctx.Err().
-	var exitErr *exec.ExitError
-	interrupted := errors.As(err, &exitErr) && exitErr.ExitCode() == -1
-	return true, errors.Is(err, context.Canceled) || interrupted
+	return op.requested, op.requested && errors.Is(err, context.Canceled)
 }
 
 func (m Model) operationCancelHint() string {
@@ -102,71 +104,15 @@ func (m Model) releaseCancellationSafe(release domain.Release, event *string) bo
 	}
 	if event == nil {
 		// Unprepared releases can take a different retry path through integration.
-		return release.PreparedAt != nil && state.Kind == gitflow.StateRun && hookPath(machine, state.ID)
+		return release.PreparedAt != nil && state.Kind == gitflow.StateRun && machine.CancellablePath(state.ID)
 	}
 	if state.Kind != gitflow.StateWait {
 		return false
 	}
 	for _, candidate := range state.Events {
 		if candidate.Name == *event {
-			return candidate.Action == "" && hookPath(machine, candidate.To)
+			return candidate.Action == "" && machine.CancellablePath(candidate.To)
 		}
 	}
-	return *event == "" && state.Wait != gitflow.WaitManual && hookPath(machine, state.Next)
-}
-
-// Only hooks and wait checks are interruptible. Never interrupt built-in Git
-// mutations (notably a push), review merges, or pipeline triggers; an external
-// write can succeed even if the local command does not receive its response.
-func hookPath(machine *gitflow.Machine, start string) bool {
-	seen := make(map[string]bool)
-	queue := []string{start}
-	for len(queue) > 0 {
-		id := queue[len(queue)-1]
-		queue = queue[:len(queue)-1]
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		state, ok := machine.State(id)
-		if !ok {
-			return false
-		}
-		switch state.Kind {
-		case gitflow.StateRun:
-			for _, step := range state.Run {
-				if step.Kind != gitflow.StepHook {
-					return false
-				}
-			}
-			queue = append(queue, state.Next, state.OnError)
-		case gitflow.StateWait:
-			if state.Wait != gitflow.WaitManual {
-				queue = append(queue, state.Next)
-			}
-		case gitflow.StateFinal:
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-func (m Model) taskCancellationSafe() bool {
-	if m.flow == nil {
-		return false
-	}
-	found := false
-	for _, rule := range m.flow.BranchTypes {
-		if rule.Machine == nil {
-			continue
-		}
-		found = true
-		for _, step := range rule.Machine.Steps() {
-			if step.Kind != gitflow.StepHook {
-				return false
-			}
-		}
-	}
-	return found
+	return *event == "" && state.Wait != gitflow.WaitManual && machine.CancellablePath(state.Next)
 }

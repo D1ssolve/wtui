@@ -20,12 +20,13 @@ import (
 const taskFlowFileName = ".wtui-task-flow.json"
 
 type taskFlowState struct {
-	Type        string                     `json:"type"`
-	Fingerprint string                     `json:"fingerprint"`
-	State       string                     `json:"state"`
-	History     []domain.ReleaseTransition `json:"history,omitempty"`
-	HooksDone   []string                   `json:"hooks_done,omitempty"`
-	Error       string                     `json:"error,omitempty"`
+	Type                string                     `json:"type"`
+	Fingerprint         string                     `json:"fingerprint"`
+	State               string                     `json:"state"`
+	History             []domain.ReleaseTransition `json:"history,omitempty"`
+	HooksDone           []string                   `json:"hooks_done,omitempty"`
+	Error               string                     `json:"error,omitempty"`
+	HookStopUnconfirmed bool                       `json:"hook_stop_unconfirmed,omitempty"`
 }
 
 type taskFlow struct {
@@ -163,6 +164,9 @@ func (m *manager) AdvanceTask(ctx context.Context, taskID, event string, statusC
 	st := tf.current()
 	if st == nil || st.Kind != gitflow.StateWait {
 		if st != nil && st.Kind == gitflow.StateRun {
+			if tf.state.HookStopUnconfirmed {
+				return fmt.Errorf("%w: hook shutdown was not confirmed; inspect remaining processes before recovery", ErrTaskFlowStep)
+			}
 			return m.runTaskMachine(ctx, tf, statusCh) // retry of a failed run state
 		}
 		return fmt.Errorf("%w: task %s is in state %s; nothing waits for input", ErrTaskFlowStep, taskID, tf.state.State)
@@ -210,6 +214,9 @@ func (m *manager) runTaskMachine(ctx context.Context, tf *taskFlow, statusCh cha
 			}
 			holds, err := m.taskWaitHolds(ctx, tf, st)
 			if err != nil {
+				if workflowInterrupted(err) {
+					return err
+				}
 				sendStatus(statusCh, fmt.Sprintf("[%s][%s] %v", tf.taskID, st.ID, err))
 			}
 			if err != nil || !holds {
@@ -221,6 +228,9 @@ func (m *manager) runTaskMachine(ctx context.Context, tf *taskFlow, statusCh cha
 		case gitflow.StateRun:
 			if err := m.runTaskState(ctx, tf, st, statusCh); err != nil {
 				tf.state.Error = err.Error()
+				if workflowInterrupted(err) {
+					return m.saveTaskInterruption(tf, err)
+				}
 				if st.OnError != "" {
 					sendStatus(statusCh, fmt.Sprintf("[%s][%s] %v; continuing with %s", tf.taskID, st.ID, err, st.OnError))
 					if err := m.enterTaskState(tf, st.OnError, "error"); err != nil {
@@ -231,7 +241,7 @@ func (m *manager) runTaskMachine(ctx context.Context, tf *taskFlow, statusCh cha
 				if saveErr := m.saveTaskFlow(tf); saveErr != nil {
 					return errors.Join(err, saveErr)
 				}
-				return fmt.Errorf("%w: state %s failed (press F to retry): %v", ErrTaskFlowStep, st.ID, err)
+				return fmt.Errorf("%w: state %s failed (press F to retry): %w", ErrTaskFlowStep, st.ID, err)
 			}
 			tf.state.Error = ""
 			if err := m.enterTaskState(tf, st.Next, ""); err != nil {
@@ -284,7 +294,6 @@ func (m *manager) runTaskHook(ctx context.Context, tf *taskFlow, stateID string,
 	defer cancel()
 	cmd := shell.Command(hookCtx, step.Command)
 	cmd.Dir = svc.WorktreePath
-	cmd.WaitDelay = 5 * time.Second
 	cmd.Env = append(os.Environ(),
 		"WTUI_TASK_ID="+tf.taskID,
 		"WTUI_STATE="+stateID,
@@ -293,14 +302,14 @@ func (m *manager) runTaskHook(ctx context.Context, tf *taskFlow, stateID string,
 		"WTUI_REPO="+svc.RepoPath,
 		"WTUI_WORKTREE="+svc.WorktreePath,
 	)
-	out, runErr := cmd.CombinedOutput()
+	out, runErr := shell.HookOutput(hookCtx, cmd)
 	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
 	for _, line := range lines[max(0, len(lines)-hookOutputLines):] {
 		if line != "" {
 			sendStatus(statusCh, fmt.Sprintf("[%s][hook %s] %s", svc.Name, step.Name, line))
 		}
 	}
-	if runErr != nil && hookCtx.Err() == context.DeadlineExceeded {
+	if errors.Is(runErr, context.DeadlineExceeded) && ctx.Err() == nil {
 		return fmt.Errorf("hook %s timed out after %s", step.Name, timeout)
 	}
 	if runErr != nil {
@@ -395,18 +404,28 @@ func (m *manager) taskMachineWorkflow(tf *taskFlow) domain.WorkflowSummary {
 	if st != nil && st.Kind == gitflow.StateWait {
 		hasF := false
 		for _, ev := range st.Events {
-			summary.Events = append(summary.Events, domain.WorkflowEvent{Name: ev.Name, Key: ev.Key, Label: ev.Label, Action: ev.Action})
+			summary.Events = append(summary.Events, domain.WorkflowEvent{
+				Name: ev.Name, Key: ev.Key, Label: ev.Label, Action: ev.Action,
+				Cancellable: ev.Action == "" && tf.machine.CancellablePath(ev.To),
+			})
 			hasF = hasF || ev.Key == "F"
 		}
 		if st.Wait != gitflow.WaitManual && !hasF {
-			summary.Events = append(summary.Events, domain.WorkflowEvent{Key: "F", Label: "re-check " + strings.ReplaceAll(st.Wait, "_", " ")})
+			summary.Events = append(summary.Events, domain.WorkflowEvent{Key: "F", Label: "re-check " + strings.ReplaceAll(st.Wait, "_", " "), Cancellable: tf.machine.CancellablePath(st.Next)})
 		}
 	}
-	if st != nil && st.Kind == gitflow.StateRun {
-		summary.Events = []domain.WorkflowEvent{{Key: "F", Label: "retry " + st.Label}}
+	if st != nil && st.Kind == gitflow.StateRun && !tf.state.HookStopUnconfirmed {
+		summary.Events = []domain.WorkflowEvent{{Key: "F", Label: "retry " + st.Label, Cancellable: tf.machine.CancellablePath(st.ID)}}
 	}
-	done := st != nil && st.Kind == gitflow.StateFinal
-	result := workflowSummaryWithServices(summary.Steps, summary.Current, summary.NextAction, summary.Blocker, done, tf.state.Error != "", nil)
+	if tf.state.HookStopUnconfirmed {
+		summary.NextAction = "Inspect remaining hook processes before recovery"
+	}
+	final := st != nil && st.Kind == gitflow.StateFinal
+	result := workflowSummaryWithServices(summary.Steps, summary.Current, summary.NextAction, summary.Blocker,
+		final && st.Outcome == gitflow.OutcomeReleased, tf.state.Error != "" || final && st.Outcome == gitflow.OutcomeRejected, nil)
+	if final {
+		result.Outcome = st.Outcome
+	}
 	result.Events, result.Gated = summary.Events, true
 	return result
 }

@@ -505,13 +505,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.opRunning = false
 		requested, cancelled := m.finishOperationCancellation(msg.Err)
+		var saved *task.TaskWorkflowCancelled
 		switch {
+		case cancelled && errors.As(msg.Err, &saved):
+			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow cancelled in state " + saved.State + "; press F to retry.")
 		case cancelled:
-			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow cancelled. Check the workflow panel for its current state.")
+			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow cancelled: " + msg.Err.Error() + ". Check its current state.")
 		case requested && msg.Err != nil:
 			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow after cancellation request: " + msg.Err.Error())
 		case msg.Err != nil:
 			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow: " + msg.Err.Error())
+		case msg.Outcome == gitflow.OutcomeRejected:
+			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow rejected.")
 		default:
 			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow updated.")
 		}
@@ -688,10 +693,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(validateTaskCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
 
 	case panels.OpenTagBrowserMsg:
-		m.opRunning = true
-		m.operationGeneration++
+		ctx := m.startOperation("tag inspection for task "+msg.TaskID, true)
 		m.outputPanel.AppendLine("Loading tags for task " + msg.TaskID + "...")
-		return m, tea.Batch(listTagsCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
+		return m, tea.Batch(listTagsCmd(ctx, m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
 
 	case panels.OpenForgeMenuMsg:
 		provider := msg.Provider
@@ -1722,12 +1726,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if release.Status == domain.ReleaseStatusFailed && release.Error != nil && release.Error.Recoverable {
 					line += "; press ctrl+r to retry"
 				}
+			} else {
+				line += ": " + msg.Err.Error() + "; refresh to check the saved state"
 			}
 			m.outputPanel.AppendLine(line + ".")
 		case requested && msg.Err != nil:
 			m.outputPanel.AppendLine("Release operation after cancellation request: " + msg.Err.Error())
 		case msg.Err != nil:
 			m.outputPanel.AppendLine(strings.ToUpper(msg.Action[:1]) + msg.Action[1:] + " release failed: " + msg.Err.Error())
+		case msg.Release.Status == domain.ReleaseStatusRejected:
+			m.outputPanel.AppendLine("Release " + msg.Release.ID + " rejected (state " + msg.Release.State + ").")
 		default:
 			m.outputPanel.AppendLine(strings.ToUpper(msg.Action[:1]) + msg.Action[1:] + " release done: " + msg.Release.ID)
 		}
@@ -2002,6 +2010,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.opRunning = false
+		if _, cancelled := m.finishOperationCancellation(msg.Err); cancelled {
+			m.outputPanel.AppendLine("Tag inspection cancelled for task " + msg.TaskID + ".")
+			return m, nil
+		}
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("List tags failed: " + msg.Err.Error())
 			return m, nil
@@ -2583,7 +2595,7 @@ func (m Model) fireTaskEvent(key string) (Model, tea.Cmd) {
 		if ev.Key != key || selected == nil {
 			continue
 		}
-		ctx := m.startOperation("task "+selected.ID+" workflow", m.taskCancellationSafe())
+		ctx := m.startOperation("task "+selected.ID+" workflow", ev.Cancellable)
 		label := ev.Name
 		if label == "" {
 			label = ev.Label
