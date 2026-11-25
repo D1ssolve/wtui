@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -256,6 +258,37 @@ func TestInit_ExistingFile(t *testing.T) {
 	}
 	if raw, _ := loadWritten(t, env.target); raw.Workflow.Extends != "github-flow" {
 		t.Fatalf("workflow = %+v", raw.Workflow)
+	}
+}
+
+func TestInit_NextStepsQuoteConfigPathForSh(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the printed command is POSIX sh on Unix")
+	}
+	t.Setenv("F4_ENV", "expanded")
+	for _, name := range []string{"plain.yaml", "with space.yaml", "c$F4_ENV.yaml", "it's.yaml", `dq"q.yaml`, "back`echo x`tick.yaml", `back\slash.yaml`} {
+		t.Run(name, func(t *testing.T) {
+			env := newInitEnv(t)
+			target := filepath.Join(env.root, name)
+			code, out, errOut := runInit(cliArgs{yes: true, config: target, root: env.root}, "", noDraft)
+			if code != 0 {
+				t.Fatalf("code %d, stderr %q", code, errOut)
+			}
+			var line string
+			for _, l := range strings.Split(out, "\n") {
+				if cmd, ok := strings.CutSuffix(strings.TrimSpace(l), "start wtui"); ok {
+					line = strings.TrimSpace(cmd)
+				}
+			}
+			// wtui is shadowed by a function that echoes its arguments one per line.
+			got, err := exec.Command("/bin/sh", "-c", `wtui() { printf '%s\n' "$@"; }; `+line).Output()
+			if err != nil {
+				t.Fatalf("%q: %v", line, err)
+			}
+			if want := "--config\n" + target + "\n"; string(got) != want {
+				t.Fatalf("%q ran as %q, want %q", line, got, want)
+			}
+		})
 	}
 }
 

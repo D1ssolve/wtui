@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -145,12 +146,25 @@ func initCommand(c cliArgs, stdin io.Reader, stdout, stderr io.Writer, draft dra
 
 	start := "wtui"
 	if c.config != "" {
-		start = fmt.Sprintf("wtui --config %q", target)
+		start = "wtui --config " + shellArg(target)
 	}
 	width := max(len(start+" flow"), len("wtui --help"))
 	fmt.Fprintf(stdout, "Wrote %s\nNext steps:\n  %-*s  start wtui\n  %-*s  see the workflow\n  %-*s  all commands\n",
 		target, width, start, width, start+" flow", width, "wtui --help")
 	return 0
+}
+
+// shellArg quotes s for the shell the printed command is meant for: POSIX sh on Unix (single quotes,
+// nothing expands), cmd.exe on Windows (double quotes; Windows paths cannot contain them).
+// PowerShell users on Windows must adapt the line.
+func shellArg(s string) string {
+	if runtime.GOOS == "windows" {
+		return `"` + s + `"`
+	}
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+:@%") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 type prompter struct {
