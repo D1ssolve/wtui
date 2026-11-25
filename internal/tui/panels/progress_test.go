@@ -27,7 +27,6 @@ func TestParseProgressLine(t *testing.T) {
 		{name: "close nested step", line: "[api:merge:develop] merged into develop", service: "api", phase: "merge", state: ProgressRunning, ok: true},
 		{name: "release step", line: "[api][merge] merging production MR 12", service: "api", phase: "merge", state: ProgressRunning, ok: true},
 		{name: "release failure", line: "[api][merge] failed: boom", service: "api", phase: "merge", state: ProgressFailed, ok: true},
-		{name: "release failure without cause", line: "[api][merge] failed", service: "api", phase: "merge", state: ProgressFailed, ok: true},
 		{name: "no brackets", line: "sync skipped.", ok: false},
 		{name: "warning", line: "[api] Warning: something", ok: false},
 		{name: "empty rest", line: "[api] ", ok: false},

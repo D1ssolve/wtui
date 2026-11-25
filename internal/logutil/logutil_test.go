@@ -1,54 +1,12 @@
 package logutil
 
 import (
-	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-const canary = "CANARY-6f1d"
-
-func TestRedact_URLUserinfo(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"fatal: Authentication failed for 'https://alice:" + canary + "@example.invalid/repo'", "fatal: Authentication failed for 'https://***@example.invalid/repo'"},
-		{"clone https://" + canary + "@github.example/org/repo.git failed", "clone https://***@github.example/org/repo.git failed"},
-		{"push ssh://git:p@ss" + canary + "@host.invalid:22/r", "push ssh://***@host.invalid:22/r"},
-		{"git@github.com:org/repo.git and https://example.invalid/a@b", "git@github.com:org/repo.git and https://example.invalid/a@b"},
-		{"no url here", "no url here"},
-		{"failed for <https://alice:O'" + canary + "@example.invalid/repo>", "failed for <https://***@example.invalid/repo>"},
-		{"failed for 'https://alice:O'" + canary + "@example.invalid/repo'", "failed for 'https://***@example.invalid/repo'"},
-		{"see https://example.invalid/a?q=x@y#z", "see https://example.invalid/a?q=x@y#z"},
-	}
-	for _, tc := range cases {
-		if got := Redact(tc.in); got != tc.want {
-			t.Errorf("Redact(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
-func TestInitLogger_RedactsURLCredentialsInEveryField(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	logger, err := InitLogger("redact", slog.LevelDebug)
-	if err != nil {
-		t.Fatal(err)
-	}
-	url := "https://alice:O'" + canary + "@example.invalid/repo"
-	logger.With("remote", url).WithGroup("op").Error("push "+url+" failed",
-		"err", errors.New("fatal: Authentication failed for '"+url+"'"),
-		"argv", []string{"git", "push", url},
-	)
-	data, err := os.ReadFile(filepath.Join(XDGStateDir("redact"), "redact.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(data)
-	if strings.Contains(text, canary) || strings.Count(text, "https://***@example.invalid/repo") != 4 {
-		t.Fatalf("log must keep host and drop credentials in message, attrs, errors and slices:\n%s", text)
-	}
-}
 
 func TestParseLogLevel(t *testing.T) {
 	t.Parallel()

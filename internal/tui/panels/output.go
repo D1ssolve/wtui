@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/D1ssolve/wtui/internal/logutil"
 	uitheme "github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
@@ -40,7 +39,6 @@ func NewOutputPanel(width, height int) OutputPanel {
 }
 
 func (p *OutputPanel) AppendLine(line string) {
-	line = logutil.Redact(line)
 	now := time.Now
 	if p.now != nil {
 		now = p.now

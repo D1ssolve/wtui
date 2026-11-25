@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -512,9 +513,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow cancelled: " + msg.Err.Error() + ". Check its current state.")
 		case requested && msg.Err != nil:
 			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow after cancellation request: " + msg.Err.Error())
-			m.reportNext(msg.Err)
 		case msg.Err != nil:
-			m.reportFailure("Task "+msg.TaskID+" workflow", msg.Err)
+			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow: " + msg.Err.Error())
 		case msg.Outcome == gitflow.OutcomeRejected:
 			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow rejected.")
 		default:
@@ -528,7 +528,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ExplanationMsg:
 		m.explaining = false
 		if msg.Err != nil {
-			m.reportFailure("AI explanation", msg.Err)
+			m.outputPanel.AppendLine("AI explanation failed: " + msg.Err.Error())
 			return m, nil
 		}
 		if m.modal != nil {
@@ -1075,7 +1075,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.releaseTaskMerge = nil
 			m.pendingReleaseSubmit = nil
-			m.reportFailure("Plan task MR merges", msg.Err)
+			m.outputPanel.AppendLine("Plan task MR merges failed: " + msg.Err.Error())
 			return m, nil
 		}
 		plan := msg.Plan
@@ -1104,7 +1104,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Err != nil {
 			m.modal = nil
-			m.reportFailure("Plan adding tasks to release", msg.Err)
+			m.outputPanel.AppendLine("Plan adding tasks to release failed: " + msg.Err.Error())
 			return m, nil
 		}
 		dlg.SetPlan(msg.Plan)
@@ -1138,7 +1138,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = false
 		if msg.Err != nil {
 			m.releaseTaskMerge = nil
-			m.reportFailure("Plan task MR retry", msg.Err)
+			m.outputPanel.AppendLine("Plan task MR retry failed: " + msg.Err.Error())
 			return m, nil
 		}
 		retryPlan := msg.Plan
@@ -1452,7 +1452,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = nil
 		svc := m.servicesPanel.SelectedService()
 		if svc == nil || svc.Name != msg.ServiceName || m.servicesPanel.TaskID() != msg.TaskID {
-			m.reportFailure("Merge MR", fmt.Errorf("selected %w", task.ErrServiceNotFound))
+			m.outputPanel.AppendLine("Merge MR failed: selected service not found.")
 			return m, nil
 		}
 		m.opRunning = true
@@ -1464,7 +1464,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = nil
 		svc := m.servicesPanel.SelectedService()
 		if svc == nil || svc.Name != msg.ServiceName {
-			m.reportFailure("Pipeline status", fmt.Errorf("selected %w", task.ErrServiceNotFound))
+			m.outputPanel.AppendLine("Pipeline status failed: selected service not found.")
 			return m, nil
 		}
 		m.opRunning = true
@@ -1478,7 +1478,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = nil
 		svc := m.servicesPanel.SelectedService()
 		if svc == nil || svc.Name != msg.ServiceName {
-			m.reportFailure("List issues", fmt.Errorf("selected %w", task.ErrServiceNotFound))
+			m.outputPanel.AppendLine("List issues failed: selected service not found.")
 			return m, nil
 		}
 		m.opRunning = true
@@ -1520,7 +1520,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ReleasesLoadedMsg:
 		if msg.Err != nil {
-			m.reportFailure("Load releases", msg.Err)
+			m.outputPanel.AppendLine("Load releases failed: " + msg.Err.Error())
 			return m, nil
 		}
 		m.releasesPanel.SetReleases(msg.Releases)
@@ -1547,7 +1547,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = false
 		m.releaseCleanupRequest = nil
 		if msg.Err != nil {
-			m.reportFailure("Plan release cleanup", msg.Err)
+			m.outputPanel.AppendLine("Plan release cleanup failed: " + msg.Err.Error())
 			if m.cleanupQueueActive() {
 				return m.stopCleanupQueue("")
 			}
@@ -1591,7 +1591,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Blocker:    "Could not load task workflow; see OUTPUT for details",
 				NextAction: "check task configuration and repository access, then press r to retry",
 			})
-			m.reportFailure("Load task workflow", msg.Err, slog.String("task_id", msg.TaskID))
+			m.logger.Error("Load task workflow failed", slog.String("task_id", msg.TaskID), slog.String("err", msg.Err.Error()))
+			m.outputPanel.AppendLine("Load task workflow failed: " + msg.Err.Error())
 			m.recalculateDimensions()
 			return m, nil
 		}
@@ -1607,7 +1608,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mergeInspection = nil
 		m.opRunning = false
 		if msg.Err != nil {
-			m.reportFailure("Inspect task MRs", msg.Err)
+			m.outputPanel.AppendLine("Inspect task MRs failed: " + msg.Err.Error())
 			return m, nil
 		}
 		inspected := msg.Inspection.Services
@@ -1619,7 +1620,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if len(inspected) == 0 {
-				m.reportFailure("Inspect service MR", task.ErrServiceNotFound)
+				m.outputPanel.AppendLine("Inspect service MR failed: service not found.")
 				return m, nil
 			}
 		}
@@ -1648,7 +1649,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mergeInspection = nil
 		m.opRunning = false
 		if msg.Err != nil {
-			m.reportFailure("Inspect release MRs", msg.Err)
+			m.outputPanel.AppendLine("Inspect release MRs failed: " + msg.Err.Error())
 			return m, nil
 		}
 		services := make([]modal.MergeServiceStatus, len(msg.Inspection.Services))
@@ -1675,15 +1676,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch {
 		case msg.Err != nil:
-			m.reportFailure("Merge task MRs", msg.Err)
+			m.outputPanel.AppendLine("Merge task MRs failed: " + msg.Err.Error())
 		case len(msg.Result.Errs) > 0:
-			failures := make([]serviceFailure, 0, len(msg.Result.Errs))
 			for _, service := range slices.Sorted(maps.Keys(msg.Result.Errs)) {
-				m.outputPanel.AppendLine(service + ": " + failureCause(msg.Result.Errs[service]))
-				failures = append(failures, serviceFailure{name: service, err: msg.Result.Errs[service]})
+				m.outputPanel.AppendLine(service + ": " + msg.Result.Errs[service].Error())
 			}
 			m.outputPanel.AppendLine("Merge task MRs finished with errors.")
-			m.reportServiceNext(failures, "")
 		default:
 			m.outputPanel.AppendLine("Merge task MRs done.")
 		}
@@ -1695,24 +1693,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.opRunning = false
 		if msg.Err != nil {
-			m.reportFailure("Merge release MRs", msg.Err)
+			m.outputPanel.AppendLine("Merge release MRs failed: " + msg.Err.Error())
 		} else {
 			if failed := msg.Result.Failed; len(failed) > 0 {
 				m.outputPanel.AppendLine("Merge release MRs failed for: " + strings.Join(failed, ", "))
-				failures := make([]serviceFailure, 0, len(failed))
-				for _, name := range failed {
-					cause := msg.Result.Errs[name]
-					if cause == nil {
-						cause = errors.New("no cause reported")
-					}
-					m.outputPanel.AppendLine(name + ": " + failureCause(cause))
-					failures = append(failures, serviceFailure{name: name, err: cause})
-				}
-				retry := ""
-				if slices.ContainsFunc(m.mgr.ReleaseEvents(msg.Release), func(ev task.ReleaseEvent) bool { return ev.Action == gitflow.EventActionMergeReviews }) {
-					retry = "Fix the cause shown above, then press M on the release to merge again."
-				}
-				m.reportServiceNext(failures, retry)
 			}
 			if skipped := msg.Result.Skipped; len(skipped) > 0 {
 				m.outputPanel.AppendLine("Merge release MRs skipped: " + strings.Join(skipped, ", "))
@@ -1746,9 +1730,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outputPanel.AppendLine(line + ".")
 		case requested && msg.Err != nil:
 			m.outputPanel.AppendLine("Release operation after cancellation request: " + msg.Err.Error())
-			m.reportNext(msg.Err)
 		case msg.Err != nil:
-			m.reportFailure(strings.ToUpper(msg.Action[:1])+msg.Action[1:]+" release", msg.Err)
+			m.outputPanel.AppendLine(strings.ToUpper(msg.Action[:1]) + msg.Action[1:] + " release failed: " + msg.Err.Error())
 		case msg.Release.Status == domain.ReleaseStatusRejected:
 			m.outputPanel.AppendLine("Release " + msg.Release.ID + " rejected (state " + msg.Release.State + ").")
 		default:
@@ -1773,14 +1756,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modal = nil
 		}
 		if msg.Err != nil {
+			m.outputPanel.AppendLine("Release cleanup failed: " + msg.Err.Error())
 			if !m.releaseCleanupSelection.Force && !releaseCleanupHasRemoteSelection(m.releaseCleanupSelection) {
-				m.reportFailureNext("Release cleanup", msg.Err, forceCleanupNext)
 				m.failedReleaseCleanupID = msg.Result.ReleaseID
 				m.modal = modal.NewCleanupForceConfirmModal(msg.Result.ReleaseID, true, msg.Generation)
 				m.modal.SetTerminalSize(m.width, m.height)
 				return m, nil
 			}
-			m.reportFailure("Release cleanup", msg.Err)
 		} else {
 			m.failedReleaseCleanupID = ""
 			releaseID := msg.Result.ReleaseID
@@ -1806,7 +1788,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskCleanupRequest = nil
 		m.opRunning = false
 		if msg.Err != nil {
-			m.reportFailure("Plan task cleanup for "+msg.TaskID, msg.Err)
+			m.outputPanel.AppendLine("Plan task cleanup failed for " + msg.TaskID + ": " + msg.Err.Error())
 			if m.cleanupQueueActive() {
 				return m.stopCleanupQueue("")
 			}
@@ -1858,13 +1840,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modal = nil
 		}
 		if msg.Err != nil {
+			m.outputPanel.AppendLine("Task cleanup failed for " + msg.TaskID + ": " + msg.Err.Error())
 			if !m.taskCleanupForced && !m.taskCleanupRemoteSelected && m.failedTaskCleanupPlan != nil {
-				m.reportFailureNext("Task cleanup for "+msg.TaskID, msg.Err, forceCleanupNext)
 				m.modal = modal.NewCleanupForceConfirmModal(msg.TaskID, false, msg.Generation)
 				m.modal.SetTerminalSize(m.width, m.height)
 				return m, nil
 			}
-			m.reportFailure("Task cleanup for "+msg.TaskID, msg.Err)
 		} else {
 			m.failedTaskCleanupPlan = nil
 			m.taskCleanupForced = false
@@ -1888,7 +1869,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case CloneSourceServicesLoadedMsg:
 		if msg.Err != nil {
-			m.reportFailure("Load source task "+msg.SourceTaskID, msg.Err)
+			m.outputPanel.AppendLine("Error: could not load source task " + msg.SourceTaskID + ": " + msg.Err.Error())
 			return m, nil
 		}
 		if len(msg.Services) == 0 {
@@ -1900,7 +1881,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ReposLoadedMsg:
 		if msg.Err != nil {
-			m.reportFailure("Discover repositories", msg.Err)
+			m.logger.ErrorContext(context.Background(), "failed to discover repos",
+				slog.String("error", msg.Err.Error()))
+			m.outputPanel.AppendLine("Error: could not discover repos: " + msg.Err.Error())
 			m.refreshing = false
 			m.initDialogPending = false
 			m.addDialogPending = nil
@@ -1971,7 +1954,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.opRunning = false
 		if msg.Err != nil {
-			m.reportFailure("Plan close task", msg.Err)
+			m.outputPanel.AppendLine("Plan close task failed: " + msg.Err.Error())
 			return m, nil
 		}
 		closeTask := m.resolveCloseTask(msg.Plan.TaskID)
@@ -2004,11 +1987,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.finishOpProgress(msg.Err)
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Close task failed: " + msg.Err.Error())
+		}
 		closeTask := m.resolveCloseTask(msg.Result.TaskID)
 		m.modal = modal.NewCloseTaskSummaryModal(closeTask, msg.Result, m.width, m.height)
-		if msg.Err != nil {
-			m.reportFailure("Close task", msg.Err)
-		}
 		m.pendingCloseTask = nil
 		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())
 
@@ -2019,7 +2002,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cleanupScanning = false
 		m.opRunning = false
 		if msg.Err != nil {
-			m.reportFailure("Cleanup scan", msg.Err)
+			m.outputPanel.AppendLine("Cleanup scan failed: " + msg.Err.Error())
 			return m, nil
 		}
 		m.cleanupScanCandidates = append([]modal.CleanupCandidate(nil), msg.Candidates...)
@@ -2039,7 +2022,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.Err != nil {
-			m.reportFailure("List tags", msg.Err)
+			m.outputPanel.AppendLine("List tags failed: " + msg.Err.Error())
 			return m, nil
 		}
 		m.modal = modal.NewTagBrowserModal(msg.Tags, m.width, m.height)
@@ -2052,16 +2035,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opRunning = false
 		if msg.Op == "create_missing_mrs" {
 			if msg.Err != nil {
-				m.reportFailure("Create missing MR/PRs for "+msg.TaskID, msg.Err)
+				m.outputPanel.AppendLine("Create missing MR/PRs failed for " + msg.TaskID + ": " + msg.Err.Error())
 				return m, nil
 			}
 			result, ok := msg.Data.(task.TaskMRCreateResult)
 			if !ok {
-				m.reportFailure("Create missing MR/PRs", errors.New("invalid result"))
+				m.outputPanel.AppendLine("Create missing MR/PRs failed: invalid result")
 				return m, nil
 			}
 			var created, existing, failed int
-			var serviceErrs []serviceFailure
 			var confirmItems []modal.MRCreateConfirmItem
 			for _, service := range result.Services {
 				line := service.ServiceName + ": " + service.Status
@@ -2076,8 +2058,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					confirmItems = append(confirmItems, modal.MRCreateConfirmItem{ServiceName: service.ServiceName, Reason: service.Reason})
 				}
 				if service.Err != nil {
-					serviceErrs = append(serviceErrs, serviceFailure{name: service.ServiceName, err: service.Err})
-					line += ": " + failureCause(service.Err)
+					line += ": " + service.Err.Error()
 				} else if service.Reason != "" {
 					line += ": " + service.Reason
 				} else if service.MR.URL != "" {
@@ -2090,17 +2071,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modal = modal.NewMRCreateConfirmDialog(result.TaskID, result.Title, confirmItems, msg.Description)
 				m.modal.SetTerminalSize(m.width, m.height)
 			}
-			m.reportServiceNext(serviceErrs, "")
 			return m, nil
 		}
 		if msg.Err != nil {
-			m.reportFailure("Forge "+msg.Op+" for "+msg.ServiceName, msg.Err)
+			m.outputPanel.AppendLine("Forge " + msg.Op + " failed for " + msg.ServiceName + ": " + msg.Err.Error())
 			return m, nil
 		}
 		if msg.Op == "pipeline_status" && msg.Provider == forge.ForgeProviderGitLab {
 			statuses, ok := msg.Data.([]forge.PipelineStatus)
 			if !ok {
-				m.reportFailure("Forge pipeline_status for "+msg.ServiceName, errors.New("invalid result"))
+				m.outputPanel.AppendLine("Forge pipeline_status failed for " + msg.ServiceName + ": invalid result")
 				return m, nil
 			}
 			var pipeline forge.PipelineStatus
@@ -2119,7 +2099,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.opRunning = false
 		if msg.Err != nil {
-			m.reportFailure("Create release", msg.Err)
+			m.outputPanel.AppendLine("Create release failed: " + msg.Err.Error())
 		} else {
 			releaseID := strings.TrimSpace(msg.Release.ID)
 			if releaseID == "" {
@@ -2136,7 +2116,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.opRunning = false
 		if msg.Err != nil {
-			m.reportFailure("Open lazygit for "+msg.ServiceName, msg.Err)
+			m.outputPanel.AppendLine("Open lazygit for " + msg.ServiceName + " failed: " + msg.Err.Error())
+			if isExecutableNotFoundErr(msg.Err) {
+				m.outputPanel.AppendLine("lazygit not found on PATH. Install lazygit or add it to PATH.")
+			}
 		} else {
 			m.outputPanel.AppendLine("Open lazygit for " + msg.ServiceName + " done.")
 		}
@@ -2165,7 +2148,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			m.reportFailure(msg.Op, msg.Err)
+			m.outputPanel.AppendLine(msg.Op + " failed: " + msg.Err.Error())
+			m.logger.Error("command failed", slog.String("err", msg.Err.Error()))
 
 			m.pendingInitParams = nil
 			m.pendingAddParams = nil
@@ -2182,7 +2166,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())
 
 	case LoadFailedMsg:
-		m.reportFailure(msg.Op, msg.Err)
+		m.outputPanel.AppendLine(msg.Op + " failed: " + msg.Err.Error())
 		return m, nil
 
 	case ConvertHotfixDoneMsg:
@@ -2193,7 +2177,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.conversionRunning = false
 		op := "Convert hotfix " + msg.SourceTaskID + " to feature task " + msg.TargetTaskID
 		if msg.Err != nil {
-			m.reportFailure(op, msg.Err)
+			m.outputPanel.AppendLine(op + " failed: " + msg.Err.Error())
+			m.logger.Error("conversion failed", slog.String("err", msg.Err.Error()))
 		} else {
 			m.selectTaskOnLoad = msg.TargetTaskID
 			m.outputPanel.AppendLine(op + " done.")
@@ -2221,7 +2206,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		m.reportServiceNext(partialServiceFailures(msg.Result, msg.Err), "")
 		if m.pendingInitParams != nil {
 			m.selectTaskOnLoad = m.pendingInitParams.TaskID
 		}
@@ -2250,7 +2234,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		m.reportServiceNext(partialServiceFailures(msg.Result, msg.Err), "")
 		m.pendingInitParams = nil
 		m.pendingAddParams = nil
 		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())
@@ -3129,7 +3112,6 @@ func (m Model) handleOpenLazygitServiceMsg(msg panels.OpenLazygitServiceMsg) (Mo
 	info, err := os.Stat(msg.WorktreePath)
 	if err != nil {
 		m.outputPanel.AppendLine("Cannot open lazygit for service " + msg.ServiceName + ": worktree path is missing or inaccessible: " + msg.WorktreePath + " (" + err.Error() + ")")
-		m.reportNext(err)
 		return m, nil
 	}
 	if !info.IsDir() {
@@ -3167,7 +3149,7 @@ func (m Model) failureRequest() (string, ai.FailureRequest) {
 		request.Operation = "release " + r.ID + " (status " + string(r.Status) + ")"
 		request.State, request.Guidance = string(summary.Current), summary.NextAction
 		if r.Error != nil {
-			request.Error = logutil.Redact(strings.TrimSpace(r.Error.Message + "\n" + r.Error.Cause))
+			request.Error = strings.TrimSpace(r.Error.Message + "\n" + r.Error.Cause)
 		}
 	} else if t := m.tasksPanel.SelectedTask(); t != nil {
 		subject = "task " + t.ID
@@ -3269,10 +3251,25 @@ func partialFailureLines(result task.PartialFailureResult) []string {
 			failed = append(failed, service.Name)
 			continue
 		}
-		failed = append(failed, fmt.Sprintf("%s (%s)", service.Name, failureCause(service.Cause)))
+		failed = append(failed, fmt.Sprintf("%s (%s)", service.Name, service.Cause.Error()))
 	}
 	lines = append(lines, "Failed: "+strings.Join(failed, ", "))
 	return lines
+}
+
+func isExecutableNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return false
+	}
+	var execErr *exec.Error
+	if errors.As(err, &execErr) {
+		return execErr.Name == "lazygit" && errors.Is(execErr.Err, exec.ErrNotFound)
+	}
+	return errors.Is(err, exec.ErrNotFound)
 }
 
 func (m Model) updateShellInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

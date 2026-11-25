@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 )
 
 type contextKey int
@@ -45,28 +44,6 @@ func (h *taskIDHandler) WithGroup(name string) slog.Handler {
 	return &taskIDHandler{inner: h.inner.WithGroup(name)}
 }
 
-// urlUserinfo matches the userinfo of scheme://user:password@host up to the last '@' before the path.
-// ponytail: an unencoded '/' inside a password ends the match early; percent-encoded ones are covered.
-// The authority ends at '/', '?', '#' or a character URIs never contain unencoded; an apostrophe is a legal sub-delim.
-var urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s/?#<>"]*@`)
-
-// Redact removes URL credentials from diagnostic text, keeping scheme, host and path.
-func Redact(s string) string {
-	return urlUserinfo.ReplaceAllString(s, "${1}***@")
-}
-
-// redactAttr is a slog ReplaceAttr: every field, the message included, is written without URL credentials.
-func redactAttr(_ []string, a slog.Attr) slog.Attr {
-	value := a.Value.Resolve()
-	if value.Kind() != slog.KindString && value.Kind() != slog.KindAny {
-		return a
-	}
-	if text := value.String(); Redact(text) != text {
-		return slog.String(a.Key, Redact(text))
-	}
-	return a
-}
-
 func XDGStateDir(app string) string {
 	if base := os.Getenv("XDG_STATE_HOME"); base != "" {
 		return filepath.Join(base, app)
@@ -100,13 +77,12 @@ func InitLogger(app string, level slog.Leveler) (*slog.Logger, error) {
 		return fallbackLogger(), fmt.Errorf("open log file %s: %w", logPath, err)
 	}
 
-	inner := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: level, ReplaceAttr: redactAttr})
+	inner := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: level})
 	return slog.New(&taskIDHandler{inner: inner}), nil
 }
 
 func fallbackLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level:       slog.LevelWarn,
-		ReplaceAttr: redactAttr,
+		Level: slog.LevelWarn,
 	}))
 }

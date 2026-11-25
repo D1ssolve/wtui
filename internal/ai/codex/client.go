@@ -82,12 +82,6 @@ func (c *Client) DraftWorkflow(ctx context.Context, request ai.WorkflowRequest) 
 
 // complete runs one isolated, read-only Codex inference with the ChatGPT login and returns
 // the raw final message, which callers must parse through their ai trust boundary.
-// Available reports whether the codex CLI can be started, without running it.
-func (c *Client) Available() bool {
-	_, err := exec.LookPath("codex")
-	return err == nil
-}
-
 func (c *Client) complete(ctx context.Context, instructions string, payload []byte, schema string) (data []byte, resultErr error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()

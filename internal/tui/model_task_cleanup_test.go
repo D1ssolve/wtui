@@ -42,7 +42,7 @@ func TestTaskCleanup_ErrorsSurfaceInOutput(t *testing.T) {
 		if m.opRunning || mgr.taskCleanupExecCalls != 0 {
 			t.Fatal("planning error left cleanup running")
 		}
-		if !strings.Contains(m.outputPanel.View(), "Plan task cleanup for T-1 failed: planner boom") {
+		if !strings.Contains(m.outputPanel.View(), "Plan task cleanup failed for T-1: planner boom") {
 			t.Fatalf("planning error missing: %s", m.outputPanel.View())
 		}
 	})

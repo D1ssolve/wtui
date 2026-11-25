@@ -396,7 +396,7 @@ func TestCleanupDialog_TaskPlanErrorStopsQueue(t *testing.T) {
 	if m.cleanupQueueActive() {
 		t.Fatal("failed replan left queue active")
 	}
-	if !strings.Contains(m.outputPanel.View(), "Plan task cleanup for T-1 failed: planner boom") {
+	if !strings.Contains(m.outputPanel.View(), "Plan task cleanup failed for T-1: planner boom") {
 		t.Fatalf("failure reason missing: %s", m.outputPanel.View())
 	}
 	runBatchCommands(cmd())
@@ -563,7 +563,7 @@ func TestCleanupDialog_TaskFailureInQueueOpensForceConfirmation(t *testing.T) {
 	if _, ok := m.modal.(*modal.CleanupForceConfirmModal); !ok {
 		t.Fatalf("force confirmation = %T", m.modal)
 	}
-	if !strings.Contains(m.outputPanel.View(), "Task cleanup for T-1 failed: worktree busy") {
+	if !strings.Contains(m.outputPanel.View(), "Task cleanup failed for T-1: worktree busy") {
 		t.Fatalf("failure missing: %s", m.outputPanel.View())
 	}
 	if cmd != nil {
