@@ -56,7 +56,8 @@ options:
 
 // cliArgs is the parsed command line.
 type cliArgs struct {
-	help, flow    bool
+	help, version bool
+	flow          bool
 	config        string
 	format, draft string // flow output: "" (describe), "--mermaid" or "--html"; or a --draft description
 }
@@ -69,6 +70,8 @@ func parseArgs(args []string) (cliArgs, error) {
 		switch {
 		case arg == "-h" || arg == "--help":
 			c.help = true
+		case arg == "-v" || arg == "--version":
+			c.version = true
 		case arg == "flow" && !c.flow:
 			c.flow = true
 		case arg == "--config" || strings.HasPrefix(arg, "--config="):
@@ -96,6 +99,9 @@ func parseArgs(args []string) (cliArgs, error) {
 			return c, fmt.Errorf("unknown argument %q", arg)
 		}
 	}
+	if c.version && (c.help || c.flow || c.config != "") {
+		return c, errors.New("--version cannot be combined with other arguments")
+	}
 	return c, nil
 }
 
@@ -105,14 +111,14 @@ func main() {
 
 // run executes the command line and returns the process exit code.
 func run(args []string, stdout, stderr io.Writer) int {
-	if versionRequested(args) {
-		fmt.Fprint(stdout, versionOutput(resolveVersion()))
-		return 0
-	}
 	c, err := parseArgs(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "wtui: %v\n%s", err, usageText)
 		return 2
+	}
+	if c.version {
+		fmt.Fprint(stdout, versionOutput(resolveVersion()))
+		return 0
 	}
 	if c.help {
 		fmt.Fprint(stdout, usageText)
@@ -137,16 +143,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
-}
-
-func versionRequested(args []string) bool {
-	for _, arg := range args {
-		if arg == "--version" || arg == "-v" {
-			return true
-		}
-	}
-
-	return false
 }
 
 func versionOutput(version string) string {

@@ -13,29 +13,6 @@ import (
 	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
-func TestVersionRequested(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-		want bool
-	}{
-		{name: "long flag", args: []string{"--version"}, want: true},
-		{name: "short flag", args: []string{"-v"}, want: true},
-		{name: "no args", args: nil, want: false},
-		{name: "non version arg", args: []string{"--config", "test.yaml"}, want: false},
-		{name: "substring does not match", args: []string{"--versioned"}, want: false},
-		{name: "any exact version flag", args: []string{"--config", "test.yaml", "-v"}, want: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := versionRequested(tt.args); got != tt.want {
-				t.Fatalf("versionRequested(%v) = %v, want %v", tt.args, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestVersionOutput(t *testing.T) {
 	got := versionOutput("v0.1.0")
 	want := "wtui v0.1.0\n"
@@ -144,6 +121,13 @@ func TestRun_HelpAndUnknownArguments(t *testing.T) {
 	}{
 		{name: "long help", args: []string{"--help"}, wantStdout: "--config"},
 		{name: "short help", args: []string{"-h"}, wantStdout: "--config"},
+		{name: "long version", args: []string{"--version"}, wantStdout: "wtui "},
+		{name: "short version", args: []string{"-v"}, wantStdout: "wtui "},
+		{name: "unknown before version", args: []string{"flow", "--bogus", "-v"}, wantCode: 2, wantStderr: `unknown argument "--bogus"`},
+		{name: "unknown after version", args: []string{"-v", "--bogus"}, wantCode: 2, wantStderr: `unknown argument "--bogus"`},
+		{name: "unknown with help", args: []string{"--help", "--bogus"}, wantCode: 2, wantStderr: `unknown argument "--bogus"`},
+		{name: "version with flow", args: []string{"--version", "flow"}, wantCode: 2, wantStderr: "--version cannot be combined"},
+		{name: "version with config", args: []string{"--config", "x.yaml", "-v"}, wantCode: 2, wantStderr: "--version cannot be combined"},
 		{name: "help after flow", args: []string{"flow", "--help"}, wantStdout: "wtui flow"},
 		{name: "unknown flag", args: []string{"--bogus"}, wantCode: 2, wantStderr: `unknown argument "--bogus"`},
 		{name: "unknown positional", args: []string{"nope"}, wantCode: 2, wantStderr: `unknown argument "nope"`},
@@ -185,6 +169,15 @@ func TestRun_ConfigFlagBeforeAndAfterFlow(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		if code := run(args, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "workflow: trunk-based") {
 			t.Fatalf("run(%v) = %d, stdout %q, stderr %q", args, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestParseArgs_ConfigValueIsNeverAFlag(t *testing.T) {
+	for _, args := range [][]string{{"--config", "-v", "flow"}, {"flow", "--config", "-v"}, {"--config=-v", "flow"}} {
+		c, err := parseArgs(args)
+		if err != nil || c.config != "-v" || c.version || !c.flow {
+			t.Fatalf("parseArgs(%v) = %+v, %v", args, c, err)
 		}
 	}
 }
