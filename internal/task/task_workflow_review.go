@@ -50,6 +50,8 @@ func (m *manager) inspectWorkflowReviewMR(ctx context.Context, svc domain.Servic
 		item.Blockers = append([]string(nil), item.MR.Blockers...)
 		item.NextAction = item.MR.NextAction
 		switch {
+		case mergedMRState(item.MR.State) && m.usesGitLabTrain(client):
+			item = m.reconcileMergedReviewMR(ctx, svc, client, repo, reviewTarget, item)
 		case mergedMRState(item.MR.State):
 			item.Status = "merged"
 			item.NextAction = ""
@@ -92,10 +94,16 @@ func (m *manager) reconcileMergedReviewMR(ctx context.Context, svc domain.Servic
 	case len(active) > 1:
 		return fail(withRecovery(fmt.Errorf("ambiguous MR history for %s -> %s: %d active MRs", svc.Branch, reviewTarget, len(active)), "resolve duplicate active MRs in forge; refresh"))
 	}
+	if item.MR.Number != 0 && active[0].Number != item.MR.Number {
+		return fail(fmt.Errorf("MR history returned !%d, want !%d", active[0].Number, item.MR.Number))
+	}
 	item.MR = forge.MRReadiness{Number: active[0].Number, URL: active[0].URL, SourceBranch: active[0].SourceBranch, TargetBranch: active[0].TargetBranch}
 	mr, err := client.MRReadinessByNumber(ctx, active[0].Number, repo, svc.WorktreePath)
 	if err != nil {
 		return fail(withRecovery(err, "inspect numbered MR in forge; restore detail access"))
+	}
+	if m.usesGitLabTrain(client) && mr.Number != active[0].Number {
+		return fail(fmt.Errorf("numbered MR returned !%d, want !%d", mr.Number, active[0].Number))
 	}
 	item.MR = mr
 	if item.MR.Number == 0 {
@@ -124,6 +132,10 @@ func (m *manager) reconcileMergedReviewMR(ctx context.Context, svc domain.Servic
 	item.Blockers = nil
 	item.Status = "merged"
 	return item
+}
+
+func (m *manager) usesGitLabTrain(client forge.ForgeClient) bool {
+	return client.Provider() == forge.ForgeProviderGitLab && m.cfg.Forge != nil && m.cfg.Forge.MergeQueue
 }
 
 // validateMergedReviewMRIdentity fails closed unless the authoritative merged
