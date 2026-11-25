@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/D1ssolve/wtui/internal/ai"
+	"github.com/D1ssolve/wtui/internal/ai/claude"
 	"github.com/D1ssolve/wtui/internal/ai/codex"
 	"github.com/D1ssolve/wtui/internal/config"
 )
@@ -29,7 +30,9 @@ func buildAIProvider(settings *config.AIConfig) (ai.Assistant, error) {
 	switch settings.Provider {
 	case "", "codex":
 		return codex.New(settings.Model, timeout), nil
+	case "claude":
+		return claude.New(settings.Model, timeout), nil
 	default:
-		return nil, fmt.Errorf("%w: ai.provider %q has no registered implementation", ai.ErrUnavailable, settings.Provider)
+		return nil, fmt.Errorf("%w: ai.provider %q has no registered implementation; available providers: codex, claude", ai.ErrUnavailable, settings.Provider)
 	}
 }

@@ -201,7 +201,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 			out, err = flowCommand(c.format, c.config)
 		}
 		if err != nil {
-			fmt.Fprintln(stderr, "wtui flow:", err)
+			var validationErr draftValidationError
+			if errors.As(err, &validationErr) {
+				fmt.Fprintln(stderr, "wtui:", err)
+			} else {
+				fmt.Fprintln(stderr, "wtui flow:", err)
+			}
 			return 1
 		}
 		fmt.Fprint(stdout, out)
@@ -259,6 +264,10 @@ func draftCommand(description, configPath string) (string, error) {
 
 const draftAttempts = 3
 
+type draftValidationError string
+
+func (err draftValidationError) Error() string { return string(err) }
+
 func draftWorkflow(ctx context.Context, drafter interface {
 	DraftWorkflow(context.Context, ai.WorkflowRequest) (string, error)
 }, description string) (string, error) {
@@ -279,7 +288,9 @@ func draftWorkflow(ctx context.Context, drafter interface {
 			return b.String(), nil
 		}
 		if attempt == draftAttempts {
-			return "", fmt.Errorf("the AI draft still fails validation after %d attempts: %v", draftAttempts, err)
+			return "", draftValidationError(fmt.Sprintf(
+				"the assistant could not produce a workflow that compiles after %d attempts; last validation error: %s",
+				draftAttempts, ai.InertText(err.Error(), 300)))
 		}
 		request.Previous, request.Problem = draft, err.Error()
 	}

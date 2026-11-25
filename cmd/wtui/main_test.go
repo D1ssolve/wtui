@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/D1ssolve/wtui/internal/ai"
 	"github.com/D1ssolve/wtui/internal/config"
@@ -104,10 +106,21 @@ func TestDraftWorkflow_RepairsDraftWithValidatorFeedback(t *testing.T) {
 }
 
 func TestDraftWorkflow_GivesUpAfterThreeInvalidDrafts(t *testing.T) {
-	bad := "workflow:\n  extends: nope\n"
+	bad := `workflow:
+  extends: "nope\e[2J\n` + strings.Repeat("x", 1000) + `"
+`
 	d := &scriptedDrafter{drafts: []string{bad, bad, bad}}
-	if _, err := draftWorkflow(t.Context(), d, "x"); err == nil || !strings.Contains(err.Error(), "after 3 attempts") {
+	if _, err := draftWorkflow(t.Context(), d, "x"); err == nil {
 		t.Fatalf("err = %v", err)
+	} else {
+		var stderr bytes.Buffer
+		fmt.Fprintln(&stderr, err)
+		header := "the assistant could not produce a workflow that compiles after 3 attempts; last validation error: "
+		reason, ok := strings.CutPrefix(strings.TrimSuffix(stderr.String(), "\n"), header)
+		if !ok || !strings.Contains(reason, "unknown preset") || strings.ContainsAny(reason, "\x1b\n") ||
+			utf8.RuneCountInString(reason) != 300 || !strings.HasSuffix(reason, "…") {
+			t.Fatal("expected one bounded, inert reason on stderr")
+		}
 	}
 }
 

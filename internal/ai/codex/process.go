@@ -1,26 +1,11 @@
 package codex
 
 import (
-	"bytes"
-	"context"
 	"fmt"
-	"io"
-	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/D1ssolve/wtui/internal/ai"
 )
-
-func run(ctx context.Context, binary, dir string, environment []string, input io.Reader, stdout, stderr io.Writer, args ...string) error {
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Dir = dir
-	cmd.Env = environment
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = input, stdout, stderr
-	cmd.WaitDelay = time.Second
-	isolateProcess(cmd)
-	return cmd.Run()
-}
 
 func cleanEnvironment(environment []string) []string {
 	clean := make([]string, 0, len(environment))
@@ -55,22 +40,4 @@ func providerError(diagnostic string) error {
 		}
 	}
 	return fmt.Errorf("%w: Codex execution failed; check CLI installation, model availability and network, then generate again", ai.ErrUnavailable)
-}
-
-// Keep diagnostics for classification only; consume excess bytes without storing them.
-type boundedOutput struct {
-	bytes.Buffer
-	limit     int
-	truncated bool
-}
-
-func (b *boundedOutput) Write(data []byte) (int, error) {
-	n := len(data)
-	remaining := b.limit - b.Len()
-	if n > remaining {
-		data = data[:remaining]
-		b.truncated = true
-	}
-	_, err := b.Buffer.Write(data)
-	return n, err
 }

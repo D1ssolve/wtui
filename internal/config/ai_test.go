@@ -32,13 +32,20 @@ func TestEffectiveAI_RejectsUnsupportedProviderAndInvalidTimeout(t *testing.T) {
 }
 
 func TestLoadAI_PreservesProviderModelAndTimeout(t *testing.T) {
-	path := writeTempConfig(t, "ai:\n  provider: codex\n  model: custom-model\n  timeout: 3m\n")
+	path := writeTempConfig(t, "ai:\n  provider: ' Claude '\n  model: custom-model\n  timeout: 3m\n")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg = mustEffective(t, cfg)
-	if cfg.AI.Model != "custom-model" || cfg.AI.Timeout != "3m" {
+	if cfg.AI.Provider != "claude" || cfg.AI.Model != "custom-model" || cfg.AI.Timeout != "3m" {
 		t.Fatalf("AI config = %#v", cfg.AI)
+	}
+}
+
+func TestEffectiveAI_ListsAvailableProviders(t *testing.T) {
+	_, err := (&Config{AI: &AIConfig{Provider: "nope"}}).Effective()
+	if err == nil || !strings.Contains(err.Error(), "codex") || !strings.Contains(err.Error(), "claude") {
+		t.Fatalf("provider error = %v; want both supported providers", err)
 	}
 }
