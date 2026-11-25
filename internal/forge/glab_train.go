@@ -26,6 +26,9 @@ func (c *GlabClient) EnqueueMR(ctx context.Context, params MergeMRParams) error 
 	if fresh.Number != params.Number || fresh.TargetBranch != params.ExpectedTargetBranch || fresh.HeadSHA != params.ExpectedHeadSHA {
 		return errors.New("GitLab merge train: MR number, target or reviewed head changed; refresh before retrying")
 	}
+	if params.ExpectedSourceBranch != "" && fresh.SourceBranch != params.ExpectedSourceBranch {
+		return errors.New("GitLab merge train: MR source changed; refresh before retrying")
+	}
 	if fresh.State != "open" {
 		return fmt.Errorf("GitLab merge train: MR !%d is %s; refresh numbered MR status", params.Number, fresh.State)
 	}

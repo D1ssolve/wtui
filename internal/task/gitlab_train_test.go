@@ -24,6 +24,8 @@ func fakeGitLabTrain(t *testing.T, source, target string) (*forge.GlabClient, st
 	t.Setenv("TRAIN_IID", "7")
 	t.Setenv("TRAIN_REQUEST_IID", "7")
 	t.Setenv("TRAIN_MODE", "schedule")
+	t.Setenv("TRAIN_REPLACEMENT", "")
+	t.Setenv("TRAIN_REPO", "git.corp.invalid/group/nested/repo")
 	logPath := filepath.Join(dir, "effects")
 	t.Setenv("TRAIN_EFFECTS", logPath)
 	if err := os.WriteFile(logPath, nil, 0o600); err != nil {
@@ -33,13 +35,22 @@ func fakeGitLabTrain(t *testing.T, source, target string) (*forge.GlabClient, st
 set -eu
 case "$*" in
   'mr merge --help') exit 0 ;;
-  "mr list --source-branch $TRAIN_SOURCE --output json --repo git.corp.invalid/group/nested/repo")
-    if [ "$TRAIN_STATE" = merged ]; then echo '[]'; else echo '[{"iid":7,"state":"opened"}]'; fi
+  "mr list --source-branch $TRAIN_SOURCE --output json --repo $TRAIN_REPO")
+    if [ "$TRAIN_STATE" = merged ] || [ "$TRAIN_STATE" = closed ]; then echo '[]'; else echo '[{"iid":7,"state":"opened"}]'; fi
     exit 0 ;;
-  "mr list --all --source-branch $TRAIN_SOURCE --output json --repo git.corp.invalid/group/nested/repo --per-page 100 --page 1")
-    printf '[{"iid":7,"state":"merged","source_branch":"%s","target_branch":"%s"}]\n' "$TRAIN_SOURCE" "$TRAIN_TARGET"
+  "mr list --all --source-branch $TRAIN_SOURCE --output json --repo $TRAIN_REPO --per-page 100 --page 1")
+    if [ -n "$TRAIN_REPLACEMENT" ]; then
+      printf '[{"iid":7,"state":"closed","source_branch":"%s","target_branch":"%s"},{"iid":8,"state":"merged","source_branch":"%s","target_branch":"%s"}]\n' "$TRAIN_SOURCE" "$TRAIN_TARGET" "$TRAIN_SOURCE" "$TRAIN_TARGET"
+    else
+      printf '[{"iid":7,"state":"merged","source_branch":"%s","target_branch":"%s"}]\n' "$TRAIN_SOURCE" "$TRAIN_TARGET"
+    fi
     exit 0 ;;
-  "mr view $TRAIN_REQUEST_IID --output json --repo git.corp.invalid/group/nested/repo")
+  "mr view 8 --output json --repo $TRAIN_REPO")
+    if [ -n "$TRAIN_REPLACEMENT" ]; then
+      printf '{"iid":8,"state":"merged","source_branch":"%s","target_branch":"%s","sha":"reviewed-sha","merge_commit_sha":"delivered","detailed_merge_status":"mergeable","blocking_discussions_resolved":true}\n' "$TRAIN_SOURCE" "$TRAIN_TARGET"
+      exit 0
+    fi ;;
+  "mr view $TRAIN_REQUEST_IID --output json --repo $TRAIN_REPO")
     printf '{"iid":%s,"state":"%s","source_branch":"%s","target_branch":"%s","sha":"%s","merge_commit_sha":"%s","detailed_merge_status":"mergeable","blocking_discussions_resolved":true}\n' \
       "$TRAIN_IID" "$TRAIN_STATE" "$TRAIN_SOURCE" "$TRAIN_TARGET" "$TRAIN_HEAD" "$([ "$TRAIN_STATE" = merged ] && echo delivered || true)"
     exit 0 ;;
@@ -59,6 +70,7 @@ case "$*" in
     case "$TRAIN_MODE" in
       schedule) echo '[{"merge_request":{"iid":8,"state":"merged"},"status":"merged"}]'; exit 0 ;;
       immediate) echo '[{"merge_request":{"iid":7,"state":"opened"},"status":"idle"}]'; exit 0 ;;
+      lost-response) echo 'glab: connection reset after request' >&2; exit 1 ;;
       moved) echo 'glab: SHA does not match HEAD of source branch (HTTP 409)' >&2; exit 1 ;;
       unavailable) echo 'glab: Forbidden (HTTP 403)' >&2; exit 1 ;;
     esac ;;

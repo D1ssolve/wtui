@@ -69,6 +69,8 @@ type MergeMRParams struct {
 	Number       int
 	// ExpectedHeadSHA requires a server-side source head pin.
 	ExpectedHeadSHA string
+	// ExpectedSourceBranch optionally binds the GitLab train preflight to the reviewed source.
+	ExpectedSourceBranch string
 	// ExpectedTargetBranch requests a fresh readiness check immediately before
 	// merge, rejecting target or expected head drift and non-open/not-ready MRs.
 	// This preflight is not atomic target binding: retargeting can still race it.

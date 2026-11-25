@@ -350,7 +350,7 @@ func (m *manager) taskWaitHolds(ctx context.Context, tf *taskFlow, st *gitflow.S
 		if err != nil {
 			return false, err
 		}
-		states, err := m.workflowMergeStates(ctx, plans)
+		states, err := m.workflowMergeStates(ctx, tf.taskID, plans)
 		if err != nil {
 			return false, err
 		}

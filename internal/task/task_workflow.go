@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -34,6 +35,7 @@ type serviceMergeState struct {
 	merged  []bool
 	warning string
 	err     error
+	pinned  *ServiceMergeInspection
 }
 
 func (m *manager) workflowPlans(services []domain.Service) ([]serviceWorkflowPlan, bool, bool, error) {
@@ -94,7 +96,7 @@ func (m *manager) TaskWorkflow(ctx context.Context, taskID string) (domain.Workf
 		return domain.WorkflowSummary{}, err
 	}
 
-	states, err := m.workflowMergeStates(ctx, plans)
+	states, err := m.workflowMergeStates(ctx, taskID, plans)
 	if err != nil {
 		return domain.WorkflowSummary{}, err
 	}
@@ -172,11 +174,42 @@ func (m *manager) hotfixReviewWorkflow(ctx context.Context, taskID string) (doma
 // workflowMergeStates fetches every service and checks its branch against all
 // effective close targets. Review services check the first review target only,
 // mirroring ordinary review close semantics.
-func (m *manager) workflowMergeStates(ctx context.Context, plans []serviceWorkflowPlan) ([]serviceMergeState, error) {
+func (m *manager) workflowMergeStates(ctx context.Context, taskID string, plans []serviceWorkflowPlan) ([]serviceMergeState, error) {
+	pins, err := m.loadTaskTrainPins(taskID)
+	if err != nil {
+		return nil, err
+	}
+	for _, pin := range pins {
+		if !slices.ContainsFunc(plans, func(plan serviceWorkflowPlan) bool { return plan.svc.Name == pin.Service }) {
+			return nil, fmt.Errorf("service %s for recorded train MR !%d is missing", pin.Service, pin.Number)
+		}
+	}
 	states := make([]serviceMergeState, len(plans))
 	m.runWorkflowChecks(len(plans), func(i int) {
 		plan := &plans[i]
 		st := &states[i]
+		for _, pin := range pins {
+			if pin.Service != plan.svc.Name {
+				continue
+			}
+			item := m.inspectPinnedTaskTrain(ctx, plan.svc, pin)
+			st.targets = append(st.targets, "origin/"+pin.Target)
+			st.merged = append(st.merged, item.Status == "merged")
+			if st.pinned == nil || item.Status != "merged" {
+				st.pinned = &item
+			}
+		}
+		if st.pinned != nil {
+			// Once there is a train pin, ancestry alone cannot satisfy a
+			// review wait. All configured targets must have a verified pin.
+			for _, target := range m.taskTrainTargets(plan.svc) {
+				if _, exists := pins[taskTrainKey{plan.svc.Name, target}]; !exists {
+					st.targets = append(st.targets, "origin/"+target)
+					st.merged = append(st.merged, false)
+				}
+			}
+			return
+		}
 		switch plan.rule.CloseStrategy {
 		case gitflow.CloseStrategyNone:
 			return
