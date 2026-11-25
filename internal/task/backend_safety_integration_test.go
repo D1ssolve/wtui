@@ -26,6 +26,21 @@ func (c *forgeRemoteURLClient) RemoteURL(_ context.Context, _, _ string) (string
 	return c.url, nil
 }
 
+func (c *forgeRemoteURLClient) PushURL(ctx context.Context, repo, remote string) (string, error) {
+	url, err := c.Client.PushURL(ctx, repo, remote)
+	if url == filepath.Join(filepath.Dir(repo), "origin.git") && err == nil {
+		return c.url, nil
+	}
+	return url, err
+}
+
+func (c *forgeRemoteURLClient) RemoteRefSHAAt(ctx context.Context, repo, url, ref string) (string, error) {
+	if url == c.url {
+		url = filepath.Join(filepath.Dir(repo), "origin.git")
+	}
+	return c.Client.RemoteRefSHAAt(ctx, repo, url, ref)
+}
+
 func newSafetyIntegrationEnv(t *testing.T) releaseIntegrationEnv {
 	t.Helper()
 	return newReleaseIntegrationEnvWithGitClient(t, &forgeRemoteURLClient{

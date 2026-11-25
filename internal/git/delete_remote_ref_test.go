@@ -18,7 +18,7 @@ func TestDeleteRemoteRefIfUnchanged_UsesCapturedURLAndExactLease(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			assertGitArgs(t, func(client *CommandClient) error {
 				return client.DeleteRemoteRefIfUnchanged(t.Context(), "/repo", "/captured.git", tc.ref, tc.oid)
-			}, "-C /repo push --force-with-lease="+tc.ref+":"+tc.oid+" -- /captured.git :"+tc.ref+"\n")
+			}, "-C /repo -c url..insteadOf=<pin> -c url..pushInsteadOf=<pin> push --force-with-lease="+tc.ref+":"+tc.oid+" -- <pin>/captured.git :"+tc.ref+"\n")
 		})
 	}
 }

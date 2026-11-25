@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -15,6 +16,16 @@ func (m *manager) PlanReleaseTaskMergeRetry(ctx context.Context, releaseID strin
 	if err != nil {
 		return ReleaseTaskMergePlan{}, err
 	}
+	return m.taskMergeRetryPlan(ctx, release)
+}
+
+func (m *manager) taskMergeRetryPlan(ctx context.Context, release domain.Release) (ReleaseTaskMergePlan, error) {
+	plan, err := m.buildTaskMergeRetryPlan(ctx, release)
+	plan.retryID, plan.retryStatus, plan.retryCheckpoint = release.ID, release.Status, release.Checkpoint
+	return plan, err
+}
+
+func (m *manager) buildTaskMergeRetryPlan(ctx context.Context, release domain.Release) (ReleaseTaskMergePlan, error) {
 	if !m.releasePrepareTaskMergeEnabled() {
 		return ReleaseTaskMergePlan{}, fmt.Errorf("release task merge retry is not enabled")
 	}
@@ -109,18 +120,26 @@ func awaitingTaskMergeMetadataState(release domain.Release) (hasAny, allComplete
 }
 
 func (m *manager) RetryReleaseTaskMerges(ctx context.Context, releaseID string, confirmed *ReleaseTaskMergePlan) (domain.Release, error) {
+	unlock, err := m.lockRelease(ctx, releaseID)
+	if err != nil {
+		return domain.Release{}, err
+	}
+	defer unlock()
 	release, err := m.GetRelease(ctx, releaseID)
 	if err != nil {
 		return domain.Release{}, err
 	}
-	if !m.releasePrepareTaskMergeEnabled() {
-		return domain.Release{}, fmt.Errorf("release task merge retry is not enabled")
-	}
-	plan := releasePlanFromRelease(release)
-	if err := m.validateConfirmedReleaseTaskMergePlan(ctx, plan, confirmed); err != nil {
+	fresh, err := m.taskMergeRetryPlan(ctx, release)
+	if err != nil {
 		return domain.Release{}, err
 	}
-	if err := m.integrateReleaseTaskMRs(ctx, &release, confirmed, nil); err != nil {
+	if confirmed == nil || !reflect.DeepEqual(*confirmed, fresh) {
+		return domain.Release{}, fmt.Errorf("%w: task merge retry plan changed; review it again", ErrReleaseRetryUnsafe)
+	}
+	if err := m.validateConfirmedReleaseTaskMergePlan(ctx, releasePlanFromRelease(release), &fresh); err != nil {
+		return domain.Release{}, err
+	}
+	if err := m.integrateReleaseTaskMRs(ctx, &release, &fresh, nil); err != nil {
 		return release, err
 	}
 	return m.completeAcceptedPreparation(ctx, release)

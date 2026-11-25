@@ -48,15 +48,44 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 	if !plan.fingerprintAuthentic() {
 		return result, fmt.Errorf("%w: approved plan fingerprint mismatch", ErrTaskCleanupBlocked)
 	}
-	if !selection.Force {
-		fresh, err := m.PlanTaskCleanup(ctx, TaskCleanupRequest{TaskID: plan.preview.TaskID, DeleteRemoteTaskBranches: taskCleanupDeletesRemoteBranches(plan.steps)})
+	unlock, err := m.lockTask(ctx, plan.preview.TaskID)
+	if err != nil {
+		return result, err
+	}
+	defer unlock()
+	if err := m.checkTaskCleanupDestinations(ctx, plan); err != nil {
+		return result, err
+	}
+	var retry *TaskCleanupPlan
+	if selection.Force {
+		retry = &plan
+	}
+	fresh, err := m.planTaskCleanup(ctx, TaskCleanupRequest{TaskID: plan.preview.TaskID, DeleteRemoteTaskBranches: taskCleanupDeletesRemoteBranches(plan.steps)}, retry)
+	if err != nil {
+		return result, err
+	}
+	if fresh.Blocked() || !approvedCleanupRemainder(plan, fresh, selection.Force) {
+		return result, fmt.Errorf("%w: approved plan is stale: %s", ErrTaskCleanupBlocked, strings.Join(fresh.preview.Blockers, "; "))
+	}
+	if plan.firstScope != nil {
+		initial, err := plan.firstScope()
 		if err != nil {
 			return result, err
 		}
-		if len(fresh.preview.Blockers) > 0 || fresh.fingerprint != plan.fingerprint {
-			return result, fmt.Errorf("%w: approved plan is stale", ErrTaskCleanupBlocked)
+		if selection.Force {
+			current, err := cleanupDirectoryScope(m.taskDir(plan.preview.TaskID), plan.steps)
+			if err != nil {
+				return result, err
+			}
+			for path, info := range current {
+				before := initial[path]
+				if before == nil || !os.SameFile(before, info) {
+					return result, fmt.Errorf("%w: new or replaced cleanup entry %s", ErrTaskCleanupBlocked, path)
+				}
+			}
 		}
 	}
+	plan = fresh
 
 	ordered := taskCleanupExecutionOrder(plan.steps)
 	for _, step := range ordered {
@@ -86,6 +115,34 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 	return result, nil
 }
 
+// Compare the same authorization minus remote deletions already completed. A
+// proven absent step may become a no-op, never the other way around.
+func approvedCleanupRemainder(approved, fresh TaskCleanupPlan, force bool) bool {
+	if !force {
+		return fresh.fingerprint == approved.fingerprint
+	}
+	steps := make([]releaseCleanupStep, 0, len(approved.steps))
+	remote := slices.Clone(approved.preview.Remote)
+	for _, step := range approved.steps {
+		if step.kind == cleanupRemoteTaskBranch && !slices.ContainsFunc(fresh.preview.Remote, func(r TaskCleanupRemoteCandidate) bool { return r.RepoPath == step.repoPath && r.Branch == step.branch }) {
+			remote = slices.DeleteFunc(remote, func(r TaskCleanupRemoteCandidate) bool { return r.RepoPath == step.repoPath && r.Branch == step.branch })
+			continue
+		}
+		steps = append(steps, step)
+	}
+	if !slices.Equal(remote, fresh.preview.Remote) || !slices.Equal(approved.preview.DeferredRemote, fresh.preview.DeferredRemote) || len(steps) != len(fresh.steps) {
+		return false
+	}
+	for i, s := range steps {
+		if s.noop && !fresh.steps[i].noop {
+			return false
+		}
+	}
+	approved.steps = steps
+	approved.finishFingerprint()
+	return approved.fingerprint == fresh.fingerprint
+}
+
 // runTaskCleanupStep executes one local cleanup step.
 func (m *manager) runTaskCleanupStep(ctx context.Context, statusCh chan<- string, result *TaskCleanupResult, plan TaskCleanupPlan, selection TaskCleanupExecutionSelection, step releaseCleanupStep) error {
 	if err := ctx.Err(); err != nil {
@@ -99,6 +156,9 @@ func (m *manager) runTaskCleanupStep(ctx context.Context, statusCh chan<- string
 		return sendReleaseCleanupStatus(ctx, statusCh, line)
 	}
 	if !noop {
+		if err := m.checkTaskCleanupDestinations(ctx, plan); err != nil {
+			return err
+		}
 		executed, execErr := m.executeTaskCleanupStep(ctx, plan, selection, step)
 		if execErr != nil {
 			return fmt.Errorf("%s: %w", step.description, execErr)
@@ -175,7 +235,8 @@ func (m *manager) executeTaskCleanupStep(ctx context.Context, plan TaskCleanupPl
 		if err := m.recheckCleanupTargets(ctx, step); err != nil {
 			return false, err
 		}
-		sha, err := m.git.RemoteRefSHA(ctx, step.repoPath, "refs/heads/"+step.branch)
+		ref := "refs/heads/" + step.branch
+		sha, err := m.git.RemoteRefSHAAt(ctx, step.repoPath, step.remoteURL, ref)
 		if err != nil {
 			return false, err
 		}
@@ -185,7 +246,7 @@ func (m *manager) executeTaskCleanupStep(ctx context.Context, plan TaskCleanupPl
 		if sha != step.expectedSHA {
 			return false, fmt.Errorf("remote branch moved: expected %s, got %s", step.expectedSHA, sha)
 		}
-		return false, m.git.DeleteRemoteBranchIfUnchanged(ctx, step.repoPath, step.branch, step.expectedSHA)
+		return false, m.git.DeleteRemoteRefIfUnchanged(ctx, step.repoPath, step.remoteURL, ref, step.expectedSHA)
 	case cleanupTaskDirectory:
 		if !pathWithin(m.cfg.TasksRoot, step.path) {
 			return false, fmt.Errorf("task directory %s outside task ownership", step.path)

@@ -30,6 +30,11 @@ var retryCheckpoints = map[string]struct{}{
 }
 
 func (m *manager) RetryRelease(ctx context.Context, releaseID string) (domain.Release, error) {
+	unlock, err := m.lockRelease(ctx, releaseID)
+	if err != nil {
+		return domain.Release{}, err
+	}
+	defer unlock()
 	release, err := m.GetRelease(ctx, releaseID)
 	if err != nil {
 		return domain.Release{}, err

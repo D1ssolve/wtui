@@ -13,6 +13,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/fsutil"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
@@ -84,23 +85,7 @@ func (m *manager) saveHotfixCheckpoint(taskID string, cp hotfixCheckpoint) error
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(m.taskDir(taskID), ".hotfix-close-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err = f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), filepath.Join(m.taskDir(taskID), ".hotfix-close.json"))
+	return fsutil.WriteFileAtomic(filepath.Join(m.taskDir(taskID), ".hotfix-close.json"), data, 0o600)
 }
 
 func (m *manager) planHotfixClose(ctx context.Context, taskID string, services []domain.Service, branchType gitflow.BranchType, rule gitflow.BranchTypeRule) (ClosePlan, error) {

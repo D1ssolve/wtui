@@ -20,6 +20,11 @@ func (m *manager) RemoveService(
 		return err
 	}
 
+	unlock, err := m.lockTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	worktreePath := filepath.Join(m.taskDir(taskID), serviceName)
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 		return fmt.Errorf("%w: service %s not in task %s", ErrServiceNotFound, serviceName, taskID)

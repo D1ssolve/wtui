@@ -125,7 +125,7 @@ func (m *manager) planReleaseDeletionWorktrees(ctx context.Context, plan *Releas
 				step.expectedSHA = entry.HEAD
 			}
 		}
-		step.noop = m.validateCleanupWorktree(ctx, plan, entries, step)
+		step.noop = m.validateCleanupWorktree(ctx, plan, entries, step, false)
 		if !step.noop {
 			common, err := m.git.CommonDir(ctx, step.path)
 			if err != nil {

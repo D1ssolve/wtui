@@ -275,7 +275,7 @@ func assertGitArgs(t *testing.T, invoke func(*CommandClient) error, want string)
 		t.Fatal(err)
 	}
 	args, _ := os.ReadFile(argsFile)
-	if string(args) != want {
+	if normalizePinnedArgs(string(args)) != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
 }

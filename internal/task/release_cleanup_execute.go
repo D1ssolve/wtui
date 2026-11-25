@@ -26,6 +26,18 @@ func (m *manager) ExecuteReleaseCleanup(ctx context.Context, plan ReleaseCleanup
 	if !plan.fingerprintAuthentic() {
 		return result, fmt.Errorf("%w: approved plan fingerprint mismatch", ErrReleaseCleanupBlocked)
 	}
+	unlock, err := m.lockRelease(ctx, plan.preview.ReleaseID)
+	if err != nil {
+		return result, err
+	}
+	defer unlock()
+	if plan.preview.Selection.RemoveTasks {
+		unlockTasks, err := lockTaskIDs(ctx, m.cfg.TasksRoot, "task", plan.preview.Tasks)
+		if err != nil {
+			return result, err
+		}
+		defer unlockTasks()
+	}
 	fresh, err := m.PlanReleaseCleanup(ctx, plan.preview.ReleaseID, plan.preview.Selection)
 	if err != nil {
 		return result, err
@@ -262,7 +274,13 @@ func (m *manager) recheckCleanupTargets(ctx context.Context, step releaseCleanup
 		if ancestrySHA == "" {
 			ancestrySHA = step.expectedSHA
 		}
-		sha, err := m.git.RemoteRefSHA(ctx, step.repoPath, target.ref)
+		var sha string
+		var err error
+		if step.remoteURL != "" {
+			sha, err = m.git.RemoteRefSHAAt(ctx, step.repoPath, step.remoteURL, target.ref)
+		} else {
+			sha, err = m.git.RemoteRefSHA(ctx, step.repoPath, target.ref)
+		}
 		if err != nil {
 			return err
 		}

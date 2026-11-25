@@ -864,6 +864,12 @@ func taskCleanupTestManagerIn(t *testing.T, root string) (*manager, *mockGitClie
 	}
 	gitMock.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
 	gitMock.remoteURLRes = "git@example.com:group/svc.git"
+	gitMock.remoteRefSHAAtFn = func(repo, url, ref string) (string, error) {
+		if url != gitMock.remoteURLRes {
+			return "", errors.New("unknown fixture remote")
+		}
+		return gitMock.remoteRefSHAFn(repo, ref)
+	}
 	gitMock.listWorktreesRes = []git.WorktreeEntry{
 		{Path: worktree, HEAD: taskCleanupTaskSHA, Branch: "refs/heads/feature/APP-1"},
 	}

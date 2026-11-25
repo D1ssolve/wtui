@@ -169,7 +169,12 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 }
 
 func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseTaskResult, error) {
-	tf, err := m.gateTaskAction(ctx, params.TaskID, gitflow.EventActionClose)
+	unlock, err := m.lockTask(ctx, params.TaskID)
+	var tf *taskFlow
+	if err == nil {
+		defer unlock()
+		tf, err = m.gateTaskAction(ctx, params.TaskID, gitflow.EventActionClose)
+	}
 	if err != nil {
 		if params.StatusCh != nil {
 			sendLine(ctx, params.StatusCh, "[validate] "+err.Error())

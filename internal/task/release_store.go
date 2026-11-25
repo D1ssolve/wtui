@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/fsutil"
 )
 
 const (
@@ -88,35 +89,13 @@ func (m *manager) writeReleaseManifest(release domain.Release) (domain.Release, 
 	release = redactReleaseDiagnostics(release)
 
 	manifestPath := filepath.Join(releaseDir, releaseManifestFileName)
-	tmpFile, err := os.CreateTemp(releaseDir, "release-*.tmp")
+	data, err := json.MarshalIndent(release, "", "  ")
+	if err == nil {
+		err = fsutil.WriteFileAtomic(manifestPath, append(data, '\n'), 0o600)
+	}
 	if err != nil {
-		return domain.Release{}, fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
+		return domain.Release{}, fmt.Errorf("%w: %w", ErrReleaseManifestInvalid, err)
 	}
-	tmpPath := tmpFile.Name()
-
-	enc := json.NewEncoder(tmpFile)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(release); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpPath)
-		return domain.Release{}, fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
-	}
-
-	if err := tmpFile.Sync(); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpPath)
-		return domain.Release{}, fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return domain.Release{}, fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
-	}
-
-	if err := os.Rename(tmpPath, manifestPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return domain.Release{}, fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
-	}
-
 	return release, nil
 }
 
@@ -166,6 +145,8 @@ func (m *manager) loadReleaseManifestWithContext(ctx context.Context, releaseID 
 
 	if release.ID == "" {
 		release.ID = releaseID
+	} else if release.ID != releaseID {
+		return domain.Release{}, fmt.Errorf("%w: directory %q contains manifest for %q", ErrReleaseManifestInvalid, releaseID, release.ID)
 	}
 	release.Dir = releaseDir
 	normalizeReleaseTimesUTC(&release)

@@ -245,14 +245,24 @@ func TestExecuteTaskCleanup_RemovesGeneratedFilesBeforeTaskDirectory(t *testing.
 
 func TestExecuteTaskCleanup_RemoteDeleteSelectionUsesExpectedSHA(t *testing.T) {
 	mgr, gitMock := taskCleanupTestManager(t)
+	atApprovedStore := gitMock.remoteRefSHAFn
 	gitMock.listWorktreesFn = func(string) ([]git.WorktreeEntry, error) { return gitMock.listWorktreesRes, nil }
 	gitMock.removeWorktreeFn = func(_, path string, _ bool) error {
 		gitMock.listWorktreesRes = nil
+		// A named-origin lookup can no longer supply the approved store's
+		// ancestry evidence. Only reads at the captured URL can do so.
+		gitMock.remoteRefSHAFn = func(_, _ string) (string, error) { return "", nil }
 		return os.RemoveAll(path)
 	}
-	var gotBranch, gotSHA string
-	gitMock.deleteRemoteBranchIfUnchangedFn = func(_, branch, expectedSHA string) error {
-		gotBranch, gotSHA = branch, expectedSHA
+	var gotURL, gotRef, gotSHA string
+	gitMock.remoteRefSHAAtFn = func(repo, url, ref string) (string, error) {
+		if url != gitMock.remoteURLRes {
+			t.Fatalf("lookup at unapproved destination %s", url)
+		}
+		return atApprovedStore(repo, ref)
+	}
+	gitMock.deleteRemoteRefIfUnchangedFn = func(_, url, ref, expectedSHA string) error {
+		gotURL, gotRef, gotSHA = url, ref, expectedSHA
 		return nil
 	}
 	plan, err := mgr.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1", DeleteRemoteTaskBranches: true})
@@ -264,8 +274,8 @@ func TestExecuteTaskCleanup_RemoteDeleteSelectionUsesExpectedSHA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotBranch != "feature/APP-1" || gotSHA != taskCleanupTaskSHA {
-		t.Fatalf("remote delete = %s %s", gotBranch, gotSHA)
+	if gotURL != gitMock.remoteURLRes || gotRef != "refs/heads/feature/APP-1" || gotSHA != taskCleanupTaskSHA {
+		t.Fatalf("remote delete = %s %s %s", gotURL, gotRef, gotSHA)
 	}
 	if len(result.Remote) != 0 {
 		t.Fatalf("remote retained after delete: %+v", result.Remote)
@@ -330,6 +340,95 @@ func TestExecuteTaskCleanup_ForceCompletesPartialCleanupPlan(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(mgr.cfg.TasksRoot, "APP-1")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("task directory still exists: %v", err)
+	}
+}
+
+func TestForceRetryOnlyRemainingOperations(t *testing.T) {
+	for _, drift := range []string{"none", "source", "target", "registration", "new file"} {
+		t.Run(drift, func(t *testing.T) {
+			m, g, _ := setupExecutableTaskCleanup(t)
+			root := filepath.Join(m.cfg.TasksRoot, "APP-1")
+			repos := map[string]string{}
+			for _, svc := range []string{"svc", "web"} {
+				repo := filepath.Join(m.cfg.RootDir, svc)
+				repos[svc] = repo
+				for _, p := range []string{repo, filepath.Join(root, svc)} {
+					if e := os.MkdirAll(p, 0700); e != nil {
+						t.Fatal(e)
+					}
+				}
+			}
+			m.discoverer = &staticResolver{paths: repos}
+			g.commonDirFn = func(path string) (string, error) { return filepath.Join(repos[filepath.Base(path)], ".git"), nil }
+			g.listWorktreesRes = append(g.listWorktreesRes, git.WorktreeEntry{Path: filepath.Join(root, "web"), HEAD: taskCleanupTaskSHA, Branch: "refs/heads/feature/APP-1"})
+			g.listWorktreesFn = func(repo string) ([]git.WorktreeEntry, error) {
+				var result []git.WorktreeEntry
+				for _, r := range g.listWorktreesRes {
+					if filepath.Base(repo) == filepath.Base(r.Path) {
+						result = append(result, r)
+					}
+				}
+				return result, nil
+			}
+			p, e := m.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1"})
+			if e != nil || p.Blocked() || len(p.preview.Services) != 2 {
+				t.Fatal(p.preview, e)
+			}
+			remove := g.removeWorktreeFn
+			g.removeWorktreeFn = func(repo, path string, force bool) error {
+				if filepath.Base(path) == "web" && !force {
+					return errors.New("transient worktree removal failure")
+				}
+				return remove(repo, path, force)
+			}
+			r, e := m.ExecuteTaskCleanup(t.Context(), p, nil)
+			if e == nil || len(r.Completed) != 1 {
+				t.Fatal(r, e)
+			}
+			t.Logf("first execution: completed=%v error=%v", r.Completed, e)
+			g.removeWorktreeFn = remove
+			switch drift {
+			case "source":
+				base := g.resolveRefFn
+				g.resolveRefFn = func(repo, ref string) (string, error) {
+					if repo == repos["svc"] && ref == "refs/heads/feature/APP-1" {
+						return strings.Repeat("f", 40), nil
+					}
+					return base(repo, ref)
+				}
+			case "target":
+				base := g.remoteRefSHAFn
+				g.remoteRefSHAFn = func(repo, ref string) (string, error) {
+					if repo == repos["svc"] && ref == "refs/heads/master" {
+						return strings.Repeat("f", 40), nil
+					}
+					return base(repo, ref)
+				}
+			case "registration":
+				g.listWorktreesRes = append(g.listWorktreesRes, git.WorktreeEntry{Path: filepath.Join(root, "svc"), HEAD: taskCleanupTaskSHA, Branch: "refs/heads/feature/APP-1"})
+			case "new file":
+				if err := os.WriteFile(filepath.Join(root, "unapproved.txt"), []byte("keep"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r, e = m.ExecuteTaskCleanup(t.Context(), p, nil, TaskCleanupExecutionSelection{Force: true})
+			if drift == "none" {
+				if e != nil {
+					t.Fatal(e)
+				}
+				if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("cleanup left %s: %v", root, err)
+				}
+				return
+			}
+			if !errors.Is(e, ErrTaskCleanupBlocked) || len(r.Completed) != 0 {
+				t.Fatalf("retry acted on drift: completed=%v err=%v", r.Completed, e)
+			}
+			if _, err := os.Stat(filepath.Join(root, "web")); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("retry blocked before removing web: %v", e)
+		})
 	}
 }
 

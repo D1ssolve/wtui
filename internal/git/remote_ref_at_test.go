@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+// Normalize only the per-invocation nonce, keeping the operand and both
+// rewrite keys independently visible in the command contract.
+func normalizePinnedArgs(args string) string {
+	_, rest, ok := strings.Cut(args, "url..insteadOf=")
+	if !ok {
+		return args
+	}
+	prefix, _, _ := strings.Cut(rest, " ")
+	if !strings.HasPrefix(prefix, "wtui-") || !strings.HasSuffix(prefix, ":") {
+		return args
+	}
+	return strings.ReplaceAll(args, prefix, "<pin>")
+}
+
 func TestRemoteRefSHAAt_UsesCapturedURLAndExactRef(t *testing.T) {
 	for _, tc := range []struct {
 		output, want string
@@ -32,7 +46,7 @@ func TestRemoteRefSHAAt_UsesCapturedURLAndExactRef(t *testing.T) {
 				t.Fatalf("lookup = %q, %v", got, err)
 			}
 			args, err := os.ReadFile(argsFile)
-			if err != nil || string(args) != "-C /repo ls-remote -- /captured.git refs/heads/target\n" {
+			if err != nil || normalizePinnedArgs(string(args)) != "-C /repo -c url..insteadOf=<pin> -c url..pushInsteadOf=<pin> ls-remote -- <pin>/captured.git refs/heads/target\n" {
 				t.Fatalf("args = %q, %v", args, err)
 			}
 		})

@@ -13,6 +13,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/fsutil"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/shell"
 )
@@ -91,11 +92,7 @@ func (m *manager) saveTaskFlow(tf *taskFlow) error {
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(m.taskDir(tf.taskID), taskFlowFileName+".tmp")
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(m.taskDir(tf.taskID), taskFlowFileName))
+	return fsutil.WriteFileAtomic(filepath.Join(m.taskDir(tf.taskID), taskFlowFileName), data, 0o644)
 }
 
 func (tf *taskFlow) current() *gitflow.State {
@@ -154,6 +151,11 @@ func (m *manager) afterTaskAction(ctx context.Context, tf *taskFlow, action stri
 // AdvanceTask fires a named event of the task's current wait state, or re-checks the
 // wait condition when event is empty, then runs the machine until it waits again.
 func (m *manager) AdvanceTask(ctx context.Context, taskID, event string, statusCh chan<- string) error {
+	unlock, err := m.lockTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	tf, err := m.loadTaskFlow(ctx, taskID)
 	if err != nil {
 		return err

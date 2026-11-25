@@ -108,6 +108,11 @@ func (m *manager) MergeServiceMR(ctx context.Context, taskID, serviceName string
 }
 
 func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string, selection ...MRSelection) (TaskMergeResult, error) {
+	unlock, err := m.lockTask(ctx, taskID)
+	if err != nil {
+		return TaskMergeResult{TaskID: taskID}, err
+	}
+	defer unlock()
 	tf, err := m.gateTaskAction(ctx, taskID, gitflow.EventActionMergeReviews)
 	if err != nil {
 		return TaskMergeResult{TaskID: taskID}, err

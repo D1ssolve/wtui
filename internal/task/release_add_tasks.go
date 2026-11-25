@@ -203,6 +203,16 @@ func (m *manager) AddReleaseTasks(ctx context.Context, plan ReleaseTaskAddPlan, 
 	if !plan.Ready() {
 		return domain.Release{}, errors.New("release add tasks: the plan has blockers")
 	}
+	unreserve, err := m.reserveMembership(ctx, plan.TaskIDs)
+	if err != nil {
+		return domain.Release{}, err
+	}
+	defer unreserve()
+	unlock, err := m.lockRelease(ctx, plan.ReleaseID)
+	if err != nil {
+		return domain.Release{}, err
+	}
+	defer unlock()
 	fresh, err := m.PlanReleaseTaskAdd(ctx, plan.ReleaseID, plan.TaskIDs)
 	if err != nil {
 		return domain.Release{}, err

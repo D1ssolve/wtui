@@ -183,6 +183,11 @@ func NewCommandClient(logger *slog.Logger) *CommandClient {
 }
 
 func (c *CommandClient) execGit(ctx context.Context, args ...string) (string, error) {
+	out, err := c.execGitRaw(ctx, args...)
+	return strings.TrimRight(out, "\n"), err
+}
+
+func (c *CommandClient) execGitRaw(ctx context.Context, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, subprocessTimeout)
 	defer cancel()
 
@@ -207,7 +212,7 @@ func (c *CommandClient) execGit(ctx context.Context, args ...string) (string, er
 		}
 	}
 
-	return strings.TrimRight(stdout.String(), "\n"), nil
+	return stdout.String(), nil
 }
 
 func (c *CommandClient) IsValidRepo(ctx context.Context, repoPath string) error {
@@ -505,45 +510,6 @@ func (c *CommandClient) RevListAheadBehind(ctx context.Context, worktreePath, or
 func (c *CommandClient) Fetch(ctx context.Context, worktreePath string) error {
 	_, err := c.execGit(ctx, "-C", worktreePath, "fetch", "origin")
 	return err
-}
-
-func (c *CommandClient) RemoteURL(ctx context.Context, worktreePath, remote string) (string, error) {
-	if strings.TrimSpace(remote) == "" {
-		remote = "origin"
-	}
-	out, err := c.execGit(ctx, "-C", worktreePath, "remote", "get-url", remote)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(out), nil
-}
-
-// PushURL resolves the actual push destination. `git remote get-url --push
-// --all` prints every configured push URL (one per line); a remote with
-// several push destinations has no single verifiable identity, so it fails
-// closed.
-func (c *CommandClient) PushURL(ctx context.Context, worktreePath, remote string) (string, error) {
-	if strings.TrimSpace(remote) == "" {
-		remote = "origin"
-	}
-	out, err := c.execGit(ctx, "-C", worktreePath, "remote", "get-url", "--push", "--all", remote)
-	if err != nil {
-		return "", err
-	}
-	var urls []string
-	for line := range strings.SplitSeq(out, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			urls = append(urls, trimmed)
-		}
-	}
-	switch len(urls) {
-	case 0:
-		return "", errors.New("resolve push URL: empty output")
-	case 1:
-		return urls[0], nil
-	default:
-		return "", fmt.Errorf("resolve push URL: remote %s has multiple push URLs %v", remote, urls)
-	}
 }
 
 func (c *CommandClient) Checkout(ctx context.Context, worktreePath, branch string) error {
@@ -852,14 +818,6 @@ func (c *CommandClient) PushRefWithLease(ctx context.Context, repoPath, captured
 		exactOID+":"+targetRef,
 	)
 	return err
-}
-
-// validPushRemoteURL reports whether captured is safe to use as an explicit
-// push destination: nonempty after trimming and not option-like, so it can
-// never be reinterpreted as a git flag.
-func validPushRemoteURL(captured string) bool {
-	trimmed := strings.TrimSpace(captured)
-	return trimmed != "" && !strings.HasPrefix(trimmed, "-")
 }
 
 func branchRef(branch string) (string, error) {

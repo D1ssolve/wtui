@@ -13,6 +13,11 @@ func (m *manager) ForceTaskCleanup(ctx context.Context, taskID string, deleteRem
 		return TaskCleanupResult{}, err
 	}
 	result := TaskCleanupResult{TaskID: taskID}
+	unlock, err := m.lockTask(ctx, taskID)
+	if err != nil {
+		return result, err
+	}
+	defer unlock()
 	taskDir := m.taskDir(taskID)
 	services, err := m.ListServices(ctx, taskID)
 	if err != nil {

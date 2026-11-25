@@ -220,7 +220,7 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 				}
 				preview.Worktrees = append(preview.Worktrees, target.path)
 				step := releaseCleanupStep{kind: cleanupReleaseWorktree, description: "remove release worktree " + target.path, repoPath: svc.RepoPath, path: target.path, branch: target.branch, expectedSHA: target.sha}
-				step.noop = m.validateCleanupWorktree(ctx, &plan, entries, step)
+				step.noop = m.validateCleanupWorktree(ctx, &plan, entries, step, false)
 				plan.steps = append(plan.steps, step)
 			}
 		}
@@ -245,7 +245,7 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 				} else {
 					preview.Worktrees = append(preview.Worktrees, expectedPath)
 					step := releaseCleanupStep{kind: cleanupTaskWorktree, description: "remove task worktree " + expectedPath, repoPath: svc.RepoPath, path: expectedPath, branch: fb.Branch, expectedSHA: featureBranchSourceIdentity(fb)}
-					step.noop = m.validateCleanupWorktree(ctx, &plan, entries, step)
+					step.noop = m.validateCleanupWorktree(ctx, &plan, entries, step, false)
 					plan.steps = append(plan.steps, step)
 				}
 			}
@@ -568,7 +568,7 @@ func (m *manager) cleanupReleaseBranchProtected(branch string) bool {
 	return slices.Contains(exact, branch)
 }
 
-func (m *manager) validateCleanupWorktree(ctx context.Context, plan cleanupPlanBlocker, entries []git.WorktreeEntry, step releaseCleanupStep) bool {
+func (m *manager) validateCleanupWorktree(ctx context.Context, plan cleanupPlanBlocker, entries []git.WorktreeEntry, step releaseCleanupStep, allowDirty bool) bool {
 	matches := make([]git.WorktreeEntry, 0, 1)
 	for _, entry := range entries {
 		if samePath(entry.Path, step.path) {
@@ -602,7 +602,7 @@ func (m *manager) validateCleanupWorktree(ctx context.Context, plan cleanupPlanB
 	dirty, err := m.git.IsDirty(ctx, step.path)
 	if err != nil {
 		plan.block("worktree %s cleanliness check failed", step.path)
-	} else if dirty {
+	} else if dirty && !allowDirty {
 		plan.block("worktree %s is dirty", step.path)
 	}
 	return false

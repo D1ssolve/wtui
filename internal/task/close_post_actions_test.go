@@ -109,22 +109,23 @@ func proofActions(t *testing.T, proof closePostActionProof, service string) []st
 	return nil
 }
 
-func TestSameRemoteURL_ConservativeNormalization(t *testing.T) {
+func TestSameRemoteURL_ExactIdentity(t *testing.T) {
 	cases := []struct {
 		name string
 		a, b string
 		want bool
 	}{
 		{"exact", "git@gitlab.com:group/svc.git", "git@gitlab.com:group/svc.git", true},
-		{"trim and trailing slash", " git@gitlab.com:group/svc.git/ ", "git@gitlab.com:group/svc.git", true},
-		{"bare without .git suffix", "git@gitlab.com:group/svc", "git@gitlab.com:group/svc.git", true},
+		{"trim and trailing slash", " git@gitlab.com:group/svc.git/ ", "git@gitlab.com:group/svc.git", false},
+		{"bare without .git suffix", "git@gitlab.com:group/svc", "git@gitlab.com:group/svc.git", false},
+		{"space distinguishes sibling stores", "/tmp/origin.git ", "/tmp/origin.git", false},
 		{"empty never matches", "", "git@gitlab.com:group/svc.git", false},
 		{"both empty", "  ", "", false},
 		{"ssh path case differs", "git@gitlab.com:Group/Svc.git", "git@gitlab.com:group/svc.git", false},
 		{"ssh host case differs", "git@GitLab.com:group/svc.git", "git@gitlab.com:group/svc.git", false},
 		{"ssh different repos", "git@gitlab.com:group/svc.git", "git@gitlab.com:group/svc2.git", false},
 		{"https exact", "https://gitlab.com/group/svc.git", "https://gitlab.com/group/svc.git", true},
-		{"https scheme and host case", "HTTPS://GITLAB.COM/group/svc.git", "https://gitlab.com/group/svc", true},
+		{"https scheme host and suffix differ", "HTTPS://GITLAB.COM/group/svc.git", "https://gitlab.com/group/svc", false},
 		{"https path case differs", "https://gitlab.com/Group/Svc.git", "https://gitlab.com/group/svc.git", false},
 		{"https path segment differs", "https://gitlab.com/group-a/svc.git", "https://gitlab.com/group-b/svc.git", false},
 		{"scheme differs", "ssh://git@gitlab.com/group/svc.git", "https://gitlab.com/group/svc.git", false},
@@ -292,12 +293,10 @@ func TestCloseTask_SuccessfulRequiredPostActionsProveServices(t *testing.T) {
 		}
 
 		svc.RemoteURL = " git@gitlab.com:group/svc-a.git/ "
-		if _, proven, err := mgr.verifyClosePostActionProof(taskID, svc, "task-head-sha", required); err != nil || !proven {
-			t.Fatalf("verify with trimmed/slash-normalized origin: proven = %v, err = %v", proven, err)
+		if _, proven, err := mgr.verifyClosePostActionProof(taskID, svc, "task-head-sha", required); err != nil || proven {
+			t.Fatalf("verify with differently spelled origin: proven = %v, err = %v", proven, err)
 		}
 
-		// Conservative matching: scp-like SSH URLs are not robustly parseable,
-		// so scheme/host case differences must not collapse to a match.
 		svc.RemoteURL = " GIT@GitLab.com:group/svc-a.git/ "
 		if _, proven, err := mgr.verifyClosePostActionProof(taskID, svc, "task-head-sha", required); err != nil || proven {
 			t.Fatalf("verify with host-case-changed SSH origin: proven = %v, err = %v", proven, err)
