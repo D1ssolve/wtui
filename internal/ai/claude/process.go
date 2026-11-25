@@ -119,16 +119,14 @@ func childEnv(parent []string, goos string) []string {
 		}
 		switch key {
 		case "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TZ", "TMPDIR", "TERM",
+			"LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME",
+			"LC_ADDRESS", "LC_IDENTIFICATION", "LC_MEASUREMENT", "LC_NAME", "LC_PAPER", "LC_TELEPHONE",
 			"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
 			"NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS":
 			env = append(env, entry)
 		case "CLAUDE_CONFIG_DIR":
 			// https://code.claude.com/docs/en/claude-directory.md: every ~/.claude path moves, including .credentials.json.
 			env = append(env, entry)
-		default:
-			if strings.HasPrefix(key, "LC_") {
-				env = append(env, entry)
-			}
 		}
 	}
 	return env

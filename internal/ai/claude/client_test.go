@@ -152,6 +152,27 @@ func TestClaude_RejectsNonSubscriptionBeforeSendingPrompt(t *testing.T) {
 	}
 }
 
+func TestClaude_FiltersLocaleMarkersForBothChildren(t *testing.T) {
+	fakeClaude(t)
+	t.Setenv("LC_ALL", "C")
+	t.Setenv("LC_API_KEY", "synthetic-marker")
+	t.Setenv("LC_MCP_TOKEN", "synthetic-marker")
+	setFixture(t, "record-locale", "1")
+	setFixture(t, "output", result(`{"yaml":"workflow:\n  extends: trunk-based"}`))
+	if _, err := New("", testTimeout).DraftWorkflow(t.Context(), ai.WorkflowRequest{Description: privateInput}); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{"auth", "-p"} {
+		data, err := os.ReadFile(filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "locale-"+stage))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "LC_ALL=true LC_API_KEY=false LC_MCP_TOKEN=false" {
+			t.Errorf("%s child locale checks: %s", stage, data)
+		}
+	}
+}
+
 func TestClaudeProcess(t *testing.T) {
 	if address := os.Getenv("WTUI_CLAUDE_DESCENDANT"); address != "" {
 		conn, err := net.DialTimeout("tcp", address, testTimeout)
@@ -186,6 +207,12 @@ func TestClaudeProcess(t *testing.T) {
 		data, err := os.ReadFile(filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), key))
 		check(err == nil || errors.Is(err, os.ErrNotExist))
 		return string(data)
+	}
+	if fixture("record-locale") == "1" {
+		_, keyPresent := os.LookupEnv("LC_API_KEY")
+		_, tokenPresent := os.LookupEnv("LC_MCP_TOKEN")
+		record := fmt.Sprintf("LC_ALL=%t LC_API_KEY=%t LC_MCP_TOKEN=%t", os.Getenv("LC_ALL") == "C", keyPresent, tokenPresent)
+		check(os.WriteFile(filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "locale-"+args[0]), []byte(record), 0600) == nil)
 	}
 	if slices.Equal(args, []string{"auth", "status"}) {
 		mode := fixture("auth")
