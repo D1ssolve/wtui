@@ -146,7 +146,7 @@ Nothing is deleted automatically after Close, merge, tags, or finalize.
 4. Every selected item is planned again and requires separate confirmation.
 ![Task cleanup confirmation in wtui](images/workflows/task-cleanup-confirm-120x40.png)
 
-Cleanup removes worktrees, generated metadata, and task/release directories. Local and remote branches and tags are always retained. A directory with unknown files remains in place and returns an error instead of being recursively deleted.
+Cleanup removes worktrees, generated metadata, and task/release directories. It deletes local task and release branches it proves merged and unchanged. Remote branches go only after you tick them and confirm a second dialog. Tags stay; only Delete Release (`x`) removes them. A directory with unknown files stays and returns an error, unless you confirm force. Steps aren't rolled back: if cleanup stops midway, finished steps stay done, so press `D` again.
 
 More detail: [cleanup.md](cleanup.md). All keys and constraints: [configuration.md](configuration.md).
 
@@ -158,6 +158,6 @@ More detail: [cleanup.md](cleanup.md). All keys and constraints: [configuration.
 | Merge check | After review and CI pass, repeat `M`. |
 | Release | For a recoverable `failed`, use `Ctrl+R` in Releases. After a partial production merge, use `M`, not `Ctrl+R`. |
 | Cleanup | Removed items are not restored. Press `D` or `P` and create a new plan. A changed push URL or new file in the task directory also needs a new plan. |
-| "is being changed by another wtui" | Another wtui window is changing this task or release. Wait for it or close it, then repeat the action. |
+| "is being changed by another wtui" | Another wtui window is running a locked operation on this task or release. Wait for it or close it, then repeat the action. Not every change takes this lock (see [Several wtui windows](configuration.md#several-wtui-windows)). |
 | Running operation | If wtui marks it safe to interrupt, `Esc` then `y` cancels it; otherwise wtui asks you to wait. There's no rollback and wtui doesn't quit: check the reported outcome, then repeat the action. |
 | Unclear failure | `E` asks the configured AI provider (Codex by default, Claude with `ai.provider: claude`) to explain the cause and next step. It changes nothing. |

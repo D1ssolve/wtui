@@ -324,9 +324,9 @@ workflow:
 | `labels`, `reviewers`, `assignees` | none | Passed to `gh`/`glab` as given. Empty entries fail startup; wtui doesn't check the names, so the forge CLI reports unknown ones. |
 | `remove_source_branch` | `false` | GitLab: asks GitLab to delete the source branch when the MR merges. GitHub: not supported; the PR is not created, and the close plan says so. Use the repository setting "Automatically delete head branches" instead. |
 
-Without an `mr` block, wtui creates plain MRs/PRs: not draft, no labels, reviewers or assignees, and the source branch stays. `wtui flow` and the close preview show the policy when one is set.
+Without an `mr` block, wtui passes none of these options: it doesn't ask for a draft, labels, reviewers or assignees, or for source branch removal. That describes wtui's request only. Forge and repository settings, such as default reviewers or automatic branch deletion, still apply. `wtui flow` and the close preview show the policy when one is set.
 
-wtui needs the source branch after the merge in some flows, so `remove_source_branch: true` fails startup when the type closes with `merge`, reviews into several targets, is `shared`, or has `tag`, `cherry_pick`, `pipeline` or machine steps. It is always rejected under `workflow.release.mr`, because the release branch is shared. When the source is removed on merge, wtui verifies the merged review without pushing the source again.
+wtui needs the source branch after the merge in some flows, so `remove_source_branch: true` fails startup when the type closes with `merge`, reviews into several targets, is `shared`, or has `tag`, `cherry_pick`, `pipeline` or machine steps. It is always rejected under `workflow.release.mr`, because the release branch is shared. With `remove_source_branch: true` on an eligible type, Close checks the MR history before pushing, so a merged review whose source was removed is verified without pushing the source again. Without it, Close pushes the source before checking the MR (`close.push_source_before_review`, default `true`), so a source branch that a repository setting deleted can be pushed again.
 
 A hotfix reviewed into several targets uses its type's `draft`, `labels`, `reviewers` and `assignees`, never source removal.
 
@@ -537,7 +537,7 @@ Preview performs a fetch per service to refresh remote-tracking refs but creates
 
 Branch detection chooses the longest matching prefix; equal-length matches from different types are ambiguous and resolve to `unknown`. Branches matching no prefix belong to `workflow.default_type`.
 
-Close never deletes branches and never asks the forge to auto-delete a source branch. Cleanup is explicit and manual: `D` (alias `P`) opens a read-only scan of all tasks and released releases, and each selected candidate is replanned and confirmed before execution. Cleanup removes worktrees, generated task metadata, and directories while retaining local and remote branches; delete branches on the forge when needed.
+Close never deletes branches itself. It asks the forge to delete the source branch on merge only with `mr.remove_source_branch: true` on GitLab (see [MR policy](#mr-policy)); forge or repository settings can still delete branches after a merge. Cleanup is explicit and manual: `D` (alias `P`) opens a read-only scan of all tasks and released releases, and each selected candidate is replanned and confirmed before execution. What cleanup deletes is described under [Release Cleanup](#release-cleanup).
 
 ## AI
 
@@ -625,17 +625,27 @@ Release version proposals are calculated independently from each service reposit
 
 ### Release Cleanup
 
-Release cleanup removes release/task worktrees, directories, and the release manifest; tags are never deleted. Local branches are always retained, because the authoritative merge targets live on the remote and cannot be atomically guarded. Selecting remote branch deletion fails closed before any mutation; deselect remote deletion to run a local-only cleanup.
+Cleanup (task or release) removes worktrees, directories and, for a release, its manifest. It deletes:
+
+- **Local task and release branches** that the plan proves merged into their targets, only while they still point at the planned commit.
+- **Remote task and release branches** only when you tick remote deletion and confirm it in a separate dialog. Each is deleted only if it still points at the planned commit; a moved branch stops the step.
+- **Never tags.** Deleting a release with `x` in Releases is a separate action. It also removes the release's local and remote branches and tags after checking that they still match the release.
+
+Force is another separate choice. In the task cleanup dialog, `f` lets cleanup remove unknown local files in the task directory. After a normal cleanup fails, a force confirmation removes the remaining local files. Force task cleanup deletes worktrees, local branches and all task files without the usual completion and dirty-worktree checks, and remote branches only if you tick them. It still never deletes protected branches or anything outside the task directory.
 
 Directories are deleted only when every entry is plan-known. Unknown files or directories are preserved and named in the returned error, so user content never dies with a recursive delete. The same rule applies to task cleanup via `D`.
 
-When you confirm a task cleanup, wtui reads each repository's `origin` push URL again and compares it with the URL in the approved plan, including repositories whose worktree is already gone. If a URL changed, or a file appeared in the task directory after planning, nothing is removed: press `D` again to plan anew.
+Task cleanup checks each repository's `origin` push URL against the approved plan, including repositories whose worktree is already gone. It checks once before the first step and again before every step. A change before the first step stops cleanup with nothing removed. A change midway stops the remaining steps, while finished steps stay done; there's no rollback. In a normal cleanup, a file that appeared in the task directory stops only the final directory removal. With force, wtui compares the task directory with the planned inventory before the first step and refuses new or replaced entries. In every case, read the output to see what finished, then press `D` again for a new plan. These checks belong to task cleanup; release cleanup and Delete Release have their own plans.
 
 Task cleanup also inspects every release that involves the task. An active in-flight status, a recoverable failure, and a malformed or unknown status block cleanup; malformed manifests fail closed the same way. A `released` manifest supplies integration proof. A `rejected` release or a nonrecoverable failure neither blocks cleanup nor proves integration: the task must still be proven merged through live or forge-provided ancestry.
 
 ### Several wtui windows
 
-wtui locks a task or release while it changes that task's or release's state, so two wtui processes on the same machine can't change it at once. The lock files sit next to the state (`.wtui-task..<ID>.lock` under `tasks_root`, `.wtui-release..<ID>.lock` under `release.root_dir`) and are left in place on purpose; deleting them doesn't help. A second process doesn't wait: it stops with `task <ID> is being changed by another wtui (last recorded pid N); wait for it or close it`. The PID is only the last recorded owner, so check that process before closing anything. wtui writes the state files atomically, so a crash leaves either the old or the new file.
+Some operations lock their task or release so that two wtui processes using the same `tasks_root` can't run them on it at once. They are task creation, Close (`C`), Merge (`M`), hotfix conversion (`H`), removing a service, task workflow events, task cleanup and force cleanup, and the release operations (adding tasks, prepare, advancing, retry, reject, cleanup, Delete Release). Other changes don't take the lock. Adding a service (`a`), sync, push, lazygit and your own Git commands can still run while another window holds it, and reading or displaying state is never blocked.
+
+A second process doesn't wait. It stops with `task <ID> is being changed by another wtui (last recorded pid N); wait for it or close it`. The lock files sit next to the state (`.wtui-task..<ID>.lock` under `tasks_root`, `.wtui-release..<ID>.lock` under `release.root_dir`) and stay after use on purpose. A leftover file doesn't mean another process is active, and the PID is only a hint from the last owner. Don't delete these files.
+
+wtui replaces each state file (a release manifest or a task checkpoint) as a whole, so a crash leaves either the old or the new version of that one file. That isn't a transaction across files, Git or the forge: a crash between steps can leave Git or the forge ahead of the saved state.
 
 ## Validation
 
@@ -684,8 +694,9 @@ tasks mixing types must be split.
    when `tag.shared_version` is enabled.
 5. Confirm to create/push tags. Cleanup is never automatic afterwards:
     **Tasks → D** opens a read-only scan where qualifying local cleanup can be
-    selected and confirmed explicitly. Local and remote branches are retained;
-    delete remote branches manually in the forge when needed. **Tasks → P** is
+    selected and confirmed explicitly. It deletes proven local task branches;
+    remote branches stay unless you select and separately confirm their
+    deletion. **Tasks → P** is
     an alias for the same cleanup review. **Tasks → d** cleans up only the
     selected task, skipping the scan; the same per-item plan and confirmation
     still apply.
@@ -714,9 +725,21 @@ retriggering; inspect its result in the forge.
 
 The saved identity covers the services, their source SHAs and remotes, and the
 compiled workflow (including `mr` policies) with the `tag` and `close` settings.
-Changing any of them after tag confirmation blocks the retry; restore the
-previous configuration to continue. Checkpoints written by earlier wtui
-versions, before the strict config changes, are still recognized.
+Changing any of them after tag or pipeline confirmation blocks the retry.
+Restoring the previous YAML helps only when the configuration was the
+change; a different source SHA, path or remote stays blocked.
+
+Checkpoints from recent earlier versions are recognized only in these
+layouts: the current one; the older layout with the removed `tag`/`close`
+keys either unset or at their old defaults; and the layout that stored an
+empty `mr` policy. Any other layout stays blocked, including a removed key
+with a non-default value (such as a custom `tag.parser`) and checkpoints
+from v0.17.0 or older. There is no general migration.
+
+A recognized checkpoint doesn't mean the retry will succeed. If it records
+a pipeline as started without a confirmed result, wtui won't trigger it again
+and stops with `pipeline launch outcome unknown`: check that pipeline on the
+forge. A pipeline recorded as done is not triggered again either.
 
 Manual cleanup verifies integration against every review
 target — live ancestry or merged-request evidence per target — and requires
