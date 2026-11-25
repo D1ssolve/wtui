@@ -92,13 +92,14 @@ type TasksPanel struct {
 	width   int
 	height  int
 
-	tasks       []domain.Task
-	flow        *gitflow.ResolvedGitFlow
-	rootDir     string
-	repoCount   int
-	rows        []treeRow
-	treeMode    bool
-	selectedIdx int
+	tasks         []domain.Task
+	flow          *gitflow.ResolvedGitFlow
+	rootDir       string
+	repoCount     int
+	createTaskKey string
+	rows          []treeRow
+	treeMode      bool
+	selectedIdx   int
 }
 
 type treeRowKind int
@@ -129,11 +130,41 @@ func NewTasksPanel(width, height int) TasksPanel {
 	l.DisableQuitKeybindings()
 
 	return TasksPanel{
-		list:        l,
-		width:       width,
-		height:      height,
-		selectedIdx: -1,
+		list:          l,
+		width:         width,
+		height:        height,
+		selectedIdx:   -1,
+		createTaskKey: "i",
 	}
+}
+
+func (p *TasksPanel) SetCreateTaskKey(key string) {
+	p.createTaskKey = key
+}
+
+func (p TasksPanel) emptyState(width, height int) string {
+	filter := strings.TrimSpace(p.list.FilterValue())
+	lines := []string{fmt.Sprintf("No tasks yet. Press [%s] to create one.", p.createTaskKey)}
+	if len(p.tasks) > 0 {
+		lines = []string{fmt.Sprintf("No tasks match %q.", filter)}
+	} else if p.repoCount == 0 {
+		lines = append(lines,
+			fmt.Sprintf("No repositories found under %s.", p.rootDir),
+			"Set root_dir in the config (see wtui --help).",
+		)
+	}
+
+	wrap := func(text string) string {
+		return ansi.Wrap(lipgloss.NewStyle().Foreground(tasksColorDim).Render(text), width, " ")
+	}
+	wrapped := make([]string, len(lines))
+	for i, line := range lines {
+		wrapped[i] = wrap(line)
+	}
+	for len(wrapped) > 1 && lipgloss.Height(strings.Join(wrapped, "\n")) > height {
+		wrapped = wrapped[:len(wrapped)-1]
+	}
+	return clampLines(strings.Join(wrapped, "\n"), width, height)
 }
 
 func (p *TasksPanel) SetDiscovery(rootDir string, repoCount int) {
@@ -455,7 +486,7 @@ func (p TasksPanel) View() string {
 		return p.treeView()
 	}
 
-	total := len(p.list.Items())
+	total := len(p.list.VisibleItems())
 	current := 0
 	if total > 0 {
 		current = p.list.Index() + 1
@@ -469,12 +500,7 @@ func (p TasksPanel) View() string {
 	body := p.list.View()
 	parts := []string{titleStyle.Render(title)}
 	if total == 0 {
-		parts = append(parts, lipgloss.NewStyle().
-			Render(uitheme.HintLine("No tasks yet. Press [i] to create one.")))
-		if p.repoCount == 0 {
-			parts = append(parts, lipgloss.NewStyle().
-				Render(uitheme.HintLine(fmt.Sprintf("No repositories found under %s; set root_dir in the config (wtui --help)", p.rootDir))))
-		}
+		parts = append(parts, p.emptyState(innerDimensions(p.width, p.height).w, max(innerDimensions(p.width, p.height).h-1, 0)))
 	} else {
 		parts = append(parts, body)
 	}
@@ -487,6 +513,9 @@ func (p TasksPanel) View() string {
 func (p TasksPanel) treeView() string {
 	selectable := p.selectableRows()
 	total := len(selectable)
+	if len(p.tasks) > 0 && strings.TrimSpace(p.list.FilterValue()) != "" && total == 0 {
+		return p.emptyStateView(fmt.Sprintf("[1] Tasks  [0/%d]", len(p.tasks)))
+	}
 	current := 0
 	if total > 0 {
 		for i, idx := range selectable {
@@ -524,12 +553,7 @@ func (p TasksPanel) treeView() string {
 
 	parts := []string{titleStyle.Render(title)}
 	if total == 0 {
-		parts = append(parts, lipgloss.NewStyle().
-			Render(uitheme.HintLine("No tasks yet. Press [i] to create one.")))
-		if p.repoCount == 0 {
-			parts = append(parts, lipgloss.NewStyle().
-				Render(uitheme.HintLine(fmt.Sprintf("No repositories found under %s; set root_dir in the config (wtui --help)", p.rootDir))))
-		}
+		parts = append(parts, p.emptyState(inner.w, max(inner.h-1, 0)))
 	} else {
 		parts = append(parts, body, pagination)
 	}
@@ -539,6 +563,14 @@ func (p TasksPanel) treeView() string {
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
 	return renderPanelFrame(p.focused, p.width, p.height, titleStyle.Render(title), content)
+}
+
+func (p TasksPanel) emptyStateView(title string) string {
+	inner := innerDimensions(p.width, p.height)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(panelColorPrimary)
+	parts := []string{titleStyle.Render(title)}
+	parts = append(parts, p.emptyState(inner.w, max(inner.h-1, 0)))
+	return renderPanelFrame(p.focused, p.width, p.height, titleStyle.Render(title), lipgloss.JoinVertical(lipgloss.Left, parts...))
 }
 
 func (p *TasksPanel) rebuildRows() {

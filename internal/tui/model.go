@@ -236,6 +236,7 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 	}
 	m.setFocus(FocusTasks)
 	m.tasksPanel.SetFlow(opts.ResolvedFlow)
+	m.tasksPanel.SetCreateTaskKey(taskCreateKeyLabel())
 	m.tasksPanel.SetDiscovery(cfg.RootDir, 0)
 	m.servicesPanel.SetLazygitAvailable(opts.LazygitAvailable)
 	m.servicesPanel.SetForgeConfig(cfg.Forge)

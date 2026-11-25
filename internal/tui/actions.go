@@ -292,6 +292,15 @@ func taskEventActions(m Model) []domain.WorkflowEvent {
 	return m.taskWorkflow.Events
 }
 
+func taskCreateKeyLabel() string {
+	for _, a := range actionRegistry {
+		if a.scope == scopeTasks && a.short == "init" {
+			return a.displayKey()
+		}
+	}
+	return ""
+}
+
 func footerHints(m Model) []footerHint {
 	next := nextActionIndex(m)
 	var hints []footerHint
