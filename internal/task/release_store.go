@@ -85,6 +85,7 @@ func (m *manager) writeReleaseManifest(release domain.Release) (domain.Release, 
 		release.UpdatedAt = now
 	}
 	normalizeReleaseTimesUTC(&release)
+	release = redactReleaseDiagnostics(release)
 
 	manifestPath := filepath.Join(releaseDir, releaseManifestFileName)
 	tmpFile, err := os.CreateTemp(releaseDir, "release-*.tmp")
