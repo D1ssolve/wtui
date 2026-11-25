@@ -599,9 +599,10 @@ func (c *GlabClient) run(ctx context.Context, worktreePath string, args ...strin
 
 	if err := cmd.Run(); err != nil {
 		stderrText := strings.TrimSpace(stderr.String())
-		classified := classifyForgeExecError(err, stderrText)
+		host := forgeRepoHost(args)
+		classified := classifyForgeExecError(err, stderrText, ForgeError{Provider: ForgeProviderGitLab, Host: host})
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			if authErr := glabAuthError(ctx, worktreePath, glabRepoHost(args), err); authErr != nil {
+			if authErr := glabAuthError(ctx, worktreePath, host, err); authErr != nil {
 				return "", stderrText, authErr
 			}
 		}
@@ -609,23 +610,6 @@ func (c *GlabClient) run(ctx context.Context, worktreePath string, args ...strin
 	}
 
 	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), nil
-}
-
-func glabRepoHost(args []string) string {
-	for i := 0; i+1 < len(args); i++ {
-		if args[i] != "--repo" && args[i] != "-R" {
-			continue
-		}
-		repo := args[i+1]
-		if host := remoteHost(repo); host != "" {
-			return host
-		}
-		host, _, ok := strings.Cut(repo, "/")
-		if ok && strings.Contains(host, ".") {
-			return strings.ToLower(host)
-		}
-	}
-	return ""
 }
 
 func glabAuthError(ctx context.Context, worktreePath, host string, cause error) error {
@@ -650,32 +634,7 @@ func glabAuthError(ctx context.Context, worktreePath, host string, cause error) 
 	if !strings.Contains(message, hint) {
 		message += ": run " + hint
 	}
-	return &ForgeError{Category: ErrCategoryAuthError, Cause: cause, Stderr: message}
-}
-
-func classifyForgeExecError(err error, stderr string) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
-	}
-
-	if errors.Is(err, exec.ErrNotFound) {
-		return &ForgeError{Category: ErrCategoryNotInstalled, Cause: fmt.Errorf("%w: %w", ErrForgeUnavailable, err), Stderr: stderr}
-	}
-
-	lower := strings.ToLower(stderr)
-	if lower == "" {
-		lower = strings.ToLower(err.Error())
-	}
-
-	if strings.Contains(lower, "not authenticated") || strings.Contains(lower, "unauthorized") || strings.Contains(lower, "401") {
-		return &ForgeError{Category: ErrCategoryAuthError, Cause: err, Stderr: stderr}
-	}
-
-	if strings.Contains(lower, "timeout") || strings.Contains(lower, "no such host") || strings.Contains(lower, "connection") || strings.Contains(lower, "temporary failure") {
-		return &ForgeError{Category: ErrCategoryNetwork, Cause: err, Stderr: stderr}
-	}
-
-	return &ForgeError{Category: ErrCategoryUnknown, Cause: err, Stderr: stderr}
+	return &ForgeError{Category: ErrCategoryAuthError, Cause: cause, Stderr: message, Provider: ForgeProviderGitLab, Host: host}
 }
 
 var firstURLRe = regexp.MustCompile(`https?://[^\s]+`)

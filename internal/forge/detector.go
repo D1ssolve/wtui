@@ -66,6 +66,25 @@ func isBinaryAvailable(ctx context.Context, binary string) bool {
 // both URL and scp-like syntax; empty when unparseable.
 func RemoteHost(remoteURL string) string { return remoteHost(remoteURL) }
 
+// forgeRepoHost reads the host from a CLI repository selector, which can use
+// a URL, HOST/OWNER/REPO, or (with the CLI's default host) OWNER/REPO.
+func forgeRepoHost(args []string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] != "--repo" && args[i] != "-R" {
+			continue
+		}
+		repo := args[i+1]
+		if host := remoteHost(repo); host != "" {
+			return host
+		}
+		host, path, ok := strings.Cut(repo, "/")
+		if ok && strings.Contains(host, ".") && strings.Contains(path, "/") {
+			return strings.ToLower(host)
+		}
+	}
+	return ""
+}
+
 func remoteHost(remoteURL string) string {
 	trimmed := strings.TrimSpace(remoteURL)
 	if trimmed == "" {

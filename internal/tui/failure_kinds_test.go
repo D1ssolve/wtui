@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,6 +17,14 @@ import (
 )
 
 func TestFailureKinds_RenderCauseAndOneAction(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	if err := os.Mkdir(filepath.Join(state, "wtui"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "wtui", "wtui.log"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg := newTestConfig()
 	cfg.Tag = &config.TagConfig{Bump: "bad"}
 	_, configErr := cfg.Effective()
@@ -53,5 +63,15 @@ func TestFailureKinds_RenderCauseAndOneAction(t *testing.T) {
 				t.Fatalf("diagnostic tail or repeated action in Output:\n%s", view)
 			}
 		})
+	}
+}
+
+func TestFailureWithoutLogFile_PointsToStderr(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 48)
+	updated, _ := m.Update(LoadFailedMsg{Op: "Refresh", Err: errors.New("fixture failure")})
+	view := stripANSIForModel(updated.View())
+	if !strings.Contains(view, "Next: Check stderr") || strings.Contains(view, "Next: Press L") {
+		t.Fatalf("expected usable fallback without a log file:\n%s", view)
 	}
 }

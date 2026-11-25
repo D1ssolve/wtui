@@ -10,54 +10,105 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/D1ssolve/wtui/internal/app"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/execerr"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/gitflow"
+	"github.com/D1ssolve/wtui/internal/logutil"
 	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 )
 
 func TestForgeFailure_LoginCommandVisibleOnce(t *testing.T) {
 	bin := t.TempDir()
-	script := `#!/bin/sh
+	t.Setenv("PATH", bin)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name, cli, repo, command, stderr string
+		client                           forge.ForgeClient
+	}{
+		{"GitLab custom host with hint", "glab", "gitlab.example.com/group/project", "glab auth login --hostname gitlab.example.com", `#!/bin/sh
 if [ "$1 $2" = "auth status" ]; then
   echo 'gitlab.example.com has not been authenticated with glab; run glab auth login --hostname gitlab.example.com' >&2
 else
   echo '404 Not Found' >&2
 fi
 exit 1
-`
-	if err := os.WriteFile(filepath.Join(bin, "glab"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin)
-	dir := t.TempDir()
-	_, glabErr := forge.NewGlabClient(dir).ListIssues(t.Context(), forge.ListIssuesParams{WorktreePath: dir, Repo: "gitlab.example.com/group/project"})
-	var forgeErr *forge.ForgeError
-	if !errors.As(glabErr, &forgeErr) || forgeErr.Category != forge.ErrCategoryAuthError {
-		t.Fatalf("expected GitLab auth failure, got %v", glabErr)
-	}
-
-	for _, tc := range []struct {
-		name, command string
-		err           error
-	}{
-		{"GitLab custom host", "glab auth login --hostname gitlab.example.com", glabErr},
-		{"GitHub command on condensed line two", "gh auth login", &execerr.ExecError{
-			Argv: []string{"gh", "pr", "list"}, ExitCode: 4,
-			Stderr: "Authentication required.\nTo get started, please run:  gh auth login",
-		}},
+`, forge.NewGlabClient(dir)},
+		{"GitLab 401 without hint", "glab", "gitlab.example.com/group/project", "glab auth login --hostname gitlab.example.com", `#!/bin/sh
+if [ "$1 $2" = "auth status" ]; then exit 0; fi
+echo 'HTTP 401 unauthorized' >&2
+exit 1
+`, forge.NewGlabClient(dir)},
+		{"GitHub 401 without hint", "gh", "github.com/org/project", "gh auth login", `#!/bin/sh
+echo 'HTTP 401 unauthorized' >&2
+exit 1
+`, forge.NewGhClient(dir)},
+		{"GitHub Enterprise 401 without hint", "gh", "github.example.com/org/project", "gh auth login --hostname github.example.com", `#!/bin/sh
+echo 'HTTP 401 unauthorized' >&2
+exit 1
+`, forge.NewGhClient(dir)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 48)
-			updated, _ := m.Update(ForgeResultMsg{Op: "list_issues", ServiceName: "api", Err: tc.err})
-			view := stripANSIForModel(updated.View())
-			cli, _, _ := strings.Cut(tc.command, " ")
-			if count := strings.Count(view, tc.command); count != 1 || strings.Count(view, cli+" auth login") != 1 {
-				t.Errorf("120x48: full command count = %d, want exactly one:\n%s", count, updated.(Model).outputPanel.View())
+			if err := os.WriteFile(filepath.Join(bin, tc.cli), []byte(tc.stderr), 0o755); err != nil {
+				t.Fatal(err)
 			}
+			_, err := tc.client.ListIssues(t.Context(), forge.ListIssuesParams{WorktreePath: dir, Repo: tc.repo})
+			var forgeErr *forge.ForgeError
+			if !errors.As(err, &forgeErr) || forgeErr.Category != forge.ErrCategoryAuthError {
+				t.Fatalf("expected forge auth failure, got %v", err)
+			}
+			requireVisibleLogin(t, err, tc.command)
 		})
+	}
+	t.Run("GitHub command on condensed line two", func(t *testing.T) {
+		requireVisibleLogin(t, &execerr.ExecError{
+			Argv: []string{"gh", "pr", "list"}, ExitCode: 4,
+			Stderr: "Authentication required.\nTo get started, please run:  gh auth login",
+		}, "gh auth login")
+	})
+}
+
+func requireVisibleLogin(t *testing.T, err error, command string) {
+	t.Helper()
+	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 48)
+	updated, _ := m.Update(ForgeResultMsg{Op: "list_issues", ServiceName: "api", Err: err})
+	view := stripANSIForModel(updated.View())
+	if strings.Count(view, command) != 1 || strings.Count(view, " auth login") != 1 {
+		t.Errorf("120x48: want exactly one login command %q, without another provider:\n%s", command, updated.(Model).outputPanel.View())
+	}
+}
+
+func TestFailure_DefaultAssistantMissingOpensOriginalLog(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	assistant, err := app.BuildAssistant(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger, err := logutil.InitLogger("wtui", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewWithOptions(newTestConfig(), &mockManager{}, logger, Options{Assistant: assistant})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = sendWindowSize(m, 120, 48)
+
+	updated, _ := m.Update(LoadFailedMsg{Op: "Load tasks", Err: errors.New("fixture tasks root is unreadable")})
+	view := stripANSIForModel(updated.View())
+	if !strings.Contains(view, "Next: Press L") || strings.Contains(view, "Next: Press E") {
+		t.Fatalf("expected the log key with no Codex executable:\n%s", updated.(Model).outputPanel.View())
+	}
+	updated, _ = updated.Update(sendKey("L"))
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if view := stripANSIForModel(updated.View()); !strings.Contains(view, "Logs / Application") || !strings.Contains(view, "fixture tasks root is unreadable") {
+		t.Fatalf("recommended key did not reveal the original diagnostic:\n%s", view)
 	}
 }
 
@@ -96,6 +147,10 @@ func TestReleaseMergeFailure_RetryActionVisibleWith34Services(t *testing.T) {
 }
 
 func TestFailure_RecommendedKeyWorksFromItsContext(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if _, err := logutil.InitLogger("wtui", nil); err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name     string
 		setup    func(t *testing.T, m Model) Model

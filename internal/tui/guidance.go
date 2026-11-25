@@ -17,7 +17,9 @@ import (
 
 // Domain errors carry their own instruction: "(press F to retry)", "; press C ..." or, from AI providers, ": run codex login ...".
 var (
-	forgeLoginHint  = regexp.MustCompile(`(?im)(?:^|\n|; |: )(?:to get started[^\n]*?, please run:[ \t]*|run[ \t]+)?\b((?:gh|glab) auth login(?: --hostname [a-z0-9-]+(?:\.[a-z0-9-]+)*)?)\b`)
+	hostnamePattern = `[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*`
+	forgeLoginHost  = regexp.MustCompile(`^` + hostnamePattern + `$`)
+	forgeLoginHint  = regexp.MustCompile(`(?im)(?:^|\n|; |: )(?:to get started[^\n]*?, please run:[ \t]*|run[ \t]+)?\b((?:gh|glab) auth login(?: --hostname ` + hostnamePattern + `)?)\b`)
 	embeddedKeyHint = regexp.MustCompile(`\s*\((press [^)]+)\)`)
 	instructionVerb = regexp.MustCompile(`^(?:press|run|use|restore|review|inspect|finish|merge|check|refresh|fix|delete|reject|install|ask|generate|try|close|open) (\S+)`)
 )
@@ -108,10 +110,26 @@ func kindAction(err error, flow, condensed bool) string {
 	case errors.Is(err, forge.ErrForgeUnavailable) || errors.As(err, &forgeErr) && forgeErr.Category == forge.ErrCategoryNotInstalled:
 		return "Install gh (GitHub) or glab (GitLab) and add it to PATH, then retry."
 	case errors.As(err, &forgeErr) && forgeErr.Category == forge.ErrCategoryAuthError, forgeAuthFailure(err):
-		if cli := forgeCLI(err); cli != "" {
-			return "Run " + cli + " auth login, then retry."
+		cli, host := forgeCLI(err), ""
+		if forgeErr != nil {
+			switch forgeErr.Provider {
+			case forge.ForgeProviderGitLab:
+				cli, host = "glab", forgeErr.Host
+			case forge.ForgeProviderGitHub:
+				cli = "gh"
+				if forgeErr.Host != "github.com" {
+					host = forgeErr.Host
+				}
+			}
 		}
-		return "Run gh auth login or glab auth login, then retry."
+		if cli == "" {
+			return "Check authentication for this forge, then retry."
+		}
+		command := cli + " auth login"
+		if forgeLoginHost.MatchString(host) {
+			command += " --hostname " + host
+		}
+		return "Run " + command + ", then retry."
 	case errors.As(err, &forgeErr) && forgeErr.Category == forge.ErrCategoryNetwork:
 		return "Check the network connection to the forge host, then retry."
 	case errors.Is(err, task.ErrReleaseFlowChanged):

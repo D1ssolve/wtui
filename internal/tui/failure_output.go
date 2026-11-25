@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 
@@ -21,7 +22,13 @@ func (m Model) diagnosisAction() string {
 			return "Press E to ask AI why it failed."
 		}
 	}
-	return "Press L to read the logs."
+	if info, err := os.Stat(m.logPath); err == nil && info.Mode().IsRegular() {
+		if file, err := os.Open(m.logPath); err == nil {
+			file.Close()
+			return "Press L to read the logs."
+		}
+	}
+	return "Check stderr for the diagnostic."
 }
 
 func (m *Model) reportFailure(op string, err error, attrs ...slog.Attr) {

@@ -427,7 +427,8 @@ func (c *GhClient) run(ctx context.Context, worktreePath string, args ...string)
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return "", strings.TrimSpace(stderr.String()), classifyForgeExecError(err, strings.TrimSpace(stderr.String()))
+		text := strings.TrimSpace(stderr.String())
+		return "", text, classifyForgeExecError(err, text, ForgeError{Provider: ForgeProviderGitHub, Host: forgeRepoHost(args)})
 	}
 
 	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), nil
