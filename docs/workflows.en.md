@@ -30,7 +30,7 @@ flowchart LR
 ![Feature task state before working in external tools](images/workflows/feature-02-overview.png)
 3. Press `V`. This checks Git state, not application tests. `S` synchronizes branches with the remote.
 ![Feature task Git-state validation error in wtui](images/workflows/feature-03-validation-error.png)
-4. Press `C`, review the plan, and confirm. With a `review` close step (the preset's `feature`), wtui pushes branches and creates MRs/PRs into `develop`. With a `merge` step, it updates the target branches directly without an MR/PR.
+4. Press `C`, review the plan, and confirm. With a `review` close step (the preset's `feature`), wtui pushes branches and creates MRs/PRs into `develop`. With a `merge` step, it updates the target branches directly without an MR/PR. An optional [`mr:` policy](configuration.md#mr-policy) adds draft, labels, reviewers or assignees; without it the MR/PR is plain.
 ![Feature Close confirmation in wtui](images/workflows/feature-04-close-confirm.png)
 5. Complete review and wait for CI in the forge. wtui does not delete the task.
 ![Ready MRs before merging through wtui](images/workflows/feature-05-mr-ready.png)
@@ -157,6 +157,7 @@ More detail: [cleanup.md](cleanup.md). All keys and constraints: [configuration.
 | Close | Check the push and MRs/PRs, then repeat `C`. |
 | Merge check | After review and CI pass, repeat `M`. |
 | Release | For a recoverable `failed`, use `Ctrl+R` in Releases. After a partial production merge, use `M`, not `Ctrl+R`. |
-| Cleanup | Removed items are not restored. Press `D` or `P` and create a new plan. |
+| Cleanup | Removed items are not restored. Press `D` or `P` and create a new plan. A changed push URL or new file in the task directory also needs a new plan. |
+| "is being changed by another wtui" | Another wtui window is changing this task or release. Wait for it or close it, then repeat the action. |
 | Running operation | If wtui marks it safe to interrupt, `Esc` then `y` cancels it; otherwise wtui asks you to wait. There's no rollback and wtui doesn't quit: check the reported outcome, then repeat the action. |
 | Unclear failure | `E` asks the configured AI provider (Codex by default, Claude with `ai.provider: claude`) to explain the cause and next step. It changes nothing. |

@@ -28,7 +28,8 @@ A feature rarely stays inside one repository. You create the same branch several
 - **GitHub and GitLab workflows** - create and inspect MRs/PRs through `gh` or `glab`. Merging stays on the forge; wtui reconciles the result.
 - **AI where it saves time** - MR and release texts, `E` explains a failure and the next step, `wtui flow --draft "how your team works"` writes a validated `workflow:` block. It uses the Codex CLI with your ChatGPT login by default, or the Claude Code CLI with a Claude subscription if you set `ai.provider: claude`. AI is optional; everything else works without it.
 - **Release orchestration** - prepare per-service versions, promote to production, and tag from one release view.
-- **Focused workspaces** - generate a VS Code workspace and .NET solution for each task.
+- **Focused workspaces** - generate a VS Code workspace for each task, plus a .NET solution when the `dotnet` CLI is installed.
+- **Team defaults for MRs** - draft, labels, reviewers and assignees per task type or release (`mr:` in the [configuration reference](docs/configuration.md#mr-policy)).
 
 ## Install
 
@@ -91,7 +92,7 @@ Add `--config PATH` to either command to use another file. `wtui --help` lists e
 ├── gateway/
 ├── billing/
 ├── PROJ-101.code-workspace
-└── PROJ-101.sln
+└── PROJ-101.sln   (only with the dotnet CLI)
 ```
 
 5. Press `O` to open the task in your editor, write code, and commit as usual.
@@ -128,7 +129,7 @@ To clean up:
 
 When the full scan is too slow or you already know the target, press `d` in the Tasks panel to clean up only the selected task, or in the Releases panel to clean up only the selected released release. This skips the scan and goes straight to the per-item plan and confirmation; everything else works the same.
 
-Cleanup removes worktrees, generated metadata, and task/release directories. Local and remote branches and tags are always retained; delete branches on the forge when you no longer need them. Directories containing unknown files are preserved and reported instead of being removed.
+Cleanup removes worktrees, generated metadata, and task/release directories. Local and remote branches and tags are always retained; delete branches on the forge when you no longer need them. Directories containing unknown files are preserved and reported instead of being removed. If a repository's push URL or the task directory changed after you approved the plan, cleanup stops without removing anything.
 
 ![Manual cleanup review](docs/images/manual-cleanup.png)
 

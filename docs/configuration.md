@@ -272,6 +272,8 @@ The preset files are the same YAML you can write yourself; `wtui flow` prints wh
 | `workflow.release.steps` | Linear shorthand: `[integrate_tasks] cut_branch [gate]`, then either `review [back_merge] tag` or just `tag`. Replaces the preset list wholesale. |
 | `workflow.release.machine` | The release as a state machine (see below). Use either `steps` or `machine`. |
 | `workflow.release.depends_on` | Service order inside a release, for example `{web: [api], api: [db]}`. Every release action (branches, reviews, hooks, tags) runs dependencies first, and `M` merges a service's review only after the reviews of the services it depends on merged. Cycles fail startup; dependencies on services outside the release are ignored. |
+| `workflow.task_types.<name>.mr` | Options for the MRs/PRs that Close opens for this type. See [MR policy](#mr-policy). |
+| `workflow.release.mr` | Options for the production MRs/PRs a release opens. See [MR policy](#mr-policy). |
 
 ### Blocks
 
@@ -292,6 +294,41 @@ The preset files are the same YAML you can write yourself; `wtui flow` prints wh
 Merge strategies: `merge_commit`, `squash`, `rebase`, `ff_only`. Releases accept tasks merged by squash or rebase: a task counts as merged when merging its branch into integration would change nothing.
 
 A release records the release process it started with. If `workflow.release` or the branches change while it is in progress, wtui blocks it with instructions instead of continuing under different rules.
+
+### MR policy
+
+An optional `mr` block sets options on every MR/PR wtui creates for a task type, or for a release's production reviews:
+
+```yaml
+workflow:
+  extends: git-flow
+  task_types:
+    feature:
+      prefixes: ["feature/"]
+      from: integration
+      close:
+        - review: {into: integration, merge: squash}
+      mr:
+        draft: true
+        labels: [backend]
+        reviewers: [alice]
+        assignees: [bob]
+        remove_source_branch: true
+  release:
+    mr: {labels: [release]}   # needs a workflow with releases, such as git-flow
+```
+
+| Key | Default | Effect |
+|---|---|---|
+| `draft` | `false` | Opens the MR/PR as a draft. |
+| `labels`, `reviewers`, `assignees` | none | Passed to `gh`/`glab` as given. Empty entries fail startup; wtui doesn't check the names, so the forge CLI reports unknown ones. |
+| `remove_source_branch` | `false` | GitLab: asks GitLab to delete the source branch when the MR merges. GitHub: not supported; the PR is not created, and the close plan says so. Use the repository setting "Automatically delete head branches" instead. |
+
+Without an `mr` block, wtui creates plain MRs/PRs: not draft, no labels, reviewers or assignees, and the source branch stays. `wtui flow` and the close preview show the policy when one is set.
+
+wtui needs the source branch after the merge in some flows, so `remove_source_branch: true` fails startup when the type closes with `merge`, reviews into several targets, is `shared`, or has `tag`, `cherry_pick`, `pipeline` or machine steps. It is always rejected under `workflow.release.mr`, because the release branch is shared. When the source is removed on merge, wtui verifies the merged review without pushing the source again.
+
+A hotfix reviewed into several targets uses its type's `draft`, `labels`, `reviewers` and `assignees`, never source removal.
 
 ### Release state machine
 
@@ -592,7 +629,13 @@ Release cleanup removes release/task worktrees, directories, and the release man
 
 Directories are deleted only when every entry is plan-known. Unknown files or directories are preserved and named in the returned error, so user content never dies with a recursive delete. The same rule applies to task cleanup via `D`.
 
+When you confirm a task cleanup, wtui reads each repository's `origin` push URL again and compares it with the URL in the approved plan, including repositories whose worktree is already gone. If a URL changed, or a file appeared in the task directory after planning, nothing is removed: press `D` again to plan anew.
+
 Task cleanup also inspects every release that involves the task. An active in-flight status, a recoverable failure, and a malformed or unknown status block cleanup; malformed manifests fail closed the same way. A `released` manifest supplies integration proof. A `rejected` release or a nonrecoverable failure neither blocks cleanup nor proves integration: the task must still be proven merged through live or forge-provided ancestry.
+
+### Several wtui windows
+
+wtui locks a task or release while it changes that task's or release's state, so two wtui processes on the same machine can't change it at once. The lock files sit next to the state (`.wtui-task..<ID>.lock` under `tasks_root`, `.wtui-release..<ID>.lock` under `release.root_dir`) and are left in place on purpose; deleting them doesn't help. A second process doesn't wait: it stops with `task <ID> is being changed by another wtui (last recorded pid N); wait for it or close it`. The PID is only the last recorded owner, so check that process before closing anything. wtui writes the state files atomically, so a crash leaves either the old or the new file.
 
 ## Validation
 
@@ -668,6 +711,12 @@ block continuation rather than silently changing the release. A request
 closed without merge only produces the recreation warning described above.
 An uncertain pipeline-trigger response also blocks automatic
 retriggering; inspect its result in the forge.
+
+The saved identity covers the services, their source SHAs and remotes, and the
+compiled workflow (including `mr` policies) with the `tag` and `close` settings.
+Changing any of them after tag confirmation blocks the retry; restore the
+previous configuration to continue. Checkpoints written by earlier wtui
+versions, before the strict config changes, are still recognized.
 
 Manual cleanup verifies integration against every review
 target — live ancestry or merged-request evidence per target — and requires
