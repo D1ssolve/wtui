@@ -10,6 +10,39 @@ import (
 	"testing"
 )
 
+func TestRedactURLUserinfo_WhitespaceEndsAuthority(t *testing.T) {
+	t.Parallel()
+	const neighbor = "owner=ops@example.test; retry fetch"
+	for _, sep := range []struct{ name, text string }{
+		{"space", " "},
+		{"tab", "\t"},
+		{"newline", "\n"},
+		{"vertical tab", "\v"},
+		{"form feed", "\f"},
+		{"carriage return", "\r"},
+		{"next line", "\u0085"},
+		{"no-break space", "\u00a0"},
+		{"em space", "\u2003"},
+		{"line separator", "\u2028"},
+		{"paragraph separator", "\u2029"},
+		{"narrow no-break space", "\u202f"},
+		{"ideographic space", "\u3000"},
+	} {
+		t.Run(sep.name, func(t *testing.T) {
+			const public = "fetch: https://example.invalid"
+			const authenticated = "fetch: https://probe:O'FIX%2F@example.invalid"
+			suffix := sep.text + neighbor
+			if got := RedactURLUserinfo(public + suffix); got != public+suffix {
+				t.Errorf("credential-free diagnostic changed: %q", got)
+			}
+			want := "fetch: https://***@example.invalid" + suffix
+			if got := RedactURLUserinfo(authenticated + suffix); got != want {
+				t.Errorf("authenticated diagnostic = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestInitLogger_RedactsURLUserinfo(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)

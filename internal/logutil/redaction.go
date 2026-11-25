@@ -8,7 +8,8 @@ import (
 
 // An apostrophe is legal in userinfo; stop at the authority boundary, not at a shell quote.
 // ponytail: this matches URL text, not general secrets or malformed URLs with unescaped slashes in userinfo.
-var urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s/?#<>"]*@`)
+// Unicode whitespace is category Z plus the ASCII whitespace controls and U+0085 (NEL).
+var urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\p{Z}\t-\r\x{85}/?#<>"]*@`)
 
 // RedactURLUserinfo removes userinfo from diagnostic text, keeping scheme, host and path.
 func RedactURLUserinfo(text string) string {
