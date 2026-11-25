@@ -268,7 +268,8 @@ func observeNumberedReview(ctx context.Context, client forge.ForgeClient, review
 
 func waitRecheckKey(st *gitflow.State, satisfiedGuard string) string {
 	for _, ev := range st.Events {
-		if ev.Key == "F" && (ev.To != st.Next || ev.When != "" && ev.When != satisfiedGuard || ev.Action != "") {
+		// A named F takes its own transition; only a matching guard rechecks the proof.
+		if ev.Key == "F" && (ev.To != st.Next || ev.When == "" || ev.When != satisfiedGuard || ev.Action != "") {
 			return ""
 		}
 	}

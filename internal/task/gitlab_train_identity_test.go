@@ -98,10 +98,14 @@ func TestGateNextM(t *testing.T) {
 	}
 }
 
-func restartedTrainReview(t *testing.T) (Manager, *mockGitClient, string) {
+func restartedTrainReview(t *testing.T, fEvent string) (Manager, *mockGitClient, string) {
 	t.Helper()
 	m, g, effects := trainIdentityManager(t)
 	rule := taskMachineRule(t, filepath.Join(t.TempDir(), "log"))
+	if fEvent != "" {
+		review, _ := rule.Machine.State("review")
+		review.Events = append(review.Events, gitflow.Event{Name: fEvent, Key: "F", To: "done"})
+	}
 	m.flow = &gitflow.ResolvedGitFlow{
 		IntegrationBranch: "develop",
 		BranchTypes:       map[gitflow.BranchType]gitflow.BranchTypeRule{gitflow.BranchTypeFeature: rule},
@@ -132,7 +136,7 @@ func restartedTrainReview(t *testing.T) (Manager, *mockGitClient, string) {
 }
 
 func TestGateTaskMachineWaitsForPinnedTrainDelivery(t *testing.T) {
-	restart, g, effects := restartedTrainReview(t)
+	restart, g, effects := restartedTrainReview(t, "")
 	g.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
 	if err := restart.AdvanceTask(t.Context(), "TASK-1", "", nil); err != nil {
 		t.Fatal(err)
@@ -154,15 +158,19 @@ func TestGateTaskMachineWaitsForPinnedTrainDelivery(t *testing.T) {
 
 func TestObserveTaskWait_PinnedTrainAfterRestart(t *testing.T) {
 	for _, tc := range []struct {
-		state     string
-		wantPhase domain.WorkflowPhase
-		want      WaitObservation
+		name, state, fEvent  string
+		driftTarget, closeMR bool
+		wantPhase            domain.WorkflowPhase
+		want                 WaitObservation
 	}{
-		{"closed", "review", WaitObservation{}}, // !8 delivered instead of !7
-		{"merged", "done", WaitObservation{Ready: true, Key: "F"}},
+		{name: "replacement delivered", state: "closed", wantPhase: "review"},
+		{name: "exact delivery", state: "merged", wantPhase: "done", want: WaitObservation{Ready: true, Key: "F"}},
+		{name: "target rewound after hint", state: "merged", driftTarget: true, wantPhase: "review", want: WaitObservation{Ready: true, Key: "F"}},
+		{name: "pinned MR closed after hint", state: "merged", closeMR: true, wantPhase: "review", want: WaitObservation{Ready: true, Key: "F"}},
+		{name: "named F to done", state: "merged", fEvent: "proceed", driftTarget: true, wantPhase: "done", want: WaitObservation{Ready: true}},
 	} {
-		t.Run(tc.state, func(t *testing.T) {
-			restart, g, _ := restartedTrainReview(t)
+		t.Run(tc.name, func(t *testing.T) {
+			restart, g, _ := restartedTrainReview(t, tc.fEvent)
 			t.Setenv("TRAIN_STATE", tc.state)
 			if tc.state == "merged" {
 				t.Setenv("TRAIN_REPLACEMENT", "")
@@ -178,7 +186,26 @@ func TestObserveTaskWait_PinnedTrainAfterRestart(t *testing.T) {
 				t.Errorf("observe = %+v, %v; want %+v", got, err, tc.want)
 			}
 			g.fetchFn = nil
-			if err := restart.AdvanceTask(t.Context(), selected.ID, "", nil); err != nil {
+			if tc.driftTarget {
+				g.remoteRefSHAFn = func(_, ref string) (string, error) {
+					if ref == "refs/heads/develop" {
+						return "rewound", nil
+					}
+					return "reviewed-sha", nil
+				}
+			}
+			if tc.closeMR {
+				t.Setenv("TRAIN_STATE", "closed")
+			}
+			before, err := restart.TaskWorkflow(t.Context(), selected.ID)
+			if err != nil || before.Current != "review" {
+				t.Fatalf("before F: state = %q, %v", before.Current, err)
+			}
+			i := slices.IndexFunc(before.Events, func(ev domain.WorkflowEvent) bool { return ev.Key == "F" })
+			if i < 0 || before.Events[i].Name != tc.fEvent {
+				t.Fatalf("want F bound to %q; events = %+v", tc.fEvent, before.Events)
+			}
+			if err := restart.AdvanceTask(t.Context(), selected.ID, before.Events[i].Name, nil); err != nil {
 				t.Fatal(err)
 			}
 			workflow, err := restart.TaskWorkflow(t.Context(), selected.ID)
