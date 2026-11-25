@@ -22,7 +22,7 @@ func (c *GlabClient) MRHistory(ctx context.Context, branch, repo string) ([]MRIn
 			return nil, err
 		}
 		var rows []struct {
-			Number int    `json:"iid"`
+			glabMRIdentity
 			State  string `json:"state"`
 			Source string `json:"source_branch"`
 			Target string `json:"target_branch"`
@@ -34,8 +34,12 @@ func (c *GlabClient) MRHistory(ctx context.Context, branch, repo string) ([]MRIn
 		if rows == nil {
 			return nil, fmt.Errorf("MR history: expected an array, got null")
 		}
-		for _, r := range rows {
-			result = append(result, MRInfo{Number: r.Number, State: r.State, SourceBranch: r.Source, TargetBranch: r.Target, URL: r.URL})
+		for i, r := range rows {
+			number, err := r.localNumber()
+			if err != nil {
+				return nil, &ForgeError{Category: ErrCategoryParseError, Cause: fmt.Errorf("MR history page %d row %d: %w", page, i+1, err)}
+			}
+			result = append(result, MRInfo{Number: number, State: r.State, SourceBranch: r.Source, TargetBranch: r.Target, URL: r.URL})
 		}
 		if len(rows) < 100 {
 			return result, nil
