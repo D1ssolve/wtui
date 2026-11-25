@@ -46,6 +46,7 @@ func (m *manager) List(ctx context.Context) ([]domain.Task, error) {
 		task := domain.Task{
 			ID:                        taskID,
 			Dir:                       taskDir,
+			Issue:                     m.taskIssue(ctx, taskDir),
 			PendingConversionTargetID: manifest.TargetTaskID,
 		}
 		if manifestErr != nil {

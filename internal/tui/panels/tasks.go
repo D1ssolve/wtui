@@ -68,7 +68,7 @@ func renderTaskCard(task domain.Task, selected bool, width int) string {
 	gap := max(1, width-lipgloss.Width(left)-1)
 	line1 := left + strings.Repeat(" ", gap) + lipgloss.NewStyle().Foreground(statusColor).Render(status)
 	line1 = ansi.Truncate(line1, width, "…")
-	line2 := ansi.Truncate("    ├─ "+taskBranchLabel(task), width, "…")
+	line2 := ansi.Truncate("    ├─ "+taskIssueLabel(task, taskBranchLabel(task)), width, "…")
 	style := lipgloss.NewStyle().Width(width).Foreground(tasksColorNormal)
 	if selected {
 		style = style.Bold(true).Foreground(panelColorPrimary)
@@ -884,7 +884,7 @@ func (p TasksPanel) renderTreeRows(maxLines int) ([]string, int, int) {
 		selected := i == p.selectedIdx
 
 		if row.kind == treeRowKindGroup {
-			line := fmt.Sprintf("▼ %s", row.task.ID)
+			line := "▼ " + taskIssueLabel(*row.task, row.task.ID)
 			line = lipgloss.NewStyle().Bold(true).Render(line)
 			lines = append(lines, line)
 			continue
@@ -915,7 +915,16 @@ func treeTaskLabel(task *domain.Task) string {
 		return ""
 	}
 
-	return taskBranchLabel(*task)
+	return taskIssueLabel(*task, taskBranchLabel(*task))
+}
+
+func taskIssueLabel(task domain.Task, base string) string {
+	if task.Issue != nil {
+		if title := strings.Join(strings.Fields(ansi.Strip(task.Issue.Title)), " "); title != "" {
+			return base + " · " + title
+		}
+	}
+	return base
 }
 
 type dims struct{ w, h int }

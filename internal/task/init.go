@@ -61,6 +61,13 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 		return PartialFailureResult{}, fmt.Errorf("init: create task directory %s: %w", taskDir, mkdirErr)
 	}
 
+	if params.Issue != nil && created {
+		if err := writeTaskIssue(taskDir, params.Issue); err != nil {
+			// The rename may have succeeded before the directory sync failed.
+			return PartialFailureResult{}, errors.Join(err, os.RemoveAll(taskDir))
+		}
+	}
+
 	baseBranch := strings.TrimSpace(params.BaseBranch)
 	if baseBranch == "" {
 		baseBranch = strings.TrimSpace(rule.BaseBranch)

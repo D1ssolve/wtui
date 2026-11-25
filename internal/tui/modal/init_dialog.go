@@ -11,18 +11,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 type InitDialog struct {
-	fields              [4]textinput.Model
+	fields              [5]textinput.Model
 	focusIndex          int
 	defaultBranchPrefix string
 	errorMsg            string
 	title               string
 	cloneSourceBranches map[string]string
+	issueConfig         *config.Config
+	prefilledIssue      *domain.Issue
 
 	terminalHeight int
 
@@ -77,6 +80,7 @@ const (
 	initFieldBranchType
 	initFieldBranchPrefix
 	initFieldBaseBranch
+	initFieldIssue
 )
 
 var initFieldLabels = map[int]string{
@@ -85,6 +89,7 @@ var initFieldLabels = map[int]string{
 	initFieldBranchType:   "Branch Type:",
 	initFieldBranchPrefix: "Branch Prefix:",
 	initFieldBaseBranch:   "Base Branch:",
+	initFieldIssue:        "Issue:",
 }
 
 func NewInitDialog(defaultBranchPrefix string, repos []domain.Repo, termWidth, termHeight int) *InitDialog {
@@ -94,11 +99,12 @@ func NewInitDialog(defaultBranchPrefix string, repos []domain.Repo, termWidth, t
 		terminalHeight:      termHeight,
 	}
 
-	placeholders := [4]string{
+	placeholders := [5]string{
 		"task id",
 		"service1 service2 ...",
 		"feature/",
 		"main (leave empty for auto-detect)",
+		"key or URL (optional)",
 	}
 
 	for i := range d.fields {
@@ -429,6 +435,12 @@ func (d *InitDialog) submit() tea.Cmd {
 		BranchPrefix: strings.TrimSpace(d.fields[2].Value()),
 		BaseBranch:   strings.TrimSpace(d.fields[3].Value()),
 	}
+	issue, err := d.selectedIssue()
+	if err != nil {
+		d.errorMsg = err.Error()
+		return nil
+	}
+	msg.Issue = issue
 	if d.cloneSourceBranches != nil {
 		if err := d.validateCloneSelection(); err != nil {
 			d.errorMsg = err.Error()
@@ -584,10 +596,15 @@ func (d *InitDialog) branchTypeSelectorView() string {
 }
 
 func (d *InitDialog) visibleFieldOrder() []int {
+	fields := []int{initFieldTaskID, initFieldServices}
 	if d.showBranchTypeSelector {
-		return []int{initFieldTaskID, initFieldServices, initFieldBranchType, initFieldBranchPrefix, initFieldBaseBranch}
+		fields = append(fields, initFieldBranchType)
 	}
-	return []int{initFieldTaskID, initFieldServices, initFieldBranchPrefix, initFieldBaseBranch}
+	fields = append(fields, initFieldBranchPrefix, initFieldBaseBranch)
+	if d.cloneSourceBranches == nil {
+		fields = append(fields, initFieldIssue)
+	}
+	return fields
 }
 
 func (d *InitDialog) visibleFieldCount() int {
@@ -625,6 +642,8 @@ func (d *InitDialog) logicalFieldToInputIndex(logicalIndex int) int {
 		return 2
 	case initFieldBaseBranch:
 		return 3
+	case initFieldIssue:
+		return 4
 	default:
 		return -1
 	}
@@ -699,6 +718,9 @@ func parseServices(raw string) []string {
 func (d *InitDialog) visibleListHeight() int {
 	if d.terminalHeight > 0 {
 		size := d.terminalHeight - 16
+		if d.cloneSourceBranches == nil {
+			size -= 2
+		}
 		if size < 4 {
 			return 4
 		}
