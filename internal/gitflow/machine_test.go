@@ -178,6 +178,7 @@ func TestResolve_ReleaseMachineErrors(t *testing.T) {
 	cases := []struct{ name, src, want string }{
 		{"steps and machine", "workflow:\n  extends: git-flow\n  release:\n    steps: [{cut_branch: {from: integration}}, {tag: {on: release_branch}}]\n    machine:\n      states:\n" + done, "either steps or machine"},
 		{"typo key", wrap("        cut: {run: [{cut_branch: {from: integration}}], nxt: done}\n" + done), `unknown key "nxt"`},
+		{"run step kind typo", wrap("        cut: {run: [{cut_brnch: {from: integration}}], next: done}\n" + done), `line 6: unknown key "cut_brnch" in workflow.release.machine.states.cut.run[0], did you mean "cut_branch"?`},
 		{"unknown next", wrap("        cut: {run: [{cut_branch: {from: integration}}], next: nowhere}\n" + done), `next: unknown state "nowhere"`},
 		{"unreachable", wrap(cut + done + "        orphan: {final: rejected}\n"), "states.orphan: unreachable"},
 		{"no final", wrap("        a: {wait: manual, on: {go: {key: F, to: b}}}\n        b: {wait: manual, on: {back: {key: F, to: a}}}\n"), "at least one final state"},

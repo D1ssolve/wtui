@@ -1,10 +1,14 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -57,44 +61,28 @@ type ForgeConfig struct {
 type TagConfig struct {
 	Enabled               bool   `yaml:"enabled"`
 	Format                string `yaml:"format"`
-	VersionScheme         string `yaml:"version_scheme"`
-	Parser                string `yaml:"parser"`
-	Strict                bool   `yaml:"strict"`
 	Bump                  string `yaml:"bump"`
 	Annotated             bool   `yaml:"annotated"`
 	MessageTemplate       string `yaml:"message_template"`
-	Source                string `yaml:"source"`
 	Push                  bool   `yaml:"push"`
 	SharedVersion         bool   `yaml:"shared_version"`
 	CreateAfterAllTargets bool   `yaml:"create_after_all_targets"`
 }
 
 type ValidationConfig struct {
-	BlockUntracked             bool   `yaml:"block_untracked"`
-	BlockDetachedHead          bool   `yaml:"block_detached_head"`
-	BlockInterruptedOperations bool   `yaml:"block_interrupted_operations"`
-	RequireUpstreamForSync     bool   `yaml:"require_upstream_for_sync"`
-	CommandTimeout             string `yaml:"command_timeout"`
-	Concurrency                int    `yaml:"concurrency"`
+	BlockUntracked             bool `yaml:"block_untracked"`
+	BlockDetachedHead          bool `yaml:"block_detached_head"`
+	BlockInterruptedOperations bool `yaml:"block_interrupted_operations"`
+	Concurrency                int  `yaml:"concurrency"`
 }
 
 type CloseConfig struct {
-	RequireConfirmation         bool `yaml:"require_confirmation"`
-	ContinueOnError             bool `yaml:"continue_on_error"`
-	PushSourceBeforeReview      bool `yaml:"push_source_before_review"`
-	PushTargetsAfterDirectMerge bool `yaml:"push_targets_after_direct_merge"`
-	ShowPlanBeforeExecute       bool `yaml:"show_plan_before_execute"`
+	ContinueOnError        bool `yaml:"continue_on_error"`
+	PushSourceBeforeReview bool `yaml:"push_source_before_review"`
 }
 
 type PruneConfig struct {
-	Fetch               bool `yaml:"fetch"`
-	DryRunDefault       bool `yaml:"dry_run_default"`
-	RequireConfirmation bool `yaml:"require_confirmation"`
-	AllowDirty          bool `yaml:"allow_dirty"`
-	AllowUnpushed       bool `yaml:"allow_unpushed"`
-	RemoveEmptyTaskDir  bool `yaml:"remove_empty_task_dir"`
-	RunGitWorktreePrune bool `yaml:"run_git_worktree_prune"`
-	Concurrency         int  `yaml:"concurrency"`
+	Concurrency int `yaml:"concurrency"`
 }
 
 func Load(flagPath string) (*Config, error) {
@@ -113,15 +101,33 @@ func Load(flagPath string) (*Config, error) {
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
 	}
 
-	if err := rejectRemovedKeys(data); err != nil {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	if expandedSize(&doc, map[*yaml.Node]int{}) > maxExpandedNodes {
+		return nil, fmt.Errorf("config: parse %s: aliases expand the document beyond %d nodes", path, maxExpandedNodes)
+	}
+	walk := keyWalk{open: map[*yaml.Node]bool{}}
+	walk.check(&doc, reflect.TypeFor[Config](), "", true)
+	if err := walk.err(); err != nil {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
 
 	// Pre-filled blocks keep their defaults for fields a partial YAML block omits.
 	cfg.Tag, cfg.Validation, cfg.Close, cfg.Prune = defaultTag(), defaultValidation(), defaultClose(), defaultPrune()
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	// Extensions keeps the top-level x-* holders the key walk allowed as raw nodes, so any YAML
+	// inside them decodes; nested blocks stay KnownFields-strict.
+	file := struct {
+		Config     `yaml:",inline"`
+		Extensions map[string]yaml.Node `yaml:",inline"`
+	}{Config: *cfg}
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&file); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
+	*cfg = file.Config
 
 	return cfg, nil
 }
@@ -133,17 +139,24 @@ var removedKeys = map[string]string{
 	"base_branch":   "set `workflow.branches.integration`",
 }
 
-func rejectRemovedKeys(data []byte) error {
-	var top map[string]yaml.Node
-	if err := yaml.Unmarshal(data, &top); err != nil {
-		return nil // the typed parse reports syntax errors
+// ineffectiveKeys were parsed but never read; rejecting them keeps a config from promising behaviour wtui lacks.
+var ineffectiveKeys = map[string]bool{
+	"tag.version_scheme": true, "tag.parser": true, "tag.strict": true, "tag.source": true,
+	"validation.require_upstream_for_sync": true, "validation.command_timeout": true,
+	"close.require_confirmation": true, "close.push_targets_after_direct_merge": true, "close.show_plan_before_execute": true,
+	"prune.fetch": true, "prune.dry_run_default": true, "prune.require_confirmation": true, "prune.allow_dirty": true,
+	"prune.allow_unpushed": true, "prune.remove_empty_task_dir": true, "prune.run_git_worktree_prune": true,
+}
+
+// removedKeyHint takes a struct-field path; the key walk only builds one where every segment is a real field.
+func removedKeyHint(keyPath string) string {
+	if hint, ok := removedKeys[keyPath]; ok {
+		return fmt.Sprintf("%s is no longer supported: %s", keyPath, hint)
 	}
-	for key, hint := range removedKeys {
-		if _, ok := top[key]; ok {
-			return fmt.Errorf("%s is no longer supported: %s", key, hint)
-		}
+	if ineffectiveKeys[keyPath] {
+		return keyPath + " was removed: it never had an effect; delete it"
 	}
-	return nil
+	return ""
 }
 
 func resolvePath(flagPath string) (string, error) {
@@ -202,6 +215,9 @@ func (c *Config) Effective() (*Config, error) {
 		c.Editor = v
 	}
 
+	if err := c.checkNumbers(); err != nil {
+		return nil, err
+	}
 	c.effectivePaths()
 	if c.Workflow == nil {
 		c.Workflow = &WorkflowConfig{Extends: "git-flow"}
@@ -224,6 +240,30 @@ func (c *Config) Effective() (*Config, error) {
 	}
 
 	return c, nil
+}
+
+// Zero means "use the default"; any other out-of-range value is a mistake worth stopping for.
+func (c *Config) checkNumbers() error {
+	if c.Concurrency < 0 {
+		return negativeError("concurrency", c.Concurrency)
+	}
+	if c.Validation != nil && c.Validation.Concurrency < 0 {
+		return negativeError("validation.concurrency", c.Validation.Concurrency)
+	}
+	if c.Prune != nil && c.Prune.Concurrency < 0 {
+		return negativeError("prune.concurrency", c.Prune.Concurrency)
+	}
+	if c.DiscoveryDepth != 0 && c.DiscoveryDepth < 2 {
+		return fmt.Errorf("config: discovery_depth must be at least 2, got %d; omit it to use the default of 4", c.DiscoveryDepth)
+	}
+	if c.OutputPanelLines != 0 && (c.OutputPanelLines < 3 || c.OutputPanelLines > 40) {
+		return fmt.Errorf("config: output_panel_lines must be between 3 and 40, got %d; omit it to use the default of 12", c.OutputPanelLines)
+	}
+	return nil
+}
+
+func negativeError(key string, value int) error {
+	return fmt.Errorf("config: %s must be a positive number, got %d; omit it to use the default", key, value)
 }
 
 func (c *Config) effectiveWorktree() error {
@@ -321,27 +361,16 @@ func (c *Config) effectivePaths() {
 		c.Editor = "code"
 	}
 
-	// Top-level concurrency accepts missing/zero/negative input and falls back
-	// to safe default until strict config validation is introduced.
-	if c.Concurrency <= 0 {
+	if c.Concurrency == 0 {
 		c.Concurrency = 4
 	}
 
 	if c.DiscoveryDepth == 0 {
 		c.DiscoveryDepth = 4
 	}
-	if c.DiscoveryDepth < 2 {
-		c.DiscoveryDepth = 2
-	}
 
 	if c.OutputPanelLines == 0 {
 		c.OutputPanelLines = 12
-	}
-	if c.OutputPanelLines < 3 {
-		c.OutputPanelLines = 3
-	}
-	if c.OutputPanelLines > 40 {
-		c.OutputPanelLines = 40
 	}
 
 	if c.LogLevel == "" {
@@ -379,17 +408,8 @@ func (c *Config) effectiveTag() {
 	if c.Tag.Format == "" {
 		c.Tag.Format = "v{{.Version}}"
 	}
-	if c.Tag.VersionScheme == "" {
-		c.Tag.VersionScheme = "semver"
-	}
-	if c.Tag.Parser == "" {
-		c.Tag.Parser = "masterminds-semver"
-	}
 	if c.Tag.Bump == "" {
 		c.Tag.Bump = "manual"
-	}
-	if c.Tag.Source == "" {
-		c.Tag.Source = "production_branch"
 	}
 	if c.Tag.MessageTemplate == "" {
 		c.Tag.MessageTemplate = "Release {{.Tag}} for {{.TaskID}}"
@@ -403,10 +423,7 @@ func (c *Config) effectiveValidation() {
 		return
 	}
 
-	if c.Validation.CommandTimeout == "" {
-		c.Validation.CommandTimeout = "10s"
-	}
-	if c.Validation.Concurrency <= 0 {
+	if c.Validation.Concurrency == 0 {
 		c.Validation.Concurrency = 8
 	}
 
@@ -424,7 +441,7 @@ func (c *Config) effectivePrune() {
 		return
 	}
 
-	if c.Prune.Concurrency <= 0 {
+	if c.Prune.Concurrency == 0 {
 		c.Prune.Concurrency = 4
 	}
 }
@@ -433,13 +450,9 @@ func defaultTag() *TagConfig {
 	return &TagConfig{
 		Enabled:               true,
 		Format:                "v{{.Version}}",
-		VersionScheme:         "semver",
-		Parser:                "masterminds-semver",
-		Strict:                true,
 		Bump:                  "manual",
 		Annotated:             true,
 		MessageTemplate:       "Release {{.Tag}} for {{.TaskID}}",
-		Source:                "production_branch",
 		Push:                  true,
 		CreateAfterAllTargets: true,
 	}
@@ -449,28 +462,14 @@ func defaultValidation() *ValidationConfig {
 	return &ValidationConfig{
 		BlockDetachedHead:          true,
 		BlockInterruptedOperations: true,
-		RequireUpstreamForSync:     true,
-		CommandTimeout:             "10s",
 		Concurrency:                8,
 	}
 }
 
 func defaultClose() *CloseConfig {
-	return &CloseConfig{
-		RequireConfirmation:         true,
-		PushSourceBeforeReview:      true,
-		PushTargetsAfterDirectMerge: true,
-		ShowPlanBeforeExecute:       true,
-	}
+	return &CloseConfig{PushSourceBeforeReview: true}
 }
 
 func defaultPrune() *PruneConfig {
-	return &PruneConfig{
-		Fetch:               true,
-		DryRunDefault:       true,
-		RequireConfirmation: true,
-		RemoveEmptyTaskDir:  true,
-		RunGitWorktreePrune: true,
-		Concurrency:         4,
-	}
+	return &PruneConfig{Concurrency: 4}
 }

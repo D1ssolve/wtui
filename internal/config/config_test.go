@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -188,19 +189,222 @@ func TestLoad_XDGConfigHome_UsedWhenSet(t *testing.T) {
 	}
 }
 
-func TestLoad_UnknownYAMLKeys_NoError(t *testing.T) {
-	path := writeTempConfig(t, `
-log_level: DEBUG
-completely_unknown_field: some_value
-another_unknown: 42
-`)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("unknown YAML keys caused error: %v", err)
+func TestLoad_UnknownKeys_ReturnLinePathAndSuggestion(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{"top level typo", "log_level: DEBUG\nrelase: {}\n", []string{`line 2: unknown key "relase", did you mean "release"?`}},
+		{"nested typo", "tag: {formt: x}\n", []string{`line 1: unknown key "formt" in tag, did you mean "format"?`}},
+		{"no close match", "release:\n  keep_promote_key: true\n", []string{`line 2: unknown key "keep_promote_key" in release; expected one of allow_task_reuse,`}},
+		{"map value", "workflow:\n  task_types:\n    feature:\n      prefixs: [x/]\n", []string{`line 4: unknown key "prefixs" in workflow.task_types.feature, did you mean "prefixes"?`}},
+		{"machine key", "# config\n{\"workflow\": {\"release\": {\"machine\": {\"initia\": \"x\"}}}}", []string{`line 2: unknown key "initia" in workflow.release.machine, did you mean "initial"?`}},
+		{"task machine key", "workflow:\n  task_types:\n    feature:\n      machine: {initia: x}\n", []string{`line 4: unknown key "initia" in workflow.task_types.feature.machine, did you mean "initial"?`}},
+		{"state key", "# config\n{\"workflow\": {\"release\": {\"machine\": {\"states\": {\"custom\": {\"nxt\": \"x\"}}}}}}", []string{`line 2: unknown key "nxt" in workflow.release.machine.states.custom, did you mean "next"?`}},
+		{"state key far", "# config\n{\"workflow\": {\"release\": {\"machine\": {\"states\": {\"custom\": {\"unrelated_input\": \"x\"}}}}}}", []string{`line 2: unknown key "unrelated_input" in workflow.release.machine.states.custom; expected one of final, label, next, on, on_error, run, wait`}},
+		{"event key", "# config\n{\"workflow\": {\"release\": {\"machine\": {\"states\": {\"custom\": {\"on\": {\"approve\": {\"labl\": \"x\"}}}}}}}}", []string{`line 2: unknown key "labl" in workflow.release.machine.states.custom.on.approve, did you mean "label"?`}},
+		{"merged typo", "tag: {<<: {formt: x}}\n", []string{`line 1: unknown key "formt" in tag, did you mean "format"?`}},
 	}
-	if cfg.LogLevel != "DEBUG" {
-		t.Errorf("LogLevel: got %q, want DEBUG", cfg.LogLevel)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeTempConfig(t, tt.src))
+			if err == nil {
+				t.Fatal("Load() error = nil, want unknown key error")
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Load() error = %q, want it to contain %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestLoad_AnchorsAliasesAndMerges_DecodeLikeYAML(t *testing.T) {
+	tests := []struct {
+		name  string
+		src   string
+		check func(*Config) bool
+	}{
+		{"merge into task_types", "workflow: {extends: git-flow, task_types: {<<: {ops: {prefixes: [ops/], from: integration, close: [{review: {into: integration}}]}}}}\n",
+			func(c *Config) bool {
+				return c.Workflow.TaskTypes["ops"] != nil && c.Workflow.TaskTypes["ops"].From == "integration"
+			}},
+		{"merge anchored task_types", "workflow:\n  extends: git-flow\n  task_types: {<<: &types {ops: {prefixes: [ops/], from: integration, close: [{review: {into: integration}}]}}}\n",
+			func(c *Config) bool { return c.Workflow.TaskTypes["ops"] != nil }},
+		{"alias as key", "editor: &alias format\ntag: {*alias: x}\n", func(c *Config) bool { return c.Tag.Format == "x" }},
+		{"merge with override", "tag: {<<: {format: a, push: false}, format: b}\n", func(c *Config) bool { return c.Tag.Format == "b" && !c.Tag.Push }},
+		{"merge sequence, earlier wins", "tag: {<<: [{format: first}, {format: second, push: false}]}\n", func(c *Config) bool { return c.Tag.Format == "first" && !c.Tag.Push }},
+		{"alias to scalar", "root_dir: &r /work\ntasks_root: *r\n", func(c *Config) bool { return c.TasksRoot == "/work" }},
+		{"alias to mapping in task_types", "workflow:\n  task_types:\n    feature: &ft {prefixes: [feature/], from: integration}\n    ops: *ft\n",
+			func(c *Config) bool {
+				return c.Workflow.TaskTypes["ops"] != nil && c.Workflow.TaskTypes["ops"].From == "integration"
+			}},
+		{"merged machine", "workflow:\n  release:\n    machine:\n      <<: {initial: start}\n      states: {start: {final: released}}\n",
+			func(c *Config) bool { return c.Workflow.Release.Machine.Initial == "start" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, tt.src))
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			if !tt.check(mustEffective(t, cfg)) {
+				t.Fatalf("cfg decoded wrongly: tag=%+v workflow=%+v", cfg.Tag, cfg.Workflow)
+			}
+		})
+	}
+}
+
+func TestLoad_TopLevelExtensionKeys(t *testing.T) {
+	tests := []struct {
+		name, src, wantErr string
+	}{
+		{"unused junk under x-foo", "x-foo: {anything: [1, 2], nested: {whatever: true}}\nlog_level: WARN\n", ""},
+		{"holder merged into tag", "x-tag: &t {format: \"r-{{.Version}}\"}\ntag: {<<: *t}\n", ""},
+		{"typo inside a merged holder", "x-tag: &t {formt: x}\ntag: {<<: *t}\n", `line 1: unknown key "formt" in tag, did you mean "format"?`},
+		{"removed key inside a merged holder", "x-prune: &p\n  fetch: true\nprune: {<<: *p}\n", "line 2: prune.fetch was removed: it never had an effect; delete it"},
+		{"x- key below the top level", "tag: {x-foo: 1}\n", `line 1: unknown key "x-foo" in tag`},
+		{"x_ look-alike", "x_anchors: {}\n", `line 1: unknown key "x_anchors"`},
+		{"x look-alike without dash", "xanchors: {}\n", `line 1: unknown key "xanchors"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, tt.src))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			mustEffective(t, cfg)
+		})
+	}
+
+	cfg, err := Load(writeTempConfig(t, "x-tag: &t {format: \"r-{{.Version}}\"}\ntag: {<<: *t}\n"))
+	if err != nil || cfg.Tag.Format != "r-{{.Version}}" || !cfg.Tag.Push {
+		t.Fatalf("Load() = %+v, %v; want the merged format with default push", cfg.Tag, err)
+	}
+}
+
+func TestLoad_KeysAreDecodedStrings(t *testing.T) {
+	tests := []struct {
+		name, src, wantErr string
+		check              func(*Config) bool
+	}{
+		{name: "binary alias as root key (verifier)", src: "x-key: &w !!binary d29ya2Zsb3c=\n*w : {extends: trunk-based}\n",
+			check: func(c *Config) bool { return c.Workflow.Extends == "trunk-based" }},
+		{name: "binary key decoding to a field (verifier)", src: "!!binary ZWRpdG9y: test\n", check: func(c *Config) bool { return c.Editor == "test" }},
+		{name: "binary key decoding to junk (verifier)", src: "!!binary worktree: test\n", wantErr: "line 1: unknown key "},
+		{name: "quoted keys", src: "\"editor\": vim\n'tag': {format: x}\n", check: func(c *Config) bool { return c.Editor == "vim" && c.Tag.Format == "x" }},
+		{name: "integer root key", src: "!!int 1: x\n", wantErr: "line 1: unsupported key !!int 1; keys must be plain strings"},
+		{name: "custom tag key", src: "!foo bar: x\n", wantErr: "line 1: unsupported key !foo bar; keys must be plain strings"},
+		{name: "sequence key", src: "? [a, b]\n: x\n", wantErr: "line 1: unsupported key [a, b]; keys must be plain strings"},
+		{name: "bool key in a block", src: "tag: {true: x}\n", wantErr: `line 1: unknown key "true" in tag; expected one of`},
+		{name: "integer key in a block", src: "tag: {123: x}\n", wantErr: `line 1: unknown key "123" in tag; expected one of`},
+		{name: "names keep their source text, as on base", src: "workflow:\n  task_types: {1.0: {from: a}, true: {from: b}, 2024-01-01: {from: c}, 0x1F: {from: d}}\n  release: {depends_on: {123: [456, true]}}\n",
+			check: func(c *Config) bool {
+				types := c.Workflow.TaskTypes
+				return types["1.0"].From == "a" && types["true"].From == "b" && types["2024-01-01"].From == "c" && types["0x1F"].From == "d" &&
+					slices.Equal(c.Workflow.Release.DependsOn["123"], []string{"456", "true"})
+			}},
+		{name: "explicitly tagged service name", src: "workflow: {release: {depends_on: {!!int 123: [api]}}}\n", wantErr: "line 1: unsupported key !!int 123 in workflow.release.depends_on; keys must be plain strings"},
+		{name: "complex task type name", src: "workflow:\n  task_types:\n    ? [a]\n    : {from: x}\n", wantErr: "line 3: unsupported key [a] in workflow.task_types; keys must be plain strings"},
+		{name: "null task type name, which base silently dropped", src: "workflow: {task_types: {~: {from: x}}}\n", wantErr: "line 1: unsupported key ~ in workflow.task_types; keys must be plain strings"},
+		{name: "null state name", src: "workflow: {release: {machine: {states: {~: {final: released}}}}}\n", wantErr: "line 1: unsupported key ~ in workflow.release.machine.states; keys must be plain strings"},
+		{name: "aliased event key typo", src: "x-k: &l labl\nworkflow: {release: {machine: {states: {s: {on: {go: {*l : x}}}}}}}\n",
+			wantErr: `line 2: unknown key "labl" in workflow.release.machine.states.s.on.go, did you mean "label"?`},
+		{name: "aliased state key typo", src: "x-k: &n nxt\nworkflow: {release: {machine: {states: {s: {*n : done}}}}}\n",
+			wantErr: `line 2: unknown key "nxt" in workflow.release.machine.states.s, did you mean "next"?`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, tt.src))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			if !tt.check(mustEffective(t, cfg)) {
+				t.Fatalf("cfg decoded wrongly: editor=%q tag=%+v workflow=%+v", cfg.Editor, cfg.Tag, cfg.Workflow)
+			}
+		})
+	}
+}
+
+func TestLoad_ExtensionHoldersAreOpaque(t *testing.T) {
+	for name, src := range map[string]string{
+		"complex key (verifier)":         "x-any: { ? [a,b] : two }\n",
+		"tags, nulls and nested anchors": "x-any: {!custom t: 1, ~: null, 1: one, list: [&n 1, *n], deep: {a: &d {b: 1}, c: *d}}\n",
+		"removed keys inside a holder":   "x-old: {prune: {fetch: true}, git_flow: x, relase: 1}\n",
+		"binary holder key":              "!!binary eC1h: {anything: 1}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, src))
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			mustEffective(t, cfg)
+		})
+	}
+}
+
+func TestLoad_AliasBomb_ReturnsError(t *testing.T) {
+	src := "x-a: &a [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]\n"
+	for i, name := range []string{"b", "c", "d", "e", "f"} {
+		prev := string(rune('a' + i))
+		src += "x-" + name + ": &" + name + " [" + strings.Repeat("*"+prev+", ", 9) + "*" + prev + "]\n"
+	}
+	if _, err := Load(writeTempConfig(t, src)); err == nil || !strings.Contains(err.Error(), "aliases expand the document") {
+		t.Fatalf("Load() error = %v, want the alias expansion limit", err)
+	}
+}
+
+func TestLoad_TypoInSharedAnchor_ReportedOnceWithLine(t *testing.T) {
+	_, err := Load(writeTempConfig(t, "validation: &v {concurrncy: 3}\nprune: {<<: *v}\n"))
+	want := `line 1: unknown key "concurrncy" in validation, did you mean "concurrency"?`
+	if err == nil || !strings.Contains(err.Error(), want) || strings.Count(err.Error(), "concurrncy") != 1 {
+		t.Fatalf("Load() error = %v, want exactly one %q", err, want)
+	}
+}
+
+func TestLoad_SelfReferentialAnchor_ReturnsWithoutPanic(t *testing.T) {
+	_, _ = Load(writeTempConfig(t, "tag: &t {format: x, extra: *t}\n"))
+}
+
+func TestLoad_RemovedKeyHint_TakesPrecedenceOverUnknownKey(t *testing.T) {
+	_, err := Load(writeTempConfig(t, "relase: {}\ngit_flow:\n  preset: git-flow\n"))
+	if err == nil || !strings.Contains(err.Error(), "git_flow is no longer supported") {
+		t.Fatalf("Load() error = %v, want the git_flow migration hint", err)
+	}
+}
+
+func TestLoad_EmptyOrCommentOnly_UsesDefaults(t *testing.T) {
+	for name, src := range map[string]string{"empty": "", "comments only": "# nothing here\n# yet\n"} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, src))
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			mustEffective(t, cfg)
+			if cfg.Concurrency != 4 || cfg.Tag.Format != "v{{.Version}}" {
+				t.Fatalf("cfg = %+v, want defaults", cfg)
+			}
+		})
+	}
+}
+
+func TestLoad_DuplicateKey_ReturnsError(t *testing.T) {
+	if _, err := Load(writeTempConfig(t, "editor: vim\neditor: zed\n")); err == nil {
+		t.Fatal("Load() error = nil, want duplicate key error")
 	}
 }
 
@@ -364,7 +568,6 @@ func TestEffective_DiscoveryDepth(t *testing.T) {
 		label string
 	}{
 		{0, 4, "zero → default 4"},
-		{1, 2, "1 → clamped to 2"},
 		{2, 2, "2 → minimum 2"},
 		{5, 5, "5 → unchanged"},
 		{10, 10, "10 → unchanged"},
@@ -392,14 +595,10 @@ func TestEffective_OutputPanelLines(t *testing.T) {
 		label string
 	}{
 		{0, 12, "zero → default 12"},
-		{1, 3, "1 → clamped to 3"},
-		{2, 3, "2 → clamped to 3"},
 		{3, 3, "3 → minimum"},
 		{6, 6, "6 → unchanged"},
 		{20, 20, "20 → unchanged"},
 		{40, 40, "40 → maximum"},
-		{41, 40, "41 → clamped to 40"},
-		{100, 40, "100 → clamped to 40"},
 	}
 
 	for _, tc := range cases {
@@ -421,7 +620,6 @@ func TestEffective_Concurrency(t *testing.T) {
 	}{
 		{name: "zero defaults to four", input: 0, want: 4},
 		{name: "positive preserved", input: 7, want: 7},
-		{name: "negative defaults to four", input: -3, want: 4},
 	}
 
 	for _, tc := range cases {
@@ -430,6 +628,28 @@ func TestEffective_Concurrency(t *testing.T) {
 			mustEffective(t, cfg)
 			if cfg.Concurrency != tc.want {
 				t.Fatalf("Concurrency(%d): got %d, want %d", tc.input, cfg.Concurrency, tc.want)
+			}
+		})
+	}
+}
+
+func TestEffective_InvalidNumbers_ReturnError(t *testing.T) {
+	tests := []struct {
+		key string
+		cfg *Config
+	}{
+		{"concurrency", &Config{Concurrency: -1}},
+		{"validation.concurrency", &Config{Validation: &ValidationConfig{Concurrency: -2}}},
+		{"prune.concurrency", &Config{Prune: &PruneConfig{Concurrency: -3}}},
+		{"discovery_depth", &Config{DiscoveryDepth: 1}},
+		{"discovery_depth", &Config{DiscoveryDepth: -4}},
+		{"output_panel_lines", &Config{OutputPanelLines: 2}},
+		{"output_panel_lines", &Config{OutputPanelLines: 99}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			if _, err := tt.cfg.Effective(); err == nil || !strings.Contains(err.Error(), tt.key) {
+				t.Fatalf("Effective() error = %v, want an error naming %s", err, tt.key)
 			}
 		})
 	}
@@ -516,7 +736,7 @@ validation:
 close:
   continue_on_error: true
 prune:
-  dry_run_default: true
+  concurrency: 2
 release:
   root_dir: /tmp/releases
   id_format: "rel-{{.Version}}-{{.Timestamp}}"
@@ -546,7 +766,7 @@ release:
 	if cfg.Close == nil || !cfg.Close.ContinueOnError {
 		t.Fatalf("Close parsing failed: %+v", cfg.Close)
 	}
-	if cfg.Prune == nil || !cfg.Prune.DryRunDefault {
+	if cfg.Prune == nil || cfg.Prune.Concurrency != 2 {
 		t.Fatalf("Prune parsing failed: %+v", cfg.Prune)
 	}
 	if cfg.Release == nil || cfg.Release.RootDir != "/tmp/releases" {
@@ -613,24 +833,6 @@ func TestEffective_ReleaseDefaults(t *testing.T) {
 	}
 	if cfg.Release.RequireCleanBeforeMerge == nil || !*cfg.Release.RequireCleanBeforeMerge {
 		t.Errorf("Release.RequireCleanBeforeMerge default: got %v, want true", cfg.Release.RequireCleanBeforeMerge)
-	}
-}
-
-func TestLoad_ReleaseKeepPromoteKey_IgnoredAsUnknown(t *testing.T) {
-	path := writeTempConfig(t, `
-release:
-  keep_promote_key: true
-`)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load returned error: %v", err)
-	}
-
-	mustEffective(t, cfg)
-
-	if cfg.Release == nil {
-		t.Fatal("Release defaults missing")
 	}
 }
 
@@ -702,8 +904,6 @@ close:
   continue_on_error: true
 validation:
   block_untracked: true
-prune:
-  allow_dirty: true
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -717,14 +917,11 @@ prune:
 	if cfg.Tag.Format != "release-{{.Version}}" || !cfg.Tag.Enabled || !cfg.Tag.Push || !cfg.Tag.Annotated {
 		t.Errorf("tag = %+v, want explicit format with default enabled/push/annotated", cfg.Tag)
 	}
-	if !cfg.Close.ContinueOnError || !cfg.Close.RequireConfirmation || !cfg.Close.ShowPlanBeforeExecute {
-		t.Errorf("close = %+v, want explicit continue_on_error with default confirmations", cfg.Close)
+	if !cfg.Close.ContinueOnError || !cfg.Close.PushSourceBeforeReview {
+		t.Errorf("close = %+v, want explicit continue_on_error with default push_source_before_review", cfg.Close)
 	}
 	if !cfg.Validation.BlockUntracked || !cfg.Validation.BlockDetachedHead {
 		t.Errorf("validation = %+v, want explicit block_untracked with default block_detached_head", cfg.Validation)
-	}
-	if !cfg.Prune.AllowDirty || !cfg.Prune.RequireConfirmation || !cfg.Prune.DryRunDefault {
-		t.Errorf("prune = %+v, want explicit allow_dirty with default confirmation/dry-run", cfg.Prune)
 	}
 }
 
@@ -734,7 +931,7 @@ func TestLoad_PartialBlocks_ExplicitFalseWins(t *testing.T) {
 tag:
   push: false
 close:
-  require_confirmation: false
+  push_source_before_review: false
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -748,8 +945,63 @@ close:
 	if cfg.Tag.Push || !cfg.Tag.Enabled {
 		t.Errorf("tag = %+v, want push=false enabled=true", cfg.Tag)
 	}
-	if cfg.Close.RequireConfirmation || !cfg.Close.ShowPlanBeforeExecute {
-		t.Errorf("close = %+v, want require_confirmation=false show_plan=true", cfg.Close)
+	if cfg.Close.PushSourceBeforeReview {
+		t.Errorf("close = %+v, want push_source_before_review=false", cfg.Close)
+	}
+}
+
+func TestLoad_IneffectiveKeys_ReturnRemovedError(t *testing.T) {
+	keys := []string{
+		"tag.version_scheme", "tag.parser", "tag.strict", "tag.source",
+		"validation.require_upstream_for_sync", "validation.command_timeout",
+		"close.require_confirmation", "close.push_targets_after_direct_merge", "close.show_plan_before_execute",
+		"prune.fetch", "prune.dry_run_default", "prune.require_confirmation", "prune.allow_dirty",
+		"prune.allow_unpushed", "prune.remove_empty_task_dir", "prune.run_git_worktree_prune",
+	}
+	if len(keys) != len(ineffectiveKeys) {
+		t.Fatalf("ineffectiveKeys has %d entries, this list %d: update both together", len(ineffectiveKeys), len(keys))
+	}
+	for _, key := range keys {
+		block, field, _ := strings.Cut(key, ".")
+		for form, src := range map[string]string{
+			"literal": block + ":\n  " + field + ": x\n",
+			"merged":  block + ":\n  <<: {" + field + ": x}\n",
+		} {
+			t.Run(key+"/"+form, func(t *testing.T) {
+				_, err := Load(writeTempConfig(t, src))
+				want := "line 2: " + key + " was removed: it never had an effect; delete it"
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("Load() error = %v, want %q", err, want)
+				}
+			})
+		}
+	}
+}
+
+func TestLoad_RemovedKeyHints_ThroughMergesAndAliases(t *testing.T) {
+	tests := []struct{ name, src, want string }{
+		{"merged removed key (verifier input)", "prune: {<<: {fetch: true}}\n", "line 1: prune.fetch was removed: it never had an effect; delete it"},
+		{"removed key in an anchor", "validation: &v\n  concurrency: 3\nprune:\n  <<: *v\n  dry_run_default: true\n", "line 5: prune.dry_run_default was removed"},
+		{"merged migration key", "relase: {}\n<<: {git_flow: {preset: git-flow}}\n", "line 2: git_flow is no longer supported"},
+		{"hint beats an earlier root typo (verifier)", "relase: {}\nprune: {fetch: true}\n", "line 2: prune.fetch was removed"},
+		{"hint beats an earlier block typo (verifier)", "tag: {formt: x}\nprune: {<<: {fetch: true}}\n", "line 2: prune.fetch was removed"},
+		{"aliased hint beats a typo (verifier)", "x-options: &options {fetch: true}\nrelase: {}\nprune: *options\n", "line 1: prune.fetch was removed"},
+		{"hint beats an unsupported key", "? [a]\n: x\nprune: {fetch: true}\n", "line 3: prune.fetch was removed"},
+		{"earliest of two hints", "x-o: &o {parser: x}\nprune: {fetch: true}\ntag: *o\n", "line 1: tag.parser was removed"},
+		{"migration key in a binary alias (verifier)", "x-m: &k !!binary YmFzZV9icmFuY2g=\n*k : trunk\n", "line 2: base_branch is no longer supported"},
+		{"dotted root key is just unknown (verifier)", "prune.fetch: false\n", `line 1: unknown key "prune.fetch"; expected one of`},
+		{"dotted root key does not mask a removal (verifier)", "tag.parser: x\nprune: {fetch: true}\n", "line 2: prune.fetch was removed"},
+		{"quoted dotted root key (verifier)", "\"prune.fetch\": test\n", `line 1: unknown key "prune.fetch"; expected one of`},
+		{"hint matches struct paths only", "workflow: {task_types: {prune: {fetch: 1}}}\n", `line 1: unknown key "fetch" in workflow.task_types.prune; expected one of`},
+		{"unknown keys in document order", "x-a: &a {formt: 1}\nrelase: {}\ntag: {<<: *a}\n", `line 1: unknown key "formt" in tag, did you mean "format"?`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeTempConfig(t, tt.src))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
