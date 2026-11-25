@@ -2752,7 +2752,7 @@ func TestUpdate_LazygitDoneMsg_ExecutableNotFoundAppendsPathGuidance(t *testing.
 	if !strings.Contains(view, "Open lazygit for api failed:") {
 		t.Fatalf("output should contain lazygit failure message, got %q", view)
 	}
-	if !strings.Contains(view, "lazygit not found on PATH. Install lazygit or add it to PATH.") {
+	if !strings.Contains(view, "Next: Install lazygit or add it to PATH, then retry.") {
 		t.Fatalf("output should contain PATH guidance, got %q", view)
 	}
 }
@@ -2771,8 +2771,8 @@ func TestUpdate_LazygitDoneMsg_WorktreeMissingDoesNotAppendPathGuidance(t *testi
 	if !strings.Contains(view, "Open lazygit for api failed:") {
 		t.Fatalf("output should contain lazygit failure message, got %q", view)
 	}
-	if strings.Contains(view, "lazygit not found on PATH. Install lazygit or add it to PATH.") {
-		t.Fatalf("output should not contain PATH guidance for missing worktree path, got %q", view)
+	if strings.Contains(view, "Install lazygit") || !strings.Contains(view, "Next: Check that the path exists, then press r to refresh.") {
+		t.Fatalf("output should guide to the missing worktree path, not PATH, got %q", view)
 	}
 }
 
