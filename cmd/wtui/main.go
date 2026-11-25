@@ -46,12 +46,9 @@ func resolveVersion() string {
 
 const usageText = `usage:
   wtui [--config PATH]
-  wtui flow [--mermaid | --html | --draft "<how your team works>"] [--config PATH]
-
-options:
-  --config PATH   use this config file instead of the default lookup
-  -h, --help      show this help
-  -v, --version   print the version
+  wtui [--config PATH] flow [--mermaid | --html | --draft "TEXT"]
+  wtui -h | --help
+  wtui -v | --version
 `
 
 // cliArgs is the parsed command line.
@@ -62,9 +59,18 @@ type cliArgs struct {
 	format, draft string // flow output: "" (describe), "--mermaid" or "--html"; or a --draft description
 }
 
-// parseArgs accepts --config PATH or --config=PATH before or after the flow subcommand.
+// parseArgs reads the whole command line in one pass. An unknown argument wins over every other
+// error; --config PATH and --config=PATH may appear before or after flow, and the token after
+// --config is always its value.
 func parseArgs(args []string) (cliArgs, error) {
 	var c cliArgs
+	var bad error // first structural error; reported only if no unknown argument follows
+	fail := func(msg string) {
+		if bad == nil {
+			bad = errors.New(msg)
+		}
+	}
+	modes := 0 // how many of --mermaid, --html, --draft were given
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -72,26 +78,37 @@ func parseArgs(args []string) (cliArgs, error) {
 			c.help = true
 		case arg == "-v" || arg == "--version":
 			c.version = true
-		case arg == "flow" && !c.flow:
+		case arg == "flow":
+			if c.flow {
+				fail("flow given more than once")
+			}
 			c.flow = true
 		case arg == "--config" || strings.HasPrefix(arg, "--config="):
+			if c.config != "" {
+				fail("--config given more than once")
+			}
 			value, ok := strings.CutPrefix(arg, "--config=")
 			if !ok {
 				if i+1 >= len(args) {
-					return c, errors.New("--config requires a path")
+					fail("--config requires a path")
+					continue
 				}
 				i++
 				value = args[i]
 			}
 			if value == "" {
-				return c, errors.New("--config requires a non-empty path")
+				fail("--config requires a non-empty path")
 			}
 			c.config = value
-		case c.flow && (arg == "--mermaid" || arg == "--html"):
+		case arg == "--mermaid" || arg == "--html":
 			c.format = arg
-		case c.flow && arg == "--draft":
+			modes++
+		case arg == "--draft":
+			modes++
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
-				return c, errors.New("--draft requires a description of how your team works")
+				fail("--draft requires a description of how your team works")
+				i++
+				continue
 			}
 			i++
 			c.draft = args[i]
@@ -99,10 +116,13 @@ func parseArgs(args []string) (cliArgs, error) {
 			return c, fmt.Errorf("unknown argument %q", arg)
 		}
 	}
-	if c.version && (c.help || c.flow || c.config != "") {
-		return c, errors.New("--version cannot be combined with other arguments")
+	if modes > 1 {
+		fail("--mermaid, --html and --draft cannot be combined")
 	}
-	return c, nil
+	if modes > 0 && !c.flow {
+		fail("--mermaid, --html and --draft only apply to the flow subcommand")
+	}
+	return c, bad
 }
 
 func main() {
@@ -116,12 +136,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "wtui: %v\n%s", err, usageText)
 		return 2
 	}
-	if c.version {
-		fmt.Fprint(stdout, versionOutput(resolveVersion()))
-		return 0
-	}
 	if c.help {
 		fmt.Fprint(stdout, usageText)
+		return 0
+	}
+	if c.version {
+		fmt.Fprint(stdout, versionOutput(resolveVersion()))
 		return 0
 	}
 	if c.flow {
