@@ -151,6 +151,20 @@ func TestRun_HelpAndUnknownArguments(t *testing.T) {
 		{name: "config empty value", args: []string{"--config="}, wantCode: 2, wantStderr: "--config requires a non-empty path"},
 		{name: "empty separate value", args: []string{"--config", ""}, wantCode: 2, wantStderr: "--config requires a non-empty path"},
 		{name: "draft without text", args: []string{"flow", "--draft"}, wantCode: 2, wantStderr: "--draft requires"},
+		{name: "help lists init", args: []string{"--help"}, wantStdout: "init [--root DIR]"},
+		{name: "help after init", args: []string{"init", "--help"}, wantStdout: "usage:"},
+		{name: "init with flow", args: []string{"init", "flow"}, wantCode: 2, wantStderr: "init and flow cannot be combined"},
+		{name: "init twice", args: []string{"init", "init"}, wantCode: 2, wantStderr: "init given more than once"},
+		{name: "yes without init", args: []string{"--yes"}, wantCode: 2, wantStderr: "only apply to the init subcommand"},
+		{name: "root without init", args: []string{"flow", "--root", "x"}, wantCode: 2, wantStderr: "only apply to the init subcommand"},
+		{name: "preset without init", args: []string{"--preset=git-flow"}, wantCode: 2, wantStderr: "only apply to the init subcommand"},
+		{name: "root twice", args: []string{"init", "--root", "a", "--root=b"}, wantCode: 2, wantStderr: "--root given more than once"},
+		{name: "force twice", args: []string{"init", "--force", "--force"}, wantCode: 2, wantStderr: "--force given more than once"},
+		{name: "preset without value", args: []string{"init", "--preset"}, wantCode: 2, wantStderr: "--preset requires a preset name"},
+		{name: "editor empty value", args: []string{"init", "--editor="}, wantCode: 2, wantStderr: "--editor requires a non-empty command"},
+		{name: "unknown preset", args: []string{"init", "--preset", "nope"}, wantCode: 2, wantStderr: "expected one of git-flow, github-flow, trunk-based"},
+		{name: "flow flag with init", args: []string{"init", "--mermaid"}, wantCode: 2, wantStderr: "only apply to the flow subcommand"},
+		{name: "unknown beats init errors", args: []string{"init", "flow", "--bogus"}, wantCode: 2, wantStderr: `unknown argument "--bogus"`},
 		{name: "missing config file", args: []string{"flow", "--config", "/nonexistent/wtui.yaml"}, wantCode: 1, wantStderr: "--config path not found"},
 	}
 	for _, tt := range tests {
@@ -193,5 +207,12 @@ func TestParseArgs_ConfigValueIsNeverAFlag(t *testing.T) {
 		if err != nil || c.config != "-v" || c.version || !c.flow {
 			t.Fatalf("parseArgs(%v) = %+v, %v", args, c, err)
 		}
+	}
+}
+
+func TestParseArgs_InitValueFlagsConsumeNextToken(t *testing.T) {
+	c, err := parseArgs([]string{"init", "--root", "--yes", "--tasks-root=flow", "--editor", "init", "--preset", "trunk-based", "--force"})
+	if err != nil || !c.init || c.root != "--yes" || c.yes || c.tasksRoot != "flow" || c.flow || c.editor != "init" || c.preset != "trunk-based" || !c.force {
+		t.Fatalf("parseArgs = %+v, %v", c, err)
 	}
 }

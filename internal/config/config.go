@@ -169,6 +169,15 @@ func resolvePath(flagPath string) (string, error) {
 	return "", nil
 }
 
+// DefaultPath is the first user config location Load looks for; `wtui init` writes there.
+func DefaultPath() (string, error) {
+	candidates := xdgCandidates()
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("config: neither XDG_CONFIG_HOME nor a home directory is set; pass --config PATH")
+	}
+	return candidates[0], nil
+}
+
 func xdgCandidates() []string {
 	var candidates []string
 	if xdgHome := os.Getenv("XDG_CONFIG_HOME"); xdgHome != "" {
