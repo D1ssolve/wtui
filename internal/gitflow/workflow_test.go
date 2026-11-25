@@ -113,6 +113,23 @@ func TestResolve_ExtensionKeyHolder_CompilesLikeInline(t *testing.T) {
 	}
 }
 
+func TestResolve_AliasedOrMergedStepKind_ReportsDecodedTypo(t *testing.T) {
+	t.Parallel()
+
+	holders := "x-kind: &k revie\nx-step: &step {revie: {into: integration}}\n"
+	for name, tc := range map[string]struct{ close, want string }{
+		"aliased kind (verifier)": {"[{*k : {into: integration}}]", `line 3: unknown key "revie" in workflow.task_types.ops.close[0], did you mean "review"?`},
+		"merged step (verifier)":  {"[{<<: *step}]", `line 2: unknown key "revie" in workflow.task_types.ops.close[0], did you mean "review"?`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := holders + "workflow: {extends: git-flow, task_types: {ops: {prefixes: [ops/], from: integration, close: " + tc.close + "}}}\n"
+			if _, err := resolveYAML(t, src); err == nil || err.Error() != tc.want {
+				t.Fatalf("Resolve() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolve_WorkflowErrors(t *testing.T) {
 	t.Parallel()
 

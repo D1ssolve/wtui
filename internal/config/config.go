@@ -101,25 +101,26 @@ func Load(flagPath string) (*Config, error) {
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
 	}
 
-	// Decoding values first applies yaml.v3's alias-expansion limits before the key walk expands aliases.
-	var values any
-	if err := yaml.Unmarshal(data, &values); err != nil {
-		return nil, fmt.Errorf("config: parse %s: %w", path, err)
-	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
-	if err := checkKeys(&doc, reflect.TypeFor[Config](), "", map[*yaml.Node]bool{}); err != nil {
+	if expandedSize(&doc, map[*yaml.Node]int{}) > maxExpandedNodes {
+		return nil, fmt.Errorf("config: parse %s: aliases expand the document beyond %d nodes", path, maxExpandedNodes)
+	}
+	walk := keyWalk{open: map[*yaml.Node]bool{}}
+	walk.check(&doc, reflect.TypeFor[Config](), "", true)
+	if err := walk.err(); err != nil {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
 
 	// Pre-filled blocks keep their defaults for fields a partial YAML block omits.
 	cfg.Tag, cfg.Validation, cfg.Close, cfg.Prune = defaultTag(), defaultValidation(), defaultClose(), defaultPrune()
-	// Extensions catches the top-level x-* keys the key walk allowed; nested blocks stay KnownFields-strict.
+	// Extensions keeps the top-level x-* holders the key walk allowed as raw nodes, so any YAML
+	// inside them decodes; nested blocks stay KnownFields-strict.
 	file := struct {
 		Config     `yaml:",inline"`
-		Extensions map[string]any `yaml:",inline"`
+		Extensions map[string]yaml.Node `yaml:",inline"`
 	}{Config: *cfg}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
@@ -147,14 +148,15 @@ var ineffectiveKeys = map[string]bool{
 	"prune.allow_unpushed": true, "prune.remove_empty_task_dir": true, "prune.run_git_worktree_prune": true,
 }
 
-func removedKeyError(line int, keyPath string) error {
+// removedKeyHint takes a struct-field path; the key walk only builds one where every segment is a real field.
+func removedKeyHint(keyPath string) string {
 	if hint, ok := removedKeys[keyPath]; ok {
-		return fmt.Errorf("line %d: %s is no longer supported: %s", line, keyPath, hint)
+		return fmt.Sprintf("%s is no longer supported: %s", keyPath, hint)
 	}
 	if ineffectiveKeys[keyPath] {
-		return fmt.Errorf("line %d: %s was removed: it never had an effect; delete it", line, keyPath)
+		return keyPath + " was removed: it never had an effect; delete it"
 	}
-	return nil
+	return ""
 }
 
 func resolvePath(flagPath string) (string, error) {

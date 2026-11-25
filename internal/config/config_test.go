@@ -290,6 +290,74 @@ func TestLoad_TopLevelExtensionKeys(t *testing.T) {
 	}
 }
 
+func TestLoad_KeysAreDecodedStrings(t *testing.T) {
+	tests := []struct {
+		name, src, wantErr string
+		check              func(*Config) bool
+	}{
+		{name: "binary alias as root key (verifier)", src: "x-key: &w !!binary d29ya2Zsb3c=\n*w : {extends: trunk-based}\n",
+			check: func(c *Config) bool { return c.Workflow.Extends == "trunk-based" }},
+		{name: "binary key decoding to a field (verifier)", src: "!!binary ZWRpdG9y: test\n", check: func(c *Config) bool { return c.Editor == "test" }},
+		{name: "binary key decoding to junk (verifier)", src: "!!binary worktree: test\n", wantErr: "line 1: unknown key "},
+		{name: "quoted keys", src: "\"editor\": vim\n'tag': {format: x}\n", check: func(c *Config) bool { return c.Editor == "vim" && c.Tag.Format == "x" }},
+		{name: "integer root key", src: "!!int 1: x\n", wantErr: "line 1: unsupported key !!int 1; keys must be plain strings"},
+		{name: "custom tag key", src: "!foo bar: x\n", wantErr: "line 1: unsupported key !foo bar; keys must be plain strings"},
+		{name: "sequence key", src: "? [a, b]\n: x\n", wantErr: "line 1: unsupported key [a, b]; keys must be plain strings"},
+		{name: "bool key in a block", src: "tag: {true: x}\n", wantErr: "line 1: unsupported key true in tag; keys must be plain strings"},
+		{name: "integer service name", src: "workflow: {release: {depends_on: {123: [api]}}}\n", wantErr: "line 1: unsupported key 123 in workflow.release.depends_on; keys must be plain strings"},
+		{name: "null state name", src: "workflow: {release: {machine: {states: {~: {final: released}}}}}\n", wantErr: "line 1: unsupported key ~ in workflow.release.machine.states; keys must be plain strings"},
+		{name: "aliased event key typo", src: "x-k: &l labl\nworkflow: {release: {machine: {states: {s: {on: {go: {*l : x}}}}}}}\n",
+			wantErr: `line 2: unknown key "labl" in workflow.release.machine.states.s.on.go, did you mean "label"?`},
+		{name: "aliased state key typo", src: "x-k: &n nxt\nworkflow: {release: {machine: {states: {s: {*n : done}}}}}\n",
+			wantErr: `line 2: unknown key "nxt" in workflow.release.machine.states.s, did you mean "next"?`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, tt.src))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			if !tt.check(mustEffective(t, cfg)) {
+				t.Fatalf("cfg decoded wrongly: editor=%q tag=%+v workflow=%+v", cfg.Editor, cfg.Tag, cfg.Workflow)
+			}
+		})
+	}
+}
+
+func TestLoad_ExtensionHoldersAreOpaque(t *testing.T) {
+	for name, src := range map[string]string{
+		"complex key (verifier)":         "x-any: { ? [a,b] : two }\n",
+		"tags, nulls and nested anchors": "x-any: {!custom t: 1, ~: null, 1: one, list: [&n 1, *n], deep: {a: &d {b: 1}, c: *d}}\n",
+		"removed keys inside a holder":   "x-old: {prune: {fetch: true}, git_flow: x, relase: 1}\n",
+		"binary holder key":              "!!binary eC1h: {anything: 1}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, src))
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			mustEffective(t, cfg)
+		})
+	}
+}
+
+func TestLoad_AliasBomb_ReturnsError(t *testing.T) {
+	src := "x-a: &a [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]\n"
+	for i, name := range []string{"b", "c", "d", "e", "f"} {
+		prev := string(rune('a' + i))
+		src += "x-" + name + ": &" + name + " [" + strings.Repeat("*"+prev+", ", 9) + "*" + prev + "]\n"
+	}
+	if _, err := Load(writeTempConfig(t, src)); err == nil || !strings.Contains(err.Error(), "aliases expand the document") {
+		t.Fatalf("Load() error = %v, want the alias expansion limit", err)
+	}
+}
+
 func TestLoad_TypoInSharedAnchor_ReportedOnceWithLine(t *testing.T) {
 	_, err := Load(writeTempConfig(t, "validation: &v {concurrncy: 3}\nprune: {<<: *v}\n"))
 	want := `line 1: unknown key "concurrncy" in validation, did you mean "concurrency"?`

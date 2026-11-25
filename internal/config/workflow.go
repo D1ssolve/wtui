@@ -82,7 +82,10 @@ func (m *MachineConfig) decode(node *yaml.Node, path string) error {
 	if node.Kind != yaml.MappingNode {
 		return fmt.Errorf("line %d: %s must be a mapping", node.Line, path)
 	}
-	for _, p := range mappingPairs(node) {
+	for _, p := range mappingPairs(node, path) {
+		if p.err != nil {
+			return p.err
+		}
 		switch p.name {
 		case "initial":
 			m.Initial = resolve(p.value).Value
@@ -91,7 +94,10 @@ func (m *MachineConfig) decode(node *yaml.Node, path string) error {
 			if states.Kind != yaml.MappingNode {
 				return fmt.Errorf("line %d: %s.states must be a mapping of state names", states.Line, path)
 			}
-			for _, sp := range mappingPairs(states) {
+			for _, sp := range mappingPairs(states, path+".states") {
+				if sp.err != nil {
+					return sp.err
+				}
 				state := StateConfig{Name: sp.name, Line: sp.line}
 				if err := state.decode(sp.value, path+".states."+sp.name); err != nil {
 					return err
@@ -99,7 +105,7 @@ func (m *MachineConfig) decode(node *yaml.Node, path string) error {
 				m.States = append(m.States, state)
 			}
 		default:
-			return UnknownKeyError(p.line, p.name, path, machineKeys)
+			return unknownKey(p.line, p.column, p.name, path, machineKeys)
 		}
 	}
 	return nil
@@ -111,12 +117,23 @@ func (s *StateConfig) decode(node *yaml.Node, path string) error {
 	if node.Kind != yaml.MappingNode {
 		return fmt.Errorf("line %d: %s must be a mapping", node.Line, path)
 	}
-	for _, p := range mappingPairs(node) {
+	for _, p := range mappingPairs(node, path) {
+		if p.err != nil {
+			return p.err
+		}
 		value := resolve(p.value)
-		var err error
 		switch p.name {
 		case "run":
-			err = value.Decode(&s.Run)
+			if value.Kind != yaml.SequenceNode {
+				return fmt.Errorf("line %d: %s.run must be a list of steps", value.Line, path)
+			}
+			for i, item := range value.Content {
+				var step StepConfig
+				if err := step.decode(item, fmt.Sprintf("%s.run[%d]", path, i)); err != nil {
+					return err
+				}
+				s.Run = append(s.Run, step)
+			}
 		case "wait":
 			s.Wait = value
 		case "next":
@@ -131,7 +148,10 @@ func (s *StateConfig) decode(node *yaml.Node, path string) error {
 			if value.Kind != yaml.MappingNode {
 				return fmt.Errorf("line %d: %s.on must be a mapping of event names", value.Line, path)
 			}
-			for _, ep := range mappingPairs(value) {
+			for _, ep := range mappingPairs(value, path+".on") {
+				if ep.err != nil {
+					return ep.err
+				}
 				event := EventConfig{Name: ep.name}
 				if err := decodeStrict(ep.value, &event, path+".on."+ep.name, eventKeys); err != nil {
 					return err
@@ -139,10 +159,7 @@ func (s *StateConfig) decode(node *yaml.Node, path string) error {
 				s.On = append(s.On, event)
 			}
 		default:
-			return UnknownKeyError(p.line, p.name, path, stateKeys)
-		}
-		if err != nil {
-			return fmt.Errorf("%s.%s: %w", path, p.name, err)
+			return unknownKey(p.line, p.column, p.name, path, stateKeys)
 		}
 	}
 	return nil
@@ -153,9 +170,12 @@ func decodeStrict(node *yaml.Node, out any, path string, allowed []string) error
 	if node.Kind != yaml.MappingNode {
 		return fmt.Errorf("line %d: %s must be a mapping", node.Line, path)
 	}
-	for _, p := range mappingPairs(node) {
+	for _, p := range mappingPairs(node, path) {
+		if p.err != nil {
+			return p.err
+		}
 		if !slices.Contains(allowed, p.name) {
-			return UnknownKeyError(p.line, p.name, path, allowed)
+			return unknownKey(p.line, p.column, p.name, path, allowed)
 		}
 	}
 	if err := node.Decode(out); err != nil {
@@ -174,27 +194,39 @@ type StepConfig struct {
 }
 
 func (s *StepConfig) UnmarshalYAML(node *yaml.Node) error {
+	return s.decode(node, "step")
+}
+
+// The kind and param names are decoded keys, so an aliased or merged typo reports its value.
+func (s *StepConfig) decode(node *yaml.Node, path string) error {
 	node = resolve(node)
 	s.Line = node.Line
 	if node.Kind == yaml.ScalarNode {
 		s.Kind = node.Value
 		return nil
 	}
-	if node.Kind != yaml.MappingNode || len(node.Content) != 2 {
-		return fmt.Errorf("line %d: step must be a single `kind: {params}` mapping", node.Line)
+	pairs := mappingPairs(node, path)
+	if node.Kind != yaml.MappingNode || len(pairs) != 1 {
+		return fmt.Errorf("line %d: %s must be a single `kind: {params}` mapping", node.Line, path)
 	}
-	s.Kind, s.Line = node.Content[0].Value, node.Content[0].Line
-	params := resolve(node.Content[1])
+	if pairs[0].err != nil {
+		return pairs[0].err
+	}
+	s.Kind, s.Line = pairs[0].name, pairs[0].line
+	params := resolve(pairs[0].value)
 	if params.Tag == "!!null" {
 		return nil
 	}
 	if params.Kind != yaml.MappingNode {
 		return fmt.Errorf("line %d: %s params must be a mapping", params.Line, s.Kind)
 	}
-	pairs := mappingPairs(params)
-	s.Params = make(map[string]yaml.Node, len(pairs))
-	s.ParamLines = make(map[string]int, len(pairs))
-	for _, p := range pairs {
+	paramPairs := mappingPairs(params, path+"."+s.Kind)
+	s.Params = make(map[string]yaml.Node, len(paramPairs))
+	s.ParamLines = make(map[string]int, len(paramPairs))
+	for _, p := range paramPairs {
+		if p.err != nil {
+			return p.err
+		}
 		s.Params[p.name] = *resolve(p.value)
 		s.ParamLines[p.name] = p.line
 	}
