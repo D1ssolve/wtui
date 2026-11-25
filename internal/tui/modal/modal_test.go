@@ -239,6 +239,17 @@ func TestHelpOverlay_QuestionMark_Closes(t *testing.T) {
 	}
 }
 
+func TestHelpOverlay_Q_ClosesWithoutQuitting(t *testing.T) {
+	h := NewHelpOverlay(testHelpSections())
+	_, cmd := h.Update(sendKey("q"))
+	if cmd == nil {
+		t.Fatal("q must return a close command")
+	}
+	if _, ok := execCmd(cmd).(CloseModalMsg); !ok {
+		t.Fatalf("expected CloseModalMsg, got %T", execCmd(cmd))
+	}
+}
+
 func TestHelpOverlay_ScrollDownUp_AdjustsOffset(t *testing.T) {
 	h := NewHelpOverlay(testHelpSections())
 	h.SetTerminalSize(80, 10)

@@ -361,18 +361,25 @@ func TestHelpOverlay_ScrollFooter_NarrowTopMiddleBottomKeepCloseLabel(t *testing
 	}
 }
 
-func TestHelpOverlay_QuitKeys_QuitApplication(t *testing.T) {
-	for _, key := range []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune{'q'}},
-		{Type: tea.KeyCtrlC},
+func TestHelpOverlay_QuitKeys(t *testing.T) {
+	for _, tc := range []struct {
+		key  tea.KeyMsg
+		quit bool
+	}{
+		{key: tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}},
+		{key: tea.KeyMsg{Type: tea.KeyCtrlC}, quit: true},
 	} {
 		h := NewHelpOverlay(testHelpSections())
-		_, cmd := h.Update(key)
+		_, cmd := h.Update(tc.key)
 		if cmd == nil {
-			t.Fatalf("%q must return a cmd", key.String())
+			t.Fatalf("%q must return a cmd", tc.key.String())
 		}
-		if _, ok := cmd().(tea.QuitMsg); !ok {
-			t.Fatalf("%q while help open must quit the application, got %T", key.String(), cmd())
+		if tc.quit {
+			if _, ok := cmd().(tea.QuitMsg); !ok {
+				t.Fatalf("%q must quit, got %T", tc.key.String(), cmd())
+			}
+		} else if _, ok := cmd().(CloseModalMsg); !ok {
+			t.Fatalf("%q must close the overlay, got %T", tc.key.String(), cmd())
 		}
 	}
 }

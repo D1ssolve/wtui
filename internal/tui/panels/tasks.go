@@ -94,6 +94,8 @@ type TasksPanel struct {
 
 	tasks       []domain.Task
 	flow        *gitflow.ResolvedGitFlow
+	rootDir     string
+	repoCount   int
 	rows        []treeRow
 	treeMode    bool
 	selectedIdx int
@@ -132,6 +134,11 @@ func NewTasksPanel(width, height int) TasksPanel {
 		height:      height,
 		selectedIdx: -1,
 	}
+}
+
+func (p *TasksPanel) SetDiscovery(rootDir string, repoCount int) {
+	p.rootDir = rootDir
+	p.repoCount = repoCount
 }
 
 func (p *TasksPanel) SetFlow(flow *gitflow.ResolvedGitFlow) {
@@ -459,7 +466,18 @@ func (p TasksPanel) View() string {
 		Bold(true).
 		Foreground(panelColorPrimary)
 
-	parts := []string{titleStyle.Render(title), p.list.View()}
+	body := p.list.View()
+	parts := []string{titleStyle.Render(title)}
+	if total == 0 {
+		parts = append(parts, lipgloss.NewStyle().
+			Render(uitheme.HintLine("No tasks yet. Press [i] to create one.")))
+		if p.repoCount == 0 {
+			parts = append(parts, lipgloss.NewStyle().
+				Render(uitheme.HintLine(fmt.Sprintf("No repositories found under %s; set root_dir in the config (wtui --help)", p.rootDir))))
+		}
+	} else {
+		parts = append(parts, body)
+	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
@@ -505,10 +523,19 @@ func (p TasksPanel) treeView() string {
 	pagination := lipgloss.NewStyle().Foreground(tasksColorDim).Render(treePager.View())
 
 	parts := []string{titleStyle.Render(title)}
+	if total == 0 {
+		parts = append(parts, lipgloss.NewStyle().
+			Render(uitheme.HintLine("No tasks yet. Press [i] to create one.")))
+		if p.repoCount == 0 {
+			parts = append(parts, lipgloss.NewStyle().
+				Render(uitheme.HintLine(fmt.Sprintf("No repositories found under %s; set root_dir in the config (wtui --help)", p.rootDir))))
+		}
+	} else {
+		parts = append(parts, body, pagination)
+	}
 	if filtering {
 		parts = append(parts, p.list.FilterInput.View())
 	}
-	parts = append(parts, body, pagination)
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
 	return renderPanelFrame(p.focused, p.width, p.height, titleStyle.Render(title), content)

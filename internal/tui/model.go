@@ -236,6 +236,7 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 	}
 	m.setFocus(FocusTasks)
 	m.tasksPanel.SetFlow(opts.ResolvedFlow)
+	m.tasksPanel.SetDiscovery(cfg.RootDir, 0)
 	m.servicesPanel.SetLazygitAvailable(opts.LazygitAvailable)
 	m.servicesPanel.SetForgeConfig(cfg.Forge)
 
@@ -304,6 +305,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateShellInput(msg)
 		}
 
+		if m.modal != nil {
+			newModal, cmd := m.modal.Update(msg)
+			m.modal = newModal
+			return m, cmd
+		}
+
 		if m.pipelineView != nil {
 			if key.Matches(msg, m.keymap.Escape) {
 				m.pipelineView = nil
@@ -321,12 +328,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			newOverlay, cmd := m.logOverlay.Update(msg)
 			m.logOverlay = newOverlay
-			return m, cmd
-		}
-
-		if m.modal != nil {
-			newModal, cmd := m.modal.Update(msg)
-			m.modal = newModal
 			return m, cmd
 		}
 
@@ -352,7 +353,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch {
-		case key.Matches(msg, m.keymap.Quit), key.Matches(msg, m.keymap.ForceQuit):
+		case key.Matches(msg, m.keymap.ForceQuit):
+			m.logger.Info("quit requested")
+			return m, tea.Quit
+
+		case key.Matches(msg, m.keymap.Quit) && m.modal == nil:
 			m.logger.Info("quit requested")
 			return m, tea.Quit
 
@@ -1852,6 +1857,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.repos = msg.Repos
+		m.tasksPanel.SetDiscovery(m.cfg.RootDir, len(m.repos))
 		if m.refreshing {
 			m.outputPanel.AppendLine("Repository cache refreshed.")
 			m.refreshing = false

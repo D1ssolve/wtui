@@ -664,6 +664,26 @@ func TestTasksPanel_View_ContainsTitle(t *testing.T) {
 	}
 }
 
+func TestTasksPanel_EmptyView_GuidesTaskCreation(t *testing.T) {
+	p := NewTasksPanel(60, 20)
+	p.SetFlow(makeFlow(gitflow.BranchTypeRelease))
+	view := stripAnsi(p.View())
+	if !strings.Contains(view, "Press") || !strings.Contains(view, "create one") {
+		t.Fatalf("empty view should guide task creation, got %q", view)
+	}
+}
+
+func TestTasksPanel_EmptyView_ShowsMissingRepositories(t *testing.T) {
+	p := NewTasksPanel(80, 20)
+	p.SetDiscovery("/work/repos", 0)
+	view := stripAnsi(p.View())
+	for _, want := range []string{"Press", "No repositories found under", "/work/repos", "root_dir", "config"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("empty view missing %q", want)
+		}
+	}
+}
+
 func TestTasksPanel_View_ContainsItemCount(t *testing.T) {
 	p := NewTasksPanel(60, 20)
 	p.SetTasks(makeTasks("IN-001", "IN-002", "IN-003"))
