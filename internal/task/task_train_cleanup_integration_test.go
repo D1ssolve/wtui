@@ -18,7 +18,8 @@ import (
 
 func TestTaskCleanup_TrainSidecarLifecycle(t *testing.T) {
 	const id, branch, ownerContents = "APP-1", "feature/APP-1", "owner data"
-	for _, mode := range []string{"delivered", "pending", "cancelled", "stale", "owner"} {
+	for _, mode := range []string{"delivered", "pending", "cancelled", "stale", "owner", "legacy",
+		"pin-removed", "pin-replaced", "pin-same-metadata", "pin-added", "pin-removed-retry", "rmdir-permission"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("GIT_ALLOW_PROTOCOL", "file:ssh")
 			client := &interruptedTaskCleanup{Client: git.NewCommandClient(newIntegrationLogger())}
@@ -50,9 +51,10 @@ func TestTaskCleanup_TrainSidecarLifecycle(t *testing.T) {
 			if mode == "pending" {
 				detail.State, detail.MergedSHA = "open", ""
 			}
-			m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitLab: &mergeForgeClient{
-				readinessByNumber: map[int]forge.MRReadiness{7: detail},
-			}}
+			other := detail
+			other.Number = 8
+			details := map[int]forge.MRReadiness{7: detail, 8: other}
+			m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitLab: &mergeForgeClient{readinessByNumber: details}}
 			unlock, err := m.lockTask(t.Context(), id)
 			if err != nil {
 				t.Fatal(err)
@@ -71,6 +73,11 @@ func TestTaskCleanup_TrainSidecarLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			owner := filepath.Join(root, "owner-notes.txt")
+			if mode == "legacy" || mode == "pin-added" {
+				if err := os.Remove(sidecar); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if mode == "owner" {
 				writeFile(t, owner, ownerContents)
 			}
@@ -86,10 +93,60 @@ func TestTaskCleanup_TrainSidecarLifecycle(t *testing.T) {
 			if mode == "stale" {
 				writeFile(t, filepath.Join(tree, "untracked-owner.txt"), ownerContents)
 			}
+			switch mode {
+			case "pin-removed":
+				if err := os.Rename(sidecar, owner); err != nil {
+					t.Fatal(err)
+				}
+			case "pin-removed-retry":
+				client.afterRemove = cancel
+				partial, err := m.ExecuteTaskCleanup(ctx, plan, nil)
+				if !errors.Is(err, context.Canceled) || len(partial.Completed) != 1 {
+					t.Fatalf("retry fixture did not perform partial cleanup: %+v %v", partial, err)
+				}
+				if err := os.Remove(sidecar); err != nil {
+					t.Fatal(err)
+				}
+				client.afterRemove = nil
+				ctx = t.Context()
+			case "pin-replaced", "pin-same-metadata":
+				info, err := os.Stat(sidecar)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before = bytes.Replace(before, []byte(`"iid":7`), []byte(`"iid":8`), 1)
+				path := sidecar
+				if mode == "pin-replaced" {
+					path = owner
+				}
+				writeFile(t, path, string(before))
+				if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+					t.Fatal(err)
+				}
+				if path != sidecar {
+					if err := os.Rename(path, sidecar); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "pin-added":
+				writeFile(t, sidecar, string(before))
+			case "rmdir-permission":
+				parent := filepath.Dir(root)
+				t.Cleanup(func() {
+					if err := os.Chmod(parent, 0o755); err != nil {
+						t.Error(err)
+					}
+				})
+				client.afterRemove = func() {
+					if err := os.Chmod(parent, 0o555); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
 
-			result, err := m.ExecuteTaskCleanup(ctx, plan, nil)
+			result, err := m.ExecuteTaskCleanup(ctx, plan, nil, TaskCleanupExecutionSelection{Force: mode == "pin-removed-retry"})
 			t.Logf("completed=%v err=%v", result.Completed, err)
-			if mode == "delivered" {
+			if mode == "delivered" || mode == "legacy" {
 				if err != nil || !slices.Contains(result.Completed, "remove task directory "+root) {
 					t.Fatalf("approved cleanup: %+v, %v", result, err)
 				}
@@ -101,14 +158,35 @@ func TestTaskCleanup_TrainSidecarLifecycle(t *testing.T) {
 			if err == nil || (mode == "cancelled" && !errors.Is(err, context.Canceled)) {
 				t.Fatalf("cleanup should stop in %s: %+v, %v", mode, result, err)
 			}
-			after, readErr := os.ReadFile(sidecar)
-			if readErr != nil || !bytes.Equal(before, after) {
+			preserved := sidecar
+			if mode == "pin-removed" {
+				preserved = owner
+			}
+			after, readErr := os.ReadFile(preserved)
+			if mode != "pin-removed-retry" && (readErr != nil || !bytes.Equal(before, after)) {
 				t.Fatalf("train identity was not preserved: %q, %v", after, readErr)
 			}
-			if mode == "pending" || mode == "stale" {
+			switch mode {
+			case "pending", "stale", "pin-removed", "pin-replaced", "pin-same-metadata", "pin-added":
 				if len(result.Completed) != 0 {
 					t.Fatalf("cleanup mutated the task before rejecting: %+v", result)
 				}
+				if _, err := os.Stat(tree); err != nil || gitOutput(t, env.repoPath, "rev-parse", branch) != head {
+					t.Fatalf("worktree or branch changed on rejection: %v", err)
+				}
+			case "pin-removed-retry":
+				if !errors.Is(err, ErrTaskCleanupBlocked) || len(result.Completed) != 0 ||
+					gitOutput(t, env.repoPath, "rev-parse", branch) != head {
+					t.Fatalf("stale retry deleted the surviving branch: %+v %v", result, err)
+				}
+			case "rmdir-permission":
+				if !errors.Is(err, os.ErrPermission) {
+					t.Fatalf("fixture did not deny final removal: %v", err)
+				}
+				if err := os.Chmod(filepath.Dir(root), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				retryTaskTrainCleanupAfterPermissionError(t, m, details, sidecar, owner, before)
 			}
 			if mode == "stale" {
 				owner = filepath.Join(tree, "untracked-owner.txt")
@@ -120,5 +198,38 @@ func TestTaskCleanup_TrainSidecarLifecycle(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func retryTaskTrainCleanupAfterPermissionError(t *testing.T, m *manager, details map[int]forge.MRReadiness, sidecar, owner string, before []byte) {
+	t.Helper()
+	delivered := details[7]
+	pending := delivered
+	pending.State = "open"
+	details[7] = pending
+	plan, err := m.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1"})
+	if err != nil || plan.Blocked() {
+		t.Fatalf("fresh retry plan: %+v %v", plan.Preview(), err)
+	}
+	writeFile(t, owner, "retry owner data")
+	result, err := m.ExecuteTaskCleanup(t.Context(), plan, nil)
+	if !errors.Is(err, ErrTaskCleanupBlocked) || len(result.Completed) != 0 {
+		t.Fatalf("pending retry: %+v %v", result, err)
+	}
+	details[7] = delivered
+	result, err = m.ExecuteTaskCleanup(t.Context(), plan, nil)
+	if err == nil || len(result.Completed) != 0 {
+		t.Fatalf("owner file must prevent final removal: %+v %v", result, err)
+	}
+	ownerData, ownerErr := os.ReadFile(owner)
+	pinData, pinErr := os.ReadFile(sidecar)
+	if ownerErr != nil || string(ownerData) != "retry owner data" || pinErr != nil || !bytes.Equal(pinData, before) {
+		t.Fatalf("retry lost owner data or evidence: owner=%q (%v) pin=%q (%v)", ownerData, ownerErr, pinData, pinErr)
+	}
+	if err := os.Remove(owner); err != nil {
+		t.Fatal(err)
+	}
+	if result, err = m.ExecuteTaskCleanup(t.Context(), plan, nil); err != nil || len(result.Completed) != 1 {
+		t.Fatalf("delivered retry failed: %+v %v", result, err)
 	}
 }

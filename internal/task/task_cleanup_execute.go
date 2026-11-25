@@ -26,8 +26,7 @@ type TaskCleanupResult struct {
 }
 
 type TaskCleanupExecutionSelection struct {
-	Force        bool
-	trainSidecar os.FileInfo
+	Force bool
 }
 
 // ExecuteTaskCleanup revalidates an approved task cleanup plan and executes
@@ -65,7 +64,7 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 	if err != nil {
 		return result, err
 	}
-	if fresh.Blocked() || !approvedCleanupRemainder(plan, fresh, selection.Force) {
+	if fresh.Blocked() || !plan.trainPin.matches(fresh.trainPin) || !approvedCleanupRemainder(plan, fresh, selection.Force) {
 		return result, fmt.Errorf("%w: approved plan is stale: %s", ErrTaskCleanupBlocked, strings.Join(fresh.preview.Blockers, "; "))
 	}
 	if plan.firstScope != nil {
@@ -87,11 +86,9 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 		}
 	}
 	plan = fresh
-	trainSidecar, err := m.verifyTaskTrainCleanup(ctx, plan.preview.TaskID)
-	if err != nil {
+	if err := m.verifyTaskTrainCleanup(ctx, plan); err != nil {
 		return result, fmt.Errorf("%w: verify recorded train delivery: %w", ErrTaskCleanupBlocked, err)
 	}
-	selection.trainSidecar = trainSidecar
 
 	ordered := taskCleanupExecutionOrder(plan.steps)
 	for _, step := range ordered {
@@ -164,6 +161,9 @@ func (m *manager) runTaskCleanupStep(ctx context.Context, statusCh chan<- string
 	if !noop {
 		if err := m.checkTaskCleanupDestinations(ctx, plan); err != nil {
 			return err
+		}
+		if _, err := plan.trainPin.recheck(m.taskDir(plan.preview.TaskID)); err != nil {
+			return fmt.Errorf("%w: %w", ErrTaskCleanupBlocked, err)
 		}
 		executed, execErr := m.executeTaskCleanupStep(ctx, plan, selection, step)
 		if execErr != nil {
@@ -263,7 +263,7 @@ func (m *manager) executeTaskCleanupStep(ctx context.Context, plan TaskCleanupPl
 		if err := removeGeneratedTaskFiles(step.path, plan.preview.TaskID); err != nil {
 			return false, err
 		}
-		if selection.Force {
+		if selection.Force && plan.trainPin.info == nil {
 			if _, err := os.ReadDir(step.path); errors.Is(err, os.ErrNotExist) {
 				return true, nil
 			} else if err != nil {
@@ -271,7 +271,7 @@ func (m *manager) executeTaskCleanupStep(ctx context.Context, plan TaskCleanupPl
 			}
 			return false, os.RemoveAll(step.path)
 		}
-		return removeTaskDirectoryAfterCleanup(ctx, step.path, selection.trainSidecar)
+		return removeTaskDirectoryAfterCleanup(ctx, step.path, plan.trainPin)
 	default:
 		return false, fmt.Errorf("unknown cleanup step %d", step.kind)
 	}

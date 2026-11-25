@@ -31,14 +31,20 @@ type taskTrainPin struct {
 }
 
 func (m *manager) loadTaskTrainPins(taskID string) (map[taskTrainKey]taskTrainPin, error) {
-	pins := make(map[taskTrainKey]taskTrainPin)
+	if err := checkTaskTrainRecovery(m.taskDir(taskID)); err != nil {
+		return nil, err
+	}
 	raw, err := os.ReadFile(filepath.Join(m.taskDir(taskID), taskTrainFile))
 	if errors.Is(err, os.ErrNotExist) {
-		return pins, nil
+		return make(map[taskTrainKey]taskTrainPin), nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read task merge train identity: %w", err)
 	}
+	return parseTaskTrainPins(raw)
+}
+
+func parseTaskTrainPins(raw []byte) (map[taskTrainKey]taskTrainPin, error) {
 	var records []taskTrainPin
 	if err := json.Unmarshal(raw, &records); err != nil {
 		return nil, fmt.Errorf("decode task merge train identity: %w", err)
@@ -46,6 +52,7 @@ func (m *manager) loadTaskTrainPins(taskID string) (map[taskTrainKey]taskTrainPi
 	if len(records) == 0 {
 		return nil, errors.New("empty task merge train identity file")
 	}
+	pins := make(map[taskTrainKey]taskTrainPin, len(records))
 	for _, pin := range records {
 		host, project, qualified := strings.Cut(pin.Repo, "/")
 		if !qualified || host == "" || !strings.Contains(project, "/") ||
