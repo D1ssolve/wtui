@@ -840,12 +840,44 @@ close:
 }
 
 func TestLoad_IneffectiveKeys_ReturnRemovedError(t *testing.T) {
-	for key := range ineffectiveKeys {
-		t.Run(key, func(t *testing.T) {
-			block, field, _ := strings.Cut(key, ".")
-			_, err := Load(writeTempConfig(t, block+":\n  "+field+": x\n"))
-			if err == nil || !strings.Contains(err.Error(), key+" was removed: it never had an effect; delete it") {
-				t.Fatalf("Load() error = %v, want the removed-key hint for %s", err, key)
+	keys := []string{
+		"tag.version_scheme", "tag.parser", "tag.strict", "tag.source",
+		"validation.require_upstream_for_sync", "validation.command_timeout",
+		"close.require_confirmation", "close.push_targets_after_direct_merge", "close.show_plan_before_execute",
+		"prune.fetch", "prune.dry_run_default", "prune.require_confirmation", "prune.allow_dirty",
+		"prune.allow_unpushed", "prune.remove_empty_task_dir", "prune.run_git_worktree_prune",
+	}
+	if len(keys) != len(ineffectiveKeys) {
+		t.Fatalf("ineffectiveKeys has %d entries, this list %d: update both together", len(ineffectiveKeys), len(keys))
+	}
+	for _, key := range keys {
+		block, field, _ := strings.Cut(key, ".")
+		for form, src := range map[string]string{
+			"literal": block + ":\n  " + field + ": x\n",
+			"merged":  block + ":\n  <<: {" + field + ": x}\n",
+		} {
+			t.Run(key+"/"+form, func(t *testing.T) {
+				_, err := Load(writeTempConfig(t, src))
+				want := "line 2: " + key + " was removed: it never had an effect; delete it"
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("Load() error = %v, want %q", err, want)
+				}
+			})
+		}
+	}
+}
+
+func TestLoad_RemovedKeyHints_ThroughMergesAndAliases(t *testing.T) {
+	tests := []struct{ name, src, want string }{
+		{"merged removed key (verifier input)", "prune: {<<: {fetch: true}}\n", "line 1: prune.fetch was removed: it never had an effect; delete it"},
+		{"removed key in an anchor", "validation: &v\n  concurrency: 3\nprune:\n  <<: *v\n  dry_run_default: true\n", "line 5: prune.dry_run_default was removed"},
+		{"merged migration key", "relase: {}\n<<: {git_flow: {preset: git-flow}}\n", "line 2: git_flow is no longer supported"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeTempConfig(t, tt.src))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.want)
 			}
 		})
 	}

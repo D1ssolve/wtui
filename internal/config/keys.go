@@ -71,13 +71,17 @@ func checkKeys(node *yaml.Node, t reflect.Type, path string, open map[*yaml.Node
 				fields[name] = t.Field(i).Type
 			}
 		}
-		for _, p := range mappingPairs(node) {
+		pairs := mappingPairs(node)
+		// Removed-key hints are checked first so they win over any other error in the block.
+		for _, p := range pairs {
+			if err := removedKeyError(p.line, joinKey(path, p.name)); err != nil {
+				return err
+			}
+		}
+		for _, p := range pairs {
 			keyPath := joinKey(path, p.name)
 			fieldType, ok := fields[p.name]
 			if !ok {
-				if ineffectiveKeys[keyPath] {
-					return fmt.Errorf("line %d: %s was removed: it never had an effect; delete it", p.line, keyPath)
-				}
 				return UnknownKeyError(p.line, p.name, path, slices.Collect(maps.Keys(fields)))
 			}
 			if err := checkKeys(p.value, fieldType, keyPath, open); err != nil {

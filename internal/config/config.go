@@ -101,10 +101,6 @@ func Load(flagPath string) (*Config, error) {
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
 	}
 
-	if err := rejectRemovedKeys(data); err != nil {
-		return nil, fmt.Errorf("config: %s: %w", path, err)
-	}
-
 	// Decoding values first applies yaml.v3's alias-expansion limits before the key walk expands aliases.
 	var values any
 	if err := yaml.Unmarshal(data, &values); err != nil {
@@ -145,15 +141,12 @@ var ineffectiveKeys = map[string]bool{
 	"prune.allow_unpushed": true, "prune.remove_empty_task_dir": true, "prune.run_git_worktree_prune": true,
 }
 
-func rejectRemovedKeys(data []byte) error {
-	var top map[string]yaml.Node
-	if err := yaml.Unmarshal(data, &top); err != nil {
-		return nil // the typed parse reports syntax errors
+func removedKeyError(line int, keyPath string) error {
+	if hint, ok := removedKeys[keyPath]; ok {
+		return fmt.Errorf("line %d: %s is no longer supported: %s", line, keyPath, hint)
 	}
-	for key, hint := range removedKeys {
-		if _, ok := top[key]; ok {
-			return fmt.Errorf("%s is no longer supported: %s", key, hint)
-		}
+	if ineffectiveKeys[keyPath] {
+		return fmt.Errorf("line %d: %s was removed: it never had an effect; delete it", line, keyPath)
 	}
 	return nil
 }
