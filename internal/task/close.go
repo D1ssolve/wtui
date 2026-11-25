@@ -462,7 +462,9 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 			}
 
 		case gitflow.CloseStrategyReviewRequest:
-			if m.cfg.Close == nil || m.cfg.Close.PushSourceBeforeReview {
+			publish := m.cfg.Close == nil || m.cfg.Close.PushSourceBeforeReview
+			classifyFirst := m.sourceRemovedOnMerge(svc.Branch)
+			if publish && !classifyFirst {
 				if pushErr := m.pushBranch(ctx, svc.WorktreePath); pushErr != nil {
 					step(svc.Name+":push-source", StepStatusFailed, pushErr.Error())
 					svcFailed = true
@@ -493,6 +495,17 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 				step(svc.Name+":review-request", StepStatusFailed, reconcileErr.Error())
 				svcFailed = true
 				break
+			}
+			if publish && classifyFirst && state != reviewCloseVerified {
+				pushed, pushErr := m.publishReviewSource(ctx, svc, state)
+				if pushErr != nil {
+					step(svc.Name+":push-source", StepStatusFailed, pushErr.Error())
+					svcFailed = true
+					break
+				}
+				if pushed {
+					step(svc.Name+":push-source", StepStatusOK, "source pushed")
+				}
 			}
 			switch state {
 			case reviewCloseWaiting:
