@@ -1,4 +1,4 @@
-package codex
+package cliprocess
 
 import (
 	"errors"

@@ -21,9 +21,9 @@ func (c *Config) effectiveAI() error {
 		c.AI.Provider = "codex"
 	}
 	switch c.AI.Provider {
-	case "codex":
+	case "codex", "claude":
 	default:
-		return fmt.Errorf("config: ai.provider %q is unsupported; available provider: codex", c.AI.Provider)
+		return fmt.Errorf("config: ai.provider %q is unsupported; available providers: codex, claude", c.AI.Provider)
 	}
 	c.AI.Model = strings.TrimSpace(c.AI.Model)
 	if c.AI.Timeout == "" {

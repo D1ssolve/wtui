@@ -1,6 +1,6 @@
-package codex
+package ai
 
-const draftSchema = `{
+const DraftSchema = `{
   "type": "object",
   "additionalProperties": false,
   "required": ["title", "description", "services"],
@@ -24,7 +24,7 @@ const draftSchema = `{
   }
 }`
 
-const explanationSchema = `{
+const ExplanationSchema = `{
   "type": "object",
   "additionalProperties": false,
   "required": ["cause", "steps"],
@@ -34,7 +34,7 @@ const explanationSchema = `{
   }
 }`
 
-const workflowSchema = `{
+const WorkflowSchema = `{
   "type": "object",
   "additionalProperties": false,
   "required": ["yaml"],
