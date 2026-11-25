@@ -135,6 +135,20 @@ func (s *StateConfig) decode(node *yaml.Node, path string) error {
 				s.Run = append(s.Run, step)
 			}
 		case "wait":
+			if value.Kind == yaml.MappingNode {
+				// Normalize keys without mutating an anchor or changing the wait DSL's shape.
+				wait := *value
+				wait.Content = slices.Clone(value.Content)
+				for i := 0; i+1 < len(wait.Content); i += 2 {
+					key := wait.Content[i]
+					name, ok := keyName(key)
+					if !ok {
+						return unsupportedKey(key, path+".wait")
+					}
+					wait.Content[i] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name, Line: key.Line, Column: key.Column}
+				}
+				value = &wait
+			}
 			s.Wait = value
 		case "next":
 			s.Next = value.Value
