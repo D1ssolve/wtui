@@ -490,14 +490,14 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 				svcFailed = true
 				break
 			}
-			state, mergeSHA, reconcileErr := m.reconcileReviewClose(ctx, svc, target, repo, forgeClient)
+			state, reviewSHA, reconcileErr := m.reconcileReviewClose(ctx, svc, target, repo, forgeClient)
 			if reconcileErr != nil {
 				step(svc.Name+":review-request", StepStatusFailed, reconcileErr.Error())
 				svcFailed = true
 				break
 			}
-			if publish && classifyFirst && state != reviewCloseVerified {
-				pushed, pushErr := m.publishReviewSource(ctx, svc, state)
+			if publish && classifyFirst && (state == reviewCloseCreate || state == reviewCloseWaiting) {
+				pushed, pushErr := m.publishReviewSource(ctx, svc, reviewSourcePublication{state: state, openHead: reviewSHA})
 				if pushErr != nil {
 					step(svc.Name+":push-source", StepStatusFailed, pushErr.Error())
 					svcFailed = true
@@ -511,8 +511,8 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 			case reviewCloseWaiting:
 				step(svc.Name+":review-request", StepStatusSkipped, "waiting for merge")
 			case reviewCloseVerified:
-				reviewVerified, reviewMergeSHA = true, mergeSHA
-				step(svc.Name+":review-request", StepStatusOK, "merged MR verified at "+mergeSHA)
+				reviewVerified, reviewMergeSHA = true, reviewSHA
+				step(svc.Name+":review-request", StepStatusOK, "merged MR verified at "+reviewSHA)
 			default:
 				title, description := svcPlan.ForgePlan.Title, svcPlan.ForgePlan.Description
 				if strings.TrimSpace(params.ReviewTitle) != "" {

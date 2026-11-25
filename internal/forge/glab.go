@@ -336,6 +336,7 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 		SupportsSHAPin:        supportsSHAPin,
 		SupportsTargetBinding: false, // source head is server pinned; target preflight is non-atomic
 		StatusChecksBlocking:  mergeStatus == "status_checks_must_pass",
+		NumberInferred:        detail.Number == 0 && detail.IID == 0,
 	}, nil
 }
 

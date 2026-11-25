@@ -61,6 +61,8 @@ type MRReadiness struct {
 	// preflight while the requested source head remains server pinned.
 	SupportsTargetBinding bool
 	StatusChecksBlocking  bool
+	// NumberInferred indicates that the response did not report a repo-local MR number.
+	NumberInferred bool
 }
 
 type MergeMRParams struct {

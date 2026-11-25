@@ -25,12 +25,11 @@ const (
 	reviewCloseVerified = "verified"
 )
 
-// reconcileReviewClose inspects the exact numbered MR for
-// sourceBranch→target using the forge MR history and classifies the close.
-// Post-actions may only follow the verified state: a created or open MR means
-// the service waits, a merged MR is re-validated against the current source
-// head and fresh origin/<target> containment before its merge SHA is
-// accepted. A merged MR is never recreated.
+type reviewSourcePublication struct {
+	state    string
+	openHead string
+}
+
 // sourceRemovedOnMerge reports an eligible review whose forge removes the source on merge:
 // its MR history is classified before the source is published, so a merged review is
 // verified read-only and its removed source is never recreated.
@@ -42,9 +41,13 @@ func (m *manager) sourceRemovedOnMerge(branch string) bool {
 // publishReviewSource pushes the source after classification: a new review publishes it as
 // before; an open review is only fast-forwarded in place, leased on the observed remote head,
 // so a merge (and source removal) racing this push makes it fail instead of recreating the ref.
-func (m *manager) publishReviewSource(ctx context.Context, svc domain.Service, state string) (bool, error) {
-	if state == reviewCloseCreate {
+func (m *manager) publishReviewSource(ctx context.Context, svc domain.Service, publication reviewSourcePublication) (bool, error) {
+	switch publication.state {
+	case reviewCloseCreate:
 		return true, m.pushBranch(ctx, svc.WorktreePath)
+	case reviewCloseWaiting:
+	default:
+		return false, fmt.Errorf("cannot publish source for review state %q", publication.state)
 	}
 	ref := "refs/heads/" + svc.Branch
 	remote, err := m.git.RemoteRefSHA(ctx, svc.RepoPath, ref)
@@ -53,6 +56,9 @@ func (m *manager) publishReviewSource(ctx context.Context, svc domain.Service, s
 	}
 	if remote == "" {
 		return false, withRecovery(fmt.Errorf("source %s is absent on the remote while its MR is open; not re-publishing it", svc.Branch), "inspect the MR in forge; press C again once it is merged")
+	}
+	if remote != publication.openHead {
+		return false, withRecovery(fmt.Errorf("open MR head %.8s does not match published source %.8s", publication.openHead, remote), "compare the MR head with the remote source and refresh before retrying")
 	}
 	local, err := m.git.ResolveRef(ctx, svc.RepoPath, ref)
 	if err != nil {
@@ -75,6 +81,8 @@ func (m *manager) publishReviewSource(ctx context.Context, svc domain.Service, s
 	return true, m.git.PushRefWithLease(ctx, svc.RepoPath, pushURL, ref, local, ref, remote)
 }
 
+// reconcileReviewClose returns the state and its evidence SHA: the published
+// head for a removal-enabled open review, or the contained merge for a verified review.
 func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, target, repo string, client forge.ForgeClient) (string, string, error) {
 	history, ok := client.(forge.HistoryClient)
 	if !ok {
@@ -83,6 +91,30 @@ func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, 
 	rows, err := history.MRHistory(ctx, svc.Branch, repo)
 	if err != nil {
 		return "", "", err
+	}
+	removal := m.sourceRemovedOnMerge(svc.Branch)
+	const inspect = "inspect MR source, target and state in the forge; refresh before retrying"
+	if removal {
+		if svc.Branch == "" || target == "" {
+			return "", "", withRecovery(errors.New("review source or target branch is missing"), inspect)
+		}
+		// This listing is source-scoped. A row we cannot classify must not
+		// disappear into the same bucket as genuinely empty history.
+		seen := make(map[int]struct{}, len(rows))
+		for _, row := range rows {
+			if row.Number <= 0 || row.SourceBranch != svc.Branch || row.TargetBranch != target {
+				return "", "", withRecovery(fmt.Errorf("MR history identity is incomplete or unexpected: !%d %q → %q, expected %q → %q", row.Number, row.SourceBranch, row.TargetBranch, svc.Branch, target), inspect)
+			}
+			if _, duplicate := seen[row.Number]; duplicate {
+				return "", "", withRecovery(fmt.Errorf("ambiguous MR history: duplicate !%d", row.Number), inspect)
+			}
+			seen[row.Number] = struct{}{}
+			switch strings.ToLower(strings.TrimSpace(row.State)) {
+			case "open", "opened", "merged", "closed":
+			default:
+				return "", "", withRecovery(fmt.Errorf("MR history !%d has unknown state %q", row.Number, row.State), inspect)
+			}
+		}
 	}
 	active, _ := matchTargetMRs(rows, svc.Branch, target)
 	if len(active) > 1 {
@@ -96,12 +128,23 @@ func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, 
 	if err != nil {
 		return "", "", err
 	}
+	if removal {
+		if fresh.NumberInferred || fresh.Number != want.Number || fresh.SourceBranch != svc.Branch || fresh.TargetBranch != target {
+			return "", "", withRecovery(fmt.Errorf("MR !%d identity changed or is incomplete: got !%d %q → %q, expected %q → %q", want.Number, fresh.Number, fresh.SourceBranch, fresh.TargetBranch, svc.Branch, target), inspect)
+		}
+		if strings.TrimSpace(fresh.HeadSHA) == "" {
+			return "", "", withRecovery(fmt.Errorf("MR !%d has no head SHA", want.Number), inspect)
+		}
+		if mergedMRState(want.State) && !mergedMRState(fresh.State) {
+			return "", "", withRecovery(fmt.Errorf("MR !%d is listed as merged but numbered detail is %q", want.Number, fresh.State), inspect)
+		}
+	}
 	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &fresh); err != nil {
 		return "", "", err
 	}
 	switch strings.ToLower(strings.TrimSpace(fresh.State)) {
 	case "open", "opened":
-		return reviewCloseWaiting, "", nil
+		return reviewCloseWaiting, fresh.HeadSHA, nil
 	case "merged":
 	default:
 		return "", "", fmt.Errorf("MR !%d is %s", want.Number, fresh.State)
@@ -112,7 +155,7 @@ func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, 
 	// authorize post-actions on stale local code.
 	// A forge asked to remove the source on merge leaves no remote ref; only then is the
 	// local head accepted, and only as far as it equals the merged MR head checked below.
-	head, err := m.freshSourceSHA(ctx, svc, m.sourceRemovedOnMerge(svc.Branch))
+	head, err := m.freshSourceSHA(ctx, svc, removal)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve current source %s: %w", svc.Branch, err)
 	}
