@@ -24,9 +24,9 @@ A feature rarely stays inside one repository. You create the same branch several
 
 - **Task-scoped worktrees** - create matching branches and worktrees across selected repositories.
 - **Multi-service operations** - sync, push, validate, and inspect an entire task together.
-- **Your workflow, as configuration** - start from `git-flow`, `github-flow` or `trunk-based`, or describe your own branch types and state machines for tasks and releases in YAML: stands and QA before merge, QA loops, environment chains, CI gates, your own hook commands, service order, GitHub merge queues, versions from Conventional Commits. `wtui flow` shows what wtui will do; `W` in the TUI, `wtui flow --mermaid` and `wtui flow --html` draw it as a diagram.
+- **Your workflow, as configuration** - start from `git-flow`, `github-flow` or `trunk-based`, or describe your own branch types and state machines for tasks and releases in YAML: stands and QA before merge, QA loops, environment chains, CI gates, your own hook commands, service order, GitHub merge queues, versions from Conventional Commits. `wtui flow` shows what wtui will do; `W` in the TUI, `wtui flow --mermaid` and `wtui flow --html` (a self-contained page that works offline) draw it as a diagram.
 - **GitHub and GitLab workflows** - create and inspect MRs/PRs through `gh` or `glab`. Merging stays on the forge; wtui reconciles the result.
-- **AI where it saves time** - MR and release texts, `E` explains a failure and the next step, `wtui flow --draft "how your team works"` writes a validated `workflow:` block (Codex CLI with your ChatGPT login).
+- **AI where it saves time** - MR and release texts, `E` explains a failure and the next step, `wtui flow --draft "how your team works"` writes a validated `workflow:` block. It uses the Codex CLI with your ChatGPT login by default, or the Claude Code CLI with a Claude subscription if you set `ai.provider: claude`. AI is optional; everything else works without it.
 - **Release orchestration** - prepare per-service versions, promote to production, and tag from one release view.
 - **Focused workspaces** - generate a VS Code workspace and .NET solution for each task.
 
@@ -40,7 +40,19 @@ go install github.com/D1ssolve/wtui/cmd/wtui@latest
 
 ## Quick Start
 
-1. Create `~/.config/wtui/config.yaml`:
+1. Create a config. `wtui init` asks for your repositories directory, the task directory, the editor and a workflow, then writes a validated config:
+
+```bash
+wtui init
+```
+
+It writes `$XDG_CONFIG_HOME/wtui/config.yaml` (or `~/.config/wtui/config.yaml`), or the file named by `--config PATH`. An existing config is never overwritten: init stops unless you pass `--force`, and then it saves a backup next to it first. For a non-interactive setup:
+
+```bash
+wtui init --root ~/dev --preset git-flow --yes
+```
+
+You can also write the file by hand. The minimal config is:
 
 ```yaml
 root_dir: /Users/you/dev
@@ -53,11 +65,14 @@ workflow:
 
 `root_dir` is where your service repositories live. `tasks_root` is where task worktrees go. Nothing else is required to start; every other key has a default (see the [configuration reference](docs/configuration.md)).
 
-2. Start wtui:
+2. Check the workflow, then start wtui:
 
 ```bash
+wtui flow
 wtui
 ```
+
+Add `--config PATH` to either command to use another file. `wtui --help` lists every command.
 
 3. Press `i`, enter a task ID (for example `PROJ-101`), and select the repositories involved. wtui creates a branch and a worktree per service:
 
@@ -72,6 +87,8 @@ wtui
 4. Press `O` to open the task in your editor, write code, and commit as usual.
 
 Press `?` at any time for keyboard help for the focused panel, or `:` / `Ctrl+P` to search and run any available action.
+
+While a long operation runs, `Esc` offers to cancel it (`y` confirms). Cancellation stops the remaining steps; it doesn't quit wtui and doesn't undo steps that already finished. wtui reports what completed. Operations that can't stop safely tell you to wait instead.
 
 ## Everyday flow
 
@@ -122,6 +139,7 @@ wtui detects available tools automatically. Press `.` to view current integratio
 ## Requirements
 
 - Git 2.5+
+- On Windows, workflow `hook` commands run through `cmd.exe`, not `sh`, so write them for that shell. The Claude provider needs the native `claude.exe` on `PATH`.
 - Go 1.26.1+ when installing from source
 - A true-color terminal is recommended
 
