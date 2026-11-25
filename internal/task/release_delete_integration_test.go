@@ -18,6 +18,7 @@ func TestIntegration_ReleaseDeletion_PreservesTasksAndHistory(t *testing.T) {
 	for _, stage := range []string{"draft", "prepared", "released"} {
 		t.Run(stage, func(t *testing.T) {
 			env := newReleaseIntegrationEnv(t)
+			bareOrigin := filepath.Join(filepath.Dir(env.repoPath), "origin.git")
 			env.addFeatureTask(t, "APP-1", nil)
 			taskPath := filepath.Join(env.tasksRoot, "APP-1", "svc-api")
 			mustGit(t, env.repoPath, "push", "origin", "feature/APP-1")
@@ -42,8 +43,11 @@ func TestIntegration_ReleaseDeletion_PreservesTasksAndHistory(t *testing.T) {
 			}
 			mustGit(t, env.repoPath, "tag", "keep-tag")
 			mustGit(t, env.repoPath, "push", "origin", "refs/tags/keep-tag")
-			protectedBefore := gitOutput(t, env.repoPath, "show-ref", "refs/heads/master", "refs/heads/develop", "refs/heads/feature/APP-1", "refs/tags/keep-tag")
-			remoteBefore := gitOutput(t, env.repoPath, "ls-remote", "origin", "refs/heads/master", "refs/heads/develop", "refs/heads/feature/APP-1", "refs/tags/keep-tag")
+			protectedRefs := []string{"refs/heads/master", "refs/heads/develop", "refs/heads/feature/APP-1", "refs/tags/keep-tag"}
+			protectedLocalRefs := append([]string{"show-ref", "refs/remotes/origin/master", "refs/remotes/origin/develop", "refs/remotes/origin/feature/APP-1"}, protectedRefs...)
+			protectedRemoteRefs := append([]string{"show-ref"}, protectedRefs...)
+			protectedBefore := gitOutput(t, env.repoPath, protectedLocalRefs...)
+			remoteBefore := gitOutput(t, bareOrigin, protectedRemoteRefs...)
 
 			plan, err := env.manager.PlanReleaseCleanup(t.Context(), release.ID, ReleaseDeletionSelection())
 			if err != nil || len(plan.Preview().Blockers) != 0 {
@@ -55,19 +59,17 @@ func TestIntegration_ReleaseDeletion_PreservesTasksAndHistory(t *testing.T) {
 			if got := gitOutput(t, env.repoPath, "branch", "--list", "release/1.2.3"); got != "" {
 				t.Fatalf("local release branch remains: %s", got)
 			}
-			if got := gitOutput(t, env.repoPath, "branch", "--remotes", "--list", "origin/release/1.2.3"); got != "" {
-				t.Fatalf("remote-tracking release branch remains: %s", got)
-			}
 			if got := gitOutput(t, env.repoPath, "tag", "--list", "v1.2.3"); got != "" {
 				t.Fatalf("local release tag remains: %s", got)
 			}
-			if got := gitOutput(t, env.repoPath, "ls-remote", "origin", "refs/heads/release/1.2.3", "refs/tags/v1.2.3*"); got != "" {
+			// A push to the captured URL can leave the clone's tracking ref stale.
+			if got := gitOutput(t, bareOrigin, "for-each-ref", "refs/heads/release/1.2.3", "refs/tags/v1.2.3"); got != "" {
 				t.Fatalf("remote release refs remain: %s", got)
 			}
-			if got := gitOutput(t, env.repoPath, "show-ref", "refs/heads/master", "refs/heads/develop", "refs/heads/feature/APP-1", "refs/tags/keep-tag"); got != protectedBefore {
+			if got := gitOutput(t, env.repoPath, protectedLocalRefs...); got != protectedBefore {
 				t.Fatalf("unrelated local refs changed:\n%s", got)
 			}
-			if got := gitOutput(t, env.repoPath, "ls-remote", "origin", "refs/heads/master", "refs/heads/develop", "refs/heads/feature/APP-1", "refs/tags/keep-tag"); got != remoteBefore {
+			if got := gitOutput(t, bareOrigin, protectedRemoteRefs...); got != remoteBefore {
 				t.Fatalf("unrelated remote refs changed:\n%s", got)
 			}
 			if _, err := os.Stat(taskPath); err != nil {
