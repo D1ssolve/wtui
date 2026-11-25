@@ -53,6 +53,9 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 		return result, err
 	}
 	defer unlock()
+	if err := m.checkTaskCleanupDestinations(ctx, plan); err != nil {
+		return result, err
+	}
 	var retry *TaskCleanupPlan
 	if selection.Force {
 		retry = &plan
@@ -153,6 +156,9 @@ func (m *manager) runTaskCleanupStep(ctx context.Context, statusCh chan<- string
 		return sendReleaseCleanupStatus(ctx, statusCh, line)
 	}
 	if !noop {
+		if err := m.checkTaskCleanupDestinations(ctx, plan); err != nil {
+			return err
+		}
 		executed, execErr := m.executeTaskCleanupStep(ctx, plan, selection, step)
 		if execErr != nil {
 			return fmt.Errorf("%s: %w", step.description, execErr)
@@ -229,7 +235,8 @@ func (m *manager) executeTaskCleanupStep(ctx context.Context, plan TaskCleanupPl
 		if err := m.recheckCleanupTargets(ctx, step); err != nil {
 			return false, err
 		}
-		sha, err := m.git.RemoteRefSHA(ctx, step.repoPath, "refs/heads/"+step.branch)
+		ref := "refs/heads/" + step.branch
+		sha, err := m.git.RemoteRefSHAAt(ctx, step.repoPath, step.remoteURL, ref)
 		if err != nil {
 			return false, err
 		}
@@ -239,7 +246,7 @@ func (m *manager) executeTaskCleanupStep(ctx context.Context, plan TaskCleanupPl
 		if sha != step.expectedSHA {
 			return false, fmt.Errorf("remote branch moved: expected %s, got %s", step.expectedSHA, sha)
 		}
-		return false, m.git.DeleteRemoteBranchIfUnchanged(ctx, step.repoPath, step.branch, step.expectedSHA)
+		return false, m.git.DeleteRemoteRefIfUnchanged(ctx, step.repoPath, step.remoteURL, ref, step.expectedSHA)
 	case cleanupTaskDirectory:
 		if !pathWithin(m.cfg.TasksRoot, step.path) {
 			return false, fmt.Errorf("task directory %s outside task ownership", step.path)

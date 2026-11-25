@@ -245,14 +245,24 @@ func TestExecuteTaskCleanup_RemovesGeneratedFilesBeforeTaskDirectory(t *testing.
 
 func TestExecuteTaskCleanup_RemoteDeleteSelectionUsesExpectedSHA(t *testing.T) {
 	mgr, gitMock := taskCleanupTestManager(t)
+	atApprovedStore := gitMock.remoteRefSHAFn
 	gitMock.listWorktreesFn = func(string) ([]git.WorktreeEntry, error) { return gitMock.listWorktreesRes, nil }
 	gitMock.removeWorktreeFn = func(_, path string, _ bool) error {
 		gitMock.listWorktreesRes = nil
+		// A named-origin lookup can no longer supply the approved store's
+		// ancestry evidence. Only reads at the captured URL can do so.
+		gitMock.remoteRefSHAFn = func(_, _ string) (string, error) { return "", nil }
 		return os.RemoveAll(path)
 	}
-	var gotBranch, gotSHA string
-	gitMock.deleteRemoteBranchIfUnchangedFn = func(_, branch, expectedSHA string) error {
-		gotBranch, gotSHA = branch, expectedSHA
+	var gotURL, gotRef, gotSHA string
+	gitMock.remoteRefSHAAtFn = func(repo, url, ref string) (string, error) {
+		if url != gitMock.remoteURLRes {
+			t.Fatalf("lookup at unapproved destination %s", url)
+		}
+		return atApprovedStore(repo, ref)
+	}
+	gitMock.deleteRemoteRefIfUnchangedFn = func(_, url, ref, expectedSHA string) error {
+		gotURL, gotRef, gotSHA = url, ref, expectedSHA
 		return nil
 	}
 	plan, err := mgr.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1", DeleteRemoteTaskBranches: true})
@@ -264,8 +274,8 @@ func TestExecuteTaskCleanup_RemoteDeleteSelectionUsesExpectedSHA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotBranch != "feature/APP-1" || gotSHA != taskCleanupTaskSHA {
-		t.Fatalf("remote delete = %s %s", gotBranch, gotSHA)
+	if gotURL != gitMock.remoteURLRes || gotRef != "refs/heads/feature/APP-1" || gotSHA != taskCleanupTaskSHA {
+		t.Fatalf("remote delete = %s %s %s", gotURL, gotRef, gotSHA)
 	}
 	if len(result.Remote) != 0 {
 		t.Fatalf("remote retained after delete: %+v", result.Remote)

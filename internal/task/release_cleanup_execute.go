@@ -274,7 +274,13 @@ func (m *manager) recheckCleanupTargets(ctx context.Context, step releaseCleanup
 		if ancestrySHA == "" {
 			ancestrySHA = step.expectedSHA
 		}
-		sha, err := m.git.RemoteRefSHA(ctx, step.repoPath, target.ref)
+		var sha string
+		var err error
+		if step.remoteURL != "" {
+			sha, err = m.git.RemoteRefSHAAt(ctx, step.repoPath, step.remoteURL, target.ref)
+		} else {
+			sha, err = m.git.RemoteRefSHA(ctx, step.repoPath, target.ref)
+		}
 		if err != nil {
 			return err
 		}

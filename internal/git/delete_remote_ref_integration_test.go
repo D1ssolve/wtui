@@ -73,6 +73,8 @@ func TestDeleteRemoteRefIfUnchanged_ExactLease_Integration(t *testing.T) {
 				}
 			}
 
+			// Simulate a URL rewrite installed after the destination and lease were approved.
+			mustGit(t, repo, "config", "url."+changedPushURL+".pushInsteadOf", capturedURL)
 			err = client.DeleteRemoteRefIfUnchanged(t.Context(), repo, capturedURL, tc.ref, leaseOID)
 
 			wantErr := tc.move || tc.peeled

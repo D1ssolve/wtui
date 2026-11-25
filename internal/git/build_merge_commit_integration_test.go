@@ -226,6 +226,7 @@ func TestRemoteRefSHAAt_IgnoresRetargetedOrigin_Integration(t *testing.T) {
 	replacement := filepath.Join(t.TempDir(), "replacement.git")
 	mustGit(t, filepath.Dir(replacement), "init", "--bare", replacement)
 	mustGit(t, repo, "remote", "add", "origin", replacement)
+	mustGit(t, repo, "config", "url."+replacement+".insteadOf", remote)
 	client := NewCommandClient(slog.Default())
 	sha, err := client.RemoteRefSHAAt(t.Context(), repo, remote, "refs/heads/target")
 	if err != nil || sha != target {

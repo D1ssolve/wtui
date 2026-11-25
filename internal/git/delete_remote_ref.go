@@ -15,12 +15,12 @@ func (c *CommandClient) DeleteRemoteRefIfUnchanged(ctx context.Context, repoPath
 	if !validObjectID(expectedOID) {
 		return fmt.Errorf("invalid expected OID %q", expectedOID)
 	}
-	_, err := c.execGit(ctx,
-		"-C", repoPath,
+	args, operand := pinnedRemoteArgs(repoPath, capturedRemoteURL)
+	_, err := c.execGit(ctx, append(args,
 		"push",
 		"--force-with-lease="+ref+":"+expectedOID,
-		"--", capturedRemoteURL,
+		"--", operand,
 		":"+ref,
-	)
+	)...)
 	return err
 }

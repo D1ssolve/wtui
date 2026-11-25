@@ -119,6 +119,8 @@ func (p *TaskCleanupPlan) finishFingerprint() {
 		h.Write([]byte{0})
 		h.Write([]byte(s.repoPath))
 		h.Write([]byte{0})
+		h.Write([]byte(s.remoteURL))
+		h.Write([]byte{0})
 		h.Write([]byte(s.path))
 		h.Write([]byte{0})
 		h.Write([]byte(s.branch))
@@ -407,13 +409,18 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 	if len(plan.preview.Blockers) == 0 {
 		for _, r := range ready {
 			_, removed := absent[r.svc.WorktreePath]
-			plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupTaskWorktree, description: "remove task worktree " + r.svc.WorktreePath, repoPath: r.svc.RepoPath, path: r.svc.WorktreePath, branch: r.svc.Branch, noop: removed, expectedSHA: r.source})
+			url, err := m.verifiedRepoPushURL(ctx, r.svc.Name, r.svc.RepoPath)
+			if err != nil {
+				return plan, fmt.Errorf("%w: %w", ErrTaskCleanupBlocked, err)
+			}
+			// This step survives remainder comparison even when the remote branch is gone.
+			plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupTaskWorktree, description: "remove task worktree " + r.svc.WorktreePath, repoPath: r.svc.RepoPath, path: r.svc.WorktreePath, branch: r.svc.Branch, noop: removed, expectedSHA: r.source, remoteURL: url})
 			local, err := m.git.BranchExists(ctx, r.svc.RepoPath, r.svc.Branch)
 			if err != nil {
 				return plan, err
 			}
-			plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalTaskBranch, description: deleteLocalBranchReason("local task", r.svc.Branch), repoPath: r.svc.RepoPath, branch: r.svc.Branch, expectedSHA: r.source, integratedSHA: r.integrated, noop: !local, targets: r.targets})
-			remoteSHA, err := m.git.RemoteRefSHA(ctx, r.svc.RepoPath, "refs/heads/"+r.svc.Branch)
+			plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupLocalTaskBranch, description: deleteLocalBranchReason("local task", r.svc.Branch), repoPath: r.svc.RepoPath, branch: r.svc.Branch, expectedSHA: r.source, integratedSHA: r.integrated, noop: !local, targets: r.targets, remoteURL: url})
+			remoteSHA, err := m.git.RemoteRefSHAAt(ctx, r.svc.RepoPath, url, "refs/heads/"+r.svc.Branch)
 			if err != nil {
 				return plan, err
 			}
@@ -422,7 +429,7 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 				if remoteSHA == r.source {
 					plan.preview.Remote = append(plan.preview.Remote, candidate)
 					if request.DeleteRemoteTaskBranches {
-						plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupRemoteTaskBranch, description: "delete remote task branch " + r.svc.Branch, repoPath: r.svc.RepoPath, branch: r.svc.Branch, expectedSHA: r.source, integratedSHA: r.integrated, targets: r.targets})
+						plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupRemoteTaskBranch, description: "delete remote task branch " + r.svc.Branch, repoPath: r.svc.RepoPath, branch: r.svc.Branch, expectedSHA: r.source, integratedSHA: r.integrated, targets: r.targets, remoteURL: url})
 					}
 				} else {
 					plan.preview.DeferredRemote = append(plan.preview.DeferredRemote, candidate)
