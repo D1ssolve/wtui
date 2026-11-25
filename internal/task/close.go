@@ -148,10 +148,6 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 				Title:        fmt.Sprintf("Close %s/%s", taskID, svc.Name),
 				Description:  fmt.Sprintf("Auto close task %s for service %s", taskID, svc.Name),
 			}
-			servicePlan.MR = svcRule.MR
-			if svcRule.MR.RemoveSourceBranch && forge.DetectProvider(svc.RemoteURL, m.cfg.Forge) == forge.ForgeProviderGitHub {
-				plan.Warnings = append(plan.Warnings, fmt.Sprintf("[%s] GitHub cannot remove the source branch per pull request; the PR is not created while mr.remove_source_branch is true", svc.Name))
-			}
 			plan.RequiresForge = true
 		}
 
@@ -462,9 +458,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 			}
 
 		case gitflow.CloseStrategyReviewRequest:
-			publish := m.cfg.Close == nil || m.cfg.Close.PushSourceBeforeReview
-			classifyFirst := m.sourceRemovedOnMerge(svc.Branch)
-			if publish && !classifyFirst {
+			if m.cfg.Close == nil || m.cfg.Close.PushSourceBeforeReview {
 				if pushErr := m.pushBranch(ctx, svc.WorktreePath); pushErr != nil {
 					step(svc.Name+":push-source", StepStatusFailed, pushErr.Error())
 					svcFailed = true
@@ -496,17 +490,6 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 				svcFailed = true
 				break
 			}
-			if publish && classifyFirst && state != reviewCloseVerified {
-				pushed, pushErr := m.publishReviewSource(ctx, svc, state)
-				if pushErr != nil {
-					step(svc.Name+":push-source", StepStatusFailed, pushErr.Error())
-					svcFailed = true
-					break
-				}
-				if pushed {
-					step(svc.Name+":push-source", StepStatusOK, "source pushed")
-				}
-			}
 			switch state {
 			case reviewCloseWaiting:
 				step(svc.Name+":review-request", StepStatusSkipped, "waiting for merge")
@@ -521,14 +504,14 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 				if strings.TrimSpace(params.ReviewDescription) != "" {
 					description = params.ReviewDescription
 				}
-				mr, createErr := forgeClient.CreateMR(ctx, withMRPolicy(forge.CreateMRParams{
+				mr, createErr := forgeClient.CreateMR(ctx, forge.CreateMRParams{
 					WorktreePath: svc.WorktreePath,
 					SourceBranch: svcPlan.SourceBranch,
 					TargetBranch: target,
 					Title:        title,
 					Description:  description,
 					Repo:         repo,
-				}, svcPlan.MR))
+				})
 				if createErr != nil {
 					step(svc.Name+":review-request", StepStatusFailed, createErr.Error())
 					svcFailed = true

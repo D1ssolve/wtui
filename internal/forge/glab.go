@@ -56,9 +56,6 @@ func (c *GlabClient) CreateMR(ctx context.Context, params CreateMRParams) (MRInf
 			args = append(args, "--reviewer", reviewer)
 		}
 	}
-	for _, assignee := range params.Assignees {
-		args = append(args, "--assignee", assignee)
-	}
 	if params.RemoveSource {
 		args = append(args, "--remove-source-branch")
 	}

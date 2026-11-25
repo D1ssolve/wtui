@@ -49,10 +49,6 @@ func (c *GhClient) IsAvailable(ctx context.Context) bool {
 }
 
 func (c *GhClient) CreateMR(ctx context.Context, params CreateMRParams) (MRInfo, error) {
-	if params.RemoveSource {
-		// GitHub only deletes head branches through the repository-wide setting; never emulate it here.
-		return MRInfo{}, &ForgeError{Category: ErrCategoryUnknown, Cause: errors.New("gh pr create cannot remove the source branch after merge; set mr.remove_source_branch: false (GitHub deletes head branches only through the repository setting \"Automatically delete head branches\")")}
-	}
 	args := []string{
 		"pr", "create",
 		"--base", params.TargetBranch,
@@ -63,15 +59,6 @@ func (c *GhClient) CreateMR(ctx context.Context, params CreateMRParams) (MRInfo,
 	}
 	if params.Draft {
 		args = append(args, "--draft")
-	}
-	for _, label := range params.Labels {
-		args = append(args, "--label", label)
-	}
-	for _, reviewer := range params.Reviewers {
-		args = append(args, "--reviewer", reviewer)
-	}
-	for _, assignee := range params.Assignees {
-		args = append(args, "--assignee", assignee)
 	}
 
 	stdout, stderr, err := c.run(ctx, pickWorktree(c.worktreePath, params.WorktreePath), args...)

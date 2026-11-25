@@ -26,7 +26,6 @@ type TaskTypeConfig struct {
 	RequiresClean *bool        `yaml:"requires_clean"`
 	Shared        bool         `yaml:"shared"`
 	Close         []StepConfig `yaml:"close"`
-	MR            *MRConfig    `yaml:"mr"`
 	// Machine gates the task around its close steps; nil keeps the plain C close.
 	Machine *MachineConfig `yaml:"machine"`
 }
@@ -37,16 +36,6 @@ type ReleaseFlowConfig struct {
 	Machine *MachineConfig `yaml:"machine"`
 	// DependsOn orders services within a release: each service waits for the ones it lists.
 	DependsOn map[string][]string `yaml:"depends_on"`
-	MR        *MRConfig           `yaml:"mr"`
-}
-
-// MRConfig is the optional `mr:` policy for the MRs opened for a task type or release.
-type MRConfig struct {
-	Draft              bool     `yaml:"draft"`
-	Labels             []string `yaml:"labels"`
-	Reviewers          []string `yaml:"reviewers"`
-	Assignees          []string `yaml:"assignees"`
-	RemoveSourceBranch bool     `yaml:"remove_source_branch"`
 }
 
 type MachineConfig struct {

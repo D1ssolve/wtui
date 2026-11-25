@@ -107,7 +107,6 @@ printf 'https://gitlab.com/group/proj/-/merge_requests/42\n'
 		RemoveSource: true,
 		Labels:       []string{"backend"},
 		Reviewers:    []string{"alice"},
-		Assignees:    []string{"carol"},
 	})
 	if err != nil {
 		t.Fatalf("CreateMR() err = %v", err)
@@ -132,7 +131,6 @@ printf 'https://gitlab.com/group/proj/-/merge_requests/42\n'
 		"--draft",
 		"--label backend",
 		"--reviewer alice",
-		"--assignee carol",
 		"--remove-source-branch",
 	}
 	for _, check := range checks {

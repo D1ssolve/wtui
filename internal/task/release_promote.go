@@ -7,7 +7,6 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
-	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 // PromoteRelease fires the release's F event; in git-flow it opens the production reviews.
@@ -71,18 +70,14 @@ func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Rel
 	if strings.TrimSpace(description) == "" {
 		description = fmt.Sprintf("Release %s", release.ID)
 	}
-	var policy gitflow.MRPolicy
-	if m.flow != nil && m.flow.Release != nil {
-		policy = m.flow.Release.MR
-	}
-	mr, err := client.CreateMR(ctx, withMRPolicy(forge.CreateMRParams{
+	mr, err := client.CreateMR(ctx, forge.CreateMRParams{
 		WorktreePath: worktreePath,
 		SourceBranch: source,
 		TargetBranch: target,
 		Title:        title,
 		Description:  description,
 		Repo:         repo,
-	}, policy))
+	})
 	if err != nil {
 		return fmt.Errorf("release review: create %s -> %s MR for service %s: %w", source, target, svc.Name, err)
 	}

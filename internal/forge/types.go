@@ -29,7 +29,6 @@ type CreateMRParams struct {
 	RemoveSource bool
 	Labels       []string
 	Reviewers    []string
-	Assignees    []string
 }
 
 type MRInfo struct {

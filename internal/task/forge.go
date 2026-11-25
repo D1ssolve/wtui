@@ -76,14 +76,14 @@ func (m *manager) ForgeCreateMissingMRs(ctx context.Context, taskID, title strin
 			}
 		}
 
-		item.MR, item.Err = client.CreateMR(ctx, withMRPolicy(forge.CreateMRParams{
+		item.MR, item.Err = client.CreateMR(ctx, forge.CreateMRParams{
 			WorktreePath: svc.WorktreePath,
 			SourceBranch: svc.Branch,
 			TargetBranch: target,
 			Title:        title,
 			Description:  description,
 			Repo:         repo,
-		}, m.branchRule(svc.Branch).MR))
+		})
 		if item.Err != nil {
 			item.Status = "failed"
 		} else {
@@ -117,29 +117,17 @@ func (m *manager) mrCreateConfirmReason(ctx context.Context, svc domain.Service,
 }
 
 func (m *manager) reviewTarget(branch string) string {
-	rule := m.branchRule(branch)
-	if len(rule.ReviewTargets) > 0 {
-		return rule.ReviewTargets[0]
-	}
-	if rule.BaseBranch != "" {
-		return rule.BaseBranch
+	if m.flow != nil {
+		if rule, ok := m.flow.BranchTypes[gitflow.DetectBranchType(branch, m.flow)]; ok {
+			if len(rule.ReviewTargets) > 0 {
+				return rule.ReviewTargets[0]
+			}
+			if rule.BaseBranch != "" {
+				return rule.BaseBranch
+			}
+		}
 	}
 	return m.integrationBranch()
-}
-
-// branchRule is the configured rule for branch's type; zero without a flow or a matching type.
-func (m *manager) branchRule(branch string) gitflow.BranchTypeRule {
-	if m.flow == nil {
-		return gitflow.BranchTypeRule{}
-	}
-	return m.flow.BranchTypes[gitflow.DetectBranchType(branch, m.flow)]
-}
-
-// withMRPolicy applies the task type's or release's configured MR defaults to params.
-func withMRPolicy(params forge.CreateMRParams, policy gitflow.MRPolicy) forge.CreateMRParams {
-	params.Draft, params.RemoveSource = policy.Draft, policy.RemoveSourceBranch
-	params.Labels, params.Reviewers, params.Assignees = policy.Labels, policy.Reviewers, policy.Assignees
-	return params
 }
 
 func (m *manager) ForgePipelineStatus(ctx context.Context, taskID, serviceName string, branch string) ([]forge.PipelineStatus, error) {
