@@ -65,20 +65,22 @@ func ParseLogLevel(level string) slog.Level {
 	}
 }
 
-func InitLogger(app string, level slog.Leveler) (*slog.Logger, error) {
+// InitLogger returns the active file path, or an empty path when using stderr.
+func InitLogger(app string, level slog.Leveler) (*slog.Logger, string, error) {
 	logDir := XDGStateDir(app)
 	if err := os.MkdirAll(logDir, 0o750); err != nil {
-		return fallbackLogger(), fmt.Errorf("create log directory %s: %w", logDir, err)
+		return fallbackLogger(), "", fmt.Errorf("create log directory %s: %w", logDir, err)
 	}
 
 	logPath := filepath.Join(logDir, app+".log")
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
+	// The TUI reopens this path for reading, so write access alone is insufficient.
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o640)
 	if err != nil {
-		return fallbackLogger(), fmt.Errorf("open log file %s: %w", logPath, err)
+		return fallbackLogger(), "", fmt.Errorf("open log file %s: %w", logPath, err)
 	}
 
 	inner := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: level, ReplaceAttr: redactAttr})
-	return slog.New(&taskIDHandler{inner: inner}), nil
+	return slog.New(&taskIDHandler{inner: inner}), logPath, nil
 }
 
 func fallbackLogger() *slog.Logger {
