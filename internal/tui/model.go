@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -178,6 +177,7 @@ type Options struct {
 	MetadataGenerator task.MetadataGenerator
 	Assistant         ai.Assistant
 	LogLevel          *slog.LevelVar
+	LogPath           string // Successfully opened application log; empty for stderr.
 	LazygitAvailable  bool
 	GlabAvailable     bool
 	GhAvailable       bool
@@ -205,8 +205,6 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(ColorPrimary)),
 	)
 
-	logPath := filepath.Join(logutil.XDGStateDir("wtui"), "wtui.log")
-
 	m := Model{
 		MetadataGenerator: opts.MetadataGenerator,
 		assistant:         opts.Assistant,
@@ -222,7 +220,7 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 		glabAvailable:     opts.GlabAvailable,
 		ghAvailable:       opts.GhAvailable,
 		spinner:           sp,
-		logPath:           logPath,
+		logPath:           opts.LogPath,
 		logLevel:          opts.LogLevel,
 		version:           strings.TrimSpace(opts.Version),
 		tasksPanel:        panels.NewTasksPanel(25, 10),

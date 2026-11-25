@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,16 +11,14 @@ import (
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/execerr"
 	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/logutil"
 	"github.com/D1ssolve/wtui/internal/task"
 )
 
 func TestFailureKinds_RenderCauseAndOneAction(t *testing.T) {
-	state := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", state)
-	if err := os.Mkdir(filepath.Join(state, "wtui"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(state, "wtui", "wtui.log"), nil, 0o600); err != nil {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger, path, err := logutil.InitLogger("wtui", nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := newTestConfig()
@@ -51,7 +47,11 @@ func TestFailureKinds_RenderCauseAndOneAction(t *testing.T) {
 		{"unsafe retry", fmt.Errorf("%w: service=api", task.ErrReleaseRetryUnsafe), "retry is unsafe", "Restore the branches", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := sendWindowSize(newTestModelWithOptions(t, &mockManager{}, Options{Assistant: tc.assistant}), 160, 48)
+			m, err := NewWithOptions(newTestConfig(), &mockManager{}, logger, Options{Assistant: tc.assistant, LogPath: path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m = sendWindowSize(m, 160, 48)
 			updated, _ := m.Update(LoadFailedMsg{Op: "Refresh", Err: tc.err})
 			view := stripANSIForModel(updated.(Model).outputPanel.View())
 			cause, next, hasNext := strings.Cut(view, "Next: ")
@@ -68,10 +68,23 @@ func TestFailureKinds_RenderCauseAndOneAction(t *testing.T) {
 
 func TestFailureWithoutLogFile_PointsToStderr(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 48)
-	updated, _ := m.Update(LoadFailedMsg{Op: "Refresh", Err: errors.New("fixture failure")})
-	view := stripANSIForModel(updated.View())
-	if !strings.Contains(view, "Next: Check stderr") || strings.Contains(view, "Next: Press L") {
-		t.Fatalf("expected usable fallback without a log file:\n%s", view)
+	for _, tc := range []struct {
+		name   string
+		err    error
+		detail string
+	}{
+		{"unknown", errors.New("fixture failure"), "diagnostic"},
+		{"multiline git", &execerr.ExecError{Argv: []string{"git", "fetch"}, ExitCode: 128, Stderr: "fatal: remote rejected\nhidden-tail"}, "full git output"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sendWindowSize(newTestModel(t, &mockManager{}), 120, 48)
+			updated, _ := m.Update(LoadFailedMsg{Op: "Refresh", Err: tc.err})
+			view := stripANSIForModel(updated.View())
+			_, next, found := strings.Cut(view, "Next: Check stderr")
+			hint, _, _ := strings.Cut(next, "\n")
+			if !found || !strings.Contains(hint, tc.detail) || strings.Contains(view, "Next: Press L") {
+				t.Fatalf("expected usable fallback without a log file:\n%s", view)
+			}
+		})
 	}
 }

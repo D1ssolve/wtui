@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -46,7 +45,7 @@ func TestRedactURLUserinfo_WhitespaceEndsAuthority(t *testing.T) {
 func TestInitLogger_RedactsURLUserinfo(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
-	logger, err := InitLogger("redact", slog.LevelDebug)
+	logger, logPath, err := InitLogger("redact", slog.LevelDebug)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +59,7 @@ func TestInitLogger_RedactsURLUserinfo(t *testing.T) {
 		"argv", []string{"git", "push", remote},
 		"control", control,
 	)
-	data, err := os.ReadFile(filepath.Join(dir, "redact", "redact.log"))
+	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}

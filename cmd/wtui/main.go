@@ -308,7 +308,7 @@ func runTUI(configPath string) error {
 
 	logLevel := new(slog.LevelVar)
 	logLevel.Set(logutil.ParseLogLevel(cfg.LogLevel))
-	logger, logErr := logutil.InitLogger("wtui", logLevel)
+	logger, logPath, logErr := logutil.InitLogger("wtui", logLevel)
 	if logErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not open log file: %v\n", logErr)
 		logLevel = nil
@@ -328,6 +328,7 @@ func runTUI(configPath string) error {
 		Assistant:         deps.Assistant,
 		Version:           resolveVersion(),
 		LogLevel:          logLevel,
+		LogPath:           logPath,
 	})
 	if err != nil {
 		return fmt.Errorf("create TUI model: %w", err)

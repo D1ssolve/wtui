@@ -90,11 +90,11 @@ func TestFailure_DefaultAssistantMissingOpensOriginalLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logger, err := logutil.InitLogger("wtui", nil)
+	logger, path, err := logutil.InitLogger("wtui", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := NewWithOptions(newTestConfig(), &mockManager{}, logger, Options{Assistant: assistant})
+	m, err := NewWithOptions(newTestConfig(), &mockManager{}, logger, Options{Assistant: assistant, LogPath: path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,8 @@ func TestReleaseMergeFailure_RetryActionVisibleWith34Services(t *testing.T) {
 
 func TestFailure_RecommendedKeyWorksFromItsContext(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	if _, err := logutil.InitLogger("wtui", nil); err != nil {
+	logger, path, err := logutil.InitLogger("wtui", nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
@@ -175,7 +176,11 @@ func TestFailure_RecommendedKeyWorksFromItsContext(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			m := sendWindowSize(newTestModel(t, &mockManager{}), 140, 40)
+			m, err := NewWithOptions(newTestConfig(), &mockManager{}, logger, Options{LogPath: path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m = sendWindowSize(m, 140, 40)
 			if tc.setup != nil {
 				m = tc.setup(t, m)
 			}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 
@@ -22,17 +21,22 @@ func (m Model) diagnosisAction() string {
 			return "Press E to ask AI why it failed."
 		}
 	}
-	if info, err := os.Stat(m.logPath); err == nil && info.Mode().IsRegular() {
-		if file, err := os.Open(m.logPath); err == nil {
-			file.Close()
-			return "Press L to read the logs."
-		}
+	return diagnosticAction(m.logPath != "", "the diagnostic.")
+}
+
+func diagnosticAction(fileLog bool, detail string) string {
+	if fileLog {
+		return "Press L to read " + detail
 	}
-	return "Check stderr for the diagnostic."
+	return "Check stderr for " + detail
+}
+
+func (m Model) failureGuidance(err error) (cause, action string) {
+	return guidance(err, guidanceContext{flow: m.flow != nil, fileLog: m.logPath != ""})
 }
 
 func (m *Model) reportFailure(op string, err error, attrs ...slog.Attr) {
-	cause, action := guidance(err, m.flow != nil)
+	cause, action := m.failureGuidance(err)
 	m.logger.LogAttrs(context.Background(), slog.LevelError, "operation failed",
 		append([]slog.Attr{slog.String("op", op), slog.String("err", err.Error())}, attrs...)...)
 	m.outputPanel.AppendLine(op + " failed: " + cause)
@@ -49,7 +53,7 @@ func (m *Model) reportFailureNext(op string, err error, action string) {
 }
 
 func (m *Model) reportNext(err error) {
-	_, action := guidance(err, m.flow != nil)
+	_, action := m.failureGuidance(err)
 	m.logger.Error("operation failed", "err", err.Error())
 	if action == "" {
 		action = m.diagnosisAction()
@@ -86,7 +90,7 @@ func (m *Model) reportServiceNext(failures []serviceFailure, fallback string) {
 	var order []string
 	services := make(map[string][]string)
 	for _, f := range failures {
-		_, action := guidance(f.err, m.flow != nil)
+		_, action := m.failureGuidance(f.err)
 		if action == "" {
 			action = fallback
 		}
@@ -121,7 +125,7 @@ func partialServiceFailures(result task.PartialFailureResult, fallback error) []
 }
 
 func failureCause(err error) string {
-	cause, _ := guidance(err, false)
+	cause, _ := guidance(err, guidanceContext{})
 	return cause
 }
 

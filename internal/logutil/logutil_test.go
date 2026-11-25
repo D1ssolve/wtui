@@ -63,7 +63,7 @@ func TestInitLogger_CreatesLogFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", tmp)
 
-	logger, err := InitLogger("testapp", slog.LevelDebug)
+	logger, logPath, err := InitLogger("testapp", slog.LevelDebug)
 	if err != nil {
 		t.Fatalf("InitLogger returned unexpected error: %v", err)
 	}
@@ -71,7 +71,9 @@ func TestInitLogger_CreatesLogFile(t *testing.T) {
 		t.Fatal("InitLogger returned nil logger")
 	}
 
-	logPath := filepath.Join(tmp, "testapp", "testapp.log")
+	if want := filepath.Join(tmp, "testapp", "testapp.log"); logPath != want {
+		t.Fatalf("active file path = %q, want %q", logPath, want)
+	}
 	if _, statErr := os.Stat(logPath); statErr != nil {
 		t.Errorf("expected log file at %s, got stat error: %v", logPath, statErr)
 	}
@@ -81,7 +83,7 @@ func TestInitLogger_RuntimeLevelControlsRecording(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	level := new(slog.LevelVar)
 	level.Set(slog.LevelWarn)
-	logger, err := InitLogger("runtime", level)
+	logger, logPath, err := InitLogger("runtime", level)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +94,7 @@ func TestInitLogger_RuntimeLevelControlsRecording(t *testing.T) {
 	logger.Debug("after-debug")
 	logger.Info("after-info")
 	logger.Warn("after-warn")
-	data, err := os.ReadFile(filepath.Join(XDGStateDir("runtime"), "runtime.log"))
+	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -38,7 +38,12 @@ func embeddedInstruction(text, sep string) (int, bool) {
 	}
 }
 
-func guidance(err error, flow bool) (cause, action string) {
+type guidanceContext struct {
+	flow    bool
+	fileLog bool
+}
+
+func guidance(err error, at guidanceContext) (cause, action string) {
 	cause = err.Error()
 	var execErr *execerr.ExecError
 	hasExec := errors.As(err, &execErr)
@@ -92,11 +97,11 @@ func guidance(err error, flow bool) (cause, action string) {
 			return cause[:best] + rest, sentence(instruction)
 		}
 	}
-	action = kindAction(err, flow, condensed)
+	action = kindAction(err, at, condensed)
 	return cause, action
 }
 
-func kindAction(err error, flow, condensed bool) string {
+func kindAction(err error, at guidanceContext, condensed bool) string {
 	var execErr *execerr.ExecError
 	var forgeErr *forge.ForgeError
 	var missingTool *exec.Error
@@ -138,7 +143,7 @@ func kindAction(err error, flow, condensed bool) string {
 		return "Inspect the release branch history, then reject the release and prepare it again."
 	case errors.Is(err, task.ErrReleaseRetryUnsafe):
 		return "Restore the branches and worktrees named above, or reject the release and prepare it again."
-	case errors.Is(err, task.ErrTaskFlowStep) && flow:
+	case errors.Is(err, task.ErrTaskFlowStep) && at.flow:
 		return "Press W to see which events the current state accepts."
 	case errors.Is(err, task.ErrServiceNotFound):
 		return "Press r to refresh, then select the service again."
@@ -148,7 +153,7 @@ func kindAction(err error, flow, condensed bool) string {
 		return "Check that the path exists, then press r to refresh."
 	case errors.As(err, &execErr) && filepath.Base(firstArg(execErr.Argv)) == "git":
 		if condensed {
-			return "Press L for the full git output, fix the repository, then retry."
+			return diagnosticAction(at.fileLog, "the full git output, then fix the repository and retry.")
 		}
 		return "Fix the repository problem shown above, then retry."
 	default:
