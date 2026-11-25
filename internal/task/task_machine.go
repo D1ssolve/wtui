@@ -356,6 +356,22 @@ func (m *manager) taskWaitHolds(ctx context.Context, tf *taskFlow, st *gitflow.S
 		if err != nil {
 			return false, err
 		}
+		for i, state := range states {
+			plan := plans[i]
+			if plan.rule.CloseStrategy != gitflow.CloseStrategyReviewRequest || len(state.targets) != 1 || state.merged[0] {
+				continue
+			}
+			tip, err := m.git.ResolveRef(ctx, plan.svc.RepoPath, state.targets[0])
+			if err != nil {
+				return false, err
+			}
+			target := remoteReviewTarget{branch: plan.rule.ReviewTargets[0], sha: tip}
+			delivered, err := m.taskReviewAtTarget(ctx, plan.svc, target)
+			if err != nil {
+				return false, err
+			}
+			states[i].merged[0] = delivered
+		}
 		return workflowAllMerged(states), nil
 	case gitflow.WaitCIGreen:
 		green, _, err := m.taskCIGreen(ctx, tf, st.WaitOn)

@@ -1,6 +1,7 @@
 package task
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,13 +9,14 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 func TestObserveTaskWait_UsesExactMergedReviewWhenTargetIsNotCached(t *testing.T) {
 	for _, tc := range []struct {
 		name, merged, wantKey string
 	}{
-		{"matching live target", "live-target", "M"},
+		{"matching live target", "live-target", "F"},
 		{"unconfirmed target", "different-target", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -47,9 +49,9 @@ func TestObserveTaskWait_UsesExactMergedReviewWhenTargetIsNotCached(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			key, err := mgr.ObserveTaskWait(t.Context(), domain.Task{ID: "TASK-1", Phase: "feature", Services: services}, "review")
-			if err != nil || key != tc.wantKey {
-				t.Fatalf("manual key = %q, err = %v; want %q", key, err, tc.wantKey)
+			got, err := mgr.ObserveTaskWait(t.Context(), domain.Task{ID: "TASK-1", Phase: "feature", Services: services}, "review")
+			if err != nil || got != (WaitObservation{Ready: tc.wantKey != "", Key: tc.wantKey}) {
+				t.Fatalf("observation = %+v, err = %v; want key %q", got, err, tc.wantKey)
 			}
 			data, err := os.ReadFile(path)
 			if err != nil || string(data) != state {
@@ -57,4 +59,42 @@ func TestObserveTaskWait_UsesExactMergedReviewWhenTargetIsNotCached(t *testing.T
 			}
 		})
 	}
+}
+
+func TestObserveTaskWait_GuardedFOnGreenCIActuallyAdvances(t *testing.T) {
+	rule := taskMachineRule(t, filepath.Join(t.TempDir(), "unexpected-hook"))
+	rule.Machine = &gitflow.Machine{Initial: "qa", States: []gitflow.State{
+		{ID: "qa", Kind: gitflow.StateWait, Wait: gitflow.WaitCIGreen, WaitOn: gitflow.TaskBranchRef, Next: "done",
+			Events: []gitflow.Event{{Name: "accept", Key: "F", When: gitflow.WaitCIGreen, To: "done"}}},
+		{ID: "done", Kind: gitflow.StateFinal, Outcome: gitflow.OutcomeReleased},
+	}}
+	mgr := newRuleWorkflowTestManager(t, rule, false).(*manager)
+	git := mgr.git.(*mockGitClient)
+	git.getWorktreeBranchFn = func(path string) (string, error) { return "feature/" + filepath.Base(path), nil }
+	git.remoteRefSHAFn = func(_, _ string) (string, error) { return "live-head", nil }
+	mgr.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitLab: greenWaitForge{}}
+	services, err := mgr.ListServices(t.Context(), "TASK-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := mgr.ObserveTaskWait(t.Context(), domain.Task{ID: "TASK-1", Phase: "feature", Services: services}, "qa")
+	if err != nil || got != (WaitObservation{Ready: true, Key: "F"}) {
+		t.Fatalf("green guarded wait: observation = %+v, err = %v; want ready/F", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(mgr.taskDir("TASK-1"), taskFlowFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("observing CI persisted task state: %v", err)
+	}
+	if err := mgr.AdvanceTask(t.Context(), "TASK-1", rule.Machine.States[0].Events[0].Name, nil); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := mgr.TaskWorkflow(t.Context(), "TASK-1")
+	if err != nil || summary.Current != "done" {
+		t.Fatalf("manual guarded event did not finish: current=%q err=%v", summary.Current, err)
+	}
+}
+
+type greenWaitForge struct{ forge.ForgeClient }
+
+func (greenWaitForge) PipelineStatus(_ context.Context, _, _ string) ([]forge.PipelineStatus, error) {
+	return []forge.PipelineStatus{{HeadSHA: "live-head", Status: "success"}}, nil
 }

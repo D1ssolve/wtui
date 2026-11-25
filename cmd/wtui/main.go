@@ -319,15 +319,18 @@ func runTUI(configPath string) error {
 		return fmt.Errorf("build dependencies: %w", err)
 	}
 
+	waitRefreshCtx, cancelWaitRefresh := context.WithCancel(context.Background())
+	defer cancelWaitRefresh()
 	model, err := tui.NewWithOptions(cfg, deps.Manager, logger, tui.Options{
-		LazygitAvailable:  deps.LazygitAvailable,
-		GlabAvailable:     deps.GlabAvailable,
-		GhAvailable:       deps.GhAvailable,
-		ResolvedFlow:      deps.ResolvedFlow,
-		MetadataGenerator: deps.MetadataGenerator,
-		Assistant:         deps.Assistant,
-		Version:           resolveVersion(),
-		LogLevel:          logLevel,
+		WaitRefreshContext: waitRefreshCtx,
+		LazygitAvailable:   deps.LazygitAvailable,
+		GlabAvailable:      deps.GlabAvailable,
+		GhAvailable:        deps.GhAvailable,
+		ResolvedFlow:       deps.ResolvedFlow,
+		MetadataGenerator:  deps.MetadataGenerator,
+		Assistant:          deps.Assistant,
+		Version:            resolveVersion(),
+		LogLevel:           logLevel,
 	})
 	if err != nil {
 		return fmt.Errorf("create TUI model: %w", err)

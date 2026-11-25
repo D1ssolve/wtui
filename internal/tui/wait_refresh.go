@@ -26,6 +26,9 @@ type waitRefresh struct {
 	scope           uint64
 	sequence        uint64
 	timer, inFlight bool
+	cancel          context.CancelFunc
+	parent          context.Context
+	closing         bool
 	lastLine        string
 }
 
@@ -33,7 +36,7 @@ type waitRefreshTickMsg uint64
 
 type waitRefreshResultMsg struct {
 	sequence, scope uint64
-	key             string
+	observation     task.WaitObservation
 	err             error
 }
 
@@ -50,6 +53,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.waitRefresh.inFlight = false
+		m.waitRefresh.cancel = nil
 		if m.waitRefresh.target.id != "" && msg.scope == m.waitRefresh.scope {
 			m.reportWaitRefresh(msg)
 		}
@@ -58,6 +62,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := m.update(msg)
 		target := next.selectedWait()
 		if target != m.waitRefresh.target {
+			if cancel := next.waitRefresh.cancel; cancel != nil {
+				cancel()
+			}
 			next.waitRefresh.target = target
 			next.waitRefresh.scope++
 		}
@@ -91,21 +98,25 @@ func (m Model) refreshWait(observer task.WaitObserver, tick waitRefreshTickMsg) 
 		selected.Services = append([]domain.Service(nil), selected.Services...)
 	}
 	refresh.inFlight = true
+	ctx, cancel := context.WithTimeout(refresh.parent, waitRefreshTimeout)
+	refresh.cancel = cancel
 	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), waitRefreshTimeout)
 		defer cancel()
 		result := waitRefreshResultMsg{sequence: uint64(tick), scope: scope}
+		if result.err = ctx.Err(); result.err != nil {
+			return result
+		}
 		if target.release {
-			result.key, result.err = observer.ObserveReleaseWait(ctx, target.id, target.state)
+			result.observation, result.err = observer.ObserveReleaseWait(ctx, target.id, target.state)
 		} else {
-			result.key, result.err = observer.ObserveTaskWait(ctx, selected, target.state)
+			result.observation, result.err = observer.ObserveTaskWait(ctx, selected, target.state)
 		}
 		return result
 	}
 }
 
 func (m Model) selectedWait() waitRefreshTarget {
-	if m.releaseMutationBlocked() || m.releaseCleanupWorktreeLocked() || m.conversionRunning || m.refreshing ||
+	if m.waitRefresh.closing || m.releaseMutationBlocked() || m.releaseCleanupWorktreeLocked() || m.conversionRunning || m.refreshing ||
 		m.modal != nil || m.shellInput != nil || m.logOverlay != nil || m.pipelineView != nil {
 		return waitRefreshTarget{}
 	}
@@ -139,10 +150,12 @@ func (m *Model) reportWaitRefresh(result waitRefreshResultMsg) {
 	switch {
 	case result.err != nil:
 		status = "could not refresh wait status; check workflow and repository access."
-	case result.key == "M":
+	case result.observation.Ready && result.observation.Key == "M":
 		status = "forge reports merged reviews; press M to reconcile."
-	case result.key != "":
-		status = "wait condition met; press " + result.key + " to continue."
+	case result.observation.Ready && result.observation.Key != "":
+		status = "wait condition met; press " + result.observation.Key + " to continue."
+	case result.observation.Ready:
+		status = "wait condition met; no automatic key suggestion for this workflow."
 	}
 	line := fmt.Sprintf("%s %s (%s): %s", kind, target.id, target.state, status)
 	if line != m.waitRefresh.lastLine {

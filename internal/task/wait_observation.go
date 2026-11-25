@@ -11,11 +11,16 @@ import (
 	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
+// WaitObservation separates positive evidence from the availability of a key.
+type WaitObservation struct {
+	Ready bool
+	Key   string
+}
+
 // WaitObserver is the read-only capability used by the TUI's background refresh.
-// An empty key with no error means there is no confirmed next action yet.
 type WaitObserver interface {
-	ObserveReleaseWait(ctx context.Context, id, state string) (key string, err error)
-	ObserveTaskWait(ctx context.Context, selected domain.Task, state string) (key string, err error)
+	ObserveReleaseWait(ctx context.Context, id, state string) (WaitObservation, error)
+	ObserveTaskWait(ctx context.Context, selected domain.Task, state string) (WaitObservation, error)
 }
 
 type reviewObserver interface {
@@ -54,144 +59,141 @@ func observableWait(machine *gitflow.Machine, state string) string {
 	return ""
 }
 
-func (m *manager) ObserveReleaseWait(ctx context.Context, id, state string) (string, error) {
+func (m *manager) ObserveReleaseWait(ctx context.Context, id, state string) (WaitObservation, error) {
 	release, err := m.GetRelease(ctx, id)
 	if err != nil {
-		return "", err
+		return WaitObservation{}, err
 	}
 	if state == "" || ObservableReleaseWait(release, m.flow) != state {
-		return "", errWaitStateChanged
+		return WaitObservation{}, errWaitStateChanged
 	}
 	if err := m.ensureReleaseFlowUnchanged(release); err != nil {
-		return "", err
+		return WaitObservation{}, err
 	}
 	st, err := m.releaseState(release)
 	if err != nil {
-		return "", err
+		return WaitObservation{}, err
 	}
 	switch st.Wait {
 	case gitflow.WaitCIGreen:
-		key := waitRecheckKey(st)
-		if key == "" || len(release.Services) == 0 {
-			return "", nil
+		if len(release.Services) == 0 {
+			return WaitObservation{}, nil
 		}
 		holds, err := m.releaseWaitHolds(ctx, release, st)
 		if holds {
-			return key, nil
+			return WaitObservation{Ready: true, Key: waitRecheckKey(st, gitflow.WaitCIGreen)}, nil
 		}
-		return "", err
+		return WaitObservation{}, err
 	case gitflow.WaitReviewMerged:
 		if allReleaseServicesMerged(release.Services) {
-			return waitRecheckKey(st), nil
-		}
-		if !slices.ContainsFunc(st.Events, func(ev gitflow.Event) bool {
-			return ev.Key == "M" && ev.Action == gitflow.EventActionMergeReviews && ev.When == ""
-		}) {
-			return "", nil
+			return WaitObservation{Ready: true, Key: waitRecheckKey(st, "")}, nil
 		}
 		for _, svc := range release.Services {
 			if releaseServiceMerged(svc) {
 				continue
 			}
 			if svc.ProductionMR == nil {
-				return "", nil
+				return WaitObservation{}, nil
 			}
 			client, repo, path, err := m.releaseForgeDetails(ctx, svc)
 			if err != nil {
-				return "", err
+				return WaitObservation{}, err
 			}
 			mr, err := observeNumberedReview(ctx, client, numberedReview{svc.ProductionMR.Number, repo, path})
 			if err != nil {
-				return "", err
+				return WaitObservation{}, err
 			}
 			if !mergedMRState(mr.State) || len(m.releaseReviewBlockers(svc, mr)) != 0 {
-				return "", nil
+				return WaitObservation{}, nil
 			}
 		}
-		// M must still verify the delivered commit and persist the acceptance.
-		return "M", nil
+		observation := WaitObservation{Ready: true}
+		if slices.ContainsFunc(st.Events, func(ev gitflow.Event) bool {
+			return ev.Key == "M" && ev.Action == gitflow.EventActionMergeReviews && ev.When == ""
+		}) {
+			// M must still verify the delivered commit and persist the acceptance.
+			observation.Key = "M"
+		}
+		return observation, nil
 	default:
-		return "", errWaitStateChanged
+		return WaitObservation{}, errWaitStateChanged
 	}
 }
 
-func (m *manager) ObserveTaskWait(ctx context.Context, selected domain.Task, state string) (string, error) {
+func (m *manager) ObserveTaskWait(ctx context.Context, selected domain.Task, state string) (WaitObservation, error) {
 	ctx = git.WithoutLazyFetch(ctx)
 	if state == "" || len(selected.Services) == 0 || ObservableTaskWait(m.flow, selected.Phase, state) != state {
-		return "", errWaitStateChanged
+		return WaitObservation{}, errWaitStateChanged
 	}
 	tf, err := m.readTaskFlow(selected.ID, selected.Services)
 	if err != nil {
-		return "", err
+		return WaitObservation{}, err
 	}
 	if tf == nil || tf.state.State != state || tf.state.HookStopUnconfirmed {
-		return "", errWaitStateChanged
+		return WaitObservation{}, errWaitStateChanged
 	}
 	st := tf.current()
-	key := waitRecheckKey(st)
-	if key == "" {
-		return "", nil
-	}
 	for _, svc := range selected.Services {
 		branch, err := m.git.GetWorktreeBranch(ctx, svc.WorktreePath)
 		if err != nil {
-			return "", err
+			return WaitObservation{}, err
 		}
 		if branch != svc.Branch {
-			return "", errWaitStateChanged
+			return WaitObservation{}, errWaitStateChanged
 		}
 	}
 	switch st.Wait {
 	case gitflow.WaitCIGreen:
 		holds, err := m.taskWaitHolds(ctx, tf, st)
 		if holds {
-			return key, nil
+			guard := ""
+			if st.WaitOn == gitflow.TaskBranchRef {
+				guard = gitflow.WaitCIGreen
+			}
+			return WaitObservation{Ready: true, Key: waitRecheckKey(st, guard)}, nil
 		}
-		return "", err
+		return WaitObservation{}, err
 	case gitflow.WaitReviewMerged:
 		plans, _, _, err := m.workflowPlans(tf.services)
 		if err != nil {
-			return "", err
+			return WaitObservation{}, err
 		}
-		manualKey := key
 		for _, plan := range plans {
 			// Task review waits are only configured for review strategies.
 			if plan.rule.CloseStrategy != gitflow.CloseStrategyReviewRequest || len(plan.rule.ReviewTargets) == 0 {
-				return "", nil
+				return WaitObservation{}, nil
 			}
 			target := plan.rule.ReviewTargets[0]
 			tip, err := m.git.RemoteRefSHA(ctx, plan.svc.RepoPath, "refs/heads/"+target)
 			if err != nil {
-				return "", err
+				return WaitObservation{}, err
 			}
 			if tip == "" {
-				return "", nil
+				return WaitObservation{}, nil
 			}
 			// An uncached target cannot be checked for ancestry without fetching.
 			merged, ancestryErr := m.git.IsAncestor(ctx, plan.svc.RepoPath, plan.svc.Branch, tip)
 			if merged && ancestryErr == nil {
 				continue
 			}
-			event := taskEventFor(st, gitflow.EventActionMergeReviews)
-			if event == nil || event.When != "" {
-				return "", ancestryErr
-			}
-			confirmed, err := m.observeTaskReview(ctx, plan.svc, remoteReviewTarget{branch: target, sha: tip})
+			confirmed, err := m.taskReviewAtTarget(ctx, plan.svc, remoteReviewTarget{branch: target, sha: tip})
 			if err != nil || !confirmed {
-				return "", err
+				return WaitObservation{}, err
 			}
-			manualKey = "M"
 		}
-		return manualKey, nil
+		return WaitObservation{Ready: true, Key: waitRecheckKey(st, "")}, nil
 	default:
-		return "", errWaitStateChanged
+		return WaitObservation{}, errWaitStateChanged
 	}
 }
 
 type remoteReviewTarget struct{ branch, sha string }
 
-func (m *manager) observeTaskReview(ctx context.Context, svc domain.Service, target remoteReviewTarget) (bool, error) {
+func (m *manager) taskReviewAtTarget(ctx context.Context, svc domain.Service, target remoteReviewTarget) (bool, error) {
 	client, repo, err := m.serviceForgeTarget(ctx, svc)
+	if errors.Is(err, forge.ErrForgeUnavailable) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -215,8 +217,8 @@ func (m *manager) observeTaskReview(ctx context.Context, svc domain.Service, tar
 	if err != nil {
 		return false, err
 	}
-	// ponytail: when ancestry isn't available locally, only recognize a review
-	// whose resulting commit is the live target tip; M owns deeper verification.
+	// Without source ancestry, only accept a review whose exact merged SHA
+	// is the live target tip. No local fetch is required to establish equality.
 	return head != "" && mr.Number == active[0].Number && mr.MergedSHA == target.sha &&
 		validateMergedReviewMRIdentity(mr, svc, target.branch, head) == nil, nil
 }
@@ -233,9 +235,9 @@ func observeNumberedReview(ctx context.Context, client forge.ForgeClient, review
 	return client.MRReadinessByNumber(ctx, review.number, review.repo, review.path)
 }
 
-func waitRecheckKey(st *gitflow.State) string {
+func waitRecheckKey(st *gitflow.State, satisfiedGuard string) string {
 	for _, ev := range st.Events {
-		if ev.Key == "F" && (ev.To != st.Next || ev.When != "" || ev.Action != "") {
+		if ev.Key == "F" && (ev.To != st.Next || ev.When != "" && ev.When != satisfiedGuard || ev.Action != "") {
 			return ""
 		}
 	}
