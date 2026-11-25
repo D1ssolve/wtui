@@ -33,6 +33,9 @@ const promptAttempts = 3
 // clock names backups; tests pin it to force same-second collisions.
 var clock = time.Now
 
+// linkFile and replaceFile are the publication primitives; tests make them fail like exFAT does.
+var linkFile, replaceFile = os.Link, os.Rename
+
 // draftFunc turns a one-line description into a validated `workflow:` document (draftWorkflow output).
 type draftFunc func(ctx context.Context, description string) (string, error)
 
@@ -132,8 +135,12 @@ func initCommand(c cliArgs, stdin io.Reader, stdout, stderr io.Writer, draft dra
 	if err != nil {
 		return fail(err)
 	}
-	if err := writeConfig(target, data, c.force, stdout); err != nil {
+	backup, err := writeConfig(target, data, c.force)
+	if err != nil {
 		return fail(err)
+	}
+	if backup != "" {
+		fmt.Fprintf(stdout, "Backed up the previous config to %s\n", backup)
 	}
 
 	start := "wtui"
@@ -289,63 +296,106 @@ func renderConfig(root, tasksRoot, editor string, workflow *yaml.Node) ([]byte, 
 }
 
 // writeConfig validates the exact bytes through the real loader from a temp file next to the
-// target, then publishes that same file.
-func writeConfig(target string, data []byte, force bool, out io.Writer) error {
+// target, then publishes that same file. It writes nothing to stdout: output starts after the commit.
+func writeConfig(target string, data []byte, force bool) (string, error) {
 	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return "", err
 	}
 	tmp, err := os.CreateTemp(dir, ".wtui-init-*.yaml")
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer os.Remove(tmp.Name()) // no-op once renamed
+	defer os.Remove(tmp.Name()) // no-op once renamed; after a link the temp name is just a second name
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return err
+		return "", err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return "", err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return "", err
 	}
 	if err := validateConfigFile(tmp.Name()); err != nil {
-		return fmt.Errorf("the generated config is invalid, nothing was written: %w", err)
+		return "", fmt.Errorf("the generated config is invalid, nothing was written: %w", err)
 	}
 	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
-		return err
+		return "", err
 	}
-	return publish(tmp.Name(), target, force, out)
+	return publish(tmp.Name(), target, force)
 }
 
-const publishAttempts = 32
-
-// publish hard-links the validated file to target, which fails if target exists, so a config
-// another process wrote meanwhile is never clobbered. With force, each existing generation is
-// first renamed into its own exclusively reserved backup: the rename moves exactly the bytes being
-// replaced, so concurrent writers lose none of them.
-// ponytail: needs hard-link support in the config directory (not FAT/exFAT).
-func publish(tmp, target string, force bool, out io.Writer) error {
-	for range publishAttempts {
-		err := os.Link(tmp, target)
-		if !errors.Is(err, os.ErrExist) {
-			return err
-		}
-		if err := checkTarget(target, force); err != nil {
-			return err
-		}
-		backup, err := reserveBackup(target)
-		if err != nil {
-			return fmt.Errorf("back up %s: %w", target, err)
-		}
-		if err := os.Rename(target, backup); err != nil {
-			os.Remove(backup)
-			if errors.Is(err, os.ErrNotExist) {
-				continue // another writer moved it first; try to publish again
-			}
-			return fmt.Errorf("back up %s: %w", target, err)
-		}
-		fmt.Fprintf(out, "Backed up the previous config to %s\n", backup)
+// publish runs under a lock every wtui init on this target shares, so concurrent writers take
+// turns and each backup holds exactly the bytes its writer replaced. An existing config never
+// leaves its path: its bytes are first copied to a private synced backup, then the validated temp
+// file is renamed over it in one step. A new config is hard-linked, which cannot clobber a file
+// another program created meanwhile. Returns the backup path, if any.
+func publish(tmp, target string, force bool) (string, error) {
+	unlock, err := lockPublication(lockPath(target))
+	if err != nil {
+		return "", fmt.Errorf("lock %s: %w", target, err)
 	}
-	return fmt.Errorf("%s keeps being replaced by another wtui init; nothing was written, try again", target)
+	defer unlock()
+	if err := checkTarget(target, force); err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(target)
+	if errors.Is(err, os.ErrNotExist) {
+		// ponytail: creating needs hard links (not FAT/exFAT); there init fails and writes nothing.
+		if err := linkFile(tmp, target); errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("%s was created by another program while init was writing; nothing was replaced, run init again", target)
+		} else if err != nil {
+			return "", err
+		}
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	backup, err := copyToBackup(target)
+	if err != nil {
+		return "", fmt.Errorf("back up %s: %w", target, err)
+	}
+	if err := os.Chmod(tmp, info.Mode().Perm()); err != nil {
+		os.Remove(backup)
+		return "", err
+	}
+	if err := replaceFile(tmp, target); err != nil {
+		os.Remove(backup)
+		return "", err
+	}
+	return backup, nil
+}
+
+// lockPath is a hidden sibling that stays after use: deleting a lock others may hold reopens the race.
+func lockPath(target string) string {
+	return filepath.Join(filepath.Dir(target), "."+filepath.Base(target)+".lock")
+}
+
+func copyToBackup(target string) (string, error) {
+	src, err := os.Open(target)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+	dst, err := reserveBackup(target)
+	if err != nil {
+		return "", err
+	}
+	_, err = io.Copy(dst, src)
+	if err == nil {
+		err = dst.Sync()
+	}
+	if closeErr := dst.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(dst.Name())
+		return "", err
+	}
+	return dst.Name(), nil
 }
 
 // checkTarget refuses links and non-regular files whatever force says, and existing files without force.
@@ -366,8 +416,8 @@ func checkTarget(target string, force bool) error {
 	return nil
 }
 
-// reserveBackup creates an empty, never-reused backup name; a same-second name gets a -N suffix.
-func reserveBackup(target string) (string, error) {
+// reserveBackup creates a private, never-reused backup file; a same-second name gets a -N suffix.
+func reserveBackup(target string) (*os.File, error) {
 	base := target + ".bak-" + clock().Format("20060102-150405")
 	for n := 1; ; n++ {
 		name := base
@@ -375,11 +425,8 @@ func reserveBackup(target string) (string, error) {
 			name = fmt.Sprintf("%s-%d", base, n)
 		}
 		f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			return name, f.Close()
-		}
 		if !errors.Is(err, os.ErrExist) {
-			return "", err
+			return f, err
 		}
 	}
 }

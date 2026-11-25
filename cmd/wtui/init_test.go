@@ -400,6 +400,97 @@ func TestInit_ConcurrentForcesLoseNoGeneration(t *testing.T) {
 	assertNoTemps(t, filepath.Dir(env.target))
 }
 
+// afterCommit fails the test when anything reaches stdout before target holds the new config.
+type afterCommit struct {
+	t            *testing.T
+	target, want string
+	buf          bytes.Buffer
+}
+
+func (w *afterCommit) Write(p []byte) (int, error) {
+	if got, _ := os.ReadFile(w.target); !strings.Contains(string(got), w.want) {
+		w.t.Errorf("stdout written before the new config was in place: %q", p)
+	}
+	return w.buf.Write(p)
+}
+
+func seedConfig(t *testing.T, target, content string, perm os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte(content), perm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, perm); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func failWith(err error) func(string, string) error {
+	return func(string, string) error { return err }
+}
+
+func TestInit_ForceReplacesInPlaceWithoutHardLinks(t *testing.T) {
+	env := newInitEnv(t)
+	seedConfig(t, env.target, "editor: OLD\n", 0o600)
+	linkFile = failWith(errors.New("operation not supported"))
+	t.Cleanup(func() { linkFile = os.Link })
+
+	out := &afterCommit{t: t, target: env.target, want: "editor: NEW"}
+	var stderr bytes.Buffer
+	if code := initCommand(cliArgs{init: true, yes: true, force: true, root: env.root, editor: "NEW"}, unreadable{t}, out, &stderr, noDraft); code != 0 {
+		t.Fatalf("code %d, stderr %q", code, stderr.String())
+	}
+	if info, err := os.Lstat(env.target); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("target mode = %v, %v; want the original 0600", info, err)
+	}
+	backups, _ := filepath.Glob(env.target + ".bak-*")
+	if len(backups) != 1 || readFile(t, backups[0]) != "editor: OLD\n" || !strings.Contains(out.buf.String(), "Backed up the previous config to "+backups[0]) {
+		t.Fatalf("backups %v, stdout %q", backups, out.buf.String())
+	}
+	assertNoTemps(t, filepath.Dir(env.target))
+}
+
+func TestInit_FailedPublicationChangesNothing(t *testing.T) {
+	unsupported := failWith(errors.New("operation not supported"))
+	for _, tt := range []struct {
+		name     string
+		existing bool
+		link     func(string, string) error
+		replace  func(string, string) error
+	}{
+		{name: "replace fails on force", existing: true, link: os.Link, replace: unsupported},
+		{name: "link fails on create", link: unsupported, replace: os.Rename},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newInitEnv(t)
+			if tt.existing {
+				seedConfig(t, env.target, "editor: OLD\n", 0o644)
+			}
+			linkFile, replaceFile = tt.link, tt.replace
+			t.Cleanup(func() { linkFile, replaceFile = os.Link, os.Rename })
+
+			out := &afterCommit{t: t, target: env.target, want: "editor: NEW"}
+			var stderr bytes.Buffer
+			if code := initCommand(cliArgs{init: true, yes: true, force: true, root: env.root, editor: "NEW"}, unreadable{t}, out, &stderr, noDraft); code != 1 || !strings.Contains(stderr.String(), "operation not supported") {
+				t.Fatalf("code %d, stderr %q", code, stderr.String())
+			}
+			if tt.existing {
+				if got := readFile(t, env.target); got != "editor: OLD\n" {
+					t.Fatalf("target = %q", got)
+				}
+			} else if _, err := os.Lstat(env.target); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("target exists after failed create: %v", err)
+			}
+			if backups, _ := filepath.Glob(env.target + ".bak-*"); len(backups) != 0 {
+				t.Fatalf("backups left: %v", backups)
+			}
+			assertNoTemps(t, filepath.Dir(env.target))
+		})
+	}
+}
+
 func TestInit_RefusesSymlinkTargetsWithoutTouchingThem(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
