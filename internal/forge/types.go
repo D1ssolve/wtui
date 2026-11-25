@@ -113,6 +113,17 @@ type TriggerPipelineParams struct {
 	WorkflowFile string
 }
 
+type PublishParams struct {
+	WorktreePath string
+	// Repo is the host-qualified project (host/owner/repo) whose remote holds the verified tag.
+	Repo  string
+	Tag   string
+	Title string
+	Notes string
+	// CommitSHA is the accepted commit the tag peels to; adapters that can read it back check it.
+	CommitSHA string
+}
+
 type ListIssuesParams struct {
 	WorktreePath string
 	Repo         string

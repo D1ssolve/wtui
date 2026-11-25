@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ var retryCheckpoints = map[string]struct{}{
 	"tag":                  {},
 	"push_branch":          {},
 	"push_tag":             {},
+	"publish_release":      {},
 	"service_done":         {},
 	"cleanup":              {},
 	"final":                {},
@@ -183,6 +185,21 @@ func (m *manager) retryFinishRelease(ctx context.Context, release domain.Release
 		if execErr := m.runFinishService(ctx, &release, svc, nil); execErr != nil {
 			releaseErr := classifyReleaseError(execErr, svc)
 			_ = m.failRelease(&release, releaseErr)
+			return release, execErr
+		}
+	}
+	// This retry tags outside the machine, so it runs the flow's publish steps itself.
+	for _, step := range m.releaseMachine().Steps() {
+		if step.Kind != gitflow.StepPublish {
+			continue
+		}
+		if execErr := m.publishReleases(ctx, &release, step, nil); execErr != nil {
+			var svcErr *releaseServiceError
+			var svc *domain.ReleaseService
+			if errors.As(execErr, &svcErr) {
+				svc = svcErr.svc
+			}
+			_ = m.failRelease(&release, classifyReleaseError(execErr, svc))
 			return release, execErr
 		}
 	}

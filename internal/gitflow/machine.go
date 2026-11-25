@@ -132,7 +132,7 @@ func linearMachine(steps []Step, production string) *Machine {
 			gate = s.Label
 		case StepReview:
 			review = &steps[i]
-		case StepBackMerge, StepTag:
+		case StepBackMerge, StepTag, StepPublish:
 			finish = append(finish, s)
 		}
 	}
@@ -479,6 +479,8 @@ func (c *compiler) machineStep(scope machineScope, path string, step *Step) erro
 		if _, perr := time.ParseDuration(step.Timeout); perr != nil {
 			return fmt.Errorf("%s.timeout: %v", path, perr)
 		}
+	case StepPublish:
+		return validatePublish(path, step)
 	}
 	return err
 }
@@ -486,6 +488,7 @@ func (c *compiler) machineStep(scope machineScope, path string, step *Step) erro
 type machineFact string
 
 func factCut() machineFact            { return "cut" }
+func factTagged() machineFact         { return "tagged" }
 func factOpened(b string) machineFact { return machineFact("opened:" + b) }
 func factMerged(b string) machineFact { return machineFact("merged:" + b) }
 func (f machineFact) opened() (string, bool) {
@@ -586,6 +589,8 @@ func validateMachineDataFlow(base string, m *Machine, byID map[string]*State, su
 				out[factCut()] = true
 			case StepReview:
 				out[factOpened(step.Into[0])] = true
+			case StepTag:
+				out[factTagged()] = true
 			}
 		}
 		return out
@@ -611,7 +616,7 @@ func validateMachineDataFlow(base string, m *Machine, byID map[string]*State, su
 		}
 		return merged
 	}
-	universe := map[machineFact]bool{factCut(): true, factOpened(TaskBranchRef): true, factMerged(TaskBranchRef): true}
+	universe := map[machineFact]bool{factCut(): true, factTagged(): true, factOpened(TaskBranchRef): true, factMerged(TaskBranchRef): true}
 	for _, s := range m.States {
 		for _, step := range s.Run {
 			if step.Kind == StepReview {
@@ -668,6 +673,9 @@ func validateMachineDataFlow(base string, m *Machine, byID map[string]*State, su
 			if step.Kind == StepTag && step.On != ReleaseBranchRef && !have[factMerged(step.On)] {
 				return fmt.Errorf("%s.on: no merged review into %s precedes this tag on every path", stepPath, step.On)
 			}
+			if step.Kind == StepPublish && !have[factTagged()] {
+				return fmt.Errorf("%s: no tag step precedes this publish on every path; publish releases an existing tag", stepPath)
+			}
 			if step.Kind == StepIntegrateTasks && (s.ID != m.Initial || i != 0 || len(s.Run) != 2 || s.Run[1].Kind != StepCutBranch) {
 				return fmt.Errorf("%s: integrate_tasks must be followed only by cut_branch in the initial state", stepPath)
 			}
@@ -679,6 +687,8 @@ func validateMachineDataFlow(base string, m *Machine, byID map[string]*State, su
 				have[factCut()] = true
 			case StepReview:
 				have[factOpened(step.Into[0])] = true
+			case StepTag:
+				have[factTagged()] = true
 			}
 		}
 		if s.Kind == StateWait && s.Wait == WaitReviewMerged {
@@ -711,6 +721,9 @@ func (m *Machine) canonical() string {
 		fmt.Fprintf(&b, "|%s:%s:%s:%s:%s:%s:%s", s.ID, s.Kind, s.Next, s.OnError, s.Wait, s.WaitOn, s.Outcome)
 		for _, st := range s.Run {
 			fmt.Fprintf(&b, ";%s:%s:%s:%s:%s:%s:%s:%s", st.Kind, st.From, strings.Join(st.Into, ","), st.Merge, st.On, st.When, st.Command, st.Timeout)
+			if st.Kind == StepPublish { // only here, so fingerprints of flows without publish stay unchanged
+				fmt.Fprintf(&b, ":%q:%s", st.Title, st.Notes)
+			}
 		}
 		for _, ev := range s.Events {
 			fmt.Fprintf(&b, ";ev:%s:%s:%s:%s:%s", ev.Name, ev.Key, ev.To, ev.Action, ev.When)

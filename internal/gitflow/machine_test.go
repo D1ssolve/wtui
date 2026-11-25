@@ -1,6 +1,7 @@
 package gitflow
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -167,6 +168,36 @@ func TestResolve_StepsCompileToLegacyStateIDs(t *testing.T) {
 	}
 }
 
+func TestResolve_PublishStepFollowsTag(t *testing.T) {
+	t.Parallel()
+
+	steps := "workflow:\n  extends: trunk-based\n  release:\n    steps: [{cut_branch: {from: integration}}, {tag: {on: release_branch}}%s]\n"
+	without, err := resolveYAML(t, fmt.Sprintf(steps, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	with, err := resolveYAML(t, fmt.Sprintf(steps, `, {publish: {title: "{{.Service}} {{.Version}}"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishing, _ := with.Release.Machine.State(StateFinishing)
+	if len(finishing.Run) != 2 || finishing.Run[0].Kind != StepTag || finishing.Run[1].Kind != StepPublish || finishing.Run[1].Notes != PublishNotesChangelog {
+		t.Fatalf("finishing = %+v", finishing.Run)
+	}
+	retitled, err := resolveYAML(t, fmt.Sprintf(steps, `, {publish: {title: "{{.Tag}}"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp := with.ReleaseFingerprint(); fp == without.ReleaseFingerprint() || fp == retitled.ReleaseFingerprint() {
+		t.Fatal("adding or retitling publish must change the release fingerprint")
+	}
+
+	_, err = resolveYAML(t, "workflow:\n  extends: git-flow\n  release:\n    machine:\n      states:\n        cut: {run: [{cut_branch: {from: integration}}], next: tag}\n        tag: {run: [{tag: {on: release}}], next: pub}\n        pub: {run: [{publish: {notes: description}}], next: done}\n        done: {final: released}\n")
+	if err != nil {
+		t.Fatalf("publish in a state after the tag state: %v", err)
+	}
+}
+
 func TestResolve_ReleaseMachineErrors(t *testing.T) {
 	t.Parallel()
 
@@ -202,6 +233,12 @@ func TestResolve_ReleaseMachineErrors(t *testing.T) {
 		{"merge action with to", wrap("        cut: {run: [{cut_branch: {from: integration}}, {review: {from: release, into: production}}], next: w}\n        w: {wait: review_merged, next: done, on: {m: {key: M, action: merge_reviews, to: done}}}\n" + done), "leaves through the wait's next"},
 		{"user event on M", wrap(cut + "        done: {wait: manual, on: {go: {key: M, to: end}}}\n        end: {final: released}\n"), "M is reserved"},
 		{"bad wait", wrap("        w: {wait: forever, next: done}\n" + done), "expected manual, review_merged, ci_green"},
+		{"publish before tag", wrap("        p: {run: [{publish: {}}], next: done}\n" + done), "workflow.release.machine.states.p.run[0].publish: no tag step precedes this publish on every path"},
+		{"publish on a path without tag", wrap("        cut: {run: [{cut_branch: {from: integration}}], next: w}\n        w: {wait: manual, on: {go: {key: F, to: tag}, skip: {key: S, to: pub}}}\n        tag: {run: [{tag: {on: release}}], next: pub}\n        pub: {run: [{publish: {}}], next: done}\n" + done), "states.pub.run[0].publish: no tag step precedes"},
+		{"publish notes", wrap("        cut: {run: [{cut_branch: {from: integration}}], next: p}\n        p: {run: [{tag: {on: release}}, {publish: {notes: readme}}], next: done}\n" + done), "publish.notes: expected changelog or description"},
+		{"publish title", wrap("        cut: {run: [{cut_branch: {from: integration}}], next: p}\n        p: {run: [{tag: {on: release}}, {publish: {title: \"{{.Nope}}\"}}], next: done}\n" + done), "publish.title: expected a template"},
+		{"publish before tag in steps", "workflow:\n  extends: trunk-based\n  release:\n    steps: [{cut_branch: {from: integration}}, {publish: {}}, {tag: {on: release_branch}}]\n", "sequence [cut_branch, publish, tag] is not supported"},
+		{"publish in task close", "workflow:\n  extends: git-flow\n  task_types:\n    feature: {prefixes: [feature/], from: integration, close: [{merge: {into: integration}}, {tag: {on: integration}}, {publish: {}}]}\n", "block is not available in task close steps"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

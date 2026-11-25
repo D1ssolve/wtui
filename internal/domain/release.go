@@ -92,6 +92,8 @@ type ReleaseService struct {
 	// Accepted records the verified merge SHA of every review per target branch.
 	Accepted  map[string]string `json:"accepted,omitempty"`
 	HooksDone []string          `json:"hooks_done,omitempty"`
+	// ReleaseURL is the forge Release object published for Tag; once set, publish skips the service.
+	ReleaseURL string `json:"release_url,omitempty"`
 }
 
 type ProductionMRRef struct {

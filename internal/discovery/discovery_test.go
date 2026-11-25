@@ -169,6 +169,9 @@ func (m *mockGitClient) IsAncestor(_ context.Context, _, _, _ string) (bool, err
 func (m *mockGitClient) CreateTag(_ context.Context, _, _, _, _ string) error {
 	panic("mockGitClient.CreateTag called unexpectedly")
 }
+func (m *mockGitClient) TagMessage(context.Context, string, string) (string, error) {
+	panic("mockGitClient.TagMessage called unexpectedly")
+}
 func (m *mockGitClient) PushTag(_ context.Context, _, _, _, _ string) error {
 	panic("mockGitClient.PushTag called unexpectedly")
 }
