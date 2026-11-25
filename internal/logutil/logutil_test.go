@@ -1,6 +1,7 @@
 package logutil
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -102,5 +103,32 @@ func TestInitLogger_RuntimeLevelControlsRecording(t *testing.T) {
 	if !strings.Contains(text, "during-debug") || !strings.Contains(text, "after-warn") ||
 		strings.Contains(text, "before-debug") || strings.Contains(text, "after-debug") || strings.Contains(text, "after-info") {
 		t.Fatalf("runtime level did not control actual recording: %s", text)
+	}
+}
+
+func TestInitLogger_WriteOnlyFileFallsBack(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := XDGStateDir("testapp")
+	if err := os.Mkdir(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "testapp.log")
+	if err := os.WriteFile(path, nil, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err == nil {
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		t.Skip("this environment allows reads of mode-0200 files")
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("read probe failed for an unexpected reason: %v", err)
+	}
+
+	logger, activePath, err := InitLogger("testapp", slog.LevelInfo)
+	if !errors.Is(err, os.ErrPermission) || logger == nil || activePath != "" {
+		t.Fatalf("write-only file should not become the active sink: path=%q, err=%v", activePath, err)
 	}
 }

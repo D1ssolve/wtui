@@ -73,7 +73,8 @@ func InitLogger(app string, level slog.Leveler) (*slog.Logger, string, error) {
 	}
 
 	logPath := filepath.Join(logDir, app+".log")
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
+	// The TUI reopens this path for reading, so write access alone is insufficient.
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o640)
 	if err != nil {
 		return fallbackLogger(), "", fmt.Errorf("open log file %s: %w", logPath, err)
 	}
