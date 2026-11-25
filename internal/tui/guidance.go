@@ -31,15 +31,18 @@ func (m Model) failureActions() failureActions {
 
 // reportFailure prints "<op> failed: <cause>" and one "Next:" line; the full error goes to the log behind L.
 func (m *Model) reportFailure(op string, err error, logAttrs ...any) {
-	_, action := guidance(err, m.failureActions())
-	m.reportFailureNext(op, err, action, logAttrs...)
+	cause, action := guidance(err, m.failureActions())
+	m.writeFailure(op, err, cause, m.inContext(action), logAttrs)
 }
 
 // forceCleanupNext replaces key hints while the force cleanup dialog has the keyboard.
 const forceCleanupNext = "Decide in the Confirm Force Cleanup dialog whether to remove the remaining local files."
 
-func (m *Model) reportFailureNext(op string, err error, action string, logAttrs ...any) {
-	cause, _ := guidance(err, m.failureActions())
+func (m *Model) reportFailureNext(op string, err error, action string) {
+	m.writeFailure(op, err, failureCause(err), action, nil)
+}
+
+func (m *Model) writeFailure(op string, err error, cause, action string, logAttrs []any) {
 	m.logger.Error("operation failed", append([]any{"op", op, "err", err.Error()}, logAttrs...)...)
 	m.outputPanel.AppendLine(op + " failed: " + cause)
 	m.outputPanel.AppendLine("Next: " + action)
@@ -48,7 +51,63 @@ func (m *Model) reportFailureNext(op string, err error, action string, logAttrs 
 func (m *Model) reportNext(err error) {
 	_, action := guidance(err, m.failureActions())
 	m.logger.Error("operation failed", "err", err.Error())
-	m.outputPanel.AppendLine("Next: " + action)
+	m.outputPanel.AppendLine("Next: " + m.inContext(action))
+}
+
+type serviceFailure struct {
+	name string
+	err  error
+}
+
+// reportServiceNext follows per-service cause lines with one Next per distinct action, naming its services.
+func (m *Model) reportServiceNext(failures []serviceFailure) {
+	actions := m.failureActions()
+	var order []string
+	services := map[string][]string{}
+	for _, f := range failures {
+		_, action := guidance(f.err, actions)
+		m.logger.Error("service operation failed", "service", f.name, "err", f.err.Error())
+		if _, seen := services[action]; !seen {
+			order = append(order, action)
+		}
+		services[action] = append(services[action], f.name)
+	}
+	for _, action := range order {
+		m.outputPanel.AppendLine("Next for " + strings.Join(services[action], ", ") + ": " + m.inContext(action))
+	}
+}
+
+func partialServiceFailures(result task.PartialFailureResult, fallback error) []serviceFailure {
+	var failures []serviceFailure
+	for _, service := range result.FailedServices {
+		err := service.Cause
+		if err == nil {
+			err = fallback
+		}
+		if err != nil {
+			failures = append(failures, serviceFailure{name: service.Name, err: err})
+		}
+	}
+	return failures
+}
+
+func failureCause(err error) string {
+	cause, _ := guidance(err, failureActions{})
+	return cause
+}
+
+// inContext prefixes a key action with the step that frees the keyboard from a dialog or an active filter.
+func (m Model) inContext(action string) string {
+	rest, isKey := strings.CutPrefix(action, "Press ")
+	switch {
+	case !isKey:
+		return action
+	case m.modal != nil:
+		return "Press Esc to close the dialog, then press " + rest
+	case m.focus == FocusTasks && m.tasksPanel.FilterActive(), m.focus == FocusServices && m.servicesPanel.FilterActive():
+		return "Press Esc to leave the filter, then press " + rest
+	}
+	return action
 }
 
 // Domain errors carry their own instruction: "(press F to retry)", "; press C ..." or, from AI providers, ": run codex login ...".
@@ -107,7 +166,11 @@ func guidance(err error, actions failureActions) (cause, action string) {
 			}
 		}
 		if best >= 0 {
-			return cause[:best], sentence(cause[best+2:])
+			instruction, rest, _ := strings.Cut(cause[best+2:], "\n")
+			if rest != "" {
+				rest = "\n" + rest
+			}
+			return cause[:best] + rest, sentence(instruction)
 		}
 	}
 	return cause, kindAction(err, actions, condensed)
@@ -128,6 +191,9 @@ func kindAction(err error, actions failureActions, condensed bool) string {
 		return "Install gh (GitHub) or glab (GitLab) and add it to PATH, then retry."
 	case errors.As(err, &forgeErr) && forgeErr.Category == forge.ErrCategoryAuthError, forgeAuthFailure(err):
 		if cli := forgeCLI(err); cli != "" {
+			if strings.Contains(err.Error(), cli+" auth login") {
+				return "Authenticate " + cli + " as its message above says, then retry."
+			}
 			return "Run " + cli + " auth login, then retry."
 		}
 		return "Run gh auth login or glab auth login, then retry."
@@ -143,6 +209,8 @@ func kindAction(err error, actions failureActions, condensed bool) string {
 		return "Press W to see which events the current state accepts."
 	case errors.Is(err, task.ErrServiceNotFound):
 		return "Press r to refresh, then select the service again."
+	case configError(err):
+		return "Fix the config value named above, check it with wtui flow, then restart wtui."
 	case errors.Is(err, fs.ErrNotExist):
 		return "Check that the path exists, then press r to refresh."
 	case errors.As(err, &execErr) && filepath.Base(firstArg(execErr.Argv)) == "git":
@@ -150,11 +218,22 @@ func kindAction(err error, actions failureActions, condensed bool) string {
 			return "Press L for the full git output, fix the repository, then retry."
 		}
 		return "Fix the repository problem shown above, then retry."
-	case actions.explain:
-		return "Press E to ask AI why it failed."
 	default:
-		return "Press L to read the logs."
+		return diagnoseAction(actions)
 	}
+}
+
+func diagnoseAction(actions failureActions) string {
+	if actions.explain {
+		return "Press E to ask AI why it failed."
+	}
+	return "Press L to read the logs."
+}
+
+// configError matches internal/config errors, which carry a "config: " prefix rather than a type.
+func configError(err error) bool {
+	text := err.Error()
+	return strings.HasPrefix(text, "config: ") || strings.Contains(text, ": config: ")
 }
 
 func forgeAuthFailure(err error) bool {

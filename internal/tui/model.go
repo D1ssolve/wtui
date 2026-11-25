@@ -1677,13 +1677,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Err != nil:
 			m.reportFailure("Merge task MRs", msg.Err)
 		case len(msg.Result.Errs) > 0:
-			errs := make([]error, 0, len(msg.Result.Errs))
+			failures := make([]serviceFailure, 0, len(msg.Result.Errs))
 			for _, service := range slices.Sorted(maps.Keys(msg.Result.Errs)) {
-				m.outputPanel.AppendLine(service + ": " + msg.Result.Errs[service].Error())
-				errs = append(errs, msg.Result.Errs[service])
+				m.outputPanel.AppendLine(service + ": " + failureCause(msg.Result.Errs[service]))
+				failures = append(failures, serviceFailure{name: service, err: msg.Result.Errs[service]})
 			}
 			m.outputPanel.AppendLine("Merge task MRs finished with errors.")
-			m.reportNext(errors.Join(errs...))
+			m.reportServiceNext(failures)
 		default:
 			m.outputPanel.AppendLine("Merge task MRs done.")
 		}
@@ -1699,6 +1699,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			if failed := msg.Result.Failed; len(failed) > 0 {
 				m.outputPanel.AppendLine("Merge release MRs failed for: " + strings.Join(failed, ", "))
+				m.logger.Error("operation failed", "op", "Merge release MRs", "release", msg.Release.ID, "failed", failed)
+				// Each service's cause was already streamed as its [service][merge] line.
+				action := m.inContext(diagnoseAction(m.failureActions()))
+				if slices.ContainsFunc(m.mgr.ReleaseEvents(msg.Release), func(ev task.ReleaseEvent) bool { return ev.Action == gitflow.EventActionMergeReviews }) {
+					action = "Fix the MR failure shown in the [service][merge] lines above, then press M on the release to merge again."
+				}
+				m.outputPanel.AppendLine("Next for " + strings.Join(failed, ", ") + ": " + action)
 			}
 			if skipped := msg.Result.Skipped; len(skipped) > 0 {
 				m.outputPanel.AppendLine("Merge release MRs skipped: " + strings.Join(skipped, ", "))
@@ -1990,11 +1997,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.finishOpProgress(msg.Err)
+		closeTask := m.resolveCloseTask(msg.Result.TaskID)
+		m.modal = modal.NewCloseTaskSummaryModal(closeTask, msg.Result, m.width, m.height)
 		if msg.Err != nil {
 			m.reportFailure("Close task", msg.Err)
 		}
-		closeTask := m.resolveCloseTask(msg.Result.TaskID)
-		m.modal = modal.NewCloseTaskSummaryModal(closeTask, msg.Result, m.width, m.height)
 		m.pendingCloseTask = nil
 		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())
 
@@ -2047,7 +2054,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			var created, existing, failed int
-			var serviceErrs []error
+			var serviceErrs []serviceFailure
 			var confirmItems []modal.MRCreateConfirmItem
 			for _, service := range result.Services {
 				line := service.ServiceName + ": " + service.Status
@@ -2062,8 +2069,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					confirmItems = append(confirmItems, modal.MRCreateConfirmItem{ServiceName: service.ServiceName, Reason: service.Reason})
 				}
 				if service.Err != nil {
-					serviceErrs = append(serviceErrs, service.Err)
-					line += ": " + service.Err.Error()
+					serviceErrs = append(serviceErrs, serviceFailure{name: service.ServiceName, err: service.Err})
+					line += ": " + failureCause(service.Err)
 				} else if service.Reason != "" {
 					line += ": " + service.Reason
 				} else if service.MR.URL != "" {
@@ -2072,13 +2079,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.outputPanel.AppendLine(line)
 			}
 			m.outputPanel.AppendLine(fmt.Sprintf("Create missing MR/PRs done: created=%d, existing=%d, failed=%d", created, existing, failed))
-			if len(serviceErrs) > 0 {
-				m.reportNext(errors.Join(serviceErrs...))
-			}
 			if len(confirmItems) > 0 {
 				m.modal = modal.NewMRCreateConfirmDialog(result.TaskID, result.Title, confirmItems, msg.Description)
 				m.modal.SetTerminalSize(m.width, m.height)
 			}
+			m.reportServiceNext(serviceErrs)
 			return m, nil
 		}
 		if msg.Err != nil {
@@ -2209,6 +2214,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		m.reportServiceNext(partialServiceFailures(msg.Result, msg.Err))
 		if m.pendingInitParams != nil {
 			m.selectTaskOnLoad = m.pendingInitParams.TaskID
 		}
@@ -2237,6 +2243,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		m.reportServiceNext(partialServiceFailures(msg.Result, msg.Err))
 		m.pendingInitParams = nil
 		m.pendingAddParams = nil
 		return m, tea.Batch(loadTasksCmd(m.mgr, m.operationGeneration), m.maybeLoadServicesCmd())
@@ -3153,7 +3160,7 @@ func (m Model) failureRequest() (string, ai.FailureRequest) {
 		request.Operation = "release " + r.ID + " (status " + string(r.Status) + ")"
 		request.State, request.Guidance = string(summary.Current), summary.NextAction
 		if r.Error != nil {
-			request.Error = strings.TrimSpace(r.Error.Message + "\n" + r.Error.Cause)
+			request.Error = logutil.Redact(strings.TrimSpace(r.Error.Message + "\n" + r.Error.Cause))
 		}
 	} else if t := m.tasksPanel.SelectedTask(); t != nil {
 		subject = "task " + t.ID
@@ -3255,7 +3262,7 @@ func partialFailureLines(result task.PartialFailureResult) []string {
 			failed = append(failed, service.Name)
 			continue
 		}
-		failed = append(failed, fmt.Sprintf("%s (%s)", service.Name, service.Cause.Error()))
+		failed = append(failed, fmt.Sprintf("%s (%s)", service.Name, failureCause(service.Cause)))
 	}
 	lines = append(lines, "Failed: "+strings.Join(failed, ", "))
 	return lines

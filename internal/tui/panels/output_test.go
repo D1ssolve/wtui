@@ -21,6 +21,15 @@ func TestOutputPanel_AppendLineAddsPresentationTimestamp(t *testing.T) {
 	}
 }
 
+func TestOutputPanel_AppendLineRedactsURLCredentials(t *testing.T) {
+	p := NewOutputPanel(120, 8)
+	p.AppendLine("fatal: Authentication failed for 'https://alice:CANARY-6f1d@example.invalid/repo'")
+
+	if got := p.RecentText(5); strings.Contains(got, "CANARY-6f1d") || !strings.Contains(got, "https://***@example.invalid/repo") {
+		t.Fatalf("output = %q", got)
+	}
+}
+
 func TestOutputPanel_New_EmptyViewport(t *testing.T) {
 	p := NewOutputPanel(80, 10)
 	if p.width != 80 || p.height != 10 {
