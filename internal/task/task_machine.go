@@ -48,6 +48,10 @@ func (m *manager) loadTaskFlow(ctx context.Context, taskID string) (*taskFlow, e
 	if err != nil || len(services) == 0 {
 		return nil, err
 	}
+	return m.readTaskFlow(taskID, services)
+}
+
+func (m *manager) readTaskFlow(taskID string, services []domain.Service) (*taskFlow, error) {
 	var typ gitflow.BranchType
 	mixed := false
 	for i, svc := range services {
@@ -346,15 +350,13 @@ func (m *manager) serviceForgeTarget(ctx context.Context, svc domain.Service) (f
 func (m *manager) taskWaitHolds(ctx context.Context, tf *taskFlow, st *gitflow.State) (bool, error) {
 	switch st.Wait {
 	case gitflow.WaitReviewMerged:
-		plans, _, _, err := m.workflowPlans(tf.services)
-		if err != nil {
-			return false, err
+		// Manual re-check may fetch objects; tracking refs are not proof.
+		for _, svc := range tf.services {
+			if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
+				return false, err
+			}
 		}
-		states, err := m.workflowMergeStates(ctx, plans)
-		if err != nil {
-			return false, err
-		}
-		return workflowAllMerged(states), nil
+		return m.taskReviewWaitHolds(ctx, tf.services)
 	case gitflow.WaitCIGreen:
 		green, _, err := m.taskCIGreen(ctx, tf, st.WaitOn)
 		return green, err

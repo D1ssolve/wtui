@@ -369,7 +369,7 @@ func paletteItems(m Model) []modal.PaletteItem {
 	return items
 }
 
-func (m Model) runPaletteAction(id int) (tea.Model, tea.Cmd) {
+func (m Model) runPaletteAction(id int) (Model, tea.Cmd) {
 	m.modal = nil
 	if id < 0 || id >= len(actionRegistry) {
 		return m, nil
@@ -378,5 +378,5 @@ func (m Model) runPaletteAction(id int) (tea.Model, tea.Cmd) {
 	if focus, ok := scopeFocus[a.scope]; ok {
 		m.setFocus(focus)
 	}
-	return m.Update(keyMsgFor(a.keys[0]))
+	return m.update(keyMsgFor(a.keys[0]))
 }

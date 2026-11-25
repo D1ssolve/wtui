@@ -80,6 +80,7 @@ type Model struct {
 	taskWorkflowPending       bool
 	taskWorkflow              *domain.WorkflowSummary
 	releaseWorkflow           *domain.WorkflowSummary
+	waitRefresh               waitRefresh
 	mergeInspectionGeneration uint64
 	mergeInspection           *mergeInspectionRequest
 
@@ -176,14 +177,15 @@ type shellInputState struct {
 }
 
 type Options struct {
-	MetadataGenerator task.MetadataGenerator
-	Assistant         ai.Assistant
-	LogLevel          *slog.LevelVar
-	LazygitAvailable  bool
-	GlabAvailable     bool
-	GhAvailable       bool
-	ResolvedFlow      *gitflow.ResolvedGitFlow
-	Version           string
+	WaitRefreshContext context.Context
+	MetadataGenerator  task.MetadataGenerator
+	Assistant          ai.Assistant
+	LogLevel           *slog.LevelVar
+	LazygitAvailable   bool
+	GlabAvailable      bool
+	GhAvailable        bool
+	ResolvedFlow       *gitflow.ResolvedGitFlow
+	Version            string
 }
 
 func New(cfg *config.Config, mgr task.Manager, logger *slog.Logger) (Model, error) {
@@ -231,6 +233,10 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 		releasesPanel:     panels.NewReleasesPanel(25, 10),
 		outputPanel:       panels.NewOutputPanel(80, cfg.OutputPanelLines+2),
 	}
+	m.waitRefresh.parent = opts.WaitRefreshContext
+	if m.waitRefresh.parent == nil {
+		m.waitRefresh.parent = context.Background()
+	}
 
 	if opts.LogLevel != nil {
 		m.defaultLogLevel = opts.LogLevel.Level()
@@ -254,7 +260,7 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	if handled, cmd := m.handleMetadata(msg); handled {
 		return m, cmd
 	}
@@ -335,6 +341,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if key.Matches(msg, m.keymap.ForceQuit) {
 			m.logger.Info("quit requested")
+			m.waitRefresh.closing = true
 			return m, tea.Quit
 		}
 		if m.handleOperationCancelKey(msg) {
@@ -358,12 +365,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch {
-		case key.Matches(msg, m.keymap.ForceQuit):
-			m.logger.Info("quit requested")
-			return m, tea.Quit
-
 		case key.Matches(msg, m.keymap.Quit) && m.modal == nil:
 			m.logger.Info("quit requested")
+			m.waitRefresh.closing = true
 			return m, tea.Quit
 
 		case key.Matches(msg, m.keymap.Tab):
@@ -1929,7 +1933,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.outputPanel.AppendLine("Validation cancelled for task " + msg.TaskID + ".")
 				return m, nil
 			}
-			return m.Update(CommandDoneMsg{Generation: msg.Generation, Err: msg.Err, Op: "Validate task " + msg.TaskID})
+			return m.update(CommandDoneMsg{Generation: msg.Generation, Err: msg.Err, Op: "Validate task " + msg.TaskID})
 		}
 		if msg.Validation.Blocking {
 			m.pendingSyncTask = nil
@@ -3272,7 +3276,7 @@ func isExecutableNotFoundErr(err error) bool {
 	return errors.Is(err, exec.ErrNotFound)
 }
 
-func (m Model) updateShellInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) updateShellInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		m.shellInput = nil

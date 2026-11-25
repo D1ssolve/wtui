@@ -97,6 +97,7 @@ func TestTaskMachine_GatesCloseAndMergeAndRunsStandHooks(t *testing.T) {
 func TestTaskMachine_ReviewMergedWaitAdvancesAndConfigChangeBlocks(t *testing.T) {
 	rule := taskMachineRule(t, filepath.Join(t.TempDir(), "log"))
 	mgr := newRuleWorkflowTestManager(t, rule, true).(*manager)
+	mgr.git.(*mockGitClient).remoteRefSHAFn = func(_, ref string) (string, error) { return ref + "-sha", nil }
 	ctx := t.Context()
 	state := `{"type":"feature","fingerprint":"` + rule.Machine.Fingerprint() + `","state":"review"}`
 	if err := os.WriteFile(filepath.Join(mgr.taskDir("TASK-1"), taskFlowFileName), []byte(state), 0o644); err != nil {

@@ -196,6 +196,9 @@ func (c *CommandClient) execGitRaw(ctx context.Context, args ...string) (string,
 	c.logger.InfoContext(ctx, "exec git", slog.Any("argv", argv))
 
 	cmd := exec.CommandContext(ctx, "git", args...)
+	if ctx.Value(noLazyFetchKey{}) != nil {
+		cmd.Env = append(cmd.Environ(), "GIT_NO_LAZY_FETCH=1")
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
