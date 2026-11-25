@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/fsutil"
@@ -112,41 +110,10 @@ func (m *manager) closePostActionConfigDigest() string {
 	}{m.flow, m.cfg.Tag, m.cfg.Close})
 }
 
-// sameRemoteURL conservatively compares two remote URLs after normalization:
-// surrounding space is trimmed, and trailing slashes plus one trailing ".git"
-// are dropped. Repository paths stay case-sensitive: scheme and host are
-// lowercased only when the URL parses robustly with the standard library
-// (scp-like "git@host:path" syntax fails that parse and compares exactly). An
-// empty URL on either side never matches, so stale or unrecorded origins fail
-// closed.
+// A Git endpoint may be a literal filesystem path. Only its exact captured
+// bytes identify the approved destination; an absent identity proves nothing.
 func sameRemoteURL(a, b string) bool {
-	na, nb := normalizeRemoteURL(a), normalizeRemoteURL(b)
-	if na == "" || nb == "" {
-		return false
-	}
-	return canonicalRemoteURL(na) == canonicalRemoteURL(nb)
-}
-
-func normalizeRemoteURL(u string) string {
-	u = strings.TrimSpace(u)
-	u = strings.TrimRight(u, "/")
-	u = strings.TrimSuffix(u, ".git")
-	u = strings.TrimRight(u, "/")
-	return u
-}
-
-// canonicalRemoteURL lowercases only the scheme and host of a robustly
-// parseable absolute URL; the path keeps its case. Anything else (notably
-// scp-like SSH remotes) is returned unchanged so case-sensitive repository
-// paths never collapse into a match.
-func canonicalRemoteURL(u string) string {
-	parsed, err := url.Parse(u)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return u
-	}
-	parsed.Scheme = strings.ToLower(parsed.Scheme)
-	parsed.Host = strings.ToLower(parsed.Host)
-	return parsed.String()
+	return a != "" && a == b
 }
 
 func (m *manager) closePostActionsProofPath(taskID string) string {

@@ -37,7 +37,7 @@ func TestTaskCleanupRetry_PushDestination_Integration(t *testing.T) {
 	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
 	const branch = "feature/APP-1"
 	const ref = "refs/heads/" + branch
-	for _, mode := range []string{"unchanged", "origin", "pushurl", "missing-on-replacement", "between-worktrees"} {
+	for _, mode := range []string{"unchanged", "origin", "pushurl", "missing-on-replacement", "between-worktrees", "space-approved", "space-drift", "extra-empty-pushurl"} {
 		t.Run(mode, func(t *testing.T) {
 			client := &interruptedTaskCleanup{Client: git.NewCommandClient(newIntegrationLogger())}
 			api := newReleaseIntegrationEnvWithGitClient(t, client)
@@ -56,13 +56,20 @@ func TestTaskCleanupRetry_PushDestination_Integration(t *testing.T) {
 				mustGit(t, repo, "worktree", "add", "-b", branch, filepath.Join(root, name), "master")
 				mustGit(t, repo, "push", "origin", ref)
 			}
+			approved := filepath.Join(filepath.Dir(api.repoPath), "origin.git")
+			replacement := filepath.Join(t.TempDir(), "replacement.git")
+			if mode == "space-approved" || mode == "space-drift" {
+				replacement = approved + " "
+			}
+			mustGit(t, api.repoPath, "clone", "--bare", approved, replacement)
+			if mode == "space-approved" {
+				approved, replacement = replacement, approved
+				mustGit(t, api.repoPath, "remote", "set-url", "origin", approved)
+			}
 			plan, err := m.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1", DeleteRemoteTaskBranches: true})
 			if err != nil || plan.Blocked() {
 				t.Fatalf("plan: %v, %v", plan.Preview().Blockers, err)
 			}
-			approved := gitOutput(t, api.repoPath, "remote", "get-url", "--push", "origin")
-			replacement := filepath.Join(t.TempDir(), "replacement.git")
-			mustGit(t, api.repoPath, "clone", "--bare", approved, replacement)
 			if mode == "between-worktrees" {
 				client.afterRemove = func() {
 					mustGit(t, api.repoPath, "remote", "set-url", "--push", "origin", replacement)
@@ -77,17 +84,20 @@ func TestTaskCleanupRetry_PushDestination_Integration(t *testing.T) {
 			client.stopAt = ""
 			tip := gitOutput(t, approved, "rev-parse", ref)
 			switch mode {
-			case "origin", "missing-on-replacement":
+			case "origin", "missing-on-replacement", "space-drift":
 				mustGit(t, api.repoPath, "remote", "set-url", "origin", replacement)
 			case "pushurl":
 				mustGit(t, api.repoPath, "remote", "set-url", "--push", "origin", replacement)
+			case "extra-empty-pushurl":
+				// get-url prints this as the approved path followed by two LFs.
+				mustGit(t, api.repoPath, "remote", "set-url", "--push", "origin", approved+"\n")
 			}
 			if mode == "missing-on-replacement" {
 				mustGit(t, replacement, "update-ref", "-d", ref, tip)
 			}
 
 			result, err := m.ExecuteTaskCleanup(t.Context(), plan, nil, TaskCleanupExecutionSelection{Force: true})
-			drift := mode != "unchanged"
+			drift := mode != "unchanged" && mode != "space-approved"
 			t.Logf("first=%v; retry=%v; error=%v", first.Completed, result.Completed, err)
 			if drift && (err == nil || len(result.Completed) != 0) || !drift && err != nil {
 				t.Errorf("unexpected retry outcome for %s", mode)
@@ -99,6 +109,9 @@ func TestTaskCleanupRetry_PushDestination_Integration(t *testing.T) {
 					want = oid
 				}
 				origin := filepath.Join(filepath.Dir(repo), "origin.git")
+				if name == "svc-api" {
+					origin = approved
+				}
 				for _, store := range []string{repo, origin} {
 					if got := gitOutput(t, store, "for-each-ref", "--format=%(objectname)", ref); got != want {
 						t.Errorf("%s %s: got %q, want %q", store, ref, got, want)
