@@ -1,6 +1,7 @@
 package gitflow
 
 import (
+	_ "embed"
 	"fmt"
 	"html"
 	"io"
@@ -12,6 +13,9 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/config"
 )
+
+//go:embed assets/mermaid.min.js
+var mermaidJS []byte
 
 // Describe is the plain-text summary printed by `wtui flow`.
 func (flow *ResolvedGitFlow) Describe() string {
@@ -207,8 +211,9 @@ func mermaidMachine(b *strings.Builder, m *Machine, prefix string) {
 	}
 }
 
-// HTML is a standalone page rendering Mermaid(); the browser loads mermaid.js from a CDN.
+// HTML is a standalone page rendering Mermaid() with an embedded Mermaid bundle.
 func (flow *ResolvedGitFlow) HTML() string {
+	mermaid := strings.ReplaceAll(string(mermaidJS), "</script", `<\/script`)
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -222,8 +227,9 @@ func (flow *ResolvedGitFlow) HTML() string {
 ` + html.EscapeString(flow.Mermaid()) + `</pre>
 <h2>Details</h2>
 <pre class="text">` + html.EscapeString(flow.Describe()) + `</pre>
-<script type="module">
-import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+<!-- Mermaid 11.17.2, MIT license. -->
+<script>` + mermaid + `</script>
+<script>
 mermaid.initialize({startOnLoad: true, securityLevel: "strict"});
 </script>
 </body>
