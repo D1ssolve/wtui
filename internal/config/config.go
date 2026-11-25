@@ -116,11 +116,17 @@ func Load(flagPath string) (*Config, error) {
 
 	// Pre-filled blocks keep their defaults for fields a partial YAML block omits.
 	cfg.Tag, cfg.Validation, cfg.Close, cfg.Prune = defaultTag(), defaultValidation(), defaultClose(), defaultPrune()
+	// Extensions catches the top-level x-* keys the key walk allowed; nested blocks stay KnownFields-strict.
+	file := struct {
+		Config     `yaml:",inline"`
+		Extensions map[string]any `yaml:",inline"`
+	}{Config: *cfg}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
-	if err := decoder.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
+	if err := decoder.Decode(&file); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
+	*cfg = file.Config
 
 	return cfg, nil
 }

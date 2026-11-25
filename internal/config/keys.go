@@ -79,6 +79,9 @@ func checkKeys(node *yaml.Node, t reflect.Type, path string, open map[*yaml.Node
 			}
 		}
 		for _, p := range pairs {
+			if path == "" && strings.HasPrefix(p.name, "x-") {
+				continue // top-level x-* keys are free-form anchor holders (the Compose convention)
+			}
 			keyPath := joinKey(path, p.name)
 			fieldType, ok := fields[p.name]
 			if !ok {

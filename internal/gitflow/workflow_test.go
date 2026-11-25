@@ -1,6 +1,8 @@
 package gitflow
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -80,6 +82,34 @@ func TestResolve_FingerprintTracksFlowChanges(t *testing.T) {
 	}
 	if a.ReleaseFingerprint() == "" || a.ReleaseFingerprint() == b.ReleaseFingerprint() {
 		t.Fatalf("fingerprints = %q / %q, want non-empty and different", a.ReleaseFingerprint(), b.ReleaseFingerprint())
+	}
+}
+
+func TestResolve_ExtensionKeyHolder_CompilesLikeInline(t *testing.T) {
+	t.Parallel()
+
+	describe := func(src string) string {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if cfg, err = cfg.Effective(); err != nil {
+			t.Fatalf("Effective() error: %v", err)
+		}
+		flow, err := Resolve(cfg)
+		if err != nil {
+			t.Fatalf("Resolve() error: %v", err)
+		}
+		return flow.Describe()
+	}
+	holder := describe("x-types: &types\n  ops: {prefixes: [ops/], from: integration, close: [{review: {into: integration}}]}\nworkflow:\n  extends: git-flow\n  task_types:\n    <<: *types\n")
+	inline := describe("workflow:\n  extends: git-flow\n  task_types:\n    ops: {prefixes: [ops/], from: integration, close: [{review: {into: integration}}]}\n")
+	if holder != inline || !strings.Contains(holder, "ops: prefixes ops/") {
+		t.Fatalf("holder flow:\n%s\ninline flow:\n%s", holder, inline)
 	}
 }
 

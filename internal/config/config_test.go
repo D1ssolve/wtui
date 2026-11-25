@@ -204,7 +204,6 @@ func TestLoad_UnknownKeys_ReturnLinePathAndSuggestion(t *testing.T) {
 		{"state key far", "# config\n{\"workflow\": {\"release\": {\"machine\": {\"states\": {\"custom\": {\"unrelated_input\": \"x\"}}}}}}", []string{`line 2: unknown key "unrelated_input" in workflow.release.machine.states.custom; expected one of final, label, next, on, on_error, run, wait`}},
 		{"event key", "# config\n{\"workflow\": {\"release\": {\"machine\": {\"states\": {\"custom\": {\"on\": {\"approve\": {\"labl\": \"x\"}}}}}}}}", []string{`line 2: unknown key "labl" in workflow.release.machine.states.custom.on.approve, did you mean "label"?`}},
 		{"merged typo", "tag: {<<: {formt: x}}\n", []string{`line 1: unknown key "formt" in tag, did you mean "format"?`}},
-		{"helper anchor key", "x-anchors: &a {concurrency: 3}\nprune: *a\n", []string{`line 1: unknown key "x-anchors"; expected one of`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -254,6 +253,40 @@ func TestLoad_AnchorsAliasesAndMerges_DecodeLikeYAML(t *testing.T) {
 				t.Fatalf("cfg decoded wrongly: tag=%+v workflow=%+v", cfg.Tag, cfg.Workflow)
 			}
 		})
+	}
+}
+
+func TestLoad_TopLevelExtensionKeys(t *testing.T) {
+	tests := []struct {
+		name, src, wantErr string
+	}{
+		{"unused junk under x-foo", "x-foo: {anything: [1, 2], nested: {whatever: true}}\nlog_level: WARN\n", ""},
+		{"holder merged into tag", "x-tag: &t {format: \"r-{{.Version}}\"}\ntag: {<<: *t}\n", ""},
+		{"typo inside a merged holder", "x-tag: &t {formt: x}\ntag: {<<: *t}\n", `line 1: unknown key "formt" in tag, did you mean "format"?`},
+		{"removed key inside a merged holder", "x-prune: &p\n  fetch: true\nprune: {<<: *p}\n", "line 2: prune.fetch was removed: it never had an effect; delete it"},
+		{"x- key below the top level", "tag: {x-foo: 1}\n", `line 1: unknown key "x-foo" in tag`},
+		{"x_ look-alike", "x_anchors: {}\n", `line 1: unknown key "x_anchors"`},
+		{"x look-alike without dash", "xanchors: {}\n", `line 1: unknown key "xanchors"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, tt.src))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			mustEffective(t, cfg)
+		})
+	}
+
+	cfg, err := Load(writeTempConfig(t, "x-tag: &t {format: \"r-{{.Version}}\"}\ntag: {<<: *t}\n"))
+	if err != nil || cfg.Tag.Format != "r-{{.Version}}" || !cfg.Tag.Push {
+		t.Fatalf("Load() = %+v, %v; want the merged format with default push", cfg.Tag, err)
 	}
 }
 
