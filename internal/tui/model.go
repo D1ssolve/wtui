@@ -72,6 +72,7 @@ type Model struct {
 	spinner                   spinner.Model
 	opRunning                 bool
 	operationGeneration       uint64
+	operationCancellation     operationCancellation
 	conversionRunning         bool
 	opProgress                *panels.OperationProgress
 	refreshing                bool
@@ -336,6 +337,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logger.Info("quit requested")
 			return m, tea.Quit
 		}
+		if m.handleOperationCancelKey(msg) {
+			return m, nil
+		}
 		switch m.focus {
 		case FocusTasks:
 			if m.tasksPanel.FilterActive() {
@@ -500,9 +504,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.opRunning = false
-		if msg.Err != nil {
+		requested, cancelled := m.finishOperationCancellation(msg.Err)
+		switch {
+		case cancelled:
+			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow cancelled. Check the workflow panel for its current state.")
+		case requested && msg.Err != nil:
+			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow after cancellation request: " + msg.Err.Error())
+		case msg.Err != nil:
 			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow: " + msg.Err.Error())
-		} else {
+		default:
 			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow updated.")
 		}
 		if selected := m.tasksPanel.SelectedTask(); selected != nil && selected.ID == msg.TaskID {
@@ -1700,9 +1710,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.opRunning = false
-		if msg.Err != nil {
+		requested, cancelled := m.finishOperationCancellation(msg.Err)
+		switch {
+		case cancelled:
+			line := "Release operation cancelled"
+			if release := msg.Release; release.ID != "" {
+				line += ": " + release.ID + ", status " + string(release.Status)
+				if release.State != "" && release.State != string(release.Status) {
+					line += ", state " + release.State
+				}
+				if release.Status == domain.ReleaseStatusFailed && release.Error != nil && release.Error.Recoverable {
+					line += "; press ctrl+r to retry"
+				}
+			}
+			m.outputPanel.AppendLine(line + ".")
+		case requested && msg.Err != nil:
+			m.outputPanel.AppendLine("Release operation after cancellation request: " + msg.Err.Error())
+		case msg.Err != nil:
 			m.outputPanel.AppendLine(strings.ToUpper(msg.Action[:1]) + msg.Action[1:] + " release failed: " + msg.Err.Error())
-		} else {
+		default:
 			m.outputPanel.AppendLine(strings.ToUpper(msg.Action[:1]) + msg.Action[1:] + " release done: " + msg.Release.ID)
 		}
 		return m, loadReleasesCmd(m.mgr)
@@ -2520,14 +2546,13 @@ func (m Model) fireReleaseEvent(release domain.Release, key string) (Model, tea.
 		m.outputPanel.AppendLine("Release action unavailable for status " + string(release.Status) + ".")
 		return m, nil
 	}
-	m.opRunning = true
-	m.operationGeneration++
+	ctx := m.startOperation("release "+release.ID+" workflow", m.releaseCancellationSafe(release, &event))
 	if event != "" {
 		m.outputPanel.AppendLine("Release " + release.ID + ": " + event + "...")
 	} else {
 		m.outputPanel.AppendLine("Re-checking release " + release.ID + "...")
 	}
-	return m, tea.Batch(advanceReleaseCmd(m.mgr, release.ID, event, m.operationGeneration), m.spinner.Tick)
+	return m, tea.Batch(advanceReleaseCmd(ctx, m.mgr, release.ID, event, m.operationGeneration), m.spinner.Tick)
 }
 
 // taskWorkflowBlocks explains why a gated task cannot close or merge in its current state.
@@ -2558,14 +2583,13 @@ func (m Model) fireTaskEvent(key string) (Model, tea.Cmd) {
 		if ev.Key != key || selected == nil {
 			continue
 		}
-		m.opRunning = true
-		m.operationGeneration++
+		ctx := m.startOperation("task "+selected.ID+" workflow", m.taskCancellationSafe())
 		label := ev.Name
 		if label == "" {
 			label = ev.Label
 		}
 		m.outputPanel.AppendLine("Task " + selected.ID + ": " + label + "...")
-		return m, tea.Batch(advanceTaskCmd(m.mgr, selected.ID, ev.Name, m.operationGeneration), m.spinner.Tick)
+		return m, tea.Batch(advanceTaskCmd(ctx, m.mgr, selected.ID, ev.Name, m.operationGeneration), m.spinner.Tick)
 	}
 	return m, nil
 }
@@ -2642,10 +2666,9 @@ func (m Model) startReleaseRetry() (Model, tea.Cmd) {
 		m.outputPanel.AppendLine("Release retry unavailable: release must be failed and recoverable.")
 		return m, nil
 	}
-	m.opRunning = true
-	m.operationGeneration++
+	ctx := m.startOperation("release "+release.ID+" retry", m.releaseCancellationSafe(*release, nil))
 	m.outputPanel.AppendLine("Retrying release " + release.ID + "...")
-	return m, tea.Batch(retryReleaseCmd(m.mgr, release.ID, m.operationGeneration), m.spinner.Tick)
+	return m, tea.Batch(retryReleaseCmd(ctx, m.mgr, release.ID, m.operationGeneration), m.spinner.Tick)
 }
 
 func releaseTaskMergeRetryable(status domain.ReleaseStatus) bool {

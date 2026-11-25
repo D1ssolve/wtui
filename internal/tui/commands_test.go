@@ -1129,7 +1129,7 @@ func TestRetryReleaseCmdReturnsDoneMsg(t *testing.T) {
 	expected := domain.Release{ID: "rel-1", Status: domain.ReleaseStatusPrepared}
 	mgr := &cmdManager{retryReleaseResult: expected}
 
-	done, ok := retryReleaseCmd(mgr, "rel-1", 13)().(ReleaseActionDoneMsg)
+	done, ok := retryReleaseCmd(t.Context(), mgr, "rel-1", 13)().(ReleaseActionDoneMsg)
 	if !ok {
 		t.Fatalf("message type = %T, want ReleaseActionDoneMsg", done)
 	}
@@ -1189,7 +1189,7 @@ func TestMergeServiceMRCmdPreservesTaskAndService(t *testing.T) {
 func TestAdvanceReleaseCmdStreamsStatusAndReturnsDone(t *testing.T) {
 	for _, tc := range []struct{ event, action string }{{"advance", "advance"}, {"", "check"}} {
 		mgr := &cmdManager{promoteResult: domain.Release{ID: "rel-1"}}
-		msg := advanceReleaseCmd(mgr, "rel-1", tc.event, 21)()
+		msg := advanceReleaseCmd(t.Context(), mgr, "rel-1", tc.event, 21)()
 		line, ok := msg.(OutputLineMsg)
 		if !ok || line.Line != "promoting" {
 			t.Fatalf("first message = %#v, want streamed output", msg)

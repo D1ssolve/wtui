@@ -12,6 +12,9 @@ func renderFooter(m Model) string {
 	if m.shellInput != nil {
 		return m.styles.Footer.Render("; " + m.shellInput.input + "█")
 	}
+	if hint := m.operationCancelHint(); hint != "" {
+		return m.styles.Footer.Render(hint)
+	}
 
 	hints := renderFooterHints(fitFooterHints(footerHints(m), m.width))
 	if m.opRunning {

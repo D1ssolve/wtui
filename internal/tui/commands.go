@@ -603,11 +603,11 @@ func mergeReleaseMRsCmd(mgr task.Manager, releaseID string, generation uint64) t
 }
 
 // advanceReleaseCmd fires a workflow event; an empty event re-checks the current wait condition.
-func advanceReleaseCmd(mgr task.Manager, releaseID, event string, generation uint64) tea.Cmd {
+func advanceReleaseCmd(parent context.Context, mgr task.Manager, releaseID, event string, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan ReleaseActionDoneMsg, 1)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 		defer cancel()
 		release, err := mgr.AdvanceRelease(ctx, releaseID, event, statusCh)
 		close(statusCh)
@@ -621,9 +621,9 @@ func advanceReleaseCmd(mgr task.Manager, releaseID, event string, generation uin
 	return readStatusOrDone(statusCh, doneCh)
 }
 
-func retryReleaseCmd(mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
+func retryReleaseCmd(parent context.Context, mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 		defer cancel()
 		release, err := mgr.RetryRelease(ctx, releaseID)
 		return ReleaseActionDoneMsg{Generation: generation, Action: "retry", Release: release, Err: err}
@@ -860,11 +860,11 @@ type TaskAdvanceDoneMsg struct {
 	Err        error
 }
 
-func advanceTaskCmd(mgr task.Manager, taskID, event string, generation uint64) tea.Cmd {
+func advanceTaskCmd(parent context.Context, mgr task.Manager, taskID, event string, generation uint64) tea.Cmd {
 	statusCh := make(chan string, 32)
 	doneCh := make(chan TaskAdvanceDoneMsg, 1)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
 		defer cancel()
 		err := mgr.AdvanceTask(ctx, taskID, event, statusCh)
 		close(statusCh)
