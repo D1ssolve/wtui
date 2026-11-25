@@ -106,14 +106,15 @@ func (c *Client) complete(ctx context.Context, instructions string, payload []by
 	environment := cleanEnvironment(os.Environ())
 	// Status must precede forced_login_method: forcing a mismatched method can
 	// clear saved credentials in Codex.
-	status := cliprocess.NewOutput(8192)
-	if err := cliprocess.Run(ctx, binary, dir, environment, nil, status, status, "login", "status"); err != nil {
+	// Historically os/exec's io.Copy used bytes.Buffer.ReadFrom, bypassing the Write cap.
+	var status bytes.Buffer
+	if err := cliprocess.Run(ctx, binary, dir, environment, nil, &status, &status, "login", "status"); err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("Codex authentication check cancelled: %w", ctx.Err())
 		}
 		return nil, authError()
 	}
-	if status.Truncated() || strings.TrimSpace(status.String()) != "Logged in using ChatGPT" {
+	if strings.TrimSpace(status.String()) != "Logged in using ChatGPT" {
 		return nil, authError()
 	}
 	schemaFile := filepath.Join(dir, "schema.json")
@@ -149,8 +150,8 @@ func (c *Client) complete(ctx context.Context, instructions string, payload []by
 	}
 	args = append(args, "-")
 	input := io.MultiReader(strings.NewReader(instructions), bytes.NewReader(payload))
-	diagnostic := cliprocess.NewOutput(64 * 1024)
-	if err := cliprocess.Run(ctx, binary, dir, environment, input, io.Discard, diagnostic, args...); err != nil {
+	var diagnostic bytes.Buffer // Preserve full stderr for the historical error classification.
+	if err := cliprocess.Run(ctx, binary, dir, environment, input, io.Discard, &diagnostic, args...); err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("Codex generation cancelled or timed out: %w", ctx.Err())
 		}

@@ -33,7 +33,7 @@ func TestClaude_StopsProcessGroupOnCancelOrTimeout(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer listener.Close()
-			t.Setenv("WTUI_CLAUDE_BLOCK", listener.Addr().String())
+			setFixture(t, "block", listener.Addr().String())
 			deadline := time.Now().Add(testTimeout)
 			if err := listener.SetDeadline(deadline); err != nil {
 				t.Fatal(err)

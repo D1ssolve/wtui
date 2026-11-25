@@ -41,7 +41,8 @@ func complete[T requestPayload](ctx context.Context, c *Client, instructions, sc
 			resultErr = errors.Join(resultErr, fmt.Errorf("%w: cannot remove private Claude Code workspace", ai.ErrUnavailable))
 		}
 	}()
-	env := childEnvironment(os.Environ(), dir)
+	env := append(childEnv(os.Environ(), runtime.GOOS),
+		"CLAUDE_CODE_SAFE_MODE=1", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1")
 	if err := checkSubscription(ctx, binary, dir, env); err != nil {
 		return nil, err
 	}
@@ -99,22 +100,38 @@ func checkSubscription(ctx context.Context, binary, dir string, env []string) er
 	return nil
 }
 
-func childEnvironment(inherited []string, dir string) []string {
-	env := make([]string, 0, len(inherited))
-	for _, entry := range inherited {
-		key, _, _ := strings.Cut(entry, "=")
-		key = strings.ToUpper(key)
-		if strings.Contains(key, "API_KEY") || strings.HasPrefix(key, "ANTHROPIC_") ||
-			strings.HasPrefix(key, "AWS_") || strings.HasPrefix(key, "AZURE_") ||
-			strings.HasPrefix(key, "GOOGLE_") || strings.HasPrefix(key, "CLOUDSDK_") ||
-			strings.HasPrefix(key, "OTEL_") || strings.HasPrefix(key, "CLAUDE_CODE_") ||
-			key == "CLAUDECODE" || key == "NODE_OPTIONS" || key == "PWD" {
+func childEnv(parent []string, goos string) []string {
+	env := make([]string, 0, len(parent))
+	for _, entry := range parent {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
 			continue
 		}
-		env = append(env, entry)
+		if goos == "windows" {
+			key = strings.ToUpper(key)
+			switch key {
+			case "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
+				"USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+				"PROGRAMFILES", "USERNAME", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE":
+				env = append(env, entry)
+				continue
+			}
+		}
+		switch key {
+		case "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TZ", "TMPDIR", "TERM",
+			"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
+			"NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS":
+			env = append(env, entry)
+		case "CLAUDE_CONFIG_DIR":
+			// https://code.claude.com/docs/en/claude-directory.md: every ~/.claude path moves, including .credentials.json.
+			env = append(env, entry)
+		default:
+			if strings.HasPrefix(key, "LC_") {
+				env = append(env, entry)
+			}
+		}
 	}
-	// Retain HOME and CLAUDE_CONFIG_DIR for the CLI's saved login; never open credential storage.
-	return append(env, "PWD="+dir, "CLAUDE_CODE_SAFE_MODE=1", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1")
+	return env
 }
 
 func cancelled(err error) error {

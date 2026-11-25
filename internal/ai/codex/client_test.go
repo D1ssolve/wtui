@@ -107,6 +107,24 @@ func TestGenerate_ReportsSanitizedProviderFailures(t *testing.T) {
 	}
 }
 
+func TestGenerate_AcceptsPaddedChatGPTStatus(t *testing.T) {
+	fakeCodex(t)
+	t.Setenv("WTUI_CODEX_AUTH", "padded")
+	draft, err := New("", 10*time.Second).Generate(t.Context(), request())
+	if err != nil || draft.Title != "Add search" {
+		t.Fatalf("padded status prevented generation: %v", err)
+	}
+}
+
+func TestGenerate_ClassifiesQuotaAfter64KiB(t *testing.T) {
+	fakeCodex(t)
+	t.Setenv("WTUI_CODEX_ERROR", "late-quota")
+	_, err := New("", 10*time.Second).Generate(t.Context(), request())
+	if !errors.Is(err, ai.ErrUsageLimit) {
+		t.Fatalf("late quota error = %v; want ErrUsageLimit", err)
+	}
+}
+
 func TestGenerate_RejectsInvalidOrOversizedOutput(t *testing.T) {
 	for _, result := range []string{`{"title":"private-secret"}`, strings.Replace(validDraft, `"api"`, `"unknown-private-secret"`, 1), strings.Repeat("x", 1024*1024+1)} {
 		t.Run(fmt.Sprint(len(result)), func(t *testing.T) {
@@ -201,6 +219,9 @@ func TestCodexProcess(t *testing.T) {
 		case "chatgpt":
 			fmt.Fprintln(os.Stderr, "Logged in using ChatGPT")
 			os.Exit(0)
+		case "padded":
+			fmt.Fprintln(os.Stderr, "Logged in using ChatGPT"+strings.Repeat(" ", 9000))
+			os.Exit(0)
 		case "api":
 			fmt.Fprintln(os.Stderr, "Logged in using an API key - private-secret")
 			os.Exit(0)
@@ -255,6 +276,9 @@ func TestCodexProcess(t *testing.T) {
 	// A large stream must be consumed without retaining or returning its content.
 	fmt.Fprint(os.Stdout, strings.Repeat("private-secret", 100000))
 	if diagnostic := os.Getenv("WTUI_CODEX_ERROR"); diagnostic != "" {
+		if diagnostic == "late-quota" {
+			diagnostic = strings.Repeat("x", 80000) + " quota"
+		}
 		fmt.Fprintln(os.Stderr, diagnostic)
 		os.Exit(1)
 	}
