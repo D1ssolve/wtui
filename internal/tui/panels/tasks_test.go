@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/paginator"
 	tea "github.com/charmbracelet/bubbletea"
@@ -266,6 +267,7 @@ func TestTasksPanel_KeyEnter_EmptyList_NoOp(t *testing.T) {
 
 func TestTasksPanel_KeyI_EmitsOpenInitDialogMsg(t *testing.T) {
 	p := NewTasksPanel(40, 20)
+	p.SetInitKey(key.NewBinding(key.WithKeys("i")))
 	p.SetFocused(true)
 
 	_, cmd := p.Update(sendKey("i"))
@@ -672,7 +674,7 @@ func TestTasksPanel_EmptyView_GuidesTaskCreation(t *testing.T) {
 			flow = makeFlow(gitflow.BranchTypeRelease)
 		}
 		p.SetFlow(flow)
-		p.SetCreateTaskKey("Z")
+		p.SetInitKey(key.NewBinding(key.WithKeys("Z")))
 		view := stripAnsi(p.View())
 		if !strings.Contains(view, "[Z]") || !strings.Contains(view, "No tasks yet.") {
 			t.Errorf("tree=%t empty view should guide task creation, got %q", tree, view)
@@ -687,7 +689,7 @@ func TestTasksPanel_EmptyView_ShowsMissingRepositories(t *testing.T) {
 			if tree {
 				p.SetFlow(makeFlow(gitflow.BranchTypeRelease))
 			}
-			p.SetCreateTaskKey("Z")
+			p.SetInitKey(key.NewBinding(key.WithKeys("Z")))
 			p.SetDiscovery("/work/a/long/repository/root/path", 0)
 			view := stripAnsi(p.View())
 			var plain strings.Builder
@@ -734,7 +736,7 @@ func TestTasksPanel_FilteredNoMatchesDoesNotShowFirstRunHint(t *testing.T) {
 			flow = makeFlow(gitflow.BranchTypeRelease)
 		}
 		p.SetFlow(flow)
-		p.SetCreateTaskKey("Z")
+		p.SetInitKey(key.NewBinding(key.WithKeys("Z")))
 		p.SetFocused(true)
 		if view := stripAnsi(p.View()); !strings.Contains(view, "[Z]") || !strings.Contains(view, "No tasks yet.") {
 			t.Errorf("tree=%t zero tasks should show first-run hint: %q", tree, view)
@@ -751,7 +753,7 @@ func TestTasksPanel_FilteredNoMatchesDoesNotShowFirstRunHint(t *testing.T) {
 
 func TestTasksPanel_EmptyView_RepositoryHintOnlyWhenNoneDiscovered(t *testing.T) {
 	p := NewTasksPanel(40, 12)
-	p.SetCreateTaskKey("Z")
+	p.SetInitKey(key.NewBinding(key.WithKeys("Z")))
 	p.SetDiscovery("/work/repos", 0)
 	if view := stripAnsi(p.View()); !strings.Contains(view, "/work/repos") {
 		t.Fatalf("zero repositories should show configured root: %q", view)
