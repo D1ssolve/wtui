@@ -348,31 +348,13 @@ func (m *manager) serviceForgeTarget(ctx context.Context, svc domain.Service) (f
 func (m *manager) taskWaitHolds(ctx context.Context, tf *taskFlow, st *gitflow.State) (bool, error) {
 	switch st.Wait {
 	case gitflow.WaitReviewMerged:
-		plans, _, _, err := m.workflowPlans(tf.services)
-		if err != nil {
-			return false, err
-		}
-		states, err := m.workflowMergeStates(ctx, plans)
-		if err != nil {
-			return false, err
-		}
-		for i, state := range states {
-			plan := plans[i]
-			if plan.rule.CloseStrategy != gitflow.CloseStrategyReviewRequest || len(state.targets) != 1 || state.merged[0] {
-				continue
-			}
-			tip, err := m.git.ResolveRef(ctx, plan.svc.RepoPath, state.targets[0])
-			if err != nil {
+		// Manual re-check may fetch objects; tracking refs are not proof.
+		for _, svc := range tf.services {
+			if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 				return false, err
 			}
-			target := remoteReviewTarget{branch: plan.rule.ReviewTargets[0], sha: tip}
-			delivered, err := m.taskReviewAtTarget(ctx, plan.svc, target)
-			if err != nil {
-				return false, err
-			}
-			states[i].merged[0] = delivered
 		}
-		return workflowAllMerged(states), nil
+		return m.taskReviewWaitHolds(ctx, tf.services)
 	case gitflow.WaitCIGreen:
 		green, _, err := m.taskCIGreen(ctx, tf, st.WaitOn)
 		return green, err

@@ -154,42 +154,57 @@ func (m *manager) ObserveTaskWait(ctx context.Context, selected domain.Task, sta
 		}
 		return WaitObservation{}, err
 	case gitflow.WaitReviewMerged:
-		plans, _, _, err := m.workflowPlans(tf.services)
-		if err != nil {
-			return WaitObservation{}, err
+		holds, err := m.taskReviewWaitHolds(ctx, tf.services)
+		if holds {
+			return WaitObservation{Ready: true, Key: waitRecheckKey(st, "")}, nil
 		}
-		for _, plan := range plans {
-			// Task review waits are only configured for review strategies.
-			if plan.rule.CloseStrategy != gitflow.CloseStrategyReviewRequest || len(plan.rule.ReviewTargets) == 0 {
-				return WaitObservation{}, nil
-			}
-			target := plan.rule.ReviewTargets[0]
-			tip, err := m.git.RemoteRefSHA(ctx, plan.svc.RepoPath, "refs/heads/"+target)
-			if err != nil {
-				return WaitObservation{}, err
-			}
-			if tip == "" {
-				return WaitObservation{}, nil
-			}
-			// An uncached target cannot be checked for ancestry without fetching.
-			merged, ancestryErr := m.git.IsAncestor(ctx, plan.svc.RepoPath, plan.svc.Branch, tip)
-			if merged && ancestryErr == nil {
-				continue
-			}
-			confirmed, err := m.taskReviewAtTarget(ctx, plan.svc, remoteReviewTarget{branch: target, sha: tip})
-			if err != nil || !confirmed {
-				return WaitObservation{}, err
-			}
-		}
-		return WaitObservation{Ready: true, Key: waitRecheckKey(st, "")}, nil
+		return WaitObservation{}, err
 	default:
 		return WaitObservation{}, errWaitStateChanged
 	}
 }
 
-type remoteReviewTarget struct{ branch, sha string }
+type taskReviewRefs struct{ sourceSHA, targetBranch, targetSHA string }
 
-func (m *manager) taskReviewAtTarget(ctx context.Context, svc domain.Service, target remoteReviewTarget) (bool, error) {
+// Both observation and manual re-check prove delivery against exact live refs.
+func (m *manager) taskReviewWaitHolds(ctx context.Context, services []domain.Service) (bool, error) {
+	plans, _, _, err := m.workflowPlans(services)
+	if err != nil {
+		return false, err
+	}
+	for _, plan := range plans {
+		if plan.rule.CloseStrategy != gitflow.CloseStrategyReviewRequest || len(plan.rule.ReviewTargets) == 0 {
+			return false, nil
+		}
+		source := "refs/heads/" + plan.svc.Branch
+		local, err := m.git.ResolveRef(ctx, plan.svc.RepoPath, source)
+		if err != nil {
+			return false, err
+		}
+		published, err := m.git.RemoteRefSHA(ctx, plan.svc.RepoPath, source)
+		if err != nil || published == "" || published != local {
+			return false, err
+		}
+		target := plan.rule.ReviewTargets[0]
+		tip, err := m.git.RemoteRefSHA(ctx, plan.svc.RepoPath, "refs/heads/"+target)
+		if err != nil || tip == "" {
+			return false, err
+		}
+		// An uncached target or a squash may not prove source ancestry.
+		merged, ancestryErr := m.git.IsAncestor(ctx, plan.svc.RepoPath, published, tip)
+		if merged && ancestryErr == nil {
+			continue
+		}
+		refs := taskReviewRefs{sourceSHA: published, targetBranch: target, targetSHA: tip}
+		confirmed, err := m.taskReviewAtTarget(ctx, plan.svc, refs)
+		if err != nil || !confirmed {
+			return false, err
+		}
+	}
+	return len(plans) > 0, nil
+}
+
+func (m *manager) taskReviewAtTarget(ctx context.Context, svc domain.Service, refs taskReviewRefs) (bool, error) {
 	client, repo, err := m.serviceForgeTarget(ctx, svc)
 	if errors.Is(err, forge.ErrForgeUnavailable) {
 		return false, nil
@@ -205,7 +220,7 @@ func (m *manager) taskReviewAtTarget(ctx context.Context, svc domain.Service, ta
 	if err != nil {
 		return false, err
 	}
-	active, _ := matchTargetMRs(rows, svc.Branch, target.branch)
+	active, _ := matchTargetMRs(rows, svc.Branch, refs.targetBranch)
 	if len(active) != 1 || active[0].Number == 0 || !mergedMRState(active[0].State) {
 		return false, nil
 	}
@@ -213,14 +228,10 @@ func (m *manager) taskReviewAtTarget(ctx context.Context, svc domain.Service, ta
 	if err != nil {
 		return false, err
 	}
-	head, err := m.git.ResolveRef(ctx, svc.RepoPath, svc.Branch)
-	if err != nil {
-		return false, err
-	}
 	// Without source ancestry, only accept a review whose exact merged SHA
 	// is the live target tip. No local fetch is required to establish equality.
-	return head != "" && mr.Number == active[0].Number && mr.MergedSHA == target.sha &&
-		validateMergedReviewMRIdentity(mr, svc, target.branch, head) == nil, nil
+	return mr.Number == active[0].Number && mr.MergedSHA == refs.targetSHA &&
+		validateMergedReviewMRIdentity(mr, svc, refs.targetBranch, refs.sourceSHA) == nil, nil
 }
 
 type numberedReview struct {
