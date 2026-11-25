@@ -3,8 +3,10 @@ package task
 import (
 	"context"
 	"errors"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -146,6 +148,14 @@ func TestForgeCreateMissingMRs_CreatesOnlyMissing(t *testing.T) {
 		},
 	}
 	mgr := newForgeTaskTestManager(t, client)
+	flow, err := gitflow.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := flow.BranchTypes[gitflow.BranchTypeFeature]
+	rule.MR = gitflow.MRPolicy{Labels: []string{"m-path"}, Assignees: []string{"z"}}
+	flow.BranchTypes[gitflow.BranchTypeFeature] = rule
+	mgr.(*manager).flow = flow
 
 	result, err := mgr.ForgeCreateMissingMRs(t.Context(), "IN-FORGE-MRS", "Shared title", false)
 	if err != nil {
@@ -154,7 +164,7 @@ func TestForgeCreateMissingMRs_CreatesOnlyMissing(t *testing.T) {
 	if len(created) != 1 || !strings.HasSuffix(created[0].SourceBranch, "/worker") {
 		t.Fatalf("created = %#v, want only worker", created)
 	}
-	if created[0].Title != "Shared title" || created[0].TargetBranch != "develop" {
+	if created[0].Title != "Shared title" || created[0].TargetBranch != "develop" || !slices.Equal(created[0].Labels, []string{"m-path"}) || !slices.Equal(created[0].Assignees, []string{"z"}) {
 		t.Fatalf("create params = %#v", created[0])
 	}
 	if len(result.Services) != 2 || result.Services[0].ServiceName != "api" || result.Services[0].Status != "existing" || result.Services[1].ServiceName != "worker" || result.Services[1].Status != "created" {

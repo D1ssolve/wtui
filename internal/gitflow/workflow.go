@@ -169,6 +169,9 @@ func mergeWorkflow(base, user *config.WorkflowConfig) *config.WorkflowConfig {
 		if user.Release.DependsOn != nil {
 			release.DependsOn = user.Release.DependsOn
 		}
+		if user.Release.MR != nil {
+			release.MR = user.Release.MR
+		}
 		merged.Release = &release
 	}
 	return &merged
@@ -388,7 +391,49 @@ func (c *compiler) taskType(path string, tt *config.TaskTypeConfig, isDefault bo
 			return BranchTypeRule{}, err
 		}
 	}
+	if rule.MR, err = mrPolicy(path+".mr", tt.MR); err != nil {
+		return BranchTypeRule{}, err
+	}
+	if reason := sourceNeededAfterReview(rule); rule.MR.RemoveSourceBranch && reason != "" {
+		return BranchTypeRule{}, fmt.Errorf("%s.mr.remove_source_branch: %s", path, reason)
+	}
 	return rule, nil
+}
+
+func mrPolicy(path string, cfg *config.MRConfig) (MRPolicy, error) {
+	if cfg == nil {
+		return MRPolicy{}, nil
+	}
+	policy := MRPolicy{Draft: cfg.Draft, RemoveSourceBranch: cfg.RemoveSourceBranch}
+	for _, list := range []struct {
+		name string
+		in   []string
+		out  *[]string
+	}{{"labels", cfg.Labels, &policy.Labels}, {"reviewers", cfg.Reviewers, &policy.Reviewers}, {"assignees", cfg.Assignees, &policy.Assignees}} {
+		for i, value := range list.in {
+			if strings.TrimSpace(value) == "" {
+				return MRPolicy{}, fmt.Errorf("%s.%s[%d]: must not be empty", path, list.name, i)
+			}
+		}
+		*list.out = slices.Clone(list.in)
+	}
+	return policy, nil
+}
+
+// sourceNeededAfterReview names why wtui still reads the remote source branch after the
+// review merges; a forge-side branch removal would then block close verification.
+func sourceNeededAfterReview(rule BranchTypeRule) string {
+	switch {
+	case rule.Shared:
+		return "shared branches are long-lived team branches and are never removed"
+	case rule.CloseStrategy != CloseStrategyReviewRequest:
+		return "needs a review close step; wtui merges or closes this type itself"
+	case len(rule.ReviewTargets) > 1:
+		return "the source branch is reviewed into several targets and must survive until every MR merges"
+	case rule.TagOnClose || rule.CherryPickToOpenReleases || rule.TriggerPipelineOnClose || rule.Machine != nil:
+		return "wtui verifies the merged review against the remote source branch before tag, cherry_pick, pipeline or machine steps"
+	}
+	return ""
 }
 
 // ponytail: close execution reads the rule fields filled here, so only
@@ -481,6 +526,13 @@ func (c *compiler) release(cfg *config.ReleaseFlowConfig) (*ReleaseFlow, error) 
 	if err := validateDependencies(cfg.DependsOn); err != nil {
 		return nil, err
 	}
+	var err error
+	if release.MR, err = mrPolicy("workflow.release.mr", cfg.MR); err != nil {
+		return nil, err
+	}
+	if release.MR.RemoveSourceBranch {
+		return nil, fmt.Errorf("workflow.release.mr.remove_source_branch: the release branch is shared; wtui verifies the accepted review against it before tagging and removes it in release cleanup")
+	}
 	release.DependsOn = cfg.DependsOn
 	if cfg.Machine != nil {
 		if cfg.Steps != nil {
@@ -562,6 +614,7 @@ func (c *compiler) legacyReleaseRule() BranchTypeRule {
 		RequiresClean: true,
 		TagSource:     c.flow.ProductionBranch,
 		Shared:        true,
+		MR:            c.flow.Release.MR,
 	}
 	for _, step := range c.flow.Release.Steps {
 		switch step.Kind {

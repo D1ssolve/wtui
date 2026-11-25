@@ -802,6 +802,10 @@ func hotfixManager(t *testing.T) (*manager, *mockGitClient, *hotfixForge) {
 
 func TestHotfixClose_MasterMerged_CreatesOnlyDevelopWithoutTag(t *testing.T) {
 	m, g, f := hotfixManager(t)
+	// The compiler refuses remove_source_branch here; set it anyway to prove the caller keeps the source.
+	rule := m.flow.BranchTypes[gitflow.BranchTypeHotfix]
+	rule.MR = gitflow.MRPolicy{Labels: []string{"hotfix"}, RemoveSourceBranch: true}
+	m.flow.BranchTypes[gitflow.BranchTypeHotfix] = rule
 	plan, err := m.PlanCloseTask(t.Context(), "H")
 	if err != nil {
 		t.Fatal(err)
@@ -815,6 +819,9 @@ func TestHotfixClose_MasterMerged_CreatesOnlyDevelopWithoutTag(t *testing.T) {
 	}
 	if len(f.created) != 1 || f.created[0] != "develop" {
 		t.Fatalf("created targets: %v", f.created)
+	}
+	if p := f.createdParams[0]; p.RemoveSource || !slices.Equal(p.Labels, []string{"hotfix"}) {
+		t.Fatalf("hotfix MR params = %+v, want policy labels and source kept", p)
 	}
 	if g.createTagCalls != 0 {
 		t.Fatal("tag created before merge")

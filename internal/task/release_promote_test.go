@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -55,6 +57,12 @@ func (*promoteForgeClient) ListIssues(context.Context, forge.ListIssuesParams) (
 
 func TestPromoteRelease_CreatesProductionMRsAndPersists(t *testing.T) {
 	m, gitMock, client := newPromoteTestManager(t)
+	preset, err := gitflow.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.flow.Release = preset.Release
+	m.flow.Release.MR = gitflow.MRPolicy{Draft: true, Reviewers: []string{"qa"}}
 	release := writePromoteRelease(t, m, domain.ReleaseStatusPrepared,
 		promoteService("api", "/repos/api", "release/1.2.3"),
 		promoteService("worker", "/repos/worker", "release/1.2.3"),
@@ -75,7 +83,7 @@ func TestPromoteRelease_CreatesProductionMRsAndPersists(t *testing.T) {
 			t.Fatalf("service[%d].ProductionMR repository identity = %q/%q, want gitlab.com/group/repo/gitlab.com", i, svc.ProductionMR.Repo, svc.ProductionMR.ProviderHost)
 		}
 		params := client.creates[i]
-		if params.SourceBranch != svc.ReleaseBranch || params.TargetBranch != "master" || params.Repo != "gitlab.com/group/repo" {
+		if params.SourceBranch != svc.ReleaseBranch || params.TargetBranch != "master" || params.Repo != "gitlab.com/group/repo" || !params.Draft || !slices.Equal(params.Reviewers, []string{"qa"}) || params.RemoveSource {
 			t.Fatalf("create[%d] = %#v", i, params)
 		}
 	}

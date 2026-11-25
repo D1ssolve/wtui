@@ -29,6 +29,8 @@ type ServiceClosePlan struct {
 	ForgePlan      *ReviewRequestPlan
 	PipelinePlan   *PipelinePlan
 	CherryPick     bool
+	// MR is the task type's policy for the review MRs this close opens.
+	MR gitflow.MRPolicy
 }
 
 type TagPlan struct {

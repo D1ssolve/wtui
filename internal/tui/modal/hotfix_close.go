@@ -222,6 +222,9 @@ func (d *HotfixCloseModal) preview() string {
 		for _, r := range svc.Reviews {
 			fmt.Fprintf(&b, "%s | %s | %s | %s\n", svc.ServiceName, r.Target, r.State, r.URL)
 		}
+		if policy := svc.MR.Describe(); policy != "" {
+			fmt.Fprintf(&b, "  New MRs: %s\n", policy)
+		}
 		if svc.TagPlan != nil {
 			tag := svc.TagPlan.TagName
 			for _, f := range d.versions {

@@ -1,5 +1,7 @@
 package gitflow
 
+import "strings"
+
 type BranchType string
 
 const (
@@ -59,6 +61,37 @@ type ReleaseFlow struct {
 	// FromMachine marks a release described by `release.machine` rather than `release.steps`.
 	FromMachine bool
 	DependsOn   map[string][]string
+	// MR is applied to the production review MRs a release opens.
+	MR MRPolicy
+}
+
+// MRPolicy holds the optional defaults for every MR wtui opens for a task type or release.
+type MRPolicy struct {
+	Draft              bool     `json:"draft,omitempty"`
+	Labels             []string `json:"labels,omitempty"`
+	Reviewers          []string `json:"reviewers,omitempty"`
+	Assignees          []string `json:"assignees,omitempty"`
+	RemoveSourceBranch bool     `json:"remove_source_branch,omitempty"`
+}
+
+// Describe is the one-line policy text used by `wtui flow` and close previews; empty for no policy.
+func (p MRPolicy) Describe() string {
+	var parts []string
+	if p.Draft {
+		parts = append(parts, "draft")
+	}
+	for _, list := range []struct {
+		name   string
+		values []string
+	}{{"labels", p.Labels}, {"reviewers", p.Reviewers}, {"assignees", p.Assignees}} {
+		if len(list.values) > 0 {
+			parts = append(parts, list.name+" "+strings.Join(list.values, ", "))
+		}
+	}
+	if p.RemoveSourceBranch {
+		parts = append(parts, "remove source branch")
+	}
+	return strings.Join(parts, "; ")
 }
 
 const (
@@ -116,6 +149,7 @@ type BranchTypeRule struct {
 	// CherryPickToOpenReleases picks the accepted review merge into every open release branch.
 	CherryPickToOpenReleases bool
 	Close                    []Step
+	MR                       MRPolicy
 	// Machine is the optional task lifecycle compiled from task_types.<name>.machine.
 	Machine *Machine `json:"-"`
 }
