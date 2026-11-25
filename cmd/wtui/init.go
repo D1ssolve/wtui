@@ -30,6 +30,9 @@ const maxAnswer = 64 * 1024
 
 const promptAttempts = 3
 
+// clock names backups; tests pin it to force same-second collisions.
+var clock = time.Now
+
 // draftFunc turns a one-line description into a validated `workflow:` document (draftWorkflow output).
 type draftFunc func(ctx context.Context, description string) (string, error)
 
@@ -65,9 +68,7 @@ func initCommand(c cliArgs, stdin io.Reader, stdout, stderr io.Writer, draft dra
 	if err != nil {
 		return fail(err)
 	}
-	if _, err := os.Lstat(target); err == nil && !c.force {
-		return fail(fmt.Errorf("%s already exists; use --force to replace it", target))
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := checkTarget(target, c.force); err != nil {
 		return fail(err)
 	}
 
@@ -288,7 +289,7 @@ func renderConfig(root, tasksRoot, editor string, workflow *yaml.Node) ([]byte, 
 }
 
 // writeConfig validates the exact bytes through the real loader from a temp file next to the
-// target, then renames it into place; with force an existing file is backed up first.
+// target, then publishes that same file.
 func writeConfig(target string, data []byte, force bool, out io.Writer) error {
 	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -312,19 +313,75 @@ func writeConfig(target string, data []byte, force bool, out io.Writer) error {
 	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
 		return err
 	}
-	if force {
-		old, err := os.ReadFile(target)
-		if err == nil {
-			backup := target + ".bak-" + time.Now().Format("20060102-150405")
-			if err := os.WriteFile(backup, old, 0o600); err != nil {
-				return fmt.Errorf("back up %s: %w", target, err)
-			}
-			fmt.Fprintf(out, "Backed up the previous config to %s\n", backup)
-		} else if !errors.Is(err, os.ErrNotExist) {
+	return publish(tmp.Name(), target, force, out)
+}
+
+const publishAttempts = 32
+
+// publish hard-links the validated file to target, which fails if target exists, so a config
+// another process wrote meanwhile is never clobbered. With force, each existing generation is
+// first renamed into its own exclusively reserved backup: the rename moves exactly the bytes being
+// replaced, so concurrent writers lose none of them.
+// ponytail: needs hard-link support in the config directory (not FAT/exFAT).
+func publish(tmp, target string, force bool, out io.Writer) error {
+	for range publishAttempts {
+		err := os.Link(tmp, target)
+		if !errors.Is(err, os.ErrExist) {
 			return err
 		}
+		if err := checkTarget(target, force); err != nil {
+			return err
+		}
+		backup, err := reserveBackup(target)
+		if err != nil {
+			return fmt.Errorf("back up %s: %w", target, err)
+		}
+		if err := os.Rename(target, backup); err != nil {
+			os.Remove(backup)
+			if errors.Is(err, os.ErrNotExist) {
+				continue // another writer moved it first; try to publish again
+			}
+			return fmt.Errorf("back up %s: %w", target, err)
+		}
+		fmt.Fprintf(out, "Backed up the previous config to %s\n", backup)
 	}
-	return os.Rename(tmp.Name(), target)
+	return fmt.Errorf("%s keeps being replaced by another wtui init; nothing was written, try again", target)
+}
+
+// checkTarget refuses links and non-regular files whatever force says, and existing files without force.
+func checkTarget(target string, force bool) error {
+	info, err := os.Lstat(target)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case info.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("%s is a symbolic link; wtui init does not replace links: edit the file it points to, or remove the link and run init again", target)
+	case !info.Mode().IsRegular():
+		return fmt.Errorf("%s exists and is not a regular file; move it away and run init again", target)
+	case !force:
+		return fmt.Errorf("%s already exists; use --force to replace it", target)
+	}
+	return nil
+}
+
+// reserveBackup creates an empty, never-reused backup name; a same-second name gets a -N suffix.
+func reserveBackup(target string) (string, error) {
+	base := target + ".bak-" + clock().Format("20060102-150405")
+	for n := 1; ; n++ {
+		name := base
+		if n > 1 {
+			name = fmt.Sprintf("%s-%d", base, n)
+		}
+		f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			return name, f.Close()
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return "", err
+		}
+	}
 }
 
 func validateConfigFile(path string) error {

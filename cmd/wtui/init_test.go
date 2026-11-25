@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/gitflow"
@@ -29,10 +33,51 @@ func newInitEnv(t *testing.T) initEnv {
 }
 
 func runInit(c cliArgs, input string, draft draftFunc) (int, string, string) {
+	return runInitReader(c, strings.NewReader(input), draft)
+}
+
+func runInitReader(c cliArgs, stdin io.Reader, draft draftFunc) (int, string, string) {
 	c.init = true
 	var stdout, stderr bytes.Buffer
-	code := initCommand(c, strings.NewReader(input), &stdout, &stderr, draft)
+	code := initCommand(c, stdin, &stdout, &stderr, draft)
 	return code, stdout.String(), stderr.String()
+}
+
+// beforeRead runs hook once, at the first prompt, then serves the scripted answers.
+type beforeRead struct {
+	hook func()
+	r    io.Reader
+}
+
+func (b *beforeRead) Read(p []byte) (int, error) {
+	if b.hook != nil {
+		b.hook()
+		b.hook = nil
+	}
+	return b.r.Read(p)
+}
+
+type unreadable struct{ t *testing.T }
+
+func (u unreadable) Read([]byte) (int, error) {
+	u.t.Error("--yes read stdin")
+	return 0, io.EOF
+}
+
+func assertNoTemps(t *testing.T, dir string) {
+	t.Helper()
+	if temps, _ := filepath.Glob(filepath.Join(dir, ".wtui-init-*")); len(temps) != 0 {
+		t.Fatalf("temp files left: %v", temps)
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func noDraft(context.Context, string) (string, error) {
@@ -62,7 +107,10 @@ func loadWritten(t *testing.T, path string) (*config.Config, string) {
 
 func assertNothingWritten(t *testing.T, target string) {
 	t.Helper()
-	entries, _ := os.ReadDir(filepath.Dir(target))
+	entries, err := os.ReadDir(filepath.Dir(target))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
 	if len(entries) != 0 {
 		t.Fatalf("expected no files in %s, found %v", filepath.Dir(target), entries)
 	}
@@ -219,12 +267,9 @@ func TestInit_YesRoundTripsSpecialCharacters(t *testing.T) {
 	}
 	target := filepath.Join(env.root, "conf dir", "c.yaml")
 	editor := `code --wait # "x": y`
-	code, out, errOut := runInit(cliArgs{yes: true, config: target, root: root, tasksRoot: "~/tasks: here", editor: editor, preset: "trunk-based"}, "", noDraft)
+	code, _, errOut := runInitReader(cliArgs{yes: true, config: target, root: root, tasksRoot: "~/tasks: here", editor: editor, preset: "trunk-based"}, unreadable{t}, noDraft)
 	if code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errOut)
-	}
-	if strings.Contains(out, "[") {
-		t.Fatalf("--yes prompted: %q", out)
 	}
 	raw, describe := loadWritten(t, target)
 	home, _ := os.UserHomeDir()
@@ -233,13 +278,168 @@ func TestInit_YesRoundTripsSpecialCharacters(t *testing.T) {
 	}
 }
 
-func TestInit_YesRejectsMissingRoot(t *testing.T) {
+func TestInit_YesRejectsRootThatIsNotADirectory(t *testing.T) {
 	env := newInitEnv(t)
-	code, _, errOut := runInit(cliArgs{yes: true, root: "/nonexistent/wtui-root"}, "", noDraft)
-	if code != 2 || !strings.Contains(errOut, "--root: /nonexistent/wtui-root is not an existing directory") || !strings.Contains(errOut, "usage:") {
+	file := filepath.Join(env.root, "file.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{"/nonexistent/wtui-root", file} {
+		code, _, errOut := runInitReader(cliArgs{yes: true, root: root}, unreadable{t}, noDraft)
+		if code != 2 || !strings.Contains(errOut, "--root: "+root+" is not an existing directory") || !strings.Contains(errOut, "usage:") {
+			t.Fatalf("root %s: code %d, stderr %q", root, code, errOut)
+		}
+		assertNothingWritten(t, env.target)
+	}
+}
+
+func TestInit_InteractiveReasksWhenRootIsAFile(t *testing.T) {
+	env := newInitEnv(t)
+	file := filepath.Join(env.root, "file.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errOut := runInit(cliArgs{}, file+"\n"+env.root+"\n\n\n\n", noDraft); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errOut)
 	}
-	assertNothingWritten(t, env.target)
+	if raw, _ := loadWritten(t, env.target); raw.RootDir != env.root {
+		t.Fatalf("root_dir = %q, want %q", raw.RootDir, env.root)
+	}
+}
+
+func TestInit_DoesNotClobberConfigWrittenDuringPrompts(t *testing.T) {
+	env := newInitEnv(t)
+	var winner string
+	stdin := &beforeRead{r: strings.NewReader(env.root + "\n\nlate-writer\n1\n"), hook: func() {
+		if code, _, errOut := runInit(cliArgs{yes: true, root: env.root, editor: "winner"}, "", noDraft); code != 0 {
+			t.Fatalf("competing init: code %d, stderr %q", code, errOut)
+		}
+		winner = readFile(t, env.target)
+	}}
+	code, _, errOut := runInitReader(cliArgs{}, stdin, noDraft)
+	if code != 1 || !strings.Contains(errOut, env.target+" already exists; use --force to replace it") {
+		t.Fatalf("code %d, stderr %q", code, errOut)
+	}
+	if got := readFile(t, env.target); got != winner || !strings.Contains(got, "editor: winner") {
+		t.Fatalf("target = %q, want the competing init's %q", got, winner)
+	}
+	assertNoTemps(t, filepath.Dir(env.target))
+}
+
+func TestInit_SuccessiveForcesKeepEveryGeneration(t *testing.T) {
+	env := newInitEnv(t)
+	fixed := time.Date(2026, 11, 25, 12, 0, 0, 0, time.Local)
+	clock = func() time.Time { return fixed }
+	t.Cleanup(func() { clock = time.Now })
+	if err := os.MkdirAll(filepath.Dir(env.target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(env.target, []byte("editor: OLD\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, editor := range []string{"A", "B"} {
+		if code, _, errOut := runInit(cliArgs{yes: true, force: true, root: env.root, editor: editor}, "", noDraft); code != 0 {
+			t.Fatalf("force %s: code %d, stderr %q", editor, code, errOut)
+		}
+	}
+	backups, _ := filepath.Glob(env.target + ".bak-*")
+	var kept []string
+	for _, b := range backups {
+		kept = append(kept, readFile(t, b))
+	}
+	if len(kept) != 2 || kept[0] != "editor: OLD\n" || !strings.Contains(kept[1], "editor: A\n") {
+		t.Fatalf("backups %v hold %q, want OLD then A", backups, kept)
+	}
+	if !strings.Contains(readFile(t, env.target), "editor: B\n") {
+		t.Fatal("target is not the last forced write")
+	}
+}
+
+func TestInit_ConcurrentForcesLoseNoGeneration(t *testing.T) {
+	env := newInitEnv(t)
+	if err := os.MkdirAll(filepath.Dir(env.target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(env.target, []byte("editor: OLD\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const writers = 8
+	var wg sync.WaitGroup
+	errs := make([]string, writers)
+	for i := range writers {
+		wg.Go(func() {
+			if code, _, errOut := runInit(cliArgs{yes: true, force: true, root: env.root, editor: fmt.Sprintf("w%d", i)}, "", noDraft); code != 0 {
+				errs[i] = errOut
+			}
+		})
+	}
+	wg.Wait()
+	for i, e := range errs {
+		if e != "" {
+			t.Fatalf("writer %d failed: %s", i, e)
+		}
+	}
+	files, _ := filepath.Glob(env.target + "*")
+	seen := map[string]int{}
+	for _, f := range files {
+		content := readFile(t, f)
+		key := "OLD"
+		if _, after, ok := strings.Cut(content, "editor: "); ok && !strings.HasPrefix(after, "OLD") {
+			key, _, _ = strings.Cut(after, "\n")
+		}
+		seen[key]++
+	}
+	if len(files) != writers+1 || seen["OLD"] != 1 {
+		t.Fatalf("files %v, generations %v", files, seen)
+	}
+	for i := range writers {
+		if seen[fmt.Sprintf("w%d", i)] != 1 {
+			t.Fatalf("generation w%d kept %d times: %v", i, seen[fmt.Sprintf("w%d", i)], seen)
+		}
+	}
+	assertNoTemps(t, filepath.Dir(env.target))
+}
+
+func TestInit_RefusesSymlinkTargetsWithoutTouchingThem(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		dangling bool
+		force    bool
+	}{{"dangling", true, false}, {"dangling force", true, true}, {"live", false, false}, {"live force", false, true}} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newInitEnv(t)
+			dir := filepath.Dir(env.target)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if !tt.dangling {
+				if err := os.WriteFile(filepath.Join(dir, "real.yaml"), []byte("editor: real\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink("real.yaml", env.target); err != nil {
+				t.Skip("symlinks unavailable:", err)
+			}
+			code, _, errOut := runInit(cliArgs{yes: true, force: tt.force, root: env.root}, "", noDraft)
+			if code != 1 || !strings.Contains(errOut, env.target+" is a symbolic link") {
+				t.Fatalf("code %d, stderr %q", code, errOut)
+			}
+			if link, err := os.Readlink(env.target); err != nil || link != "real.yaml" {
+				t.Fatalf("link = %q, %v", link, err)
+			}
+			entries, _ := os.ReadDir(dir)
+			want := 1
+			if !tt.dangling {
+				want = 2
+				if got := readFile(t, filepath.Join(dir, "real.yaml")); got != "editor: real\n" {
+					t.Fatalf("referent = %q", got)
+				}
+			}
+			if len(entries) != want {
+				t.Fatalf("dir entries = %v", entries)
+			}
+		})
+	}
 }
 
 func TestRun_InitYesRoutesToInit(t *testing.T) {
