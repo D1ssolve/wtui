@@ -44,10 +44,11 @@ func BuildDependencies(cfg *config.Config, logger *slog.Logger) (Dependencies, e
 	forgeClients := buildForgeClients(cfg, glabAvailable, ghAvailable)
 	_, lazygitErr := exec.LookPath("lazygit")
 
-	manager := buildManager(cfg, logger, resolvedFlow, forgeClients)
+	gitClient := git.NewRemoteCommandClient(logger, cfg.ServiceRemote())
+	manager := buildManager(cfg, logger, resolvedFlow, forgeClients, gitClient)
 	return Dependencies{
 		Manager:           manager,
-		MetadataGenerator: task.NewMetadataGenerator(manager, git.NewCommandClient(logger), provider, resolvedFlow),
+		MetadataGenerator: task.NewMetadataGenerator(manager, gitClient, provider, resolvedFlow),
 		Assistant:         provider,
 		ResolvedFlow:      resolvedFlow,
 		LazygitAvailable:  lazygitErr == nil,
@@ -61,8 +62,8 @@ func buildManager(
 	logger *slog.Logger,
 	resolvedFlow *gitflow.ResolvedGitFlow,
 	forgeClients map[forge.ForgeProvider]forge.ForgeClient,
+	gitClient git.Client,
 ) task.Manager {
-	gitClient := git.NewCommandClient(logger)
 	disc := discovery.NewCached(discovery.New(cfg, gitClient, logger))
 	dotnetClient := dotnet.NewCommandClient(logger)
 	slnMgr := sln.NewManager(dotnetClient, logger)

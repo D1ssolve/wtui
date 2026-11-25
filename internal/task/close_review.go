@@ -28,7 +28,7 @@ const (
 // sourceBranch→target using the forge MR history and classifies the close.
 // Post-actions may only follow the verified state: a created or open MR means
 // the service waits, a merged MR is re-validated against the current source
-// head and fresh origin/<target> containment before its merge SHA is
+// head and fresh <remote>/<target> containment before its merge SHA is
 // accepted. A merged MR is never recreated.
 func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, target, repo string, client forge.ForgeClient) (string, string, error) {
 	history, ok := client.(forge.HistoryClient)

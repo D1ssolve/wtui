@@ -98,7 +98,7 @@ func (m *manager) executeAcceptedPrepareService(ctx context.Context, release *do
 		if err := m.checkAcceptedIntegration(ctx, svc); err != nil {
 			return err
 		}
-		if err := m.checkAcceptedReleaseRef(ctx, svc, "origin/"+svc.ReleaseBranch); err != nil {
+		if err := m.checkAcceptedReleaseRef(ctx, svc, m.cfg.ServiceRemote().Tracking(svc.ReleaseBranch)); err != nil {
 			return err
 		}
 		svc.PushedReleaseBranch = true
@@ -128,7 +128,7 @@ func (m *manager) checkAcceptedIntegration(ctx context.Context, svc *domain.Rele
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 		return err
 	}
-	return m.checkAcceptedReleaseRef(ctx, svc, "origin/"+svc.IntegrationBranch)
+	return m.checkAcceptedReleaseRef(ctx, svc, m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch))
 }
 
 func (m *manager) checkAcceptedReleaseRef(ctx context.Context, svc *domain.ReleaseService, ref string) error {

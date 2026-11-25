@@ -74,13 +74,13 @@ func TestReleaseCleanupPrimitives_Integration(t *testing.T) {
 	if err := client.DeleteBranchIfUnchanged(t.Context(), repo, "feature/delete", strings.Repeat("f", 40)); err == nil {
 		t.Fatal("changed local tip deleted")
 	}
-	if err := client.DeleteRemoteBranchIfUnchanged(t.Context(), repo, "feature/delete", strings.Repeat("f", 40)); err == nil {
+	if err := client.DeleteRemoteRefIfUnchanged(t.Context(), repo, remote, "refs/heads/feature/delete", strings.Repeat("f", 40)); err == nil {
 		t.Fatal("changed remote tip deleted")
 	}
 	if err := client.DeleteBranchIfUnchanged(t.Context(), repo, "feature/delete", sha); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.DeleteRemoteBranchIfUnchanged(t.Context(), repo, "feature/delete", sha); err != nil {
+	if err := client.DeleteRemoteRefIfUnchanged(t.Context(), repo, remote, "refs/heads/feature/delete", sha); err != nil {
 		t.Fatal(err)
 	}
 	got, err := client.RemoteRefSHA(t.Context(), repo, "refs/heads/feature/delete")

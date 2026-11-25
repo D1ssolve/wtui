@@ -159,7 +159,7 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 				if len(closed) > 0 {
 					plan.Warnings = append(plan.Warnings, fmt.Sprintf("[%s → %s] MR #%d was closed without merge; confirming will create a new MR", svc.Name, target, closed[0].Number))
 				}
-				ahead, err := m.git.RevListCount(ctx, svc.WorktreePath, svc.Branch, "origin/"+target)
+				ahead, err := m.git.RevListCount(ctx, svc.WorktreePath, svc.Branch, m.cfg.ServiceRemote().Tracking(target))
 				if err != nil {
 					return plan, err
 				}
@@ -216,7 +216,7 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 			plan.RequiresTag = true
 		}
 	}
-	plan.Warnings = append(plan.Warnings, "Cleanup is manual: press D to review and confirm cleanup candidates; Prune is separate and checks origin/"+m.flow.ProductionBranch+" only; remote branch deletion remains unsupported.")
+	plan.Warnings = append(plan.Warnings, "Cleanup is manual: press D to review and confirm cleanup candidates; Prune is separate and checks "+m.cfg.ServiceRemote().Tracking(m.flow.ProductionBranch)+" only; remote branch deletion remains unsupported.")
 	return plan, nil
 }
 

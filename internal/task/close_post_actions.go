@@ -65,36 +65,36 @@ func closePostActionsRequired(rule gitflow.BranchTypeRule) []string {
 	return required
 }
 
-// verifiedPushURL returns origin's push destination after proving it
+// verifiedPushURL returns configured remote's push destination after proving it
 // conservatively matches the service's bound remote identity. A proof must
 // never authorize a tag push to a different remote than the one it was
 // verified against, so any mismatch or unreadable push URL fails closed.
 func (m *manager) verifiedPushURL(ctx context.Context, svc domain.Service) (string, error) {
-	pushURL, err := m.git.PushURL(ctx, svc.WorktreePath, "origin")
+	pushURL, err := m.git.PushURL(ctx, svc.WorktreePath, m.cfg.ServiceRemote().String())
 	if err != nil {
-		return "", fmt.Errorf("resolve origin push URL for %s: %w", svc.Name, err)
+		return "", fmt.Errorf("resolve configured remote push URL for %s: %w", svc.Name, err)
 	}
 	if !sameRemoteURL(pushURL, svc.RemoteURL) {
-		return "", fmt.Errorf("origin push URL %q does not match remote %q for %s", pushURL, svc.RemoteURL, svc.Name)
+		return "", fmt.Errorf("configured remote push URL %q does not match remote %q for %s", pushURL, svc.RemoteURL, svc.Name)
 	}
 	return pushURL, nil
 }
 
-// verifiedRepoPushURL proves origin's push destination matches the remote's
+// verifiedRepoPushURL proves configured remote's push destination matches the remote's
 // fetch identity for repository-path callers (conversion, release
 // finalization) that carry no service record with the bound remote URL. A
 // fetch-vs-push destination mismatch fails closed before any mutation.
 func (m *manager) verifiedRepoPushURL(ctx context.Context, name, repoPath string) (string, error) {
-	remoteURL, err := m.git.RemoteURL(ctx, repoPath, "origin")
+	remoteURL, err := m.git.RemoteURL(ctx, repoPath, m.cfg.ServiceRemote().String())
 	if err != nil {
-		return "", fmt.Errorf("resolve origin URL for %s: %w", name, err)
+		return "", fmt.Errorf("resolve configured remote URL for %s: %w", name, err)
 	}
-	pushURL, err := m.git.PushURL(ctx, repoPath, "origin")
+	pushURL, err := m.git.PushURL(ctx, repoPath, m.cfg.ServiceRemote().String())
 	if err != nil {
-		return "", fmt.Errorf("resolve origin push URL for %s: %w", name, err)
+		return "", fmt.Errorf("resolve configured remote push URL for %s: %w", name, err)
 	}
 	if !sameRemoteURL(pushURL, remoteURL) {
-		return "", fmt.Errorf("origin push URL %q does not match remote %q for %s", pushURL, remoteURL, name)
+		return "", fmt.Errorf("configured remote push URL %q does not match remote %q for %s", pushURL, remoteURL, name)
 	}
 	return pushURL, nil
 }

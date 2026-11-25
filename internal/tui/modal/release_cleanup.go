@@ -259,7 +259,7 @@ func (m *ReleaseCleanupChecklistModal) body() string {
 	b.WriteString(renderCleanupOwnership(m.preview, normalStyle, dimStyle))
 	b.WriteString("\n")
 	if m.selection.DeleteRelease {
-		b.WriteString(dimStyle.Render(releaseDeletionScope))
+		b.WriteString(dimStyle.Render(releaseDeletionScope(m.preview)))
 	} else {
 		b.WriteString(dimStyle.Render("Local task and release branches are removed. Remote deletion requires a separate confirmation."))
 	}
@@ -411,7 +411,7 @@ func NewReleaseCleanupRemoteConfirmModal(preview task.ReleaseCleanupPreview, gen
 
 func (m *ReleaseCleanupRemoteConfirmModal) Title() string {
 	if m.deletion != nil {
-		return "Confirm Release Deletion on Origin"
+		return "Confirm Release Deletion on " + m.preview.Remote.String()
 	}
 	return "Confirm Remote Branch Deletion"
 }

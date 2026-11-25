@@ -210,7 +210,7 @@ func pendingTargetNames(plans []serviceWorkflowPlan, states []serviceMergeState)
 			continue
 		}
 		for _, target := range unmergedTargets(states[i]) {
-			name := strings.TrimPrefix(target, "origin/")
+			_, name, _ := strings.Cut(target, "/")
 			if !seenPending[name] {
 				seenPending[name] = true
 				pendingTargets = append(pendingTargets, name)
@@ -322,7 +322,7 @@ func reviewWorkflowRow(item ServiceMergeInspection) domain.ServiceWorkflow {
 func targetBaseNames(targets []string) []string {
 	names := make([]string, len(targets))
 	for i, target := range targets {
-		names[i] = strings.TrimPrefix(target, "origin/")
+		_, names[i], _ = strings.Cut(target, "/")
 	}
 	return names
 }
@@ -337,10 +337,10 @@ func unmergedTargets(st serviceMergeState) []string {
 	return unmerged
 }
 
-func originPrefixed(targets []string) []string {
+func (m *manager) remotePrefixed(targets []string) []string {
 	prefixed := make([]string, len(targets))
 	for i, target := range targets {
-		prefixed[i] = "origin/" + target
+		prefixed[i] = m.cfg.ServiceRemote().Tracking(target)
 	}
 	return prefixed
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,49 +66,64 @@ func TestUpdate_DeleteReleaseRejectsStaleOrBusySelection(t *testing.T) {
 }
 
 func TestUpdate_DeleteReleaseRequiresBothConfirmationsAndPreservesMode(t *testing.T) {
-	mgr := &mockManager{cleanupExecuteResult: task.ReleaseCleanupResult{ReleaseID: "rel-1"}}
-	m := sendWindowSize(newTestModel(t, mgr), 120, 40)
-	m.setFocus(FocusReleases)
-	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusDraft}})
-	m, _ = m.startReleaseCleanupPlan("rel-1", task.ReleaseDeletionSelection(), true)
-	updated, _ := m.Update(ReleaseCleanupPlanReadyMsg{Generation: m.releaseCleanupGeneration, Plan: releaseDeletionTestPlan(t)})
-	m = updated.(Model)
-	if _, ok := m.modal.(*modal.ReleaseCleanupConfirmModal); !ok {
-		t.Fatalf("deletion plan did not open confirmation: %T", m.modal)
-	}
-	generation := m.releaseCleanupGeneration
-	updated, confirmCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
-	updated, cmd := m.Update(confirmCmd())
-	m = updated.(Model)
-	if cmd != nil || mgr.cleanupExecuteCalls != 0 {
-		t.Fatal("first confirmation executed deletion")
-	}
-	if _, ok := m.modal.(*modal.ReleaseCleanupRemoteConfirmModal); !ok {
-		t.Fatalf("remote deletion confirmation missing: %T", m.modal)
-	}
-	updated, cmd = m.Update(modal.ConfirmRemoteReleaseCleanupMsg{ReleaseID: "rel-1", Generation: generation - 1})
-	m = updated.(Model)
-	if cmd != nil {
-		t.Fatal("stale confirmation executed deletion")
-	}
-	updated, confirmCmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
-	updated, cmd = m.Update(confirmCmd())
-	m = updated.(Model)
-	if cmd == nil || !m.opRunning || m.releaseCleanupSelection != task.ReleaseDeletionSelection() {
-		t.Fatal("confirmed deletion did not preserve scope into execution")
-	}
-	runBatchCommands(cmd())
-	if mgr.cleanupExecuteCalls != 1 {
-		t.Fatalf("execution calls = %d", mgr.cleanupExecuteCalls)
+	for _, remote := range []string{"origin", "upstream"} {
+		t.Run(remote, func(t *testing.T) {
+			mgr := &mockManager{cleanupExecuteResult: task.ReleaseCleanupResult{ReleaseID: "rel-1"}}
+			m := sendWindowSize(newTestModel(t, mgr), 120, 40)
+			m.setFocus(FocusReleases)
+			m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusDraft}})
+			m, _ = m.startReleaseCleanupPlan("rel-1", task.ReleaseDeletionSelection(), true)
+			updated, _ := m.Update(ReleaseCleanupPlanReadyMsg{Generation: m.releaseCleanupGeneration, Plan: releaseDeletionTestPlan(t, remote)})
+			m = updated.(Model)
+			if _, ok := m.modal.(*modal.ReleaseCleanupConfirmModal); !ok {
+				t.Fatalf("deletion plan did not open confirmation: %T", m.modal)
+			}
+			if !strings.Contains(m.modal.View(), remote) {
+				t.Errorf("first confirmation missing %s: %s", remote, m.modal.View())
+			}
+			generation := m.releaseCleanupGeneration
+			updated, confirmCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = updated.(Model)
+			updated, cmd := m.Update(confirmCmd())
+			m = updated.(Model)
+			if cmd != nil || mgr.cleanupExecuteCalls != 0 {
+				t.Fatal("first confirmation executed deletion")
+			}
+			if _, ok := m.modal.(*modal.ReleaseCleanupRemoteConfirmModal); !ok {
+				t.Fatalf("remote deletion confirmation missing: %T", m.modal)
+			}
+			if !strings.Contains(m.modal.View(), "on "+remote+"?") {
+				t.Errorf("final confirmation missing %s: %s", remote, m.modal.View())
+			}
+			updated, cmd = m.Update(modal.ConfirmRemoteReleaseCleanupMsg{ReleaseID: "rel-1", Generation: generation - 1})
+			m = updated.(Model)
+			if cmd != nil {
+				t.Fatal("stale confirmation executed deletion")
+			}
+			updated, confirmCmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = updated.(Model)
+			updated, cmd = m.Update(confirmCmd())
+			m = updated.(Model)
+			if cmd == nil || !m.opRunning || m.releaseCleanupSelection != task.ReleaseDeletionSelection() {
+				t.Fatal("confirmed deletion did not preserve scope into execution")
+			}
+			runBatchCommands(cmd())
+			if mgr.cleanupExecuteCalls != 1 {
+				t.Fatalf("execution calls = %d", mgr.cleanupExecuteCalls)
+			}
+		})
 	}
 }
 
 // The real planner supplies an opaque plan; no execution touches these files.
-func releaseDeletionTestPlan(t *testing.T) task.ReleaseCleanupPlan {
+func releaseDeletionTestPlan(t *testing.T, remote string) task.ReleaseCleanupPlan {
 	t.Helper()
 	cfg := newTestConfig()
+	if remote != "origin" {
+		if err := yaml.Unmarshal([]byte("forge: {remote: "+remote+"}"), cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cfg.TasksRoot = t.TempDir()
 	cfg.Release.RootDir = filepath.Join(cfg.TasksRoot, ".releases")
 	dir := filepath.Join(cfg.TasksRoot, ".releases", "rel-1")
@@ -137,7 +153,7 @@ func TestUpdate_DeleteReleaseRejectsPlanningModeMismatch(t *testing.T) {
 	m.setFocus(FocusReleases)
 	m.releasesPanel.SetReleases([]domain.Release{{ID: "rel-1", Status: domain.ReleaseStatusReleased}})
 	m, _ = m.startReleaseCleanupPlan("rel-1", task.DefaultReleaseCleanupSelection(), true)
-	updated, _ := m.Update(ReleaseCleanupPlanReadyMsg{Generation: m.releaseCleanupGeneration, Plan: releaseDeletionTestPlan(t)})
+	updated, _ := m.Update(ReleaseCleanupPlanReadyMsg{Generation: m.releaseCleanupGeneration, Plan: releaseDeletionTestPlan(t, "origin")})
 	m = updated.(Model)
 	if m.pendingReleaseCleanupPlan != nil || m.modal != nil {
 		t.Fatal("deletion plan accepted for ordinary cleanup request")

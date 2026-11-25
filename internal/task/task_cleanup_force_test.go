@@ -12,7 +12,7 @@ func TestExecuteTaskCleanup_DirtyWorktreeRequiresForce(t *testing.T) {
 		t.Run(map[bool]string{false: "normal", true: "force"}[force], func(t *testing.T) {
 			mgr, gitMock, plan := setupExecutableTaskCleanup(t)
 			gitMock.isDirtyFn = func(string) (bool, error) { return true, nil }
-			gitMock.deleteRemoteBranchIfUnchangedFn = func(_, _, _ string) error {
+			gitMock.deleteRemoteRefIfUnchangedFn = func(_, _, _, _ string) error {
 				t.Fatal("local cleanup attempted remote deletion")
 				return nil
 			}

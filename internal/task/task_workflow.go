@@ -30,7 +30,7 @@ type serviceWorkflowPlan struct {
 }
 
 type serviceMergeState struct {
-	targets []string // effective close targets, origin/-prefixed
+	targets []string // effective close targets, configured remote/-prefixed
 	merged  []bool
 	warning string
 	err     error
@@ -183,12 +183,12 @@ func (m *manager) workflowMergeStates(ctx context.Context, plans []serviceWorkfl
 		case gitflow.CloseStrategyDirectMerge:
 			targets, warning := m.effectiveMergeTargets(ctx, plan.svc, plan.branchType, plan.rule.MergeTargets)
 			st.warning = warning
-			st.targets = originPrefixed(targets)
+			st.targets = m.remotePrefixed(targets)
 		case gitflow.CloseStrategyReviewRequest:
 			if len(plan.rule.ReviewTargets) == 0 {
 				return
 			}
-			st.targets = []string{"origin/" + plan.rule.ReviewTargets[0]}
+			st.targets = []string{m.cfg.ServiceRemote().Tracking(plan.rule.ReviewTargets[0])}
 		}
 		if st.err = m.git.Fetch(ctx, plan.svc.RepoPath); st.err != nil {
 			return

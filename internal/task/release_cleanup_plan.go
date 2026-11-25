@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/git"
 	"github.com/D1ssolve/wtui/internal/gitflow"
@@ -38,6 +39,7 @@ type ReleaseCleanupServicePreview struct {
 }
 
 type ReleaseCleanupPreview struct {
+	Remote    config.RemoteName
 	ReleaseID string
 	Selection ReleaseCleanupSelection
 	Tasks     []string
@@ -87,12 +89,12 @@ type releaseCleanupStep struct {
 }
 
 type releaseCleanupTarget struct {
-	// ref is the authoritative origin ref used as ancestry evidence.
+	// ref is the authoritative configured remote ref used as ancestry evidence.
 	ref string
-	// plannedSHA is the origin ref OID captured at planning time.
+	// plannedSHA is the configured remote ref OID captured at planning time.
 	plannedSHA string
 	// storeRef is the local same-store mirror of ref (for example
-	// refs/remotes/origin/main for refs/heads/main). It is verified against
+	// refs/remotes/<remote>/main for refs/heads/main). It is verified against
 	// plannedSHA in the same ref-store transaction as the source deletion so
 	// a target identity change aborts the delete; empty means no atomic
 	// guard exists for that target.
@@ -124,7 +126,7 @@ func cloneCleanupPreview(src ReleaseCleanupPreview) ReleaseCleanupPreview {
 }
 
 func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, selection ReleaseCleanupSelection) (ReleaseCleanupPlan, error) {
-	plan := ReleaseCleanupPlan{preview: ReleaseCleanupPreview{ReleaseID: releaseID, Selection: selection}}
+	plan := ReleaseCleanupPlan{preview: ReleaseCleanupPreview{ReleaseID: releaseID, Selection: selection, Remote: m.cfg.ServiceRemote()}}
 	if err := validateReleaseID(releaseID); err != nil {
 		return plan, err
 	}
@@ -201,6 +203,11 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 			plan.block("service %s manifest integration branch %q does not match resolved integration branch %q", svc.Name, svc.IntegrationBranch, resolvedIntegrationBranch(m.flow))
 		}
 
+		firstStep := len(plan.steps)
+		url, err := m.verifiedRepoPushURL(ctx, svc.Name, svc.RepoPath)
+		if err != nil {
+			return plan, err
+		}
 		if err := m.validateCleanupReleaseSafety(ctx, &plan, svc); err != nil {
 			return plan, err
 		}
@@ -259,6 +266,9 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 			if err := m.validateCleanupReleaseBranch(ctx, &plan, svc, selection); err != nil {
 				return plan, err
 			}
+		}
+		for i := firstStep; i < len(plan.steps); i++ {
+			plan.steps[i].remoteURL = url
 		}
 		plan.preview.Services = append(plan.preview.Services, preview)
 		_ = taskServices
@@ -452,7 +462,7 @@ func (m *manager) cleanupTaskMergeTargetRefs(branch string) []string {
 		if rule, ok := m.flow.BranchTypes[branchType]; ok && len(rule.MergeTargets) > 0 {
 			refs := make([]string, 0, len(rule.MergeTargets))
 			for _, configured := range rule.MergeTargets {
-				refs = append(refs, cleanupRemoteBranchRef(configured))
+				refs = append(refs, m.cleanupRemoteBranchRef(configured))
 			}
 			return refs
 		}
@@ -527,28 +537,28 @@ func (m *manager) resolveCleanupTargets(ctx context.Context, plan cleanupPlanBlo
 		if !merged {
 			plan.block("%s is not contained in fresh merge target %s", label, ref)
 		}
-		targets = append(targets, releaseCleanupTarget{ref: ref, plannedSHA: sha, storeRef: localStoreMirrorRef(ref)})
+		targets = append(targets, releaseCleanupTarget{ref: ref, plannedSHA: sha, storeRef: m.localStoreMirrorRef(ref)})
 	}
 	return targets, nil
 }
 
-// localStoreMirrorRef maps an authoritative origin branch ref to the local
+// localStoreMirrorRef maps an authoritative configured remote branch ref to the local
 // ref-store mirror that shares the store with refs/heads branches.
-func localStoreMirrorRef(ref string) string {
+func (m *manager) localStoreMirrorRef(ref string) string {
 	branch, ok := strings.CutPrefix(ref, "refs/heads/")
 	if !ok || branch == "" {
 		return ""
 	}
-	return "refs/remotes/origin/" + branch
+	return "refs/remotes/" + m.cfg.ServiceRemote().Tracking(branch)
 }
 
-func cleanupRemoteBranchRef(branch string) string {
+func (m *manager) cleanupRemoteBranchRef(branch string) string {
 	branch = strings.TrimSpace(branch)
 	if strings.HasPrefix(branch, "refs/heads/") {
 		return branch
 	}
-	if strings.HasPrefix(branch, "origin/") {
-		branch = strings.TrimPrefix(branch, "origin/")
+	if strings.HasPrefix(branch, m.cfg.ServiceRemote().Tracking("")) {
+		branch = strings.TrimPrefix(branch, m.cfg.ServiceRemote().Tracking(""))
 	}
 	if branch == "" || strings.HasPrefix(branch, "refs/") {
 		return ""
@@ -621,7 +631,7 @@ func (p *ReleaseCleanupPlan) block(format string, args ...any) {
 	p.preview.Blockers = append(p.preview.Blockers, fmt.Sprintf(format, args...))
 }
 func (p *ReleaseCleanupPlan) finishFingerprint() {
-	p.fingerprint = sha256.Sum256([]byte(fmt.Sprintf("%x|%#v|%#v|%#v", p.manifestDigest, p.preview.Selection, p.steps, p.repoPaths)))
+	p.fingerprint = sha256.Sum256([]byte(fmt.Sprintf("%s|%x|%#v|%#v|%#v", p.preview.Remote, p.manifestDigest, p.preview.Selection, p.steps, p.repoPaths)))
 }
 
 // fingerprintAuthentic recomputes the digest from plan content so a caller

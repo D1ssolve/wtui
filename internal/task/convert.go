@@ -275,7 +275,7 @@ func (m *manager) planHotfixConversion(ctx context.Context, params ConvertHotfix
 				return conversionManifest{}, fmt.Errorf("conversion: compare remote source for %s: %w", svc.Name, err)
 			}
 			if !containsRemote {
-				return conversionManifest{}, fmt.Errorf("conversion: local source for %s does not contain origin/%s", svc.Name, svc.Branch)
+				return conversionManifest{}, fmt.Errorf("conversion: local source for %s does not contain "+m.cfg.ServiceRemote().String()+"/%s", svc.Name, svc.Branch)
 			}
 		}
 

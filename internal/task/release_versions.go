@@ -52,7 +52,7 @@ func (m *manager) ProposeReleaseVersions(ctx context.Context, taskIDs []string) 
 				repoLatest[repoPath] = latest
 			}
 
-			version, err := m.nextVersion(ctx, repoPath, latest.name, latest.version, "origin/"+m.integrationBranch())
+			version, err := m.nextVersion(ctx, repoPath, latest.name, latest.version, m.cfg.ServiceRemote().Tracking(m.integrationBranch()))
 			if err != nil {
 				return nil, fmt.Errorf("propose release version for service %s: %w", name, err)
 			}

@@ -78,7 +78,7 @@ func (m *manager) validateReleaseTaskMergeStep(ctx context.Context, step release
 			return fmt.Errorf("release task merge fresh gate: fetch %s: %w", step.RepoPath, err)
 		}
 		var err error
-		tip, err = m.resolveReleaseRefSHA(ctx, step.RepoPath, "origin/"+step.TargetBranch)
+		tip, err = m.resolveReleaseRefSHA(ctx, step.RepoPath, m.cfg.ServiceRemote().Tracking(step.TargetBranch))
 		if err != nil {
 			return err
 		}

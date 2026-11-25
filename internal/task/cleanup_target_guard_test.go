@@ -103,7 +103,7 @@ func TestExecuteReleaseCleanup_RemoteSelectionDeletesWithLease(t *testing.T) {
 	selection := DefaultReleaseCleanupSelection()
 	selection.DeleteRemoteTaskBranches = true
 	remoteDeletes := 0
-	gitMock.deleteRemoteBranchIfUnchangedFn = func(_, _, _ string) error {
+	gitMock.deleteRemoteRefIfUnchangedFn = func(_, _, _, _ string) error {
 		remoteDeletes++
 		return nil
 	}
@@ -140,12 +140,12 @@ func TestExecuteReleaseCleanupStep_RemoteDeletionUsesLeaseWithValidTargets(t *te
 	gitMock.remoteRefSHAFn = func(_, _ string) (string, error) { return taskCleanupTaskSHA, nil }
 	gitMock.isAncestorFn = func(_, _, _ string) (bool, error) { return true, nil }
 	remoteDeletes := 0
-	gitMock.deleteRemoteBranchIfUnchangedFn = func(_, _, _ string) error {
+	gitMock.deleteRemoteRefIfUnchangedFn = func(_, _, _, _ string) error {
 		remoteDeletes++
 		return nil
 	}
 	step := releaseCleanupStep{
-		kind: cleanupRemoteTaskBranch, repoPath: mgr.cfg.RootDir, branch: "feature/APP-1", expectedSHA: taskCleanupTaskSHA,
+		kind: cleanupRemoteTaskBranch, remoteURL: gitMock.remoteURLRes, repoPath: mgr.cfg.RootDir, branch: "feature/APP-1", expectedSHA: taskCleanupTaskSHA,
 		targets: []releaseCleanupTarget{{ref: "refs/heads/develop", plannedSHA: taskCleanupDevelopSHA, storeRef: "refs/remotes/origin/develop"}},
 	}
 

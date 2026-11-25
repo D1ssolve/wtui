@@ -16,7 +16,7 @@ func (m *manager) PromoteRelease(ctx context.Context, releaseID string, statusCh
 
 func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Release, svc *domain.ReleaseService, source, target, method string, statusCh chan<- string) error {
 
-	remoteURL, err := m.git.RemoteURL(ctx, svc.RepoPath, "origin")
+	remoteURL, err := m.git.RemoteURL(ctx, svc.RepoPath, m.cfg.ServiceRemote().String())
 	if err != nil {
 		return fmt.Errorf("release promote: resolve remote for service %s: %w", svc.Name, err)
 	}
@@ -34,7 +34,7 @@ func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Rel
 		if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 			return fmt.Errorf("release review: fetch service %s: %w", svc.Name, err)
 		}
-		sourceRef = "origin/" + source
+		sourceRef = m.cfg.ServiceRemote().Tracking(source)
 	}
 	sourceSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, sourceRef)
 	if err != nil {
@@ -92,7 +92,7 @@ func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Rel
 }
 
 // newProductionMRRef binds a production MR proof to the repository identity
-// it was created against, so a later origin retarget can never reuse the MR
+// it was created against, so a later configured remote retarget can never reuse the MR
 // number/SHA pair against a different repository.
 func newProductionMRRef(number int, url, sourceSHA, remoteURL string) *domain.ProductionMRRef {
 	return &domain.ProductionMRRef{

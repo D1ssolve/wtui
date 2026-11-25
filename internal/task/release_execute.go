@@ -133,7 +133,7 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 		return fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
 	}
 	sendStatus(statusCh, fmt.Sprintf("[%s][worktree] preparing integration worktree", svc.Name))
-	remoteIntegration := "origin/" + svc.IntegrationBranch
+	remoteIntegration := m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch)
 	if err := m.git.AddDetachedWorktree(ctx, svc.RepoPath, integrationPath, remoteIntegration); err != nil {
 		return err
 	}
@@ -172,12 +172,12 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 	for fbIdx := range svc.FeatureBranches {
 		fb := &svc.FeatureBranches[fbIdx]
 		if !m.releasePrepareTaskMergeEnabled() {
-			merged, verifyErr := m.branchMergedInto(ctx, svc.RepoPath, fb.Branch, "origin/"+svc.IntegrationBranch)
+			merged, verifyErr := m.branchMergedInto(ctx, svc.RepoPath, fb.Branch, m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch))
 			if verifyErr != nil {
-				return fmt.Errorf("release prepare: verify task branch service=%s branch=%s integration=origin/%s: %w", svc.Name, fb.Branch, svc.IntegrationBranch, verifyErr)
+				return fmt.Errorf("release prepare: verify task branch service=%s branch=%s integration="+m.cfg.ServiceRemote().String()+"/%s: %w", svc.Name, fb.Branch, svc.IntegrationBranch, verifyErr)
 			}
 			if !merged {
-				return fmt.Errorf("%w: service=%s branch=%s integration=origin/%s", ErrReleaseTaskNotMerged, svc.Name, fb.Branch, svc.IntegrationBranch)
+				return fmt.Errorf("%w: service=%s branch=%s integration="+m.cfg.ServiceRemote().String()+"/%s", ErrReleaseTaskNotMerged, svc.Name, fb.Branch, svc.IntegrationBranch)
 			}
 			fb.Merged = true
 			mergeSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, fb.Branch)
@@ -256,7 +256,7 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 			if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 				return fmt.Errorf("release prepare: fetch pushed release branch service=%s: %w", svc.Name, err)
 			}
-			remoteReleaseSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+svc.ReleaseBranch)
+			remoteReleaseSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(svc.ReleaseBranch))
 			if err != nil {
 				return err
 			}

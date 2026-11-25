@@ -328,7 +328,7 @@ func (m *manager) retryPrepareService(ctx context.Context, release *domain.Relea
 		if err := os.MkdirAll(filepath.Dir(integrationPath), 0o755); err != nil {
 			return fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
 		}
-		if err := m.git.AddDetachedWorktree(ctx, svc.RepoPath, integrationPath, "origin/"+svc.IntegrationBranch); err != nil {
+		if err := m.git.AddDetachedWorktree(ctx, svc.RepoPath, integrationPath, m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch)); err != nil {
 			return err
 		}
 		svc.IntegrationWorktreePath = integrationPath
@@ -351,18 +351,18 @@ func (m *manager) retryPrepareService(ctx context.Context, release *domain.Relea
 		return nil
 	}
 
-	if err := m.git.MergeFFOnly(ctx, integrationPath, "origin/"+svc.IntegrationBranch); err != nil {
+	if err := m.git.MergeFFOnly(ctx, integrationPath, m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch)); err != nil {
 		return fmt.Errorf("release prepare retry: fast-forward service=%s integration=%s: %w", svc.Name, svc.IntegrationBranch, err)
 	}
 
 	for fbIdx := range svc.FeatureBranches {
 		fb := &svc.FeatureBranches[fbIdx]
-		merged, verifyErr := m.branchMergedInto(ctx, svc.RepoPath, fb.Branch, "origin/"+svc.IntegrationBranch)
+		merged, verifyErr := m.branchMergedInto(ctx, svc.RepoPath, fb.Branch, m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch))
 		if verifyErr != nil {
 			return verifyErr
 		}
 		if !merged {
-			return fmt.Errorf("%w: service=%s branch=%s integration=origin/%s", ErrReleaseTaskNotMerged, svc.Name, fb.Branch, svc.IntegrationBranch)
+			return fmt.Errorf("%w: service=%s branch=%s integration="+m.cfg.ServiceRemote().String()+"/%s", ErrReleaseTaskNotMerged, svc.Name, fb.Branch, svc.IntegrationBranch)
 		}
 		fb.Merged = true
 		mergeSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, fb.Branch)
@@ -376,10 +376,10 @@ func (m *manager) retryPrepareService(ctx context.Context, release *domain.Relea
 	}
 
 	if svc.PreIntegrationRef == "" {
-		svc.PreIntegrationRef = "origin/" + svc.IntegrationBranch
+		svc.PreIntegrationRef = m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch)
 	}
 	if svc.PostIntegrationRef == "" {
-		svc.PostIntegrationRef = "origin/" + svc.IntegrationBranch
+		svc.PostIntegrationRef = m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch)
 	}
 	if svc.PostIntegrationSHA == "" {
 		postIntegrationSHA, resolveErr := m.resolveReleaseRefSHA(ctx, integrationPath, "HEAD")

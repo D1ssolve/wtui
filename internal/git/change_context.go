@@ -21,7 +21,7 @@ func (c *CommandClient) ReadChanges(ctx context.Context, repoPath, base, source 
 	sourceRef := "refs/heads/" + source
 	baseRef := base
 	if !strings.HasPrefix(base, "refs/tags/") {
-		local, remote := "refs/heads/"+base, "refs/remotes/origin/"+base
+		local, remote := "refs/heads/"+base, "refs/remotes/"+c.remote.Tracking(base)
 		refs, err := c.execGit(ctx, "-C", repoPath, "for-each-ref", "--format=%(refname)", local, remote)
 		if err != nil {
 			return ChangeContext{}, fmt.Errorf("read metadata target refs: %w", err)

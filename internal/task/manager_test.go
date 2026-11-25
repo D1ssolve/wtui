@@ -171,7 +171,6 @@ type mockGitClient struct {
 	deleteBranchIfUnchangedFn         func(repoPath, branch, expectedSHA string) error
 	deleteBranchIfUnchangedGuardCalls [][]git.RefGuard
 	remoteRefSHACalls                 []remoteRefSHACall
-	deleteRemoteBranchIfUnchangedFn   func(repoPath, branch, expectedSHA string) error
 	deleteRemoteRefIfUnchangedFn      func(repoPath, url, ref, oid string) error
 	pushRefWithLeaseFn                func(repoPath, capturedRemoteURL, targetRef, exactOID, leaseRef, leaseOID string) error
 	pushRefWithLeaseCalls             []pushRefWithLeaseCall
@@ -687,13 +686,6 @@ func (m *mockGitClient) DeleteBranchIfUnchanged(_ context.Context, repoPath, bra
 	m.mu.Unlock()
 	if m.deleteBranchIfUnchangedFn != nil {
 		return m.deleteBranchIfUnchangedFn(repoPath, branch, expectedSHA)
-	}
-	return nil
-}
-
-func (m *mockGitClient) DeleteRemoteBranchIfUnchanged(_ context.Context, repoPath, branch, expectedSHA string) error {
-	if m.deleteRemoteBranchIfUnchangedFn != nil {
-		return m.deleteRemoteBranchIfUnchangedFn(repoPath, branch, expectedSHA)
 	}
 	return nil
 }

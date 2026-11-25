@@ -37,7 +37,7 @@ type InitParams struct {
 	BranchPrefix string
 	BaseBranch   string
 
-	// FromRemoteBranch imports the existing origin branch BranchPrefix+TaskID
+	// FromRemoteBranch imports the existing configured remote branch BranchPrefix+TaskID
 	// from every discovered repository that has it; Services is ignored.
 	FromRemoteBranch bool
 

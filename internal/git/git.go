@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/D1ssolve/wtui/internal/config"
 	"log/slog"
 	"os/exec"
 	"path/filepath"
@@ -75,12 +76,12 @@ type Client interface {
 
 	ResolveRef(ctx context.Context, repoPath, ref string) (string, error)
 
-	RevListAheadBehind(ctx context.Context, worktreePath, originBranch string) (ahead, behind int, err error)
+	RevListAheadBehind(ctx context.Context, worktreePath, trackingBranch string) (ahead, behind int, err error)
 
 	Fetch(ctx context.Context, worktreePath string) error
 
 	// EnsureCommit guarantees commit sha is readable from repoPath, fetching
-	// only that object from origin when missing. No local or remote refs are
+	// only that object from the configured remote when missing. No local or remote refs are
 	// moved; a fetch failure is returned so callers fail closed.
 	EnsureCommit(ctx context.Context, repoPath, sha string) error
 
@@ -119,8 +120,8 @@ type Client interface {
 
 	Push(ctx context.Context, worktreePath string, lineCh chan<- string) error
 
-	// PushBranchExplicit pushes a specific branch to origin with upstream tracking.
-	// Command: git -C <worktreePath> push -u origin <branch>
+	// PushBranchExplicit pushes a specific branch to the configured remote with upstream tracking.
+	// Command: git -C <worktreePath> push -u <remote> <branch>
 	PushBranchExplicit(ctx context.Context, worktreePath, branch string) error
 
 	PushRef(ctx context.Context, worktreePath, source, target string) error
@@ -156,7 +157,6 @@ type Client interface {
 	// the delete atomically. Guard refs must be full refs in the same local
 	// ref store as the source branch; symbolic refs are rejected.
 	DeleteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string, guards ...RefGuard) error
-	DeleteRemoteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error
 
 	// DeleteRemoteRefIfUnchanged deletes a full branch or tag ref on the
 	// captured remote URL only when it still points at the exact expectedOID.
@@ -173,13 +173,18 @@ type Client interface {
 }
 
 type CommandClient struct {
+	remote config.RemoteName
 	logger *slog.Logger
 }
 
 var _ Client = (*CommandClient)(nil)
 
 func NewCommandClient(logger *slog.Logger) *CommandClient {
-	return &CommandClient{logger: logger}
+	return NewRemoteCommandClient(logger, config.RemoteName{})
+}
+
+func NewRemoteCommandClient(logger *slog.Logger, remote config.RemoteName) *CommandClient {
+	return &CommandClient{logger: logger, remote: remote}
 }
 
 func (c *CommandClient) execGit(ctx context.Context, args ...string) (string, error) {
@@ -221,14 +226,15 @@ func (c *CommandClient) IsValidRepo(ctx context.Context, repoPath string) error 
 }
 
 func (c *CommandClient) BaseBranch(ctx context.Context, repoPath string) (string, error) {
-	_, err := c.execGit(ctx, "-C", repoPath, "show-ref", "--verify", "--quiet", "refs/remotes/origin/HEAD")
+	remotePrefix := "refs/remotes/" + c.remote.Tracking("")
+	head := remotePrefix + "HEAD"
+	_, err := c.execGit(ctx, "-C", repoPath, "show-ref", "--verify", "--quiet", head)
 	if err == nil {
-		out, symErr := c.execGit(ctx, "-C", repoPath, "symbolic-ref", "refs/remotes/origin/HEAD")
+		out, symErr := c.execGit(ctx, "-C", repoPath, "symbolic-ref", head)
 		if symErr != nil {
-			return "", fmt.Errorf("git symbolic-ref refs/remotes/origin/HEAD: %w", symErr)
+			return "", fmt.Errorf("git symbolic-ref %s: %w", head, symErr)
 		}
 
-		const remotePrefix = "refs/remotes/origin/"
 		if after, ok := strings.CutPrefix(out, remotePrefix); ok {
 			return after, nil
 		}
@@ -281,7 +287,10 @@ func (c *CommandClient) ListBranches(ctx context.Context, repoPath, pattern stri
 }
 
 func (c *CommandClient) RemoteBranchExists(ctx context.Context, repoPath, branch string) (bool, error) {
-	_, err := c.execGit(ctx, "-C", repoPath, "ls-remote", "--exit-code", "--heads", "origin", branch)
+	if err := c.requireRemote(ctx, repoPath); err != nil {
+		return false, err
+	}
+	_, err := c.execGit(ctx, "-C", repoPath, "ls-remote", "--exit-code", "--heads", c.remote.String(), branch)
 	if err == nil {
 		return true, nil
 	}
@@ -297,10 +306,13 @@ func (c *CommandClient) RemoteBranchExists(ctx context.Context, repoPath, branch
 }
 
 func (c *CommandClient) RemoteRefSHA(ctx context.Context, repoPath, ref string) (string, error) {
+	if err := c.requireRemote(ctx, repoPath); err != nil {
+		return "", err
+	}
 	if !validRemoteRef(ref) {
 		return "", fmt.Errorf("invalid full remote ref %q", ref)
 	}
-	out, err := c.execGit(ctx, "-C", repoPath, "ls-remote", "origin", ref)
+	out, err := c.execGit(ctx, "-C", repoPath, "ls-remote", c.remote.String(), ref)
 	if err != nil {
 		return "", err
 	}
@@ -354,7 +366,10 @@ func (c *CommandClient) AddDetachedWorktree(ctx context.Context, repoPath, dest,
 }
 
 func (c *CommandClient) AddWorktreeWithTracking(ctx context.Context, repoPath, dest, localBranch, remoteBranch string) error {
-	args := []string{"-C", repoPath, "worktree", "add", "-b", localBranch, dest, "origin/" + remoteBranch}
+	if err := c.Fetch(ctx, repoPath); err != nil {
+		return err
+	}
+	args := []string{"-C", repoPath, "worktree", "add", "--track", "-b", localBranch, dest, "refs/remotes/" + c.remote.Tracking(remoteBranch)}
 	_, err := c.execGit(ctx, args...)
 	return err
 }
@@ -473,9 +488,9 @@ func (c *CommandClient) ResolveRef(ctx context.Context, repoPath, ref string) (s
 	return sha, nil
 }
 
-func (c *CommandClient) RevListAheadBehind(ctx context.Context, worktreePath, originBranch string) (ahead, behind int, err error) {
+func (c *CommandClient) RevListAheadBehind(ctx context.Context, worktreePath, trackingBranch string) (ahead, behind int, err error) {
 	out, runErr := c.execGit(ctx, "-C", worktreePath, "rev-list", "--count", "--left-right",
-		"HEAD..."+originBranch)
+		"HEAD..."+trackingBranch)
 	if runErr != nil {
 		var execErr *ExecError
 		if errors.As(runErr, &execErr) {
@@ -489,7 +504,7 @@ func (c *CommandClient) RevListAheadBehind(ctx context.Context, worktreePath, or
 				}
 			}
 		}
-		return 0, 0, fmt.Errorf("rev-list ahead/behind %s: %w", originBranch, runErr)
+		return 0, 0, fmt.Errorf("rev-list ahead/behind %s: %w", trackingBranch, runErr)
 	}
 
 	parts := strings.SplitN(strings.TrimSpace(out), "\t", 2)
@@ -508,7 +523,10 @@ func (c *CommandClient) RevListAheadBehind(ctx context.Context, worktreePath, or
 }
 
 func (c *CommandClient) Fetch(ctx context.Context, worktreePath string) error {
-	_, err := c.execGit(ctx, "-C", worktreePath, "fetch", "origin")
+	if err := c.requireRemote(ctx, worktreePath); err != nil {
+		return err
+	}
+	_, err := c.execGit(ctx, "-C", worktreePath, "fetch", c.remote.String())
 	return err
 }
 
@@ -621,10 +639,13 @@ func (c *CommandClient) Rebase(ctx context.Context, worktreePath, upstream strin
 }
 
 func (c *CommandClient) Push(ctx context.Context, worktreePath string, lineCh chan<- string) error {
+	if err := c.requireRemote(ctx, worktreePath); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, subprocessTimeout)
 	defer cancel()
 
-	args := []string{"-C", worktreePath, "push", "-u", "origin", "HEAD"}
+	args := []string{"-C", worktreePath, "push", "-u", c.remote.String(), "HEAD"}
 	argv := append([]string{"git"}, args...)
 
 	c.logger.InfoContext(ctx, "exec git", slog.Any("argv", argv))
@@ -688,12 +709,18 @@ func (c *CommandClient) Push(ctx context.Context, worktreePath string, lineCh ch
 }
 
 func (c *CommandClient) PushBranchExplicit(ctx context.Context, worktreePath, branch string) error {
-	_, err := c.execGit(ctx, "-C", worktreePath, "push", "-u", "origin", branch)
+	if err := c.requireRemote(ctx, worktreePath); err != nil {
+		return err
+	}
+	_, err := c.execGit(ctx, "-C", worktreePath, "push", "-u", c.remote.String(), branch)
 	return err
 }
 
 func (c *CommandClient) PushRef(ctx context.Context, worktreePath, source, target string) error {
-	_, err := c.execGit(ctx, "-C", worktreePath, "push", "origin", source+":"+target)
+	if err := c.requireRemote(ctx, worktreePath); err != nil {
+		return err
+	}
+	_, err := c.execGit(ctx, "-C", worktreePath, "push", c.remote.String(), source+":"+target)
 	return err
 }
 
@@ -782,18 +809,6 @@ func (c *CommandClient) execGitStdin(ctx context.Context, repoPath, stdin string
 	return nil
 }
 
-func (c *CommandClient) DeleteRemoteBranchIfUnchanged(ctx context.Context, repoPath, branch, expectedSHA string) error {
-	ref, err := branchRef(branch)
-	if err != nil {
-		return err
-	}
-	if !validObjectID(expectedSHA) {
-		return fmt.Errorf("invalid expected SHA %q", expectedSHA)
-	}
-	_, err = c.execGit(ctx, "-C", repoPath, "push", "--force-with-lease="+ref+":"+expectedSHA, "origin", ":"+ref)
-	return err
-}
-
 func (c *CommandClient) PushRefWithLease(ctx context.Context, repoPath, capturedRemoteURL, targetRef, exactOID, leaseRef, leaseOID string) error {
 	if !validPushRemoteURL(capturedRemoteURL) {
 		return fmt.Errorf("invalid push remote URL %q", capturedRemoteURL)
@@ -810,13 +825,10 @@ func (c *CommandClient) PushRefWithLease(ctx context.Context, repoPath, captured
 	if leaseOID != "" && !validObjectID(leaseOID) {
 		return fmt.Errorf("invalid lease OID %q", leaseOID)
 	}
-	_, err := c.execGit(ctx,
-		"-C", repoPath,
-		"push",
+	args, operand := pinnedRemoteArgs(repoPath, capturedRemoteURL)
+	_, err := c.execGit(ctx, append(args, "push",
 		"--force-with-lease="+leaseRef+":"+leaseOID,
-		"--", capturedRemoteURL,
-		exactOID+":"+targetRef,
-	)
+		"--", operand, exactOID+":"+targetRef)...)
 	return err
 }
 

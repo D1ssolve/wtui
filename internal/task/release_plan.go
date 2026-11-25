@@ -155,7 +155,7 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 			}
 
 			if !m.releasePrepareTaskMergeEnabled() {
-				remoteIntegration := "origin/" + m.flow.IntegrationBranch
+				remoteIntegration := m.cfg.ServiceRemote().Tracking(m.flow.IntegrationBranch)
 				merged, err := m.branchMergedInto(ctx, svc.RepoPath, svc.Branch, remoteIntegration)
 				if err != nil {
 					return releasePlan{}, fmt.Errorf("release plan: verify task branch service=%s branch=%s integration=%s: %w", svc.Name, svc.Branch, remoteIntegration, err)

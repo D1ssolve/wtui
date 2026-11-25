@@ -178,9 +178,9 @@ func (m *manager) mergeTaskReviews(ctx context.Context, taskID, serviceName stri
 			recordMergeFailure(&result, item.ServiceName, fmt.Errorf("fetch for merge target: %w", err))
 			continue
 		}
-		targetSHA, err := m.git.ResolveRef(ctx, svc.RepoPath, "origin/"+item.MR.TargetBranch)
+		targetSHA, err := m.git.ResolveRef(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(item.MR.TargetBranch))
 		if err != nil {
-			recordMergeFailure(&result, item.ServiceName, fmt.Errorf("resolve merge target origin/%s: %w", item.MR.TargetBranch, err))
+			recordMergeFailure(&result, item.ServiceName, fmt.Errorf("resolve merge target "+m.cfg.ServiceRemote().String()+"/%s: %w", item.MR.TargetBranch, err))
 			continue
 		}
 		params := forge.MergeMRParams{
@@ -376,8 +376,8 @@ func (m *manager) resolveFreshSourceSHA(ctx context.Context, svc domain.Service)
 
 // verifyHotfixMergeSHA verifies the merge result of a merged hotfix MR against
 // its target: an explicit MergedSHA must be contained in the fresh
-// origin/<target> tip; when missing, fast-forward is inferred only from an
-// exact origin tip/historical head match, never from ancestry. The inference
+// <remote>/<target> tip; when missing, fast-forward is inferred only from an
+// exact configured remote tip/historical head match, never from ancestry. The inference
 // fetches before resolving the target tip so the comparison never uses a
 // stale ref, and containment always re-fetches and re-resolves the target tip
 // before the ancestry check. Returns the verified merge SHA.
@@ -387,7 +387,7 @@ func (m *manager) verifyHotfixMergeSHA(ctx context.Context, svc domain.Service, 
 		if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 			return "", withRecovery(fmt.Errorf("fetch for merge verification: %w", err), "check target fetch access; refresh merge verification")
 		}
-		targetSHA, err := m.git.ResolveRef(ctx, svc.RepoPath, "origin/"+target)
+		targetSHA, err := m.git.ResolveRef(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(target))
 		if err != nil {
 			return "", withRecovery(err, "inspect target branch/ref; refresh merge verification")
 		}
@@ -403,7 +403,7 @@ func (m *manager) verifyHotfixMergeSHA(ctx context.Context, svc domain.Service, 
 }
 
 // verifyMergedTaskMRContained proves a merged MR SHA is fetchable and
-// contained in the fresh origin/<target> tip: the object is ensured locally,
+// contained in the fresh <remote>/<target> tip: the object is ensured locally,
 // refs are fetched, the target tip is resolved anew, and ancestry — not
 // equality — is checked, because the target may have advanced past the merge
 // commit.
@@ -414,7 +414,7 @@ func (m *manager) verifyMergedTaskMRContained(ctx context.Context, svc domain.Se
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 		return withRecovery(fmt.Errorf("fetch for merge verification: %w", err), "check target fetch access; refresh merge verification")
 	}
-	tip, err := m.git.ResolveRef(ctx, svc.RepoPath, "origin/"+target)
+	tip, err := m.git.ResolveRef(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(target))
 	if err != nil {
 		return withRecovery(err, "inspect target branch/ref; refresh merge verification")
 	}
@@ -423,7 +423,7 @@ func (m *manager) verifyMergedTaskMRContained(ctx context.Context, svc domain.Se
 		return withRecovery(err, "inspect target history and Git objects; repair verification")
 	}
 	if !contained {
-		return withRecovery(fmt.Errorf("merged SHA %s is not contained in origin/%s", mergeSHA, target), "inspect target history and MR in forge; verify intended delivery")
+		return withRecovery(fmt.Errorf("merged SHA %s is not contained in "+m.cfg.ServiceRemote().String()+"/%s", mergeSHA, target), "inspect target history and MR in forge; verify intended delivery")
 	}
 	return nil
 }
@@ -470,7 +470,7 @@ func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]S
 				return []ServiceMergeInspection{item}, err
 			}
 			if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &item.MR); err != nil {
-				return []ServiceMergeInspection{item}, withRecovery(err, "inspect saved merge proof and origin push destination")
+				return []ServiceMergeInspection{item}, withRecovery(err, "inspect saved merge proof and configured remote push destination")
 			}
 			item.Blockers = append([]string(nil), item.MR.Blockers...)
 			item.NextAction = item.MR.NextAction

@@ -25,6 +25,7 @@ type ReleaseTaskAddService struct {
 	ServiceName   string
 	ReleaseBranch string
 	ReleaseTipSHA string
+	PushURL       string
 	Branches      []ReleaseTaskAddBranch
 }
 
@@ -130,11 +131,15 @@ func (m *manager) PlanReleaseTaskAdd(ctx context.Context, releaseID string, task
 					}
 					fetched[rs.RepoPath] = true
 				}
-				tip, err := m.resolveReleaseRefSHA(ctx, rs.RepoPath, "origin/"+rs.ReleaseBranch)
+				tip, err := m.resolveReleaseRefSHA(ctx, rs.RepoPath, m.cfg.ServiceRemote().Tracking(rs.ReleaseBranch))
 				if err != nil {
 					return ReleaseTaskAddPlan{}, err
 				}
-				ps = &ReleaseTaskAddService{ServiceName: rs.Name, ReleaseBranch: rs.ReleaseBranch, ReleaseTipSHA: tip}
+				url, err := m.verifiedPushURL(ctx, svc)
+				if err != nil {
+					return ReleaseTaskAddPlan{}, err
+				}
+				ps = &ReleaseTaskAddService{PushURL: url, ServiceName: rs.Name, ReleaseBranch: rs.ReleaseBranch, ReleaseTipSHA: tip}
 				byService[rs.Name] = ps
 			}
 			branch, blockers, err := m.planReleaseTaskAddBranch(ctx, id, svc, *ps)
@@ -167,14 +172,14 @@ func (m *manager) planReleaseTaskAddBranch(ctx context.Context, taskID string, s
 	if remote, err := m.git.RemoteBranchExists(ctx, svc.RepoPath, svc.Branch); err != nil {
 		return ReleaseTaskAddBranch{}, nil, err
 	} else if remote {
-		remoteSHA, err := m.git.ResolveRef(ctx, svc.RepoPath, "origin/"+svc.Branch)
+		remoteSHA, err := m.git.ResolveRef(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(svc.Branch))
 		if err != nil {
 			return ReleaseTaskAddBranch{}, nil, err
 		}
 		if behind, err := m.git.IsAncestor(ctx, svc.RepoPath, remoteSHA, head); err != nil {
 			return ReleaseTaskAddBranch{}, nil, err
 		} else if !behind {
-			blockers = append(blockers, fmt.Sprintf("%s/%s: origin/%s has commits the local branch lacks; sync the task first", svc.Name, taskID, svc.Branch))
+			blockers = append(blockers, fmt.Sprintf("%s/%s: "+m.cfg.ServiceRemote().String()+"/%s has commits the local branch lacks; sync the task first", svc.Name, taskID, svc.Branch))
 		}
 	}
 	contained, err := m.git.IsAncestor(ctx, svc.RepoPath, head, ps.ReleaseTipSHA)
@@ -283,13 +288,9 @@ func (m *manager) mergeTasksIntoReleaseBranch(ctx context.Context, rs domain.Rel
 	if tip == ps.ReleaseTipSHA {
 		return refs, tip, nil
 	}
-	pushURL, err := m.verifiedRepoPushURL(ctx, rs.Name, rs.RepoPath)
-	if err != nil {
-		return nil, "", err
-	}
 	ref := "refs/heads/" + rs.ReleaseBranch
 	sendStatus(statusCh, fmt.Sprintf("[%s][add-tasks] pushing %s", rs.Name, rs.ReleaseBranch))
-	if err := m.git.PushRefWithLease(ctx, rs.RepoPath, pushURL, ref, tip, ref, ps.ReleaseTipSHA); err != nil {
+	if err := m.git.PushRefWithLease(ctx, rs.RepoPath, ps.PushURL, ref, tip, ref, ps.ReleaseTipSHA); err != nil {
 		return nil, "", fmt.Errorf("push %s: %w", rs.ReleaseBranch, err)
 	}
 	return refs, tip, nil
@@ -326,7 +327,7 @@ func (m *manager) fastForwardReleaseWorktree(ctx context.Context, rs domain.Rele
 		return
 	}
 	skip := func(reason string) {
-		sendStatus(statusCh, fmt.Sprintf("[%s][add-tasks] release worktree left at its commit: %s; run git merge --ff-only origin/%s there", rs.Name, reason, rs.ReleaseBranch))
+		sendStatus(statusCh, fmt.Sprintf("[%s][add-tasks] release worktree left at its commit: %s; run git merge --ff-only "+m.cfg.ServiceRemote().String()+"/%s there", rs.Name, reason, rs.ReleaseBranch))
 	}
 	if dirty, err := m.git.IsDirty(ctx, rs.ReleaseWorktreePath); err != nil || dirty {
 		skip("it has local changes")

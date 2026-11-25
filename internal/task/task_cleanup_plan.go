@@ -223,7 +223,7 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 			if _, err := os.Lstat(step.path); !errors.Is(err, os.ErrNotExist) {
 				return plan, fmt.Errorf("%w: cannot prove worktree %s absent", ErrTaskCleanupBlocked, step.path)
 			}
-			url, err := m.git.RemoteURL(ctx, step.repoPath, "origin")
+			url, err := m.git.RemoteURL(ctx, step.repoPath, m.cfg.ServiceRemote().String())
 			if err != nil {
 				return plan, err
 			}
@@ -348,7 +348,7 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 		}
 		refs := make([]string, 0, len(targetBranches))
 		for _, target := range targetBranches {
-			refs = append(refs, cleanupRemoteBranchRef(target))
+			refs = append(refs, m.cleanupRemoteBranchRef(target))
 		}
 
 		if releaseID, blocked := taskCleanupBlockedByActiveRelease(releases, request.TaskID, svc.Name, svc.Branch); blocked {
@@ -692,7 +692,7 @@ func (m *manager) resolveReviewCleanupTargets(ctx context.Context, plan *TaskCle
 			return nil, err
 		}
 		if contained {
-			targets = append(targets, releaseCleanupTarget{ref: ref, plannedSHA: targetSHA, storeRef: localStoreMirrorRef(ref)})
+			targets = append(targets, releaseCleanupTarget{ref: ref, plannedSHA: targetSHA, storeRef: m.localStoreMirrorRef(ref)})
 			continue
 		}
 		integratedSHA, err := m.reconstructMergedReviewEvidence(ctx, svc, sourceSHA, targetBranches[i])
@@ -711,7 +711,7 @@ func (m *manager) resolveReviewCleanupTargets(ctx context.Context, plan *TaskCle
 			plan.block("%s merged review %s is not contained in fresh merge target %s", label, integratedSHA, ref)
 			continue
 		}
-		targets = append(targets, releaseCleanupTarget{ref: ref, plannedSHA: targetSHA, storeRef: localStoreMirrorRef(ref), integratedSHA: integratedSHA})
+		targets = append(targets, releaseCleanupTarget{ref: ref, plannedSHA: targetSHA, storeRef: m.localStoreMirrorRef(ref), integratedSHA: integratedSHA})
 	}
 	return targets, nil
 }
@@ -729,7 +729,7 @@ func (m *manager) reconstructMergedReviewEvidence(ctx context.Context, svc domai
 	if !ok {
 		return "", errors.New("forge does not support MR history")
 	}
-	remoteURL, err := m.git.RemoteURL(ctx, svc.RepoPath, "origin")
+	remoteURL, err := m.git.RemoteURL(ctx, svc.RepoPath, m.cfg.ServiceRemote().String())
 	if err != nil {
 		return "", fmt.Errorf("resolve forge remote for %s: %w", svc.Name, err)
 	}

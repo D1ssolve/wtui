@@ -6,7 +6,7 @@ import (
 )
 
 // EnsureCommit guarantees commit sha is readable from repoPath, fetching
-// only that object from origin when missing. No local or remote refs are
+// only that object from the configured remote when missing. No local or remote refs are
 // moved; a fetch failure is returned so callers fail closed.
 func (c *CommandClient) EnsureCommit(ctx context.Context, repoPath, sha string) error {
 	if !validObjectID(sha) {
@@ -17,7 +17,10 @@ func (c *CommandClient) EnsureCommit(ctx context.Context, repoPath, sha string) 
 	} else if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	_, err := c.execGit(ctx, "-C", repoPath, "fetch", "--no-tags", "origin", sha)
+	if err := c.requireRemote(ctx, repoPath); err != nil {
+		return err
+	}
+	_, err := c.execGit(ctx, "-C", repoPath, "fetch", "--no-tags", c.remote.String(), sha)
 	if err != nil && ctx.Err() != nil {
 		return ctx.Err()
 	}
