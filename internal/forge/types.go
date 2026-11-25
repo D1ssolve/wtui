@@ -1,5 +1,7 @@
 package forge
 
+import "github.com/D1ssolve/wtui/internal/domain"
+
 type ForgeProvider string
 
 const (
@@ -125,4 +127,5 @@ type IssueInfo struct {
 	State  string
 	URL    string
 	Labels []string
+	Link   *domain.Issue
 }

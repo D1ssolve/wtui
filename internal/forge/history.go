@@ -48,9 +48,11 @@ func (c *GlabClient) MRHistory(ctx context.Context, branch, repo string) ([]MRIn
 }
 
 func (c *GhClient) MRHistory(ctx context.Context, branch, repo string) ([]MRInfo, error) {
-	parts := strings.Split(strings.Trim(repo, "/"), "/")
 	host := "github.com"
-	if len(parts) == 3 {
+	parts := strings.Split(strings.Trim(repo, "/"), "/")
+	if u, err := url.Parse(repo); err == nil && u.Host != "" {
+		host, parts = u.Host, strings.Split(strings.Trim(u.Path, "/"), "/")
+	} else if len(parts) == 3 {
 		host, parts = parts[0], parts[1:]
 	}
 	if len(parts) != 2 {

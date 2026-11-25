@@ -85,8 +85,13 @@ func TestInitDialog_TabCycles(t *testing.T) {
 
 	modal, _ = d.Update(sendSpecialKey(tea.KeyTab))
 	d = modal.(*InitDialog)
+	if d.focusIndexToLogicalFieldIndex() != initFieldIssue {
+		t.Fatal("after Tab×4: expected Issue field")
+	}
+	modal, _ = d.Update(sendSpecialKey(tea.KeyTab))
+	d = modal.(*InitDialog)
 	if d.focusIndex != 0 {
-		t.Errorf("after Tab×4 (wrap): expected focusIndex=0, got %d", d.focusIndex)
+		t.Errorf("after Tab×5 (wrap): expected focusIndex=0, got %d", d.focusIndex)
 	}
 }
 
@@ -98,8 +103,7 @@ func TestInitDialog_Enter_LastField_Submits(t *testing.T) {
 	d.fields[2].SetValue("feature/")
 	d.fields[3].SetValue("main")
 
-	d.focusIndex = 3
-	d.focusField(3)
+	d.focusField(d.lastFieldIndex())
 
 	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
 	if cmd == nil {
@@ -517,8 +521,8 @@ func TestInitDialog_ShiftTab_MovesBack(t *testing.T) {
 	d.focusField(0)
 	modal, _ = d.Update(sendSpecialKey(tea.KeyShiftTab))
 	d = modal.(*InitDialog)
-	if d.focusIndex != 3 {
-		t.Errorf("Shift+Tab from field 0 should wrap to field 3, got %d", d.focusIndex)
+	if d.focusIndexToLogicalFieldIndex() != initFieldIssue {
+		t.Errorf("Shift+Tab from Task ID should wrap to Issue, got %d", d.focusIndex)
 	}
 }
 
@@ -548,6 +552,11 @@ func TestInitDialog_Tab_CyclesFields_WithRepoPicker(t *testing.T) {
 
 	modal, _ = d.Update(sendSpecialKey(tea.KeyTab))
 	d = modal.(*InitDialog)
+	if d.focusIndexToLogicalFieldIndex() != initFieldIssue {
+		t.Errorf("Tab from Base Branch should advance to Issue, got %d", d.focusIndex)
+	}
+	modal, _ = d.Update(sendSpecialKey(tea.KeyTab))
+	d = modal.(*InitDialog)
 	if d.focusIndex != 0 {
 		t.Errorf("Tab from last field should wrap to field 0 (Task ID), got focusIndex=%d", d.focusIndex)
 	}
@@ -567,8 +576,8 @@ func TestInitDialog_ShiftTab_CyclesFieldsBackward_WithRepoPicker(t *testing.T) {
 
 	modal, _ = d.Update(sendSpecialKey(tea.KeyShiftTab))
 	d = modal.(*InitDialog)
-	if d.focusIndex != 3 {
-		t.Errorf("Shift+Tab from field 0 should wrap to field 3 (Base Branch), got focusIndex=%d", d.focusIndex)
+	if d.focusIndexToLogicalFieldIndex() != initFieldIssue {
+		t.Errorf("Shift+Tab from Task ID should wrap to Issue, got focusIndex=%d", d.focusIndex)
 	}
 }
 
@@ -835,8 +844,7 @@ func TestInitDialog_RepoPicker_Filter_SubmitIncludesAllChecked(t *testing.T) {
 	d.repoList.Select(1)
 	d.toggleSelectedRepo()
 
-	d.focusIndex = 3
-	d.focusField(3)
+	d.focusField(d.lastFieldIndex())
 
 	_, cmd := d.Update(sendSpecialKey(tea.KeyEnter))
 	if cmd == nil {

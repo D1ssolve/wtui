@@ -621,7 +621,9 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	case panels.OpenInitDialogMsg:
 		flow := m.flow
 		if len(m.repos) > 0 {
-			m.modal = modal.NewInitDialogWithFlow(m.defaultBranchPrefix(), flow, m.repos, m.width, m.height)
+			dialog := modal.NewInitDialogWithFlow(m.defaultBranchPrefix(), flow, m.repos, m.width, m.height)
+			dialog.SetIssueConfig(m.cfg)
+			m.modal = dialog
 			return m, nil
 		}
 		m.outputPanel.AppendLine("Loading repository cache for init dialog...")
@@ -981,6 +983,7 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		m.pendingInitParams = &task.InitParams{
 			TaskID:           msg.TaskID,
+			Issue:            msg.Issue,
 			Services:         msg.Services,
 			BranchType:       msg.BranchType,
 			BranchPrefix:     msg.BranchPrefix,
@@ -1478,6 +1481,16 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 			m.spinner.Tick,
 		)
 
+	case modal.CreateTaskFromIssueMsg:
+		if _, ok := m.modal.(*modal.IssueList); !ok {
+			return m, nil
+		}
+		dialog := modal.NewInitDialogWithFlow(m.defaultBranchPrefix(), m.flow, m.repos, m.width, m.height)
+		dialog.SetIssueConfig(m.cfg)
+		dialog.PrefillIssue(msg.Issue, msg.Service)
+		m.modal = dialog
+		return m, nil
+
 	case modal.ForgeListIssuesMsg:
 		m.modal = nil
 		svc := m.servicesPanel.SelectedService()
@@ -1486,6 +1499,7 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.opRunning = true
+		m.operationGeneration++
 		m.outputPanel.AppendLine("Loading issues for " + msg.ServiceName + "...")
 		return m, tea.Batch(
 			forgeOpCmd(m.mgr, "list_issues", msg.TaskID, msg.ServiceName, forge.ListIssuesParams{WorktreePath: svc.WorktreePath, State: "open"}, m.operationGeneration),
@@ -1901,7 +1915,9 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		if m.initDialogPending {
 			m.initDialogPending = false
-			m.modal = modal.NewInitDialogWithFlow(m.defaultBranchPrefix(), m.flow, msg.Repos, m.width, m.height)
+			dialog := modal.NewInitDialogWithFlow(m.defaultBranchPrefix(), m.flow, msg.Repos, m.width, m.height)
+			dialog.SetIssueConfig(m.cfg)
+			m.modal = dialog
 		}
 		if m.addDialogPending != nil {
 			pending := *m.addDialogPending
@@ -2079,6 +2095,14 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		if msg.Err != nil {
 			m.outputPanel.AppendLine("Forge " + msg.Op + " failed for " + msg.ServiceName + ": " + msg.Err.Error())
+			return m, nil
+		}
+		if msg.Op == "list_issues" {
+			if issues, ok := msg.Data.([]forge.IssueInfo); ok {
+				m.modal = modal.NewIssueList(msg.ServiceName, issues, m.width, m.height)
+			} else {
+				m.outputPanel.AppendLine("List issues failed: invalid result")
+			}
 			return m, nil
 		}
 		if msg.Op == "pipeline_status" && msg.Provider == forge.ForgeProviderGitLab {
@@ -2933,6 +2957,7 @@ func releaseCleanupMutatingMessage(msg tea.Msg) bool {
 		modal.ForgeConfirmCreateMRMsg,
 		modal.ForgeMergeMRMsg,
 		modal.ForgePipelineStatusMsg,
+		modal.CreateTaskFromIssueMsg,
 		modal.ForgeListIssuesMsg:
 		return true
 	default:

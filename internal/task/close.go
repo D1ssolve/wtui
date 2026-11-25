@@ -269,6 +269,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 	}
 
 	continueOnError := m.cfg.Close != nil && m.cfg.Close.ContinueOnError
+	issue := m.taskIssue(ctx, m.taskDir(params.TaskID))
 
 	for _, svcPlan := range services {
 		svc, svcErr := m.findService(ctx, params.TaskID, svcPlan.ServiceName)
@@ -526,14 +527,15 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 				if strings.TrimSpace(params.ReviewDescription) != "" {
 					description = params.ReviewDescription
 				}
-				mr, createErr := forgeClient.CreateMR(ctx, withMRPolicy(forge.CreateMRParams{
+				createParams := withMRPolicy(forge.CreateMRParams{
 					WorktreePath: svc.WorktreePath,
 					SourceBranch: svcPlan.SourceBranch,
 					TargetBranch: target,
 					Title:        title,
 					Description:  description,
 					Repo:         repo,
-				}, svcPlan.MR))
+				}, svcPlan.MR)
+				mr, createErr := forgeClient.CreateMR(ctx, m.withIssueReference(createParams, issue, svc.RemoteURL))
 				if createErr != nil {
 					step(svc.Name+":review-request", StepStatusFailed, createErr.Error())
 					svcFailed = true

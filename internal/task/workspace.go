@@ -117,6 +117,7 @@ func removeGeneratedTaskFiles(taskDir, taskID string) error {
 		filepath.Join(taskDir, taskID+".sln"),
 		filepath.Join(taskDir, closePostActionsProofFileName),
 		filepath.Join(taskDir, taskFlowFileName),
+		filepath.Join(taskDir, taskMetadataFileName),
 	}
 
 	var removeErrs []error
