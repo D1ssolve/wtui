@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // ForceTaskCleanup removes task-owned resources without lifecycle or clean-worktree proof.
@@ -19,9 +20,17 @@ func (m *manager) ForceTaskCleanup(ctx context.Context, taskID string, deleteRem
 	}
 	defer unlock()
 	taskDir := m.taskDir(taskID)
+	if _, err := checkPendingBranches(filepath.Join(taskDir, pendingCleanupFile), ""); err != nil {
+		return result, err
+	}
 	services, err := m.ListServices(ctx, taskID)
 	if err != nil {
 		return result, err
+	}
+	if len(services) == 0 {
+		if err := m.checkEmptyTaskBranches(ctx, taskID); err != nil {
+			return result, err
+		}
 	}
 	for _, svc := range services {
 		if err := ctx.Err(); err != nil {
