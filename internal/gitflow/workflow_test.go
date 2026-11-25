@@ -90,8 +90,10 @@ func TestResolve_WorkflowErrors(t *testing.T) {
 		name, src, want string
 	}{
 		{"unknown preset", "extends: nope", "workflow.extends"},
-		{"unknown kind", "extends: github-flow\n  task_types:\n    feature:\n      prefixes: [f/]\n      from: production\n      close:\n        - deploy: {}", "task_types.feature.close[0].deploy: unknown block kind"},
-		{"unknown param", "extends: github-flow\n  task_types:\n    feature:\n      prefixes: [f/]\n      from: production\n      close:\n        - review: {into: production, target: x}", "close[0].review.target: unknown param"},
+		{"unknown kind", "extends: github-flow\n  task_types:\n    feature:\n      prefixes: [f/]\n      from: production\n      close:\n        - deploy: {}", `line 8: unknown key "deploy" in workflow.task_types.feature.close[0]; expected one of back_merge,`},
+		{"near kind", "extends: github-flow\n  task_types:\n    feature:\n      prefixes: [f/]\n      from: production\n      close:\n        - revie: {}", `line 8: unknown key "revie" in workflow.task_types.feature.close[0], did you mean "review"?`},
+		{"unknown param", "extends: github-flow\n  task_types:\n    feature:\n      prefixes: [f/]\n      from: production\n      close:\n        - review: {into: production, target: x}", `line 8: unknown key "target" in workflow.task_types.feature.close[0].review; expected one of into, merge`},
+		{"near param", "extends: github-flow\n  task_types:\n    feature:\n      prefixes: [f/]\n      from: production\n      close:\n        - review:\n            int: production", `line 9: unknown key "int" in workflow.task_types.feature.close[0].review, did you mean "into"?`},
 		{"block in wrong context", "extends: github-flow\n  task_types:\n    feature:\n      prefixes: [f/]\n      from: production\n      close:\n        - cut_branch: {from: production}", "not available in task close"},
 		{"bad merge strategy", "extends: github-flow\n  task_types:\n    feature:\n      prefixes: [f/]\n      from: production\n      close:\n        - review: {into: production, merge: octopus}", "merge: unsupported value"},
 		{"tag first", "extends: github-flow\n  task_types:\n    feature:\n      prefixes: [f/]\n      from: production\n      close:\n        - tag: {on: production}", "tag must follow"},

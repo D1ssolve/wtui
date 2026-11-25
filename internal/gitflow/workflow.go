@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -214,16 +215,11 @@ func (c *compiler) branch(path, value string) (string, error) {
 }
 
 func (c *compiler) step(path string, ctx stepContext, raw config.StepConfig) (Step, error) {
-	path = path + "." + raw.Kind
 	allowedByCtx, known := stepSpecs[raw.Kind]
 	if !known {
-		kinds := make([]string, 0, len(stepSpecs))
-		for k := range stepSpecs {
-			kinds = append(kinds, k)
-		}
-		sort.Strings(kinds)
-		return Step{}, fmt.Errorf("%s: unknown block kind, expected one of %s", path, strings.Join(kinds, ", "))
+		return Step{}, config.UnknownKeyError(raw.Line, raw.Kind, path, slices.Collect(maps.Keys(stepSpecs)))
 	}
+	path = path + "." + raw.Kind
 	allowed, ok := allowedByCtx[ctx]
 	if !ok {
 		where := map[stepContext]string{contextTask: "task close", contextRelease: "release", contextTaskState: "task machine"}[ctx]
@@ -232,7 +228,7 @@ func (c *compiler) step(path string, ctx stepContext, raw config.StepConfig) (St
 	params := map[string][]string{}
 	for key, node := range raw.Params {
 		if !slices.Contains(allowed, key) {
-			return Step{}, fmt.Errorf("%s.%s: unknown param, expected one of [%s]", path, key, strings.Join(allowed, ", "))
+			return Step{}, config.UnknownKeyError(raw.ParamLines[key], key, path, allowed)
 		}
 		values, err := scalarList(node)
 		if err != nil {

@@ -105,11 +105,16 @@ func Load(flagPath string) (*Config, error) {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
 
+	// Decoding values first applies yaml.v3's alias-expansion limits before the key walk expands aliases.
+	var values any
+	if err := yaml.Unmarshal(data, &values); err != nil {
+		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
-	if err := checkKeys(&doc, reflect.TypeFor[Config](), ""); err != nil {
+	if err := checkKeys(&doc, reflect.TypeFor[Config](), "", map[*yaml.Node]bool{}); err != nil {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
 

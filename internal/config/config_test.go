@@ -194,11 +194,17 @@ func TestLoad_UnknownKeys_ReturnLinePathAndSuggestion(t *testing.T) {
 		src  string
 		want []string
 	}{
-		{"top level typo", "log_level: DEBUG\nrelase: {}\n", []string{"line 2", `"relase"`, `did you mean "release"?`}},
-		{"nested typo", "tag: {formt: x}\n", []string{"line 1", `"tag.formt"`, `did you mean "format"?`}},
-		{"no close match", "release:\n  keep_promote_key: true\n", []string{"line 2", `"release.keep_promote_key"`, "delete it"}},
-		{"map value", "workflow:\n  task_types:\n    feature:\n      prefixs: [x/]\n", []string{"line 4", `"workflow.task_types.feature.prefixs"`, `did you mean "prefixes"?`}},
-		{"custom decoder", "workflow:\n  release:\n    machine:\n      states:\n        done: {nxt: x}\n", []string{"workflow.release.machine", "states.done", `"nxt"`}},
+		{"top level typo", "log_level: DEBUG\nrelase: {}\n", []string{`line 2: unknown key "relase", did you mean "release"?`}},
+		{"nested typo", "tag: {formt: x}\n", []string{`line 1: unknown key "formt" in tag, did you mean "format"?`}},
+		{"no close match", "release:\n  keep_promote_key: true\n", []string{`line 2: unknown key "keep_promote_key" in release; expected one of allow_task_reuse,`}},
+		{"map value", "workflow:\n  task_types:\n    feature:\n      prefixs: [x/]\n", []string{`line 4: unknown key "prefixs" in workflow.task_types.feature, did you mean "prefixes"?`}},
+		{"machine key", "# config\n{\"workflow\": {\"release\": {\"machine\": {\"initia\": \"x\"}}}}", []string{`line 2: unknown key "initia" in workflow.release.machine, did you mean "initial"?`}},
+		{"task machine key", "workflow:\n  task_types:\n    feature:\n      machine: {initia: x}\n", []string{`line 4: unknown key "initia" in workflow.task_types.feature.machine, did you mean "initial"?`}},
+		{"state key", "# config\n{\"workflow\": {\"release\": {\"machine\": {\"states\": {\"custom\": {\"nxt\": \"x\"}}}}}}", []string{`line 2: unknown key "nxt" in workflow.release.machine.states.custom, did you mean "next"?`}},
+		{"state key far", "# config\n{\"workflow\": {\"release\": {\"machine\": {\"states\": {\"custom\": {\"unrelated_input\": \"x\"}}}}}}", []string{`line 2: unknown key "unrelated_input" in workflow.release.machine.states.custom; expected one of final, label, next, on, on_error, run, wait`}},
+		{"event key", "# config\n{\"workflow\": {\"release\": {\"machine\": {\"states\": {\"custom\": {\"on\": {\"approve\": {\"labl\": \"x\"}}}}}}}}", []string{`line 2: unknown key "labl" in workflow.release.machine.states.custom.on.approve, did you mean "label"?`}},
+		{"merged typo", "tag: {<<: {formt: x}}\n", []string{`line 1: unknown key "formt" in tag, did you mean "format"?`}},
+		{"helper anchor key", "x-anchors: &a {concurrency: 3}\nprune: *a\n", []string{`line 1: unknown key "x-anchors"; expected one of`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -213,6 +219,54 @@ func TestLoad_UnknownKeys_ReturnLinePathAndSuggestion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoad_AnchorsAliasesAndMerges_DecodeLikeYAML(t *testing.T) {
+	tests := []struct {
+		name  string
+		src   string
+		check func(*Config) bool
+	}{
+		{"merge into task_types", "workflow: {extends: git-flow, task_types: {<<: {ops: {prefixes: [ops/], from: integration, close: [{review: {into: integration}}]}}}}\n",
+			func(c *Config) bool {
+				return c.Workflow.TaskTypes["ops"] != nil && c.Workflow.TaskTypes["ops"].From == "integration"
+			}},
+		{"merge anchored task_types", "workflow:\n  extends: git-flow\n  task_types: {<<: &types {ops: {prefixes: [ops/], from: integration, close: [{review: {into: integration}}]}}}\n",
+			func(c *Config) bool { return c.Workflow.TaskTypes["ops"] != nil }},
+		{"alias as key", "editor: &alias format\ntag: {*alias: x}\n", func(c *Config) bool { return c.Tag.Format == "x" }},
+		{"merge with override", "tag: {<<: {format: a, push: false}, format: b}\n", func(c *Config) bool { return c.Tag.Format == "b" && !c.Tag.Push }},
+		{"merge sequence, earlier wins", "tag: {<<: [{format: first}, {format: second, push: false}]}\n", func(c *Config) bool { return c.Tag.Format == "first" && !c.Tag.Push }},
+		{"alias to scalar", "root_dir: &r /work\ntasks_root: *r\n", func(c *Config) bool { return c.TasksRoot == "/work" }},
+		{"alias to mapping in task_types", "workflow:\n  task_types:\n    feature: &ft {prefixes: [feature/], from: integration}\n    ops: *ft\n",
+			func(c *Config) bool {
+				return c.Workflow.TaskTypes["ops"] != nil && c.Workflow.TaskTypes["ops"].From == "integration"
+			}},
+		{"merged machine", "workflow:\n  release:\n    machine:\n      <<: {initial: start}\n      states: {start: {final: released}}\n",
+			func(c *Config) bool { return c.Workflow.Release.Machine.Initial == "start" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, tt.src))
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			if !tt.check(mustEffective(t, cfg)) {
+				t.Fatalf("cfg decoded wrongly: tag=%+v workflow=%+v", cfg.Tag, cfg.Workflow)
+			}
+		})
+	}
+}
+
+func TestLoad_TypoInSharedAnchor_ReportedOnceWithLine(t *testing.T) {
+	_, err := Load(writeTempConfig(t, "validation: &v {concurrncy: 3}\nprune: {<<: *v}\n"))
+	want := `line 1: unknown key "concurrncy" in validation, did you mean "concurrency"?`
+	if err == nil || !strings.Contains(err.Error(), want) || strings.Count(err.Error(), "concurrncy") != 1 {
+		t.Fatalf("Load() error = %v, want exactly one %q", err, want)
+	}
+}
+
+func TestLoad_SelfReferentialAnchor_ReturnsWithoutPanic(t *testing.T) {
+	_, _ = Load(writeTempConfig(t, "tag: &t {format: x, extra: *t}\n"))
 }
 
 func TestLoad_RemovedKeyHint_TakesPrecedenceOverUnknownKey(t *testing.T) {
