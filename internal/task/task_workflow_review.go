@@ -7,6 +7,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 // inspectWorkflowReviewMR mirrors the readiness classification in mr_merge.go,
@@ -18,6 +19,11 @@ import (
 // (squash/rebase included) is recognized as merged instead of missing.
 func (m *manager) inspectWorkflowReviewMR(ctx context.Context, svc domain.Service, reviewTarget string) ServiceMergeInspection {
 	item := ServiceMergeInspection{ServiceName: svc.Name}
+	if m.hasServiceRule(svc) && m.branchRule(svc.Name, svc.Branch).CloseStrategy != gitflow.CloseStrategyReviewRequest {
+		item.Status = "blocked"
+		item.Blockers = []string{"service workflow does not close by MR"}
+		return item
+	}
 	client, clientErr := m.forgeClientForService(ctx, svc)
 	if clientErr != nil {
 		return failedWorkflowInspection(item, clientErr, "inspect origin URL and forge provider configuration")
@@ -44,7 +50,7 @@ func (m *manager) inspectWorkflowReviewMR(ctx context.Context, svc domain.Servic
 			}
 			break
 		}
-		if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &item.MR); err != nil {
+		if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Name, svc.Branch), &item.MR); err != nil {
 			return failedWorkflowInspection(item, err, "inspect saved merge proof and origin push destination")
 		}
 		item.Blockers = append([]string(nil), item.MR.Blockers...)
@@ -104,7 +110,7 @@ func (m *manager) reconcileMergedReviewMR(ctx context.Context, svc domain.Servic
 	if item.MR.URL == "" {
 		item.MR.URL = active[0].URL
 	}
-	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &mr); err != nil {
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Name, svc.Branch), &mr); err != nil {
 		return fail(withRecovery(err, "inspect saved merge proof and origin push destination"))
 	}
 	currentSHA, err := m.resolveFreshSourceSHA(ctx, svc)

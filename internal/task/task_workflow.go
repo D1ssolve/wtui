@@ -45,7 +45,8 @@ func (m *manager) workflowPlans(services []domain.Service) ([]serviceWorkflowPla
 		var ok bool
 		if m.flow != nil {
 			plan.branchType = gitflow.DetectBranchType(svc.Branch, m.flow)
-			rule, ok = m.flow.BranchTypes[plan.branchType]
+			_, ok = m.flow.BranchTypes[plan.branchType]
+			rule = m.flow.RuleFor(svc.Name, plan.branchType)
 		}
 		if !ok {
 			// No rule for this branch type (sparse or missing flow): assume the
@@ -120,7 +121,7 @@ func (m *manager) allHotfixReview(services []domain.Service) bool {
 		return false
 	}
 	for _, svc := range services {
-		if !m.isMultiTargetReview(svc.Branch) {
+		if !m.isMultiTargetReview(svc.Name, svc.Branch) {
 			return false
 		}
 	}
@@ -170,8 +171,7 @@ func (m *manager) hotfixReviewWorkflow(ctx context.Context, taskID string) (doma
 }
 
 // workflowMergeStates fetches every service and checks its branch against all
-// effective close targets. Review services check the first review target only,
-// mirroring ordinary review close semantics.
+// effective close targets, including every target of a machine-gated review.
 func (m *manager) workflowMergeStates(ctx context.Context, plans []serviceWorkflowPlan) ([]serviceMergeState, error) {
 	states := make([]serviceMergeState, len(plans))
 	m.runWorkflowChecks(len(plans), func(i int) {
@@ -188,7 +188,7 @@ func (m *manager) workflowMergeStates(ctx context.Context, plans []serviceWorkfl
 			if len(plan.rule.ReviewTargets) == 0 {
 				return
 			}
-			st.targets = []string{"origin/" + plan.rule.ReviewTargets[0]}
+			st.targets = originPrefixed(plan.rule.ReviewTargets)
 		}
 		if st.err = m.git.Fetch(ctx, plan.svc.RepoPath); st.err != nil {
 			return

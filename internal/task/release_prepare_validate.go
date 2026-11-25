@@ -31,6 +31,7 @@ func confirmReleaseTaskMergeRows(release *domain.Release, plan *ReleaseTaskMerge
 		}
 		fb := &release.Services[svcIdx].FeatureBranches[fbIdx]
 		if fb.TaskMergeStatus == "" {
+			fb.TaskMergeMethod = step.MergeMethod
 			fb.TaskMergeMRNumber = step.MRNumber
 			fb.TaskMergeMRURL = step.MRURL
 			fb.TaskMergeHeadSHA = step.HeadSHA
@@ -40,6 +41,21 @@ func confirmReleaseTaskMergeRows(release *domain.Release, plan *ReleaseTaskMerge
 		if fb.TaskMergeStatus == taskMergeStatusPending {
 			fb.TaskMergeExpectedTarget = step.TargetSHA
 		}
+	}
+	return nil
+}
+
+// Older confirmations predate service overrides and used the global merge method.
+func (m *manager) checkConfirmedTaskRule(svc domain.ReleaseService, fb domain.ReleaseFeatureBranch) error {
+	if err := m.checkReleaseTaskRule(svc.Name, fb.Branch, svc.IntegrationBranch); err != nil {
+		return err
+	}
+	method := fb.TaskMergeMethod
+	if method == "" && m.flow != nil {
+		method = forgeMergeMethod(m.flow.BranchTypes[gitflow.DetectBranchType(fb.Branch, m.flow)].MergeStrategy)
+	}
+	if method != m.mergeMethodForBranch(svc.Name, fb.Branch) {
+		return fmt.Errorf("%w: %s/%s task MR merge method changed since confirmation", ErrReleaseRetryUnsafe, svc.Name, fb.Branch)
 	}
 	return nil
 }
@@ -68,6 +84,12 @@ func releaseTaskMergeTargetKey(repoPath, targetBranch string) string {
 }
 
 func (m *manager) validateReleaseTaskMergeStep(ctx context.Context, step releaseTaskMergeStep, targets map[string]string) error {
+	if err := m.checkReleaseTaskRule(step.ServiceName, step.Branch, step.TargetBranch); err != nil {
+		return err
+	}
+	if step.MergeMethod != m.mergeMethodForBranch(step.ServiceName, step.Branch) {
+		return errors.New("release task merge method changed since preview")
+	}
 	if err := m.validateTaskMergeLocalHead(ctx, step.WorktreePath, step.HeadSHA); err != nil {
 		return err
 	}
@@ -106,6 +128,18 @@ func (m *manager) validateReleaseTaskMergeStep(ctx context.Context, step release
 	}
 	if mr.SourceBranch != step.Branch || mr.TargetBranch != step.TargetBranch || mr.HeadSHA != step.HeadSHA || !openMRState(mr.State) || !mr.Ready {
 		return errors.New("release task merge fresh gate: MR changed since preview")
+	}
+	return nil
+}
+
+// integrate_tasks can only accept a task MR into the release integration branch.
+func (m *manager) checkReleaseTaskRule(service, branch, integration string) error {
+	if m.flow == nil {
+		return nil
+	}
+	rule, ok := m.flow.ServiceOverride(service, gitflow.DetectBranchType(branch, m.flow))
+	if ok && (rule.CloseStrategy != gitflow.CloseStrategyReviewRequest || len(rule.ReviewTargets) != 1 || rule.ReviewTargets[0] != integration) {
+		return fmt.Errorf("integrate_tasks: %s/%s needs a single review into %s; configured close: %s", service, branch, integration, gitflow.DescribeSteps(rule.Close, ", "))
 	}
 	return nil
 }

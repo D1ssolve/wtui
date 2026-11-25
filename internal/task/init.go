@@ -62,9 +62,6 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 	}
 
 	baseBranch := strings.TrimSpace(params.BaseBranch)
-	if baseBranch == "" {
-		baseBranch = strings.TrimSpace(rule.BaseBranch)
-	}
 
 	results := m.addWorktreesForServices(
 		ctx, params.TaskID, params.Services, taskDir, branchName, baseBranch,
@@ -227,6 +224,9 @@ func (m *manager) processService(
 	}
 
 	baseBranch := baseBranchOverride
+	if baseBranch == "" {
+		baseBranch = m.branchRule(serviceName, branchName).BaseBranch
+	}
 	if baseBranch == "" {
 		b, baseErr := cache.getBaseBranch(ctx, m.git, repoPath)
 		if baseErr != nil {

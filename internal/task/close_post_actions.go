@@ -102,12 +102,14 @@ func (m *manager) verifiedRepoPushURL(ctx context.Context, name, repoPath string
 // closePostActionConfigDigest binds a proof to the configuration that defines
 // the required actions: resolved git flow rules plus tag/close settings. Any
 // change invalidates every recorded proof.
-func (m *manager) closePostActionConfigDigest() string {
-	return digest(struct {
+func (m *manager) closePostActionConfigDigest(svc domain.Service) string {
+	rules := serviceRulesIdentity{}
+	rules.add(m.flow, svc.Name, svc.Branch)
+	return rules.bind(digest(struct {
 		Flow  any
 		Tag   any
 		Close any
-	}{m.flow, m.cfg.Tag, m.cfg.Close})
+	}{m.flow, m.cfg.Tag, m.cfg.Close}))
 }
 
 // A Git endpoint may be a literal filesystem path. Only its exact captured
@@ -190,7 +192,7 @@ func (m *manager) proveClosePostAction(ctx context.Context, taskID string, svc d
 		PushURL:   pushURL,
 		Branch:    svc.Branch,
 		SourceSHA: sha,
-		Config:    m.closePostActionConfigDigest(),
+		Config:    m.closePostActionConfigDigest(svc),
 	}
 	merged := false
 	for i := range proof.Services {
@@ -225,7 +227,7 @@ func (m *manager) verifyClosePostActionProof(taskID string, svc domain.Service, 
 	if err != nil {
 		return "", false, err
 	}
-	config := m.closePostActionConfigDigest()
+	config := m.closePostActionConfigDigest(svc)
 	for _, rec := range proof.Services {
 		if rec.Service != svc.Name || rec.Branch != svc.Branch || rec.SourceSHA != sourceSHA || rec.Config != config || !samePath(rec.RepoPath, svc.RepoPath) || !sameRemoteURL(rec.RemoteURL, svc.RemoteURL) || !sameRemoteURL(rec.PushURL, svc.RemoteURL) {
 			continue

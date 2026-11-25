@@ -33,8 +33,8 @@ type reviewSourcePublication struct {
 // sourceRemovedOnMerge reports an eligible review whose forge removes the source on merge:
 // its MR history is classified before the source is published, so a merged review is
 // verified read-only and its removed source is never recreated.
-func (m *manager) sourceRemovedOnMerge(branch string) bool {
-	rule := m.branchRule(branch)
+func (m *manager) sourceRemovedOnMerge(service, branch string) bool {
+	rule := m.branchRule(service, branch)
 	return rule.MR.RemoveSourceBranch && gitflow.SourceNeededAfterReview(rule) == ""
 }
 
@@ -92,9 +92,9 @@ func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, 
 	if err != nil {
 		return "", "", err
 	}
-	removal := m.sourceRemovedOnMerge(svc.Branch)
+	removal := m.sourceRemovedOnMerge(svc.Name, svc.Branch)
 	const inspect = "inspect MR source, target and state in the forge; refresh before retrying"
-	if removal {
+	if removal || m.hasServiceRule(svc) {
 		if svc.Branch == "" || target == "" {
 			return "", "", withRecovery(errors.New("review source or target branch is missing"), inspect)
 		}
@@ -128,7 +128,7 @@ func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, 
 	if err != nil {
 		return "", "", err
 	}
-	if removal {
+	if removal || m.hasServiceRule(svc) {
 		if fresh.Number != want.Number || fresh.SourceBranch != svc.Branch || fresh.TargetBranch != target {
 			return "", "", withRecovery(fmt.Errorf("MR !%d identity changed or is incomplete: got !%d %q → %q, expected %q → %q", want.Number, fresh.Number, fresh.SourceBranch, fresh.TargetBranch, svc.Branch, target), inspect)
 		}
@@ -139,7 +139,7 @@ func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, 
 			return "", "", withRecovery(fmt.Errorf("MR !%d is listed as merged but numbered detail is %q", want.Number, fresh.State), inspect)
 		}
 	}
-	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &fresh); err != nil {
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Name, svc.Branch), &fresh); err != nil {
 		return "", "", err
 	}
 	switch strings.ToLower(strings.TrimSpace(fresh.State)) {

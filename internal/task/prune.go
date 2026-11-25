@@ -108,7 +108,7 @@ func (m *manager) scanTaskPrunable(ctx context.Context, taskID string) (domain.P
 			return domain.PruneCandidate{}, ctx.Err()
 		}
 
-		mergeTarget := m.pruneMergeTarget(service.Branch)
+		mergeTarget := m.pruneMergeTarget(service.Name, service.Branch)
 		pruneService := domain.ServicePrune{
 			ServiceName: service.Name,
 			Branch:      service.Branch,
@@ -157,12 +157,12 @@ func (m *manager) scanTaskPrunable(ctx context.Context, taskID string) (domain.P
 	}, nil
 }
 
-func (m *manager) pruneMergeTarget(branch string) string {
+func (m *manager) pruneMergeTarget(service, branch string) string {
 	base := ""
 	flow := m.flow
 	if flow != nil {
 		base = flow.IntegrationBranch
-		if rule := flow.BranchTypes[gitflow.DetectBranchType(branch, flow)]; len(rule.Close) > 0 && len(rule.Close[0].Into) > 0 {
+		if rule := flow.RuleFor(service, gitflow.DetectBranchType(branch, flow)); len(rule.Close) > 0 && len(rule.Close[0].Into) > 0 {
 			base = rule.Close[0].Into[0]
 		}
 	}

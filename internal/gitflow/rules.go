@@ -35,6 +35,7 @@ type ResolvedGitFlow struct {
 	DefaultBranchType BranchType
 	AllowMixed        bool
 	BranchTypes       map[BranchType]BranchTypeRule
+	serviceRules      map[string]map[BranchType]BranchTypeRule
 	Release           *ReleaseFlow
 }
 

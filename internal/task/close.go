@@ -51,11 +51,6 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 	}
 
 	firstBranchType := gitflow.DetectBranchType(services[0].Branch, flow)
-	rule, ok := flow.BranchTypes[firstBranchType]
-	if !ok {
-		return ClosePlan{}, fmt.Errorf("%w: %s", ErrNoMergeTargets, firstBranchType)
-	}
-
 	if !flow.AllowMixed {
 		for _, svc := range services[1:] {
 			branchType := gitflow.DetectBranchType(svc.Branch, flow)
@@ -71,30 +66,29 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 		Services:   make([]ServiceClosePlan, 0, len(services)),
 	}
 	for _, svc := range services {
-		if !m.isMultiTargetReview(svc.Branch) {
+		if !m.isMultiTargetReview(svc.Name, svc.Branch) {
 			continue
 		}
 		for _, other := range services {
-			if !m.isMultiTargetReview(other.Branch) {
+			if !m.isMultiTargetReview(other.Name, other.Branch) {
 				return ClosePlan{}, ErrMixedBranchTypes
 			}
 		}
 		bt := gitflow.DetectBranchType(svc.Branch, flow)
-		return m.planHotfixClose(ctx, taskID, services, bt, flow.BranchTypes[bt])
+		return m.planHotfixClose(ctx, taskID, services, bt)
 	}
 
+	if cp, err := m.loadHotfixCheckpoint(taskID); err != nil {
+		return ClosePlan{}, err
+	} else if len(cp.Tags) > 0 || len(cp.Pipelines) > 0 {
+		return ClosePlan{}, fmt.Errorf("hotfix source/services/config changed after tag or pipeline confirmation; restore the confirmed state before continuing")
+	}
 	for _, svc := range services {
-		svcBranchType := firstBranchType
-		svcRule := rule
-		if flow.AllowMixed {
-			svcBranchType = gitflow.DetectBranchType(svc.Branch, flow)
-			resolvedRule, found := flow.BranchTypes[svcBranchType]
-			if !found {
-				return ClosePlan{}, fmt.Errorf("%w: %s", ErrNoMergeTargets, svcBranchType)
-			}
-			svcRule = resolvedRule
+		svcBranchType := gitflow.DetectBranchType(svc.Branch, flow)
+		if _, ok := flow.BranchTypes[svcBranchType]; !ok {
+			return ClosePlan{}, fmt.Errorf("%w: %s", ErrNoMergeTargets, svcBranchType)
 		}
-
+		svcRule := flow.RuleFor(svc.Name, svcBranchType)
 		targets := append([]string(nil), svcRule.MergeTargets...)
 		if resolvedTargets, warning := m.effectiveMergeTargets(ctx, svc, svcBranchType, targets); warning != "" {
 			plan.Warnings = append(plan.Warnings, warning)
@@ -169,6 +163,7 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 		plan.Services = append(plan.Services, servicePlan)
 	}
 
+	plan.Fingerprint = m.closeServiceRules(plan.Services).bind("")
 	return plan, nil
 }
 
@@ -223,6 +218,9 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 		return m.executeHotfixClose(ctx, params, plan)
 	}
 
+	if params.Fingerprint != "" && params.Fingerprint != plan.Fingerprint {
+		return result, fmt.Errorf("close plan changed; review it again")
+	}
 	services := plan.Services
 	if params.ServiceName != "" {
 		services = slices.DeleteFunc(append([]ServiceClosePlan(nil), services...), func(s ServiceClosePlan) bool {
@@ -468,7 +466,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 
 		case gitflow.CloseStrategyReviewRequest:
 			publish := m.cfg.Close == nil || m.cfg.Close.PushSourceBeforeReview
-			classifyFirst := m.sourceRemovedOnMerge(svc.Branch)
+			classifyFirst := m.sourceRemovedOnMerge(svc.Name, svc.Branch)
 			if publish && !classifyFirst {
 				if pushErr := m.pushBranch(ctx, svc.WorktreePath); pushErr != nil {
 					step(svc.Name+":push-source", StepStatusFailed, pushErr.Error())
@@ -770,7 +768,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 // into. Shared by close planning and workflow guidance. The returned warning
 // (non-empty when detection fails) is informational; targets stay unchanged.
 func (m *manager) effectiveMergeTargets(ctx context.Context, svc domain.Service, branchType gitflow.BranchType, targets []string) ([]string, string) {
-	if m.flow == nil || !m.flow.BranchTypes[branchType].ViaActiveRelease || m.flow.Release == nil {
+	if m.flow == nil || !m.flow.RuleFor(svc.Name, branchType).ViaActiveRelease || m.flow.Release == nil {
 		return targets, ""
 	}
 	releasePrefix := m.flow.Release.BranchPrefix

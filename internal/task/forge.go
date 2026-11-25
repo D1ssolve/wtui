@@ -40,6 +40,15 @@ func (m *manager) ForgeCreateMissingMRs(ctx context.Context, taskID, title strin
 	result := TaskMRCreateResult{TaskID: taskID, Title: title, Services: make([]ServiceMRCreateResult, 0, len(services))}
 	for _, svc := range services {
 		item := ServiceMRCreateResult{ServiceName: svc.Name}
+		if m.hasServiceRule(svc) {
+			rule := m.branchRule(svc.Name, svc.Branch)
+			if rule.CloseStrategy != gitflow.CloseStrategyReviewRequest || len(rule.ReviewTargets) != 1 {
+				item.Status = "failed"
+				item.Err = fmt.Errorf("%s: use the configured close workflow", svc.Name)
+				result.Services = append(result.Services, item)
+				continue
+			}
+		}
 		client, clientErr := m.forgeClientForService(ctx, svc)
 		if clientErr != nil {
 			item.Status, item.Err = "failed", clientErr
@@ -61,13 +70,19 @@ func (m *manager) ForgeCreateMissingMRs(ctx context.Context, taskID, title strin
 			result.Services = append(result.Services, item)
 			continue
 		}
+		target := m.reviewTarget(svc.Name, svc.Branch)
 		if len(mrs) > 0 {
+			if m.hasServiceRule(svc) && (len(mrs) != 1 || mrs[0].SourceBranch != svc.Branch || mrs[0].TargetBranch != target) {
+				item.Status = "failed"
+				item.Err = fmt.Errorf("%s: expected one existing MR from %s into %s", svc.Name, svc.Branch, target)
+				result.Services = append(result.Services, item)
+				continue
+			}
 			item.Status, item.MR = "existing", mrs[0]
 			result.Services = append(result.Services, item)
 			continue
 		}
 
-		target := m.reviewTarget(svc.Branch)
 		if !force {
 			if reason := m.mrCreateConfirmReason(ctx, svc, client, repo, target); reason != "" {
 				item.Status, item.Reason = "confirm", reason
@@ -83,7 +98,7 @@ func (m *manager) ForgeCreateMissingMRs(ctx context.Context, taskID, title strin
 			Title:        title,
 			Description:  description,
 			Repo:         repo,
-		}, m.branchRule(svc.Branch).MR))
+		}, m.branchRule(svc.Name, svc.Branch).MR))
 		if item.Err != nil {
 			item.Status = "failed"
 		} else {
@@ -116,8 +131,8 @@ func (m *manager) mrCreateConfirmReason(ctx context.Context, svc domain.Service,
 	return ""
 }
 
-func (m *manager) reviewTarget(branch string) string {
-	rule := m.branchRule(branch)
+func (m *manager) reviewTarget(service, branch string) string {
+	rule := m.branchRule(service, branch)
 	if len(rule.ReviewTargets) > 0 {
 		return rule.ReviewTargets[0]
 	}
@@ -127,12 +142,20 @@ func (m *manager) reviewTarget(branch string) string {
 	return m.integrationBranch()
 }
 
+func (m *manager) hasServiceRule(svc domain.Service) bool {
+	if m.flow == nil {
+		return false
+	}
+	_, ok := m.flow.ServiceOverride(svc.Name, gitflow.DetectBranchType(svc.Branch, m.flow))
+	return ok
+}
+
 // branchRule is the configured rule for branch's type; zero without a flow or a matching type.
-func (m *manager) branchRule(branch string) gitflow.BranchTypeRule {
+func (m *manager) branchRule(service, branch string) gitflow.BranchTypeRule {
 	if m.flow == nil {
 		return gitflow.BranchTypeRule{}
 	}
-	return m.flow.BranchTypes[gitflow.DetectBranchType(branch, m.flow)]
+	return m.flow.RuleFor(service, gitflow.DetectBranchType(branch, m.flow))
 }
 
 // withMRPolicy applies the task type's or release's configured MR defaults to params.

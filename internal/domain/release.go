@@ -122,6 +122,7 @@ type ReleaseFeatureBranch struct {
 	TaskMergeStatus         string `json:"task_merge_status,omitempty"`
 	TaskMergeMRNumber       int    `json:"task_merge_mr_number,omitempty"`
 	TaskMergeMRURL          string `json:"task_merge_mr_url,omitempty"`
+	TaskMergeMethod         string `json:"task_merge_method,omitempty"`
 	TaskMergeHeadSHA        string `json:"task_merge_head_sha,omitempty"`
 	TaskMergeTargetSHA      string `json:"task_merge_target_sha,omitempty"`
 	TaskMergeExpectedTarget string `json:"task_merge_expected_target,omitempty"`

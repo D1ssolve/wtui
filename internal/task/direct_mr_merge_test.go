@@ -145,7 +145,7 @@ func TestDirectMergeProof_OpenMRAllowsCloseAndCleanup(t *testing.T) {
 			return resolve(repo, ref)
 		}
 	}
-	params := forge.MergeMRParams{Repo: "gitlab.com/group/repo", Number: 7, ExpectedHeadSHA: detail.HeadSHA, ExpectedTargetBranch: "master", Method: m.mergeMethodForBranch(detail.SourceBranch)}
+	params := forge.MergeMRParams{Repo: "gitlab.com/group/repo", Number: 7, ExpectedHeadSHA: detail.HeadSHA, ExpectedTargetBranch: "master", Method: m.mergeMethodForBranch("svc", detail.SourceBranch)}
 	_, dir, err := m.readDirectMergeProofs(params)
 	if err != nil {
 		t.Fatal(err)

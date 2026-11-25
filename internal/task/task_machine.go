@@ -48,9 +48,11 @@ func (m *manager) loadTaskFlow(ctx context.Context, taskID string) (*taskFlow, e
 	if err != nil || len(services) == 0 {
 		return nil, err
 	}
+	rules := serviceRulesIdentity{}
 	var typ gitflow.BranchType
 	mixed := false
 	for i, svc := range services {
+		rules.add(m.flow, svc.Name, svc.Branch)
 		bt := gitflow.DetectBranchType(svc.Branch, m.flow)
 		if i == 0 {
 			typ = bt
@@ -69,18 +71,19 @@ func (m *manager) loadTaskFlow(ctx context.Context, taskID string) (*taskFlow, e
 	if rule.Machine == nil {
 		return nil, nil
 	}
+	fingerprint := rules.bind(rule.Machine.Fingerprint())
 	tf := &taskFlow{taskID: taskID, machine: rule.Machine, services: services}
 	data, err := os.ReadFile(filepath.Join(m.taskDir(taskID), taskFlowFileName))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		tf.state = taskFlowState{Type: string(typ), Fingerprint: rule.Machine.Fingerprint(), State: rule.Machine.Initial}
+		tf.state = taskFlowState{Type: string(typ), Fingerprint: fingerprint, State: rule.Machine.Initial}
 	case err != nil:
 		return nil, err
 	default:
 		if err := json.Unmarshal(data, &tf.state); err != nil {
 			return nil, fmt.Errorf("%w: %s is corrupt: %v", ErrTaskFlowStep, taskFlowFileName, err)
 		}
-		if tf.state.Type != string(typ) || tf.state.Fingerprint != rule.Machine.Fingerprint() {
+		if tf.state.Type != string(typ) || tf.state.Fingerprint != fingerprint {
 			return nil, fmt.Errorf("%w: task %s started under a different %s machine; restore that configuration or delete %s in the task directory to restart its workflow", ErrTaskFlowStep, taskID, typ, taskFlowFileName)
 		}
 	}

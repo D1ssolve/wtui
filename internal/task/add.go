@@ -30,10 +30,8 @@ func (m *manager) Add(ctx context.Context, params AddParams) (PartialFailureResu
 	}
 	branchName := m.resolveBranchName(branchPrefix, params.TaskID)
 
-	baseBranch := strings.TrimSpace(rule.BaseBranch)
-
 	results := m.addWorktreesForServices(
-		ctx, params.TaskID, params.Services, taskDir, branchName, baseBranch,
+		ctx, params.TaskID, params.Services, taskDir, branchName, "",
 		params.RemoteBranchStrategies, params.BranchSuffixes, params.StatusCh,
 	)
 	summary := summarizeServiceResults(params.TaskID, "add", params.Services, results)

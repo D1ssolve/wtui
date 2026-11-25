@@ -44,6 +44,9 @@ func (flow *ResolvedGitFlow) Describe() string {
 		if policy := rule.MR.Describe(); policy != "" {
 			fmt.Fprintf(&b, "    mr: %s\n", policy)
 		}
+		for _, line := range flow.ServiceRuleDescriptions(BranchType(name)) {
+			fmt.Fprintf(&b, "    service %s\n", line)
+		}
 		if rule.Machine != nil {
 			fmt.Fprintf(&b, "    machine, starts in %s (C closes, M merges only where an event offers it):\n", rule.Machine.Initial)
 			describeMachine(&b, rule.Machine, "      ")
@@ -157,6 +160,9 @@ func (flow *ResolvedGitFlow) Mermaid() string {
 			branch = "any other branch"
 		}
 		fmt.Fprintf(&b, "    subgraph %s[\"%s\"]\n", mermaidID("task", name), mermaidLabel(name))
+		for i, line := range flow.ServiceRuleDescriptions(BranchType(name)) {
+			fmt.Fprintf(&b, "        %s[\"%s\"]\n", mermaidID("task", name, "service", fmt.Sprint(i)), mermaidLabel(line))
+		}
 		if rule.Machine != nil {
 			prefix := mermaidID("task", name, "m")
 			fmt.Fprintf(&b, "        %s([\"%s from %s\"]) --> %s\n", mermaidID("task", name, "start"), mermaidLabel(branch), mermaidLabel(rule.BaseBranch), mermaidID(prefix, rule.Machine.Initial))
@@ -248,6 +254,7 @@ mermaid.initialize({startOnLoad: true, securityLevel: "strict"});
 func FormatReference() string {
 	var b strings.Builder
 	b.WriteString("Top level: workflow: {extends, branches: {production, integration}, default_type, task_types: {<name>: {prefixes, from, shared, requires_clean, close: [steps], mr}}, release: {branch: <prefix>{{.Version}}, steps: [steps] | machine, mr}}\n")
+	b.WriteString("services: {<service>: {task_types: {<type>: {from, close, mr}}}}; omitted fields inherit; prefixes and machines are global.\n")
 	b.WriteString("mr (optional MR defaults): {draft: bool, labels: [..], reviewers: [..], assignees: [..], remove_source_branch: bool}; remove_source_branch only on a single-target review close with no tag, cherry_pick, pipeline or machine, never on release; GitHub cannot remove branches per pull request.\n")
 	b.WriteString("Branch references: production, integration, a literal branch name; in release states also release (the release branch).\n")
 	b.WriteString("A step is a single-key mapping {kind: {params}}. Kinds and params by context:\n")

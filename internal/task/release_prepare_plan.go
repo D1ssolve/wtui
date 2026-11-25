@@ -131,6 +131,9 @@ func sortReleaseTaskMergeRows(rows []ReleaseTaskMergeRow, steps []releaseTaskMer
 }
 
 func (m *manager) planReleaseTaskMergeRow(ctx context.Context, svc domain.ReleaseService, fb domain.ReleaseFeatureBranch, targetSHA string) (ReleaseTaskMergeRow, releaseTaskMergeStep, error) {
+	if err := m.checkReleaseTaskRule(svc.Name, fb.Branch, svc.IntegrationBranch); err != nil {
+		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, err
+	}
 	client, err := m.forgeClientForReleaseService(ctx, svc)
 	if err != nil {
 		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, err
@@ -150,14 +153,14 @@ func (m *manager) planReleaseTaskMergeRow(ctx context.Context, svc domain.Releas
 	matches, _ := matchTargetMRs(mrs, fb.Branch, svc.IntegrationBranch)
 	if len(matches) != 1 {
 		row := ReleaseTaskMergeRow{ServiceName: svc.Name, TaskID: fb.TaskID, Branch: fb.Branch, TargetBranch: svc.IntegrationBranch, TargetSHA: targetSHA, Status: taskMergeStatusUnknown, Ready: false, Blockers: []string{"MR missing or ambiguous"}}
-		step := releaseTaskMergeStep{ServiceName: svc.Name, TaskID: fb.TaskID, Branch: fb.Branch, TargetSHA: targetSHA, Ready: false, Status: taskMergeStatusUnknown, Blockers: row.Blockers, RepoPath: svc.RepoPath, WorktreePath: fb.WorktreePath, Repo: repo, TargetBranch: svc.IntegrationBranch, MergeMethod: m.mergeMethodForBranch(fb.Branch)}
+		step := releaseTaskMergeStep{ServiceName: svc.Name, TaskID: fb.TaskID, Branch: fb.Branch, TargetSHA: targetSHA, Ready: false, Status: taskMergeStatusUnknown, Blockers: row.Blockers, RepoPath: svc.RepoPath, WorktreePath: fb.WorktreePath, Repo: repo, TargetBranch: svc.IntegrationBranch, MergeMethod: m.mergeMethodForBranch(svc.Name, fb.Branch)}
 		return row, step, nil
 	}
 	mr, err := client.MRReadinessByNumber(ctx, matches[0].Number, repo, fb.WorktreePath)
 	if err != nil {
 		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, fmt.Errorf("release task merge plan: read MR !%d: %w", matches[0].Number, err)
 	}
-	reconciled, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(fb.Branch), &mr)
+	reconciled, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Name, fb.Branch), &mr)
 	if err != nil {
 		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, err
 	}
@@ -184,7 +187,7 @@ func (m *manager) planReleaseTaskMergeRow(ctx context.Context, svc domain.Releas
 	step := releaseTaskMergeStep{
 		ServiceName: svc.Name, TaskID: fb.TaskID, Branch: fb.Branch,
 		MRNumber: mr.Number, MRURL: mr.URL, HeadSHA: mr.HeadSHA, TargetSHA: targetSHA, AcceptedSHA: acceptedSHA, Ready: ready, Status: status, Blockers: append([]string(nil), blockers...),
-		RepoPath: svc.RepoPath, WorktreePath: fb.WorktreePath, Repo: repo, TargetBranch: svc.IntegrationBranch, SupportsPin: mr.SupportsSHAPin, MergeMethod: m.mergeMethodForBranch(fb.Branch),
+		RepoPath: svc.RepoPath, WorktreePath: fb.WorktreePath, Repo: repo, TargetBranch: svc.IntegrationBranch, SupportsPin: mr.SupportsSHAPin, MergeMethod: m.mergeMethodForBranch(svc.Name, fb.Branch),
 	}
 	return row, step, nil
 }

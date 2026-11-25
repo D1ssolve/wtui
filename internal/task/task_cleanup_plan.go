@@ -319,12 +319,8 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 		}
 
 		branchType := gitflow.DetectBranchType(svc.Branch, m.flow)
-		var closeRule gitflow.BranchTypeRule
-		hasCloseRule := false
-		if m.flow != nil {
-			closeRule, hasCloseRule = m.flow.BranchTypes[branchType]
-		}
-		if hasCloseRule && (closeRule.TagOnClose || closeRule.TriggerPipelineOnClose) {
+		closeRule := m.flow.RuleFor(svc.Name, branchType)
+		if closeRule.TagOnClose || closeRule.CherryPickToOpenReleases || closeRule.TriggerPipelineOnClose {
 			required := closePostActionsRequired(closeRule)
 			proofDigest, proven, proofErr := m.verifyClosePostActionProof(request.TaskID, svc, sourceSHA, required)
 			switch {
@@ -342,7 +338,7 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 		if removed {
 			repoService.WorktreePath = svc.RepoPath
 		}
-		targetBranches, warning := m.effectiveMergeTargets(ctx, repoService, branchType, m.taskCleanupMergeTargetBranches(branchType))
+		targetBranches, warning := m.effectiveMergeTargets(ctx, repoService, branchType, m.taskCleanupMergeTargetBranches(svc.Name, branchType))
 		if warning != "" {
 			plan.block("service %s target resolution failed: %s", svc.Name, warning)
 		}
@@ -379,7 +375,7 @@ func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupReques
 			}
 		}
 		var targets []releaseCleanupTarget
-		if hasCloseRule && closeRule.CloseStrategy == gitflow.CloseStrategyReviewRequest {
+		if closeRule.CloseStrategy == gitflow.CloseStrategyReviewRequest {
 			// Review targets prove independently: live source ancestry when
 			// present, otherwise authoritative merged-MR evidence per target.
 			targets, err = m.resolveReviewCleanupTargets(ctx, &plan, repoService, refs, targetBranches, sourceSHA, "task branch "+svc.Branch)
@@ -534,17 +530,14 @@ func taskCleanupHasReleaseProofCandidate(releases []domain.Release, taskID strin
 // until production and integration both contain the accepted merge), while
 // merge strategies prove every MergeTargets entry. The integration branch is
 // the fallback when the resolved rule carries no usable targets.
-func (m *manager) taskCleanupMergeTargetBranches(branchType gitflow.BranchType) []string {
-	if m.flow != nil {
-		if rule, ok := m.flow.BranchTypes[branchType]; ok {
-			if rule.CloseStrategy == gitflow.CloseStrategyReviewRequest {
-				if targets := appendUnique(nil, rule.ReviewTargets...); len(targets) > 0 {
-					return targets
-				}
-			} else if len(rule.MergeTargets) > 0 {
-				return rule.MergeTargets
-			}
+func (m *manager) taskCleanupMergeTargetBranches(service string, branchType gitflow.BranchType) []string {
+	rule := m.flow.RuleFor(service, branchType)
+	if rule.CloseStrategy == gitflow.CloseStrategyReviewRequest {
+		if targets := appendUnique(nil, rule.ReviewTargets...); len(targets) > 0 {
+			return targets
 		}
+	} else if len(rule.MergeTargets) > 0 {
+		return rule.MergeTargets
 	}
 	return []string{resolvedIntegrationBranch(m.flow)}
 }
@@ -747,7 +740,7 @@ func (m *manager) reconstructMergedReviewEvidence(ctx context.Context, svc domai
 			continue
 		}
 		if !strings.EqualFold(strings.TrimSpace(row.State), "merged") {
-			params := forge.MergeMRParams{Repo: repo, Number: row.Number, ExpectedHeadSHA: sourceSHA, ExpectedTargetBranch: targetBranch, Method: m.mergeMethodForBranch(svc.Branch)}
+			params := forge.MergeMRParams{Repo: repo, Number: row.Number, ExpectedHeadSHA: sourceSHA, ExpectedTargetBranch: targetBranch, Method: m.mergeMethodForBranch(svc.Name, svc.Branch)}
 			proofs, _, err := m.readDirectMergeProofs(params)
 			if err != nil {
 				return "", err
@@ -779,7 +772,7 @@ func (m *manager) reconstructMergedReviewEvidence(ctx context.Context, svc domai
 	if err != nil {
 		return "", err
 	}
-	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &detail); err != nil {
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Name, svc.Branch), &detail); err != nil {
 		return "", err
 	}
 	if detail.Number != matches[0].Number || detail.SourceBranch != svc.Branch || detail.TargetBranch != targetBranch {

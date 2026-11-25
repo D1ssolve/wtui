@@ -190,13 +190,12 @@ func (g *metadataGenerator) targetBranch(purpose ai.Purpose, service domain.Serv
 	if purpose == ai.PurposeRelease || purpose == ai.PurposeTag {
 		return g.flow.ProductionBranch
 	}
-	if rule, ok := g.flow.BranchTypes[gitflow.DetectBranchType(service.Branch, g.flow)]; ok {
-		if len(rule.ReviewTargets) > 0 {
-			return rule.ReviewTargets[0]
-		}
-		if rule.BaseBranch != "" {
-			return rule.BaseBranch
-		}
+	rule := g.flow.RuleFor(service.Name, gitflow.DetectBranchType(service.Branch, g.flow))
+	if len(rule.ReviewTargets) > 0 {
+		return rule.ReviewTargets[0]
+	}
+	if rule.BaseBranch != "" {
+		return rule.BaseBranch
 	}
 	return strings.TrimSpace(service.BaseBranch)
 }
