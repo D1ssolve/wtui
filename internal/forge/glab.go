@@ -185,6 +185,11 @@ func (c *GlabClient) MRReadinessByNumber(ctx context.Context, number int, repo, 
 	return c.mrReadinessByNumber(ctx, number, repo, worktreePath, "", c.supportsSHAPin(ctx, worktreePath))
 }
 
+// ObserveMRByNumber reads review metadata without probing or caching merge capabilities.
+func (c *GlabClient) ObserveMRByNumber(ctx context.Context, number int, repo, worktreePath string) (MRReadiness, error) {
+	return c.mrReadinessByNumber(ctx, number, repo, pickWorktree(c.worktreePath, worktreePath), "", false)
+}
+
 func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, worktreePath, sourceBranch string, supportsSHAPin bool) (MRReadiness, error) {
 	stdout, _, err := c.run(ctx, worktreePath, "mr", "view", strconv.Itoa(number), "--output", "json", "--repo", repo)
 	if err != nil {

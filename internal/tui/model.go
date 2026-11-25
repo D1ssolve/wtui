@@ -80,6 +80,7 @@ type Model struct {
 	taskWorkflowPending       bool
 	taskWorkflow              *domain.WorkflowSummary
 	releaseWorkflow           *domain.WorkflowSummary
+	waitRefresh               waitRefresh
 	mergeInspectionGeneration uint64
 	mergeInspection           *mergeInspectionRequest
 
@@ -254,7 +255,7 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	if handled, cmd := m.handleMetadata(msg); handled {
 		return m, cmd
 	}
@@ -1929,7 +1930,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.outputPanel.AppendLine("Validation cancelled for task " + msg.TaskID + ".")
 				return m, nil
 			}
-			return m.Update(CommandDoneMsg{Generation: msg.Generation, Err: msg.Err, Op: "Validate task " + msg.TaskID})
+			return m.update(CommandDoneMsg{Generation: msg.Generation, Err: msg.Err, Op: "Validate task " + msg.TaskID})
 		}
 		if msg.Validation.Blocking {
 			m.pendingSyncTask = nil
@@ -3272,7 +3273,7 @@ func isExecutableNotFoundErr(err error) bool {
 	return errors.Is(err, exec.ErrNotFound)
 }
 
-func (m Model) updateShellInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) updateShellInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		m.shellInput = nil

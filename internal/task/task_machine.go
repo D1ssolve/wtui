@@ -47,6 +47,10 @@ func (m *manager) loadTaskFlow(ctx context.Context, taskID string) (*taskFlow, e
 	if err != nil || len(services) == 0 {
 		return nil, err
 	}
+	return m.readTaskFlow(taskID, services)
+}
+
+func (m *manager) readTaskFlow(taskID string, services []domain.Service) (*taskFlow, error) {
 	var typ gitflow.BranchType
 	mixed := false
 	for i, svc := range services {
