@@ -21,11 +21,13 @@ wtui --config ./team.yaml
 
 ### Creating a config with `wtui init`
 
-`wtui init` writes a first config to the default path above (`$XDG_CONFIG_HOME/wtui/config.yaml`, else `~/.config/wtui/config.yaml`) or to `--config PATH`. It asks for `root_dir`, `tasks_root`, `editor` and a workflow preset, or lets you describe your process for an AI draft. Every answer can be given as a flag; `--yes` skips the questions and uses the flags and defaults:
+`wtui init` writes a first config to the default path above (`$XDG_CONFIG_HOME/wtui/config.yaml`, else `~/.config/wtui/config.yaml`) or to `--config PATH`. It asks for `root_dir` (an existing directory that already contains your Git clones), `tasks_root`, `editor` and a workflow preset. At the workflow question you can also describe your process in one line for an AI draft; that choice is interactive only and has no flag. Paths, editor and preset can be given as flags, and `--yes` skips the questions and uses the flags and defaults:
 
 ```bash
 wtui init --root ~/dev --tasks-root ~/dev/.tasks --editor code --preset trunk-based --yes
 ```
+
+`--draft` belongs to `wtui flow` only (see [AI](#ai)); `wtui init --draft` is rejected.
 
 | Flag | Default |
 |---|---|
@@ -34,11 +36,11 @@ wtui init --root ~/dev --tasks-root ~/dev/.tasks --editor code --preset trunk-ba
 | `--editor CMD` | `$EDITOR`, else `code` |
 | `--preset NAME` | `git-flow` (`github-flow`, `trunk-based`) |
 
-init never overwrites a config by accident. If the target exists, it stops with an error and writes nothing. With `--force`, it first copies the old file to `config.yaml.bak-<timestamp>` and reports the backup path, then replaces the config. It refuses symbolic links and non-regular files even with `--force`. When it finishes, it prints the commands to start wtui and check the workflow.
+init never overwrites a config by accident. If the target exists, it stops with an error and writes nothing. With `--force`, it first copies the old file to `<target file name>.bak-<timestamp>` in the same directory (for example `config.yaml.bak-20261125-150405`, or `team.yaml.bak-...` with `--config ./team.yaml`) and reports the backup path, then replaces the config. It refuses symbolic links and non-regular files even with `--force`. When it finishes, it prints the commands to start wtui and check the workflow.
 
 Logs are written to `$XDG_STATE_HOME/wtui/wtui.log`, with `$HOME/.local/state` used when `XDG_STATE_HOME` is unset.
 
-wtui removes the user name and password from URLs (`https://user:token@host/repo` becomes `https://***@host/repo`) in the log file, in warnings on stderr, in the output panel, in release errors it saves, and in what `E` sends to the AI provider. Only URL credentials are removed; other secrets in command output are not detected. Log files and release manifests written before this change are not rewritten, so delete or clean them yourself if they may contain credentials.
+wtui removes the user name and password from URLs (`https://user:token@host/repo` becomes `https://***@host/repo`) in the log file, in the stderr fallback logger used when the log file can't be opened, in the output panel, in release errors it saves, and in what `E` sends to the AI provider. Only URL credentials are removed; other secrets in command output are not detected. Log files and release manifests written before this change are not rewritten, so delete or clean them yourself if they may contain credentials.
 
 Press `L` to view logs inside wtui:
 
@@ -538,9 +540,9 @@ What it is used for:
 
 ## Tags
 
-An absent `tag` block gets all defaults shown below. In a present block, omitted plain booleans remain `false`.
+Every omitted key gets the default shown below, whether the `tag` block is absent or only partly written. For example, `tag: {format: "release-{{.Version}}"}` keeps `enabled`, `annotated` and `push` set to `true`, so tags are still pushed. Write `push: false` to stop pushing.
 
-| Key | Type | Absent-block default | Runtime status |
+| Key | Type | Default | Runtime status |
 |---|---|---|---|
 | `tag.enabled` | bool | `true` | Enables tagging in hotfix review continuation; other close flows do not currently consult this flag. |
 | `tag.format` | string | `v{{.Version}}` | Used to render tag names. Empty values receive the default. |

@@ -40,16 +40,26 @@ go install github.com/D1ssolve/wtui/cmd/wtui@latest
 
 ## Quick Start
 
-1. Create a config. `wtui init` asks for your repositories directory, the task directory, the editor and a workflow, then writes a validated config:
+1. Clone your service repositories into one existing directory. wtui doesn't clone anything; it finds Git clones up to a few levels below that directory (`root_dir`):
+
+```text
+~/dev/
+├── gateway/   (git clone)
+└── billing/   (git clone)
+```
+
+Pick the workflow your branches support. `git-flow` needs both `master` and `develop` in every repository, because features start from `develop`. If your repositories have only `main`, use `github-flow` (or `trunk-based`).
+
+2. Create a config. `wtui init` asks for that directory, the task directory, the editor and a workflow, then writes a validated config:
 
 ```bash
 wtui init
 ```
 
-It writes `$XDG_CONFIG_HOME/wtui/config.yaml` (or `~/.config/wtui/config.yaml`), or the file named by `--config PATH`. An existing config is never overwritten: init stops unless you pass `--force`, and then it saves a backup next to it first. For a non-interactive setup:
+It writes `$XDG_CONFIG_HOME/wtui/config.yaml` (or `~/.config/wtui/config.yaml`), or the file named by `--config PATH`. An existing config is never overwritten: init stops unless you pass `--force`, and then it saves a backup next to it first. For a non-interactive setup with `main`-only repositories:
 
 ```bash
-wtui init --root ~/dev --preset git-flow --yes
+wtui init --root ~/dev --preset github-flow --yes
 ```
 
 You can also write the file by hand. The minimal config is:
@@ -60,12 +70,12 @@ tasks_root: /Users/you/dev/.tasks
 editor: code
 
 workflow:
-  extends: git-flow
+  extends: github-flow   # git-flow needs master and develop
 ```
 
 `root_dir` is where your service repositories live. `tasks_root` is where task worktrees go. Nothing else is required to start; every other key has a default (see the [configuration reference](docs/configuration.md)).
 
-2. Check the workflow, then start wtui:
+3. Check the workflow, then start wtui:
 
 ```bash
 wtui flow
@@ -74,7 +84,7 @@ wtui
 
 Add `--config PATH` to either command to use another file. `wtui --help` lists every command.
 
-3. Press `i`, enter a task ID (for example `PROJ-101`), and select the repositories involved. wtui creates a branch and a worktree per service:
+4. Press `i`, enter a task ID (for example `PROJ-101`), and select the repositories involved. wtui creates a branch and a worktree per service:
 
 ```text
 .tasks/PROJ-101/
@@ -84,7 +94,7 @@ Add `--config PATH` to either command to use another file. `wtui --help` lists e
 └── PROJ-101.sln
 ```
 
-4. Press `O` to open the task in your editor, write code, and commit as usual.
+5. Press `O` to open the task in your editor, write code, and commit as usual.
 
 Press `?` at any time for keyboard help for the focused panel, or `:` / `Ctrl+P` to search and run any available action.
 

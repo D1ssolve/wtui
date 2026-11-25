@@ -6,7 +6,7 @@ Short guide for the `git-flow` preset (`workflow: {extends: git-flow}`): `develo
 
 ## Before You Start
 
-1. Create a config with `wtui init` (see the [README](../README.md)), then check it with `wtui flow`. init never overwrites an existing config without `--force`. wtui refuses unknown or [removed keys](configuration.md#removed-keys) with the line number and a hint, so fix those first.
+1. Clone your services into one existing directory; wtui finds the clones there and never clones itself. This guide's `git-flow` needs `master` and `develop` in every repository; for `main` only, choose `github-flow` or `trunk-based`. Create a config with `wtui init` (see the [README](../README.md)), then check it with `wtui flow`. init never overwrites an existing config without `--force`. wtui refuses unknown or [removed keys](configuration.md#removed-keys) with the line number and a hint, so fix those first.
 2. Authenticate `glab` for GitLab or `gh` for GitHub.
 3. In wtui, press `,` to view the effective configuration and `.` to check available tools. `W` shows the workflow diagram; `wtui flow --html > flow.html` saves it as a page that opens offline.
 
