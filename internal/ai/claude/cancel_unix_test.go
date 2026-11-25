@@ -17,14 +17,30 @@ import (
 	"github.com/D1ssolve/wtui/internal/ai"
 )
 
-func TestClaude_StopsProcessGroupOnCancelOrTimeout(t *testing.T) {
+// readinessDeadline lets the test signal expiry after the descendant handshake.
+type readinessDeadline struct {
+	context.Context
+	expired <-chan struct{}
+}
+
+func (ctx readinessDeadline) Done() <-chan struct{} { return ctx.expired }
+
+func (ctx readinessDeadline) Err() error {
+	select {
+	case <-ctx.expired:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func TestClaude_StopsProcessGroupOnCancelOrDeadline(t *testing.T) {
 	for _, tt := range []struct {
-		name    string
-		timeout time.Duration
-		want    error
+		name string
+		want error
 	}{
-		{"cancel", testTimeout, context.Canceled},
-		{"timeout", 4 * time.Second, context.DeadlineExceeded},
+		{"cancel", context.Canceled},
+		{"deadline", context.DeadlineExceeded},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			fakeClaude(t)
@@ -38,11 +54,24 @@ func TestClaude_StopsProcessGroupOnCancelOrTimeout(t *testing.T) {
 			if err := listener.SetDeadline(deadline); err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
+			parent := t.Context()
+			expired := make(chan struct{})
+			if errors.Is(tt.want, context.DeadlineExceeded) {
+				parent = readinessDeadline{context.WithoutCancel(parent), expired}
+			}
+			ctx, cancel := context.WithCancel(parent)
 			done := make(chan error, 1)
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(testTimeout):
+					t.Error("provider did not exit during cleanup")
+				}
+			})
 			go func() {
-				_, err := New("", tt.timeout).Generate(ctx, ai.Request{Title: privateInput})
+				defer close(done)
+				_, err := New("", 0).Generate(ctx, ai.Request{Title: privateInput})
 				done <- err
 			}()
 			conn, err := listener.AcceptTCP()
@@ -62,8 +91,10 @@ func TestClaude_StopsProcessGroupOnCancelOrTimeout(t *testing.T) {
 			if err != nil || pid <= 1 {
 				t.Fatal("missing fake CLI pid")
 			}
-			if tt.want == context.Canceled {
+			if errors.Is(tt.want, context.Canceled) {
 				cancel()
+			} else {
+				close(expired)
 			}
 			select {
 			case err := <-done:
@@ -80,5 +111,22 @@ func TestClaude_StopsProcessGroupOnCancelOrTimeout(t *testing.T) {
 				t.Fatalf("descendant did not exit: %v", err)
 			}
 		})
+	}
+}
+
+func TestClaude_EnforcesConfiguredTimeout(t *testing.T) {
+	fakeClaude(t)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	// The fake hangs if it reaches inference. Expiry during startup is also valid.
+	setFixture(t, "block", listener.Addr().String())
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+	_, err = New("", 200*time.Millisecond).Generate(ctx, ai.Request{Title: privateInput})
+	if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+		t.Fatalf("request error = %v, parent error = %v; want configured deadline", err, ctx.Err())
 	}
 }
