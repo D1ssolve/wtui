@@ -93,8 +93,15 @@ func TestResolve_ReleaseMachine_CompilesStatesEventsAndWaits(t *testing.T) {
 			t.Fatalf("mermaid missing %q:\n%s", want, diagram)
 		}
 	}
-	if page := flow.HTML(); !strings.Contains(page, "rel_qualification --&gt;|&#34;X reject&#34;| rel_fixing") || !strings.Contains(page, "mermaid.initialize") {
+	page := flow.HTML()
+	if !strings.Contains(page, "rel_qualification --&gt;|&#34;X reject&#34;| rel_fixing") || !strings.Contains(page, "mermaid.initialize") {
 		t.Fatalf("html page does not embed the escaped diagram:\n%s", page)
+	}
+	if strings.Contains(page, "<script src") || strings.Contains(page, "cdn.jsdelivr.net") || strings.Count(page, "</script>") != 2 || !strings.Contains(page, `</script>`+"\n</body>") {
+		t.Fatal("html page must inline Mermaid and contain exactly two closing script tags")
+	}
+	if len(mermaidJS) <= 1_000_000 || !strings.Contains(page, string(mermaidJS[:64])) {
+		t.Fatal("html page does not contain the embedded Mermaid library")
 	}
 	if flow.ReleaseFingerprint() == "" {
 		t.Fatal("release fingerprint is empty")
