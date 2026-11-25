@@ -46,22 +46,6 @@ func digest(v any) string {
 	return fmt.Sprintf("%x", sha256.Sum256(b))
 }
 
-func (m *manager) hotfixIdentity(services []ServiceClosePlan) string {
-	type service struct{ Name, Repo, Remote, Branch, SHA string }
-	ids := make([]service, 0, len(services))
-	for _, s := range services {
-		ids = append(ids, service{s.ServiceName, s.RepoPath, s.RemoteURL, s.SourceBranch, s.SourceSHA})
-	}
-	return digest(struct {
-		Services []service
-		Config   any
-	}{ids, struct {
-		Flow  any
-		Tag   any
-		Close any
-	}{m.flow, m.cfg.Tag, m.cfg.Close}})
-}
-
 func (m *manager) loadHotfixCheckpoint(taskID string) (hotfixCheckpoint, error) {
 	cp := hotfixCheckpoint{Tags: map[string]TagPlan{}, Pipelines: map[string]string{}}
 	data, err := os.ReadFile(filepath.Join(m.taskDir(taskID), ".hotfix-close.json"))
@@ -176,7 +160,7 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 	}
 	slices.SortFunc(plan.Services, func(a, b ServiceClosePlan) int { return strings.Compare(a.ServiceName, b.ServiceName) })
 	identity := m.hotfixIdentity(plan.Services)
-	if cp.Identity != "" && cp.Identity != identity && (len(cp.Tags) > 0 || len(cp.Pipelines) > 0) {
+	if (len(cp.Tags) > 0 || len(cp.Pipelines) > 0) && cp.Identity != identity && !m.matchesPriorHotfixIdentity(plan.Services, cp.Identity) {
 		return plan, errors.New("hotfix source/services/config changed after tag or pipeline confirmation; restore the confirmed state before continuing")
 	}
 	// Fingerprint includes live MR state, but not suggested versions that can move after a partial tag push.
@@ -236,7 +220,10 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 	if err != nil {
 		return result, err
 	}
-	cp.Identity = m.hotfixIdentity(plan.Services)
+	saveChoices := len(cp.Tags) == 0 && len(cp.Pipelines) == 0
+	if saveChoices {
+		cp.Identity = m.hotfixIdentity(plan.Services)
+	}
 	for _, sp := range plan.Services {
 		if sp.TagPlan == nil {
 			continue
@@ -269,7 +256,10 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 		if normalizeVersion(tag.Version) == "" || tag.TagName == "" {
 			return result, errors.New("invalid tag version or format")
 		}
-		cp.Tags[sp.ServiceName] = tag
+		if !tag.Locked {
+			cp.Tags[sp.ServiceName] = tag
+			saveChoices = true
+		}
 	}
 	if plan.SharedVersion {
 		version := ""
@@ -294,8 +284,10 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 			return result, fmt.Errorf("%s: %w", sp.ServiceName, err)
 		}
 	}
-	if err = m.saveHotfixCheckpoint(p.TaskID, cp); err != nil {
-		return result, err
+	if saveChoices {
+		if err = m.saveHotfixCheckpoint(p.TaskID, cp); err != nil {
+			return result, err
+		}
 	}
 	// Recheck after confirmation/checkpoint and before any remote mutation.
 	fresh, err := m.PlanCloseTask(ctx, p.TaskID)
