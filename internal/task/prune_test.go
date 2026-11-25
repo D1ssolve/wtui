@@ -234,11 +234,9 @@ func newPruneManager(t *testing.T, rootDir, tasksRoot string, gitMock *mockGitCl
 	t.Helper()
 
 	cfg := &config.Config{
-		RootDir:      rootDir,
-		TasksRoot:    tasksRoot,
-		BranchPrefix: "feature/",
-		BaseBranch:   "develop",
-		Editor:       "code",
+		RootDir:   rootDir,
+		TasksRoot: tasksRoot,
+		Editor:    "code",
 		Prune: &config.PruneConfig{
 			Concurrency: concurrency,
 		},

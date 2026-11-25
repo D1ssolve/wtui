@@ -24,8 +24,9 @@ A feature rarely stays inside one repository. You create the same branch several
 
 - **Task-scoped worktrees** - create matching branches and worktrees across selected repositories.
 - **Multi-service operations** - sync, push, validate, and inspect an entire task together.
-- **Git Flow support** - use `git-flow`, `github-flow`, `gitlab-flow`, or custom branch rules.
+- **Your workflow, as configuration** - start from `git-flow`, `github-flow` or `trunk-based`, or describe your own branch types and state machines for tasks and releases in YAML: stands and QA before merge, QA loops, environment chains, CI gates, your own hook commands, service order, GitHub merge queues, versions from Conventional Commits. `wtui flow` shows what wtui will do; `W` in the TUI, `wtui flow --mermaid` and `wtui flow --html` draw it as a diagram.
 - **GitHub and GitLab workflows** - create and inspect MRs/PRs through `gh` or `glab`. Merging stays on the forge; wtui reconciles the result.
+- **AI where it saves time** - MR and release texts, `E` explains a failure and the next step, `wtui flow --draft "how your team works"` writes a validated `workflow:` block (Codex CLI with your ChatGPT login).
 - **Release orchestration** - prepare per-service versions, promote to production, and tag from one release view.
 - **Focused workspaces** - generate a VS Code workspace and .NET solution for each task.
 
@@ -46,8 +47,8 @@ root_dir: /Users/you/dev
 tasks_root: /Users/you/dev/.tasks
 editor: code
 
-git_flow:
-  preset: git-flow
+workflow:
+  extends: git-flow
 ```
 
 `root_dir` is where your service repositories live. `tasks_root` is where task worktrees go. Nothing else is required to start; every other key has a default (see the [configuration reference](docs/configuration.md)).
@@ -74,13 +75,13 @@ Press `?` at any time for keyboard help for the focused panel, or `:` / `Ctrl+P`
 
 ## Everyday flow
 
-The default path from task to a cleaned-up release:
+The default path from task to a cleaned-up release (with the `git-flow` preset):
 
 1. **Develop** - work in the task worktrees. `V` validates Git state (clean worktree, no interrupted merge/rebase); it does not run your application tests. `S` syncs branches.
-2. **`C` (Close)** - shows a plan, then pushes source branches. What `C` does depends on where the task is: it creates MRs for review, merges directly into configured targets when the branch rule uses `direct_merge`, or, on a hotfix whose MRs are already verified as merged, runs the final tagging step (and the pipeline trigger, if configured).
+2. **`C` (Close)** - shows a plan, then pushes source branches. What `C` does is defined by the task type's `close` steps in `workflow`: it creates MRs for a `review` step, merges directly for a `merge` step, and once the reviews are verified as merged runs the remaining steps (`tag`, `cherry_pick`, `pipeline`).
 3. **Review and CI** - complete reviews and wait for CI on GitHub/GitLab.
 4. **`M` (Merge)** - rechecks readiness, asks for confirmation, merges ready MRs, and verifies the result.
-5. **Release** - in the Releases panel (`3`), press `N` to bundle merged tasks into a release, `F` to promote it to production, complete review and CI, press `M` to merge ready production MRs, then `F` again to finalize tags.
+5. **Release** - in the Releases panel (`3`), press `N` to bundle merged tasks into a release and `F` to move it to its next step. With `git-flow`, `F` opens production MRs, `M` merges the ready ones, and `F` again back-merges and tags; with `trunk-based`, `F` tags the release branch. The release steps come from `workflow.release`.
 6. **`D` (Cleanup)** - remove the finished task and release worktrees manually. See below.
 
 ![Task workflow across multiple service worktrees](docs/images/task-workflow.png)
@@ -108,7 +109,7 @@ Cleanup removes worktrees, generated metadata, and task/release directories. Loc
 
 ![Per-service release workflow](docs/images/release-workflow.png)
 
-Prepare per-service versions, promote to production, merge ready MRs, and tag from one release view. Full guides: [Russian](docs/workflows.md) and [English](docs/workflows.en.md).
+Prepare per-service versions, move each release through the steps your workflow defines, and tag from one release view. Full guides: [Russian](docs/workflows.md) and [English](docs/workflows.en.md).
 
 ## Optional Tools
 

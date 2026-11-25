@@ -171,7 +171,7 @@ func TestReviewGuidance_ReleaseFailureRecovery(t *testing.T) {
 		{domain.ReleaseStatusRejected, nil, "new release"},
 	} {
 		t.Run(string(tc.status)+tc.action, func(t *testing.T) {
-			got := ReleaseWorkflow(domain.Release{Status: tc.status, Error: tc.err, Services: []domain.ReleaseService{{Name: "api", Status: tc.status, Error: tc.err}}})
+			got := ReleaseWorkflow(domain.Release{Status: tc.status, Error: tc.err, Services: []domain.ReleaseService{{Name: "api", Status: tc.status, Error: tc.err}}}, nil)
 			if !strings.Contains(got.NextAction, tc.action) || !strings.Contains(got.Services[0].NextAction, tc.action) || got.Blocker == "" || got.Services[0].Blocker == "" {
 				t.Errorf("release recovery = %+v, want %q and understandable blockers", got, tc.action)
 			}

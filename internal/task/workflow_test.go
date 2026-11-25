@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -270,23 +271,23 @@ func TestReleaseWorkflow_StatusMapping(t *testing.T) {
 		wantNext    string
 		wantBlocker string
 	}{
-		{domain.ReleaseStatusDraft, domain.ReleaseWorkflowDevelop, "prepare release", ""},
-		{domain.ReleaseStatusValidating, domain.ReleaseWorkflowDevelop, "validating release", ""},
-		{domain.ReleaseStatusMerging, domain.ReleaseWorkflowDevelop, "preparing release", ""},
-		{domain.ReleaseStatusAwaitingTaskMerge, domain.ReleaseWorkflowDevelop, "awaiting task MR confirmation", ""},
-		{domain.ReleaseStatusIntegratingTasks, domain.ReleaseWorkflowDevelop, "integrating task MRs (press ctrl+r to review retry)", ""},
-		{domain.ReleaseStatusTaskMergeBlocked, domain.ReleaseWorkflowDevelop, "press ctrl+r to review blocked task MRs", "MR !7 has unresolved discussions"},
-		{domain.ReleaseStatusTaskMergePartial, domain.ReleaseWorkflowDevelop, "press ctrl+r to review partial task MRs", "merge failed for worker"},
-		{domain.ReleaseStatusBranching, domain.ReleaseWorkflowReleaseBranch, "creating release branches", ""},
-		{domain.ReleaseStatusPushing, domain.ReleaseWorkflowReleaseBranch, "pushing release branches", ""},
-		{domain.ReleaseStatusPrepared, domain.ReleaseWorkflowRegression, "press F to create master MRs", ""},
-		{domain.ReleaseStatusAwaitingMasterMerge, domain.ReleaseWorkflowMasterMR, "merge ready MRs in forge, then press M to reconcile", ""},
-		{domain.ReleaseStatusMasterMerged, domain.ReleaseWorkflowTag, "press F to sync develop and tag", ""},
-		{domain.ReleaseStatusSyncingDevelop, domain.ReleaseWorkflowTag, "syncing develop", ""},
-		{domain.ReleaseStatusTagging, domain.ReleaseWorkflowTag, "tagging release", ""},
-		{domain.ReleaseStatusReleased, domain.ReleaseWorkflowTag, "release complete", ""},
-		{domain.ReleaseStatusFailed, domain.ReleaseWorkflowDevelop, "inspect failure and remote state; manual recovery required", "tag push failed"},
-		{domain.ReleaseStatusRejected, domain.ReleaseWorkflowDevelop, "review rejection; prepare a new release if intended", "Release was rejected"},
+		{domain.ReleaseStatusDraft, "preparing", "prepare release", ""},
+		{domain.ReleaseStatusValidating, "preparing", "validating release", ""},
+		{domain.ReleaseStatusMerging, "preparing", "preparing release", ""},
+		{domain.ReleaseStatusAwaitingTaskMerge, "preparing", "awaiting task MR confirmation", ""},
+		{domain.ReleaseStatusIntegratingTasks, "preparing", "integrating task MRs (press ctrl+r to review retry)", ""},
+		{domain.ReleaseStatusTaskMergeBlocked, "preparing", "press ctrl+r to review blocked task MRs", "MR !7 has unresolved discussions"},
+		{domain.ReleaseStatusTaskMergePartial, "preparing", "press ctrl+r to review partial task MRs", "merge failed for worker"},
+		{domain.ReleaseStatusBranching, "preparing", "creating release branches", ""},
+		{domain.ReleaseStatusPushing, "preparing", "pushing", ""},
+		{domain.ReleaseStatusPrepared, "prepared", "press F to create master MRs", ""},
+		{domain.ReleaseStatusAwaitingMasterMerge, "awaiting_master_merge", "merge ready MRs in forge, then press M to reconcile", ""},
+		{domain.ReleaseStatusMasterMerged, "master_merged", "press F to sync develop and tag", ""},
+		{domain.ReleaseStatusSyncingDevelop, "finishing", "back-merging", ""},
+		{domain.ReleaseStatusTagging, "finishing", "tagging release", ""},
+		{domain.ReleaseStatusReleased, "released", "release complete", ""},
+		{domain.ReleaseStatusFailed, "preparing", "inspect failure and remote state; manual recovery required", "tag push failed"},
+		{domain.ReleaseStatusRejected, "preparing", "review rejection; prepare a new release if intended", "Release was rejected"},
 	}
 
 	for _, tt := range tests {
@@ -300,12 +301,12 @@ func TestReleaseWorkflow_StatusMapping(t *testing.T) {
 			case domain.ReleaseStatusTaskMergePartial:
 				release.Error = &domain.ReleaseError{Message: "merge failed for worker"}
 			}
-			summary := ReleaseWorkflow(release)
+			summary := ReleaseWorkflow(release, nil)
 			if summary.Current != tt.want || summary.NextAction != tt.wantNext || summary.Blocker != tt.wantBlocker {
-				t.Fatalf("ReleaseWorkflow() = %#v, want current=%q next=%q blocker=%q", summary, tt.want, tt.wantNext, tt.wantBlocker)
+				t.Fatalf("ReleaseWorkflow(, nil) = %#v, want current=%q next=%q blocker=%q", summary, tt.want, tt.wantNext, tt.wantBlocker)
 			}
-			if len(summary.Steps) != 5 {
-				t.Fatalf("steps = %d, want 5", len(summary.Steps))
+			if len(summary.Steps) != 6 {
+				t.Fatalf("steps = %d, want the six non-final git-flow states", len(summary.Steps))
 			}
 			if tt.status == domain.ReleaseStatusReleased {
 				for _, step := range summary.Steps {
@@ -334,7 +335,7 @@ func TestReleaseWorkflow_TaskMergeServiceDetail(t *testing.T) {
 		}},
 	}
 
-	summary := ReleaseWorkflow(release)
+	summary := ReleaseWorkflow(release, nil)
 	if len(summary.Services) != 1 {
 		t.Fatalf("Services = %#v, want 1 row", summary.Services)
 	}
@@ -349,20 +350,20 @@ func TestReleaseWorkflow_IncludesPerServiceRows(t *testing.T) {
 		{Name: "worker", Status: domain.ReleaseStatusFailed, Error: &domain.ReleaseError{Message: "CI failed"}},
 	}}
 
-	summary := ReleaseWorkflow(release)
+	summary := ReleaseWorkflow(release, nil)
 	want := []domain.ServiceWorkflow{
 		{
 			ServiceName: "api",
 			Status:      "awaiting_master_merge",
 			Detail:      "MR #42: open",
-			Current:     domain.ReleaseWorkflowMasterMR,
+			Current:     "awaiting_master_merge",
 			NextAction:  "merge ready MRs in forge, then press M to reconcile",
 		},
 		{
 			ServiceName: "worker",
 			Status:      "failed",
 			Detail:      "CI failed",
-			Current:     domain.ReleaseWorkflowDevelop,
+			Current:     "preparing",
 			NextAction:  "inspect failure and remote state; manual recovery required",
 			Blocker:     "CI failed",
 		},
@@ -540,5 +541,23 @@ func assertWorkflowStates(t *testing.T, summary domain.WorkflowSummary) {
 	}
 	if summary.Current != domain.TaskWorkflowReleaseEligible && !foundNow {
 		t.Fatalf("current phase %q has no now step: %#v", summary.Current, summary.Steps)
+	}
+}
+
+func TestReleaseWorkflow_FollowsConfiguredReleaseFlow(t *testing.T) {
+	flow := &gitflow.ResolvedGitFlow{ProductionBranch: "main", IntegrationBranch: "main", Release: &gitflow.ReleaseFlow{Steps: []gitflow.Step{
+		{Kind: gitflow.StepCutBranch}, {Kind: gitflow.StepGate, Label: "qualification"}, {Kind: gitflow.StepTag, On: "release_branch"},
+	}}}
+	summary := ReleaseWorkflow(domain.Release{Status: domain.ReleaseStatusPrepared}, flow)
+
+	var labels []string
+	for _, step := range summary.Steps {
+		labels = append(labels, step.Label)
+	}
+	if !slices.Equal(labels, []string{"prepare", "qualification", "tag"}) {
+		t.Fatalf("labels = %v, want flow-derived steps without a production MR", labels)
+	}
+	if summary.NextAction != "press F to tag the release branch" {
+		t.Fatalf("next = %q", summary.NextAction)
 	}
 }

@@ -23,3 +23,22 @@ const draftSchema = `{
     }
   }
 }`
+
+const explanationSchema = `{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cause", "steps"],
+  "properties": {
+    "cause": {"type": "string"},
+    "steps": {"type": "array", "items": {"type": "string"}}
+  }
+}`
+
+const workflowSchema = `{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["yaml"],
+  "properties": {
+    "yaml": {"type": "string"}
+  }
+}`

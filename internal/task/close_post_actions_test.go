@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/git"
@@ -18,7 +17,7 @@ import (
 
 // closeProofTestEnv builds a two-service task whose feature rule requires tag
 // and pipeline post-actions, with all git operations succeeding by default.
-func closeProofTestEnv(t *testing.T, taskID string, mutateCfg func(*config.Config), mutateGit func(*mockGitClient), triggerPipeline func(context.Context, forge.TriggerPipelineParams) error) (*manager, *mockGitClient) {
+func closeProofTestEnv(t *testing.T, taskID string, mutateFlow func(*gitflow.ResolvedGitFlow), mutateGit func(*mockGitClient), triggerPipeline func(context.Context, forge.TriggerPipelineParams) error) (*manager, *mockGitClient) {
 	t.Helper()
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -78,10 +77,10 @@ func closeProofTestEnv(t *testing.T, taskID string, mutateCfg func(*config.Confi
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
 	cfg.Close.ContinueOnError = true
-	if mutateCfg != nil {
-		mutateCfg(cfg)
+	flow, err := closeTestFlow(cfg)
+	if err == nil && mutateFlow != nil {
+		mutateFlow(flow)
 	}
-	flow, err := gitflow.EffectiveConfig(cfg.GitFlow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,12 +91,12 @@ func closeProofTestEnv(t *testing.T, taskID string, mutateCfg func(*config.Confi
 	return mgr, gitMock
 }
 
-func tagAndPipelineRule(cfg *config.Config) {
-	featureRule := cfg.GitFlow.BranchTypes["feature"]
+func tagAndPipelineRule(flow *gitflow.ResolvedGitFlow) {
+	featureRule := flow.BranchTypes[gitflow.BranchTypeFeature]
 	featureRule.TagOnClose = true
 	featureRule.TagSource = "develop"
 	featureRule.TriggerPipelineOnClose = true
-	cfg.GitFlow.BranchTypes["feature"] = featureRule
+	flow.BranchTypes[gitflow.BranchTypeFeature] = featureRule
 }
 
 func proofActions(t *testing.T, proof closePostActionProof, service string) []string {

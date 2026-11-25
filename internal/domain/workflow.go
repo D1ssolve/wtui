@@ -8,18 +8,14 @@ const (
 	TaskWorkflowReviewCI        WorkflowPhase = "review_ci"
 	TaskWorkflowMerge           WorkflowPhase = "merge"
 	TaskWorkflowReleaseEligible WorkflowPhase = "release_eligible"
-
-	ReleaseWorkflowDevelop       WorkflowPhase = "develop"
-	ReleaseWorkflowReleaseBranch WorkflowPhase = "release_branch"
-	ReleaseWorkflowRegression    WorkflowPhase = "regression"
-	ReleaseWorkflowMasterMR      WorkflowPhase = "master_mr"
-	ReleaseWorkflowTag           WorkflowPhase = "tag"
 )
 
 type WorkflowStep struct {
 	Phase WorkflowPhase
 	Label string
 	State string
+	// Kind classifies release machine states for display: review, gate or tag.
+	Kind string
 }
 
 type ServiceWorkflow struct {
@@ -33,7 +29,18 @@ type ServiceWorkflow struct {
 	Blocker    string
 }
 
+// WorkflowEvent is a key the user can press in the current workflow state.
+type WorkflowEvent struct {
+	Name   string
+	Key    string
+	Label  string
+	Action string
+}
+
 type WorkflowSummary struct {
+	// Gated marks a task driven by its type's machine: C and M work only where its events offer them.
+	Gated      bool
+	Events     []WorkflowEvent
 	Steps      []WorkflowStep
 	Services   []ServiceWorkflow
 	Current    WorkflowPhase

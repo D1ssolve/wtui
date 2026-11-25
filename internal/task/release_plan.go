@@ -57,8 +57,8 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 			return releasePlan{}, fmt.Errorf("%w: %s", ErrReleaseTaskNotFound, taskID)
 		}
 
-		if task.ParentID != "" || task.Phase != string(gitflow.BranchTypeFeature) {
-			return releasePlan{}, fmt.Errorf("%w: task %s must be root feature task", ErrReleaseInvalidTasks, taskID)
+		if task.ParentID != "" || task.Phase != string(m.flow.DefaultBranchType) {
+			return releasePlan{}, fmt.Errorf("%w: task %s must be a root %s task", ErrReleaseInvalidTasks, taskID, m.flow.DefaultBranchType)
 		}
 
 		services, err := m.ListServices(ctx, taskID)
@@ -156,7 +156,7 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 
 			if !m.releasePrepareTaskMergeEnabled() {
 				remoteIntegration := "origin/" + m.flow.IntegrationBranch
-				merged, err := m.git.IsAncestor(ctx, svc.RepoPath, svc.Branch, remoteIntegration)
+				merged, err := m.branchMergedInto(ctx, svc.RepoPath, svc.Branch, remoteIntegration)
 				if err != nil {
 					return releasePlan{}, fmt.Errorf("release plan: verify task branch service=%s branch=%s integration=%s: %w", svc.Name, svc.Branch, remoteIntegration, err)
 				}
@@ -183,6 +183,7 @@ func (m *manager) buildReleasePlan(ctx context.Context, params CreateReleasePara
 	slices.SortFunc(plannedServices, func(a, b domain.ReleaseService) int {
 		return strings.Compare(a.Name, b.Name)
 	})
+	plannedServices = orderReleaseServices(plannedServices, m.releaseDependencies())
 
 	return releasePlan{
 		Title:       strings.TrimSpace(params.Title),

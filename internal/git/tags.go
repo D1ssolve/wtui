@@ -207,3 +207,38 @@ func sortTags(tags []domain.TagInfo) {
 		}
 	})
 }
+
+const (
+	commitFieldSep  = "\x1f"
+	commitRecordSep = "\x1e"
+)
+
+func (c *CommandClient) CommitLog(ctx context.Context, repoPath, from, to string) ([]domain.Commit, error) {
+	if to == "" || strings.HasPrefix(to, "-") || strings.HasPrefix(from, "-") {
+		return nil, fmt.Errorf("invalid commit range %q..%q", from, to)
+	}
+	rev := to
+	if from != "" {
+		rev = from + ".." + to
+	}
+	out, err := c.execGit(ctx, "-C", repoPath, "log", "--format=%H%x1f%s%x1f%b%x1e", rev, "--")
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, err
+	}
+	return parseCommitLog(out), nil
+}
+
+func parseCommitLog(out string) []domain.Commit {
+	var commits []domain.Commit
+	for record := range strings.SplitSeq(out, commitRecordSep) {
+		fields := strings.SplitN(strings.TrimLeft(record, "\n"), commitFieldSep, 3)
+		if len(fields) != 3 || fields[0] == "" {
+			continue
+		}
+		commits = append(commits, domain.Commit{SHA: fields[0], Subject: fields[1], Body: strings.TrimSpace(fields[2])})
+	}
+	return commits
+}

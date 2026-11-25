@@ -486,3 +486,23 @@ func repoNames(repos []domain.Repo) []string {
 	}
 	return names
 }
+
+func (m *mockGitClient) CherryPick(context.Context, string, string) error {
+	panic("mockGitClient.CherryPick called unexpectedly")
+}
+
+func (m *mockGitClient) CommitsMentioning(context.Context, string, string, string) ([]string, error) {
+	panic("mockGitClient.CommitsMentioning called unexpectedly")
+}
+
+func (m *mockGitClient) MergeIsNoop(context.Context, string, string, string) (bool, error) {
+	panic("mockGitClient.MergeIsNoop called unexpectedly")
+}
+
+func (m *mockGitClient) MergeConflicts(context.Context, string, string, string) ([]string, error) {
+	panic("mockGitClient.MergeConflicts called unexpectedly")
+}
+
+func (m *mockGitClient) CommitLog(context.Context, string, string, string) ([]domain.Commit, error) {
+	return nil, nil
+}

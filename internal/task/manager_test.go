@@ -72,7 +72,8 @@ func (f *fakeFindAllRepoResolver) FindAll(_ context.Context) ([]domain.Repo, err
 }
 
 type mockGitClient struct {
-	mu sync.Mutex
+	commitLogFn func(repoPath, from, to string) ([]domain.Commit, error)
+	mu          sync.Mutex
 
 	isValidRepoErr   error
 	baseBranchResult string
@@ -174,6 +175,11 @@ type mockGitClient struct {
 	deleteRemoteRefIfUnchangedFn      func(repoPath, url, ref, oid string) error
 	pushRefWithLeaseFn                func(repoPath, capturedRemoteURL, targetRef, exactOID, leaseRef, leaseOID string) error
 	pushRefWithLeaseCalls             []pushRefWithLeaseCall
+	cherryPickCalls                   []string
+	cherryPickFn                      func(worktreePath, commit string) error
+	commitsMentioningFn               func(repoPath, ref, text string) ([]string, error)
+	mergeIsNoopFn                     func(repoPath, base, branch string) (bool, error)
+	mergeConflictsFn                  func(repoPath, base, ref string) ([]string, error)
 	deleteTagCalls                    int
 	createTagErr                      error
 	pushTagErr                        error
@@ -699,6 +705,37 @@ func (m *mockGitClient) DeleteRemoteRefIfUnchanged(_ context.Context, repoPath, 
 	return nil
 }
 
+func (m *mockGitClient) CherryPick(_ context.Context, worktreePath, commit string) error {
+	m.mu.Lock()
+	m.cherryPickCalls = append(m.cherryPickCalls, commit)
+	m.mu.Unlock()
+	if m.cherryPickFn != nil {
+		return m.cherryPickFn(worktreePath, commit)
+	}
+	return nil
+}
+
+func (m *mockGitClient) MergeIsNoop(_ context.Context, repoPath, base, branch string) (bool, error) {
+	if m.mergeIsNoopFn != nil {
+		return m.mergeIsNoopFn(repoPath, base, branch)
+	}
+	return false, nil
+}
+
+func (m *mockGitClient) MergeConflicts(_ context.Context, repoPath, base, ref string) ([]string, error) {
+	if m.mergeConflictsFn != nil {
+		return m.mergeConflictsFn(repoPath, base, ref)
+	}
+	return nil, nil
+}
+
+func (m *mockGitClient) CommitsMentioning(_ context.Context, repoPath, ref, text string) ([]string, error) {
+	if m.commitsMentioningFn != nil {
+		return m.commitsMentioningFn(repoPath, ref, text)
+	}
+	return nil, nil
+}
+
 func (m *mockGitClient) PushRefWithLease(_ context.Context, repoPath, capturedRemoteURL, targetRef, exactOID, leaseRef, leaseOID string) error {
 	m.mu.Lock()
 	m.pushRefWithLeaseCalls = append(m.pushRefWithLeaseCalls, pushRefWithLeaseCall{
@@ -844,10 +881,9 @@ func newTestManager(t *testing.T, tasksRoot, rootDir string, gitMock *mockGitCli
 	t.Helper()
 
 	cfg := &config.Config{
-		TasksRoot:    tasksRoot,
-		RootDir:      rootDir,
-		BranchPrefix: "feature/",
-		Editor:       "code",
+		TasksRoot: tasksRoot,
+		RootDir:   rootDir,
+		Editor:    "code",
 	}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
@@ -856,12 +892,7 @@ func newTestManager(t *testing.T, tasksRoot, rootDir string, gitMock *mockGitCli
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
 
-	logger := newTestLogger()
-	disc := discovery.New(cfg, gitMock, logger)
-	slnMgr := sln.NewManager(&mockDotnetClient{}, logger)
-	validator := validation.NewTaskValidator(gitMock)
-
-	return New(cfg, gitMock, disc, slnMgr, validator, nil, nil, logger)
+	return newTestManagerWithCfg(t, cfg, gitMock)
 }
 
 func newTestManagerWithCfg(t *testing.T, cfg *config.Config, gitMock *mockGitClient) Manager {
@@ -872,7 +903,11 @@ func newTestManagerWithCfg(t *testing.T, cfg *config.Config, gitMock *mockGitCli
 	slnMgr := sln.NewManager(&mockDotnetClient{}, logger)
 	validator := validation.NewTaskValidator(gitMock)
 
-	return New(cfg, gitMock, disc, slnMgr, validator, nil, nil, logger)
+	flow, err := gitflow.Resolve(cfg)
+	if err != nil {
+		t.Fatalf("resolve workflow: %v", err)
+	}
+	return New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
 }
 
 func makeGitDir(t *testing.T, repoDir string) {
@@ -934,8 +969,8 @@ func TestInit_CreatesDirAndCallsAddWorktree(t *testing.T) {
 	if !call.NewBranch {
 		t.Errorf("AddWorktree newBranch = false, want true (branch did not exist)")
 	}
-	if call.Base != "main" {
-		t.Errorf("AddWorktree base = %q, want %q", call.Base, "main")
+	if call.Base != "develop" {
+		t.Errorf("AddWorktree base = %q, want %q", call.Base, "develop")
 	}
 }
 
@@ -1036,7 +1071,7 @@ func TestInit_BranchTypeHotfix_UsesHotfixPrefixAndProductionBase(t *testing.T) {
 		listWorktreesRes: nil,
 	}
 
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", Editor: "code"}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code"}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
@@ -1050,7 +1085,7 @@ func TestInit_BranchTypeHotfix_UsesHotfixPrefixAndProductionBase(t *testing.T) {
 		DefaultBranchType: gitflow.BranchTypeFeature,
 		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
 			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
-			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "develop"},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "master"},
 		},
 	}
 	mgr := New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
@@ -1081,7 +1116,7 @@ func TestInit_EmptyBranchType_DefaultsToFeature(t *testing.T) {
 	makeGitDir(t, svcRepo)
 
 	gitMock := &mockGitClient{isValidRepoErr: nil, branchExistsRes: false, listWorktreesRes: nil}
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", Editor: "code"}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code"}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
@@ -1139,7 +1174,7 @@ func TestAdd_BranchTypeHotfix_UsesHotfixPrefixAndProductionBase(t *testing.T) {
 	makeGitDir(t, svcRepo)
 
 	gitMock := &mockGitClient{isValidRepoErr: nil, branchExistsRes: false, listWorktreesRes: nil}
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", Editor: "code"}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code"}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
@@ -1153,7 +1188,7 @@ func TestAdd_BranchTypeHotfix_UsesHotfixPrefixAndProductionBase(t *testing.T) {
 		DefaultBranchType: gitflow.BranchTypeFeature,
 		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
 			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
-			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "develop"},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "master"},
 		},
 	}
 	mgr := New(cfg, gitMock, disc, slnMgr, validator, flow, nil, logger)
@@ -1478,7 +1513,7 @@ func TestList_EnrichesPhaseParentAndGroupMetadata(t *testing.T) {
 		{Path: filepath.Join(tasksRoot, "ORPHAN-release", "api"), Branch: "refs/heads/release/2.0.0"},
 	}
 
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", Editor: "code"}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code"}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
@@ -1559,7 +1594,7 @@ func TestList_WhenListServicesFails_PhaseLeftEmpty(t *testing.T) {
 		commonDirErr: errors.New("git metadata missing"),
 	}
 
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", Editor: "code"}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code"}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
@@ -1730,18 +1765,15 @@ func TestSyncTask_RebasesOntoConfigBaseBranch(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		TasksRoot:    tasksRoot,
-		RootDir:      rootDir,
-		BranchPrefix: "feature/",
-		BaseBranch:   "develop",
-		Editor:       "code",
+		TasksRoot: tasksRoot,
+		RootDir:   rootDir,
+		Editor:    "code",
 	}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
-	cfg.BaseBranch = "develop"
 
 	mgr := newTestManagerWithCfg(t, cfg, gitMock)
 	lineCh := make(chan string, 32)
@@ -1799,11 +1831,9 @@ func TestSyncTask_RebasesOntoMainWhenBaseBranchEmpty(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		TasksRoot:    tasksRoot,
-		RootDir:      rootDir,
-		BranchPrefix: "feature/",
-		BaseBranch:   "",
-		Editor:       "code",
+		TasksRoot: tasksRoot,
+		RootDir:   rootDir,
+		Editor:    "code",
 	}
 
 	if _, err := cfg.Effective(); err != nil {
@@ -1811,7 +1841,6 @@ func TestSyncTask_RebasesOntoMainWhenBaseBranchEmpty(t *testing.T) {
 	}
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
-	cfg.BaseBranch = ""
 
 	mgr := newTestManagerWithCfg(t, cfg, gitMock)
 	lineCh := make(chan string, 16)
@@ -1832,7 +1861,7 @@ func TestSyncTask_RebasesOntoMainWhenBaseBranchEmpty(t *testing.T) {
 		t.Fatalf("Rebase call count = %d, want 1", len(rebaseCalls))
 	}
 	if rebaseCalls[0].Upstream != "origin/develop" {
-		t.Errorf("Rebase upstream = %q, want %q (empty BaseBranch must fall back to develop)",
+		t.Errorf("Rebase upstream = %q, want %q (no workflow must fall back to develop)",
 			rebaseCalls[0].Upstream, "origin/develop")
 	}
 }
@@ -2330,7 +2359,7 @@ func TestManagerForgeMethods_WithoutClients_ReturnUnavailable(t *testing.T) {
 		repoStatusFn:     func(string) (git.RawStatus, error) { return git.RawStatus{Branch: "feature/IN-FORGE"}, nil },
 	}
 
-	cfg := &config.Config{RootDir: rootDir, TasksRoot: tasksRoot, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code"}
+	cfg := &config.Config{RootDir: rootDir, TasksRoot: tasksRoot, Editor: "code"}
 	effective, err := cfg.Effective()
 	if err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
@@ -2374,20 +2403,21 @@ func TestSyncTask_MergesWithMergeStrategy(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		TasksRoot:    tasksRoot,
-		RootDir:      rootDir,
-		BranchPrefix: "feature/",
-		BaseBranch:   "main",
-		Editor:       "code",
+		TasksRoot: tasksRoot,
+		RootDir:   rootDir,
+		Editor:    "code",
 	}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
-	cfg.BaseBranch = "main"
-
-	mgr := newTestManagerWithCfg(t, cfg, gitMock)
+	cfg.Workflow = &config.WorkflowConfig{Extends: "github-flow"}
+	flow, err := gitflow.Resolve(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
 	lineCh := make(chan string, 16)
 
 	if err := mgr.SyncTask(context.Background(), "IN-MERGE", SyncStrategyMerge, lineCh); err != nil {
@@ -2449,18 +2479,15 @@ func TestSyncTask_RebasesWithRebaseStrategy(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		TasksRoot:    tasksRoot,
-		RootDir:      rootDir,
-		BranchPrefix: "feature/",
-		BaseBranch:   "develop",
-		Editor:       "code",
+		TasksRoot: tasksRoot,
+		RootDir:   rootDir,
+		Editor:    "code",
 	}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
 	cfg.TasksRoot = tasksRoot
 	cfg.RootDir = rootDir
-	cfg.BaseBranch = "develop"
 
 	mgr := newTestManagerWithCfg(t, cfg, gitMock)
 	lineCh := make(chan string, 16)
@@ -3286,8 +3313,8 @@ func TestInit_RemoteBranchConflict_StrategyNewBranch(t *testing.T) {
 	if !call.NewBranch {
 		t.Error("NewBranch = false, want true (should create new branch)")
 	}
-	if call.Base != "main" {
-		t.Errorf("Base = %q, want %q", call.Base, "main")
+	if call.Base != "develop" {
+		t.Errorf("Base = %q, want %q", call.Base, "develop")
 	}
 }
 
@@ -3410,8 +3437,8 @@ func TestInit_RemoteBranchConflict_NoRemoteBranch(t *testing.T) {
 	if !call.NewBranch {
 		t.Error("NewBranch = false, want true (should create new branch)")
 	}
-	if call.Base != "main" {
-		t.Errorf("Base = %q, want %q", call.Base, "main")
+	if call.Base != "develop" {
+		t.Errorf("Base = %q, want %q", call.Base, "develop")
 	}
 }
 
@@ -3656,8 +3683,8 @@ func TestAdd_RemoteBranchConflict_StrategyNewBranch(t *testing.T) {
 	if !call.NewBranch {
 		t.Error("NewBranch = false, want true (should create new branch)")
 	}
-	if call.Base != "main" {
-		t.Errorf("Base = %q, want %q", call.Base, "main")
+	if call.Base != "develop" {
+		t.Errorf("Base = %q, want %q", call.Base, "develop")
 	}
 }
 
@@ -3748,8 +3775,8 @@ func TestAdd_RemoteBranchConflict_NoRemoteBranch(t *testing.T) {
 	if !call.NewBranch {
 		t.Error("NewBranch = false, want true (should create new branch)")
 	}
-	if call.Base != "main" {
-		t.Errorf("Base = %q, want %q", call.Base, "main")
+	if call.Base != "develop" {
+		t.Errorf("Base = %q, want %q", call.Base, "develop")
 	}
 }
 
@@ -3850,4 +3877,11 @@ func assertContainsLine(t *testing.T, lines []string, want string) {
 	}
 
 	t.Fatalf("lines %v do not contain %q", lines, want)
+}
+
+func (m *mockGitClient) CommitLog(_ context.Context, repoPath, from, to string) ([]domain.Commit, error) {
+	if m.commitLogFn != nil {
+		return m.commitLogFn(repoPath, from, to)
+	}
+	return nil, nil
 }

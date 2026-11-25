@@ -1,0 +1,25 @@
+branches:
+  production: master
+  integration: develop
+default_type: feature
+task_types:
+  feature:
+    prefixes: ["feature/"]
+    from: integration
+    close:
+      - review: {into: [integration]}
+  hotfix:
+    prefixes: ["hotfix/"]
+    from: production
+    shared: true
+    close:
+      - merge: {into: [production, integration], via_active_release: true}
+      - tag: {on: production}
+release:
+  branch: "release/{{.Version}}"
+  steps:
+    - cut_branch: {from: integration}
+    - gate: {label: regression}
+    - review: {from: release, into: production}
+    - back_merge: {from: release, into: integration, when: diverged}
+    - tag: {on: accepted_merge}

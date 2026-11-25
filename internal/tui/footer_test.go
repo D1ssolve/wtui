@@ -118,8 +118,8 @@ func TestRenderFooter_ReleaseStatusActions(t *testing.T) {
 		key, label string
 		has        bool
 	}{
-		{domain.Release{Status: domain.ReleaseStatusPrepared}, "F", "promote", true},
-		{domain.Release{Status: domain.ReleaseStatusMasterMerged}, "F", "finalize", true},
+		{domain.Release{Status: domain.ReleaseStatusPrepared}, "F", "advance", true},
+		{domain.Release{Status: domain.ReleaseStatusMasterMerged}, "F", "advance", true},
 		{domain.Release{Status: domain.ReleaseStatusAwaitingMasterMerge}, "M", "merge MRs", true},
 		{domain.Release{Status: domain.ReleaseStatusReleased}, "d", "cleanup", true},
 		{domain.Release{Status: domain.ReleaseStatusDraft}, "d", "cleanup", false},

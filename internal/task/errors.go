@@ -41,6 +41,7 @@ var (
 	ErrReleaseTaskNotMerged           = errors.New("release: task not merged")
 	ErrReleaseLegacyManifest          = errors.New("release: legacy manifest")
 	ErrReleaseMasterMoved             = errors.New("release: master moved")
+	ErrReleaseFlowChanged             = errors.New("release: workflow changed since the release started")
 	ErrReleaseCleanupBlocked          = errors.New("release: cleanup blocked")
 	ErrTaskCleanupBlocked             = errors.New("task cleanup blocked")
 

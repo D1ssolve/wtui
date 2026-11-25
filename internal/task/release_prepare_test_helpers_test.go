@@ -3,15 +3,40 @@ package task
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
-	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 func enableReleasePrepareTaskMerge(t *testing.T, m *manager) {
 	t.Helper()
-	m.cfg.GitFlow.TaskMerge = &config.TaskMergeConfig{Timing: config.TaskMergeTimingReleasePrepare}
+	setReleasePrepareTaskMerge(t, m, true)
+}
+
+func setReleasePrepareTaskMerge(t *testing.T, m *manager, enabled bool) {
+	t.Helper()
+	if m.flow == nil {
+		t.Fatal("manager has no flow")
+	}
+	flow := *m.flow
+	release := gitflow.ReleaseFlow{BranchPrefix: "release/", Steps: []gitflow.Step{
+		{Kind: gitflow.StepCutBranch, From: flow.IntegrationBranch},
+		{Kind: gitflow.StepGate, Label: "regression"},
+		{Kind: gitflow.StepReview, From: "release", Into: []string{flow.ProductionBranch}},
+		{Kind: gitflow.StepBackMerge, From: "release", Into: []string{flow.IntegrationBranch}, When: "diverged"},
+		{Kind: gitflow.StepTag, On: "accepted_merge"},
+	}}
+	if flow.Release != nil {
+		release = *flow.Release
+	}
+	release.Steps = slices.DeleteFunc(slices.Clone(release.Steps), func(s gitflow.Step) bool { return s.Kind == gitflow.StepIntegrateTasks })
+	if enabled {
+		release.Steps = append([]gitflow.Step{{Kind: gitflow.StepIntegrateTasks}}, release.Steps...)
+	}
+	flow.Release = &release
+	m.flow = &flow
 }
 
 type releaseTaskMergeForge struct {

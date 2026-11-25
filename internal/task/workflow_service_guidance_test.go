@@ -97,6 +97,7 @@ func TestTaskWorkflow_ServiceGuidance_DirectMerge(t *testing.T) {
 		{name: "tag on close", mutate: func(r *gitflow.BranchTypeRule) { r.TagOnClose = true }, wantNext: "press C to create tag", wantPhase: domain.TaskWorkflowReleaseEligible},
 		{name: "pipeline on close", mutate: func(r *gitflow.BranchTypeRule) { r.TriggerPipelineOnClose = true }, wantNext: "press C to trigger pipeline", wantPhase: domain.TaskWorkflowReleaseEligible},
 		{name: "tag and pipeline on close", mutate: func(r *gitflow.BranchTypeRule) { r.TagOnClose = true; r.TriggerPipelineOnClose = true }, wantNext: "press C to tag and trigger pipeline", wantPhase: domain.TaskWorkflowReleaseEligible},
+		{name: "cherry-pick on close", mutate: func(r *gitflow.BranchTypeRule) { r.CherryPickToOpenReleases = true }, wantNext: "press C to cherry-pick into open releases", wantPhase: domain.TaskWorkflowReleaseEligible},
 		{name: "no post action", mutate: func(r *gitflow.BranchTypeRule) {}, wantNext: "", wantPhase: domain.TaskWorkflowMerge},
 	}
 	for _, tt := range postActionTests {
@@ -191,17 +192,17 @@ func TestReleaseWorkflow_ServiceGuidance(t *testing.T) {
 		{Name: "web", Status: domain.ReleaseStatusBranching},
 	}}
 
-	summary := ReleaseWorkflow(release)
+	summary := ReleaseWorkflow(release, nil)
 	api := findServiceRow(t, summary.Services, "api")
-	if api.Current != domain.ReleaseWorkflowMasterMR || api.NextAction != "merge ready MRs in forge, then press M to reconcile" {
+	if api.Current != "awaiting_master_merge" || api.NextAction != "merge ready MRs in forge, then press M to reconcile" {
 		t.Fatalf("api guidance = current %q next %q, want master MR guidance", api.Current, api.NextAction)
 	}
 	worker := findServiceRow(t, summary.Services, "worker")
-	if worker.Current != domain.ReleaseWorkflowDevelop || worker.NextAction != "inspect failure and remote state; manual recovery required" || worker.Blocker != "CI failed" {
+	if worker.Current != "master_merged" || worker.NextAction != "inspect failure and remote state; manual recovery required" || worker.Blocker != "CI failed" {
 		t.Fatalf("worker guidance = current %q next %q blocker %q, want failed guidance", worker.Current, worker.NextAction, worker.Blocker)
 	}
 	web := findServiceRow(t, summary.Services, "web")
-	if web.Current != domain.ReleaseWorkflowReleaseBranch || web.NextAction != "creating release branches" {
+	if web.Current != "master_merged" || web.NextAction != "creating release branches" {
 		t.Fatalf("web guidance = current %q next %q, want release branch guidance", web.Current, web.NextAction)
 	}
 	for _, row := range summary.Services {

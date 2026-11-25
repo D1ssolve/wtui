@@ -1,0 +1,10 @@
+branches:
+  production: main
+  integration: main
+default_type: feature
+task_types:
+  feature:
+    prefixes: ["feature/"]
+    from: production
+    close:
+      - review: {into: [production]}

@@ -2,7 +2,6 @@ package modal
 
 import (
 	"fmt"
-	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/gitflow"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 type AddDialog struct {
@@ -422,9 +422,6 @@ func (d *AddDialog) applyBranchTypeSelection() {
 		d.prefixInput.SetValue(strings.TrimSpace(rule.Prefixes[0]))
 	}
 	base := strings.TrimSpace(rule.BaseBranch)
-	if selected == gitflow.BranchTypeHotfix && strings.TrimSpace(d.flow.ProductionBranch) != "" {
-		base = strings.TrimSpace(d.flow.ProductionBranch)
-	}
 	if base != "" {
 		d.baseInput.SetValue(base)
 	}

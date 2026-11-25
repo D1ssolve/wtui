@@ -94,7 +94,7 @@ func renderWorkflowCards(steps []domain.WorkflowStep) string {
 		case "blocked":
 			marker = "✗"
 		}
-		parts = append(parts, workflowCardStyle(step.State).Render(workflowIcon(step.Phase)+"  "+marker+" "+step.Label))
+		parts = append(parts, workflowCardStyle(step.State).Render(workflowIcon(step)+"  "+marker+" "+step.Label))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }
@@ -115,15 +115,15 @@ func workflowCardStyle(state string) lipgloss.Style {
 		Padding(0, 1)
 }
 
-func workflowIcon(phase domain.WorkflowPhase) string {
-	switch phase {
-	case domain.TaskWorkflowCode:
+func workflowIcon(step domain.WorkflowStep) string {
+	switch {
+	case step.Phase == domain.TaskWorkflowCode:
 		return "</>"
-	case domain.TaskWorkflowMR, domain.TaskWorkflowMerge, domain.ReleaseWorkflowMasterMR:
+	case step.Phase == domain.TaskWorkflowMR, step.Phase == domain.TaskWorkflowMerge, step.Kind == "review":
 		return "⎇"
-	case domain.TaskWorkflowReviewCI, domain.ReleaseWorkflowRegression:
+	case step.Phase == domain.TaskWorkflowReviewCI, step.Kind == "gate":
 		return "⟳"
-	case domain.ReleaseWorkflowTag:
+	case step.Kind == "tag":
 		return "◆"
 	default:
 		return "◇"

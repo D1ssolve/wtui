@@ -90,6 +90,17 @@ type ConfirmReleaseExecuteMsg struct {
 	Generation      uint64
 }
 
+type SubmitAddReleaseTasksMsg struct {
+	ReleaseID  string
+	TaskIDs    []string
+	Generation uint64
+}
+
+type ConfirmAddReleaseTasksMsg struct {
+	ReleaseID  string
+	Generation uint64
+}
+
 type ConfirmReleaseTaskMergeRetryMsg struct {
 	ReleaseID  string
 	Generation uint64

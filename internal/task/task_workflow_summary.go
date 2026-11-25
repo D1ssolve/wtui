@@ -36,20 +36,35 @@ func (m *manager) workflowAllMergedSummary(plans []serviceWorkflowPlan, states [
 // target is satisfied: tagging and/or pipeline trigger configured on the rule.
 // Empty means close has nothing left to do.
 func combinedPostAction(plans []serviceWorkflowPlan) string {
-	tag, pipeline := combinedTagOnClose(plans), false
+	tag, pick, pipeline := combinedTagOnClose(plans), false, false
 	for i := range plans {
+		pick = pick || plans[i].rule.CherryPickToOpenReleases
 		pipeline = pipeline || plans[i].rule.TriggerPipelineOnClose
 	}
-	switch {
-	case tag && pipeline:
-		return "press C to tag and trigger pipeline"
-	case tag:
-		return "press C to create tag"
-	case pipeline:
-		return "press C to trigger pipeline"
-	default:
-		return ""
+	return closeActionText(tag, pick, pipeline)
+}
+
+func closeActionText(tag, pick, pipeline bool) string {
+	var parts []string
+	if tag {
+		parts = append(parts, "tag")
 	}
+	if pick {
+		parts = append(parts, "cherry-pick into open releases")
+	}
+	if pipeline {
+		parts = append(parts, "trigger pipeline")
+	}
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		if tag {
+			return "press C to create tag"
+		}
+		return "press C to " + parts[0]
+	}
+	return "press C to " + strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
 }
 
 func combinedTagOnClose(plans []serviceWorkflowPlan) bool {
@@ -208,16 +223,7 @@ func pendingTargetNames(plans []serviceWorkflowPlan, states []serviceMergeState)
 // ruleCloseAction names the close post-action configured on a single rule,
 // using the same wording as the combined close guidance.
 func ruleCloseAction(rule gitflow.BranchTypeRule) string {
-	switch {
-	case rule.TagOnClose && rule.TriggerPipelineOnClose:
-		return "press C to tag and trigger pipeline"
-	case rule.TagOnClose:
-		return "press C to create tag"
-	case rule.TriggerPipelineOnClose:
-		return "press C to trigger pipeline"
-	default:
-		return ""
-	}
+	return closeActionText(rule.TagOnClose, rule.CherryPickToOpenReleases, rule.TriggerPipelineOnClose)
 }
 
 func mergedWorkflowRow(plan serviceWorkflowPlan, st serviceMergeState) domain.ServiceWorkflow {

@@ -41,3 +41,7 @@ CLAUDE.md
 
 # Generated Windows resource objects
 cmd/wtui/rsrc_windows_*.syso
+
+# local orchestration state and promo output
+.omo/
+brag-output/

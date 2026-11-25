@@ -157,6 +157,24 @@ func TestGenerate_TimeoutAndCancellation(t *testing.T) {
 	})
 }
 
+func TestExplainAndDraftWorkflow_UseTheSameIsolatedProcess(t *testing.T) {
+	fakeCodex(t)
+	t.Setenv("WTUI_CODEX_RESULT", `{"cause":"The tag already exists at another commit.","steps":["Inspect the tag","Press ctrl+r"]}`)
+	explanation, err := New("", 10*time.Second).Explain(t.Context(), ai.FailureRequest{Error: "private-diff"})
+	if err != nil || len(explanation.Steps) != 2 {
+		t.Fatalf("explanation = %+v, err = %v", explanation, err)
+	}
+	t.Setenv("WTUI_CODEX_RESULT", `{"yaml":"workflow:\n  extends: trunk-based"}`)
+	draft, err := New("", 10*time.Second).DraftWorkflow(t.Context(), ai.WorkflowRequest{Description: "private-diff"})
+	if err != nil || draft != "workflow:\n  extends: trunk-based\n" {
+		t.Fatalf("draft = %q, err = %v", draft, err)
+	}
+	t.Setenv("WTUI_CODEX_RESULT", `{"yaml":"private-secret"}`)
+	if _, err := New("", 10*time.Second).DraftWorkflow(t.Context(), ai.WorkflowRequest{Description: "private-diff"}); err == nil || strings.Contains(err.Error(), "private-secret") {
+		t.Fatalf("malformed draft error = %v, want a sanitized rejection", err)
+	}
+}
+
 // The subprocess fixture exercises the actual executable, stdin and file boundary.
 func TestCodexProcess(t *testing.T) {
 	if os.Getenv("WTUI_CODEX_HELPER") != "1" {

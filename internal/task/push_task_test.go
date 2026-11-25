@@ -279,7 +279,7 @@ func TestPushTask_ProtectedBranch_RefusesPush(t *testing.T) {
 		},
 	}
 
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code"}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code"}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
@@ -585,7 +585,7 @@ func TestPushTask_BoundedConcurrencyHonorsConfig(t *testing.T) {
 		},
 	}
 
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code", Concurrency: 1}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code", Concurrency: 1}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}

@@ -31,8 +31,8 @@ type TaskCleanupExecutionSelection struct {
 
 // ExecuteTaskCleanup revalidates an approved task cleanup plan and executes
 // its local steps in safety order: worktrees first, then the task directory
-// only when empty. Local and remote branches are never deleted (no atomic
-// local branch steps as retention-only. Remote branches are deleted only when
+// only when empty. Local branches are deleted only when unchanged and guarded
+// by the planned merge-target SHAs. Remote branches are deleted only when
 // the approved plan selected them. Execution stops on the first failure; steps
 // already completed stay in the result. Retained remote candidates are
 // populated only after every local Git step succeeds.

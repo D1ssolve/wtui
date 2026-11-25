@@ -709,3 +709,33 @@ func mergedProductionMR(number int, name, head, mergedSHA string) forge.MRReadin
 		HeadSHA: head, MergedSHA: mergedSHA,
 	}
 }
+
+type queueReleaseForgeClient struct {
+	*releaseMergeForgeClient
+	queued []forge.MergeMRParams
+}
+
+func (f *queueReleaseForgeClient) EnqueueMR(_ context.Context, params forge.MergeMRParams) error {
+	f.queued = append(f.queued, params)
+	return nil
+}
+
+func TestReleaseMerge_MergeQueueEnqueuesAndKeepsWaiting(t *testing.T) {
+	m, _, client := newReleaseMergeTestManager(t)
+	queue := &queueReleaseForgeClient{releaseMergeForgeClient: client}
+	m.forgeClients = map[forge.ForgeProvider]forge.ForgeClient{forge.ForgeProviderGitLab: queue}
+	m.cfg.Forge.MergeQueue = true
+	client.readiness = map[int]forge.MRReadiness{1: openProductionMR(1, "api", "api-source")}
+	release := writePromoteRelease(t, m, domain.ReleaseStatusAwaitingMasterMerge, releaseMergeService("api", 1))
+
+	got, result, err := m.MergeReleaseMRs(t.Context(), release.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queue.queued) != 1 || queue.queued[0].ExpectedHeadSHA != "api-source" || queue.queued[0].ExpectedTargetSHA != "" || len(client.merges) != 0 {
+		t.Fatalf("queued = %#v, merges = %#v", queue.queued, client.merges)
+	}
+	if got.Status != domain.ReleaseStatusAwaitingMasterMerge || got.Services[0].AcceptedMergeSHA != "" || !slices.Equal(result.Skipped, []string{"api"}) {
+		t.Fatalf("release = %s %+v, result = %+v", got.Status, got.Services[0], result)
+	}
+}

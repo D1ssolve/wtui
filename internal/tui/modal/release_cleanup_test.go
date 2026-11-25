@@ -78,7 +78,7 @@ func TestReleaseDeletionConfirm_RendersScopeAndFitsTerminal(t *testing.T) {
 			m.SetTerminalSize(size.w, size.h)
 			view := stripAnsi(m.View())
 			assertViewFitsContent(t, m.View(), size.w, size.h)
-			for _, want := range []string{"Delete release", "origin", "tags", "retained", "task branches", "develop/master", "cancel"} {
+			for _, want := range []string{"Delete release", "origin", "tags", "retained", "task branches", "integration/production", "cancel"} {
 				if !strings.Contains(strings.ReplaceAll(view, "\n", " "), want) {
 					t.Fatalf("%dx%d remote=%v missing %q:\n%s", size.w, size.h, remote, want, view)
 				}

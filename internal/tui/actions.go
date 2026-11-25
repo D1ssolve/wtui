@@ -8,6 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/gitflow"
+	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
 )
@@ -122,6 +124,32 @@ func releaseIn(statuses ...domain.ReleaseStatus) func(Model) bool {
 	}
 }
 
+func releaseWaiting(m Model) bool {
+	rel := m.releasesPanel.SelectedRelease()
+	if rel == nil || rel.Status == domain.ReleaseStatusFailed || rel.Status == domain.ReleaseStatusReleased || rel.Status == domain.ReleaseStatusRejected {
+		return false
+	}
+	return slices.ContainsFunc(m.mgr.ReleaseEvents(*rel), func(ev task.ReleaseEvent) bool { return ev.Key == "F" })
+}
+
+func releaseCanMerge(m Model) bool {
+	rel := m.releasesPanel.SelectedRelease()
+	if rel == nil {
+		return false
+	}
+	for _, ev := range m.mgr.ReleaseEvents(*rel) {
+		if ev.Action == gitflow.EventActionMergeReviews {
+			return true
+		}
+	}
+	return false
+}
+
+func releaseAcceptsTasks(m Model) bool {
+	rel := m.releasesPanel.SelectedRelease()
+	return rel != nil && task.CanAddReleaseTasks(*rel) == nil && len(m.addableReleaseTasks(*rel)) > 0
+}
+
 func releaseEditable(m Model) bool { return hasRelease(m) && !m.releaseMutationBlocked() }
 
 func releaseRetryable(m Model) bool {
@@ -146,6 +174,8 @@ var actionRegistry = []action{
 	{scope: scopeGlobal, keys: []string{"?"}, short: "help", help: "Toggle this help", pinned: true},
 	{scope: scopeGlobal, keys: []string{"r"}, short: "refresh", help: "Refresh tasks, releases, and repository cache"},
 	{scope: scopeGlobal, keys: []string{"."}, short: "status", help: "System status (tools / forge)"},
+	{scope: scopeGlobal, keys: []string{"E"}, short: "explain", help: "Ask AI why the selected release or the last operation failed, and what to do", when: func(m Model) bool { return m.assistant != nil }},
+	{scope: scopeGlobal, keys: []string{"W"}, short: "flow", help: "Workflow diagram: task close steps and release states, with the selection marked"},
 	{scope: scopeGlobal, keys: []string{"L"}, help: "Toggle logs (commands / application)"},
 	{scope: scopeGlobal, keys: []string{"q", "ctrl+c"}, short: "quit", help: "Quit"},
 
@@ -183,11 +213,11 @@ var actionRegistry = []action{
 	{scope: scopeServices, keys: []string{"esc"}, short: "back", help: "Back to tasks", nav: true},
 
 	{scope: scopeReleases, keyLabel: "j/k, arrows", help: "Move selection", nav: true},
-	{scope: scopeReleases, keys: []string{"F"}, short: "promote", help: "Promote prepared release: create master MRs", when: releaseIn(domain.ReleaseStatusPrepared)},
-	{scope: scopeReleases, keys: []string{"F"}, short: "finalize", help: "Finalize merged release: sync develop and tag", when: releaseIn(domain.ReleaseStatusMasterMerged)},
-	{scope: scopeReleases, keys: []string{"M"}, short: "merge MRs", help: "Merge selected release MRs", when: releaseIn(domain.ReleaseStatusAwaitingMasterMerge)},
+	{scope: scopeReleases, keys: []string{"F"}, short: "advance", help: "Advance the release to its next workflow step, or re-check what it waits for", when: releaseWaiting},
+	{scope: scopeReleases, keys: []string{"M"}, short: "merge MRs", help: "Review and merge the release MRs the workflow waits for", when: releaseCanMerge},
 	{scope: scopeReleases, keys: []string{"ctrl+r"}, short: "retry", help: "Review and retry a recoverable release step", when: releaseRetryable},
 	{scope: scopeReleases, keys: []string{"N"}, short: "prepare release", help: "Create release from tasks"},
+	{scope: scopeReleases, keys: []string{"A"}, short: "add tasks", help: "Add tasks to the selected prepared release: merge their branches into its release branches", when: releaseAcceptsTasks},
 	{scope: scopeReleases, keys: []string{"d"}, short: "cleanup", help: "Clean up selected released release (no scan)", when: releaseIn(domain.ReleaseStatusReleased)},
 	{scope: scopeReleases, keys: []string{"x"}, short: "delete release", help: "Delete selected release: worktrees, branches and tags (tasks are kept)", when: releaseEditable},
 	{scope: scopeReleases, keys: []string{"D", "P"}, short: "scan", help: "Open cleanup review (scan, select, confirm)"},
@@ -245,12 +275,37 @@ func nextActionIndex(m Model) int {
 	return -1
 }
 
+// releaseEventActions are the workflow events of the selected release beyond the fixed F and M.
+func releaseEventActions(m Model) []task.ReleaseEvent {
+	rel := m.releasesPanel.SelectedRelease()
+	if m.focus != FocusReleases || rel == nil {
+		return nil
+	}
+	return slices.DeleteFunc(m.mgr.ReleaseEvents(*rel), func(ev task.ReleaseEvent) bool { return ev.Key == "F" || ev.Key == "M" })
+}
+
+// taskEventActions are the workflow events of the selected task's machine.
+func taskEventActions(m Model) []domain.WorkflowEvent {
+	if m.focus != FocusTasks || m.taskWorkflow == nil || !m.taskWorkflow.Gated {
+		return nil
+	}
+	return m.taskWorkflow.Events
+}
+
 func footerHints(m Model) []footerHint {
 	next := nextActionIndex(m)
 	var hints []footerHint
 	if next >= 0 {
 		a := actionRegistry[next]
 		hints = append(hints, footerHint{key: a.footerKey(), label: a.short, next: true, pinned: true})
+	}
+	for _, ev := range releaseEventActions(m) {
+		hints = append(hints, footerHint{key: displayKey(ev.Key), label: ev.Label, pinned: true})
+	}
+	for _, ev := range taskEventActions(m) {
+		if ev.Key != "C" && ev.Key != "M" {
+			hints = append(hints, footerHint{key: displayKey(ev.Key), label: ev.Label, pinned: true})
+		}
 	}
 	scope := focusScope(m.focus)
 	for _, s := range []actionScope{scope, scopeGlobal} {
@@ -275,6 +330,16 @@ func helpSections(m Model) []modal.HelpSection {
 		for _, a := range actionRegistry {
 			if a.scope == scope && (a.enabled == nil || a.enabled(m)) {
 				section.Rows = append(section.Rows, modal.HelpRow{Key: a.displayKey(), Desc: a.help})
+			}
+		}
+		if scope == scopeTasks {
+			for _, ev := range taskEventActions(m) {
+				section.Rows = append(section.Rows, modal.HelpRow{Key: displayKey(ev.Key), Desc: "Workflow event: " + ev.Label})
+			}
+		}
+		if scope == scopeReleases {
+			for _, ev := range releaseEventActions(m) {
+				section.Rows = append(section.Rows, modal.HelpRow{Key: displayKey(ev.Key), Desc: "Workflow event: " + ev.Label})
 			}
 		}
 		sections = append(sections, section)

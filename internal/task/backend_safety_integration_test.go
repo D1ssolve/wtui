@@ -38,9 +38,9 @@ func newSafetyIntegrationEnv(t *testing.T) releaseIntegrationEnv {
 // production-targeted review_request task branch merged via squash: the plan
 // reconstructs the authoritative merged SHA from forge evidence (no prior
 // merge call in this process) and local cleanup executes against real
-// repositories. Neither local nor remote branch deletion has an atomic remote
-// target guard, so both branches must be retained: local cleanup removes only
-// worktrees and task metadata and reports the remote candidates as retained.
+// repositories. The local branch is deleted under atomic guards on the planned
+// merge-target SHAs; the remote branch is not selected for deletion, so it is
+// retained and reported as a remote candidate.
 func TestIntegration_TaskCleanup_ReviewToProductionSquashProof(t *testing.T) {
 	env := newSafetyIntegrationEnv(t)
 	env.manager.flow.BranchTypes[gitflow.BranchTypeFeature] = gitflow.BranchTypeRule{
@@ -99,14 +99,14 @@ func TestIntegration_TaskCleanup_ReviewToProductionSquashProof(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(env.tasksRoot, "APP-70")); !os.IsNotExist(err) {
 		t.Fatalf("task directory remains: %v", err)
 	}
-	if branch := gitOutput(t, env.repoPath, "branch", "--list", "feature/APP-70"); branch == "" {
-		t.Fatal("local branch must be retained: no atomic remote target guard exists")
+	if branch := gitOutput(t, env.repoPath, "branch", "--list", "feature/APP-70"); branch != "" {
+		t.Fatalf("local branch %q must be deleted once squash evidence proves it integrated", branch)
 	}
 	if len(result.Remote) != 1 || result.Remote[0].ExpectedSHA != sourceSHA {
 		t.Fatalf("retained remote candidates = %+v", result.Remote)
 	}
 	if out := gitOutput(t, env.repoPath, "ls-remote", "origin", "refs/heads/feature/APP-70"); out == "" {
-		t.Fatal("remote branch must be retained: no remote deletion path exists")
+		t.Fatal("remote branch must be retained: remote deletion was not selected")
 	}
 }
 

@@ -55,7 +55,7 @@ func findMsgInBatch(t *testing.T, cmd tea.Cmd) tea.Msg {
 		}
 		if result := c(); result != nil {
 			switch result.(type) {
-			case ReleaseTaskMergePlanReadyMsg, ReleaseTaskMergeRetryPlanReadyMsg:
+			case ReleaseTaskMergePlanReadyMsg, ReleaseTaskMergeRetryPlanReadyMsg, ReleaseTaskAddPlanReadyMsg, ReleaseActionDoneMsg:
 				return result
 			}
 		}

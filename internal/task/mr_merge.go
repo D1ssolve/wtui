@@ -35,6 +35,7 @@ type ServiceMergeInspection struct {
 type TaskMergeResult struct {
 	TaskID  string
 	Merged  []string
+	Queued  []string
 	Skipped []string
 	Steps   []string
 	Errs    map[string]error
@@ -66,14 +67,14 @@ func (m *manager) inspectTaskMerge(ctx context.Context, taskID string) (TaskMerg
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			if m.isHotfixReview(svc.Branch) {
+			if m.isMultiTargetReview(svc.Branch) {
 				rows, err := m.inspectHotfixMRs(ctx, svc)
 				if err != nil {
 					item := ServiceMergeInspection{ServiceName: svc.Name}
 					if len(rows) > 0 {
 						item = rows[0]
 					} else {
-						item.MR.TargetBranch = strings.Join(m.flow.BranchTypes[gitflow.BranchTypeHotfix].ReviewTargets, ", ")
+						item.MR.TargetBranch = strings.Join(m.flow.BranchTypes[gitflow.DetectBranchType(svc.Branch, m.flow)].ReviewTargets, ", ")
 					}
 					rows = []ServiceMergeInspection{failedWorkflowInspection(item, err, "inspect hotfix MR history and repository; refresh")}
 				}
@@ -107,6 +108,18 @@ func (m *manager) MergeServiceMR(ctx context.Context, taskID, serviceName string
 }
 
 func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string, selection ...MRSelection) (TaskMergeResult, error) {
+	tf, err := m.gateTaskAction(ctx, taskID, gitflow.EventActionMergeReviews)
+	if err != nil {
+		return TaskMergeResult{TaskID: taskID}, err
+	}
+	result, err := m.mergeTaskReviews(ctx, taskID, serviceName, selection...)
+	if err == nil {
+		err = m.afterTaskAction(ctx, tf, gitflow.EventActionMergeReviews, nil)
+	}
+	return result, err
+}
+
+func (m *manager) mergeTaskReviews(ctx context.Context, taskID, serviceName string, selection ...MRSelection) (TaskMergeResult, error) {
 	if len(selection) > 1 {
 		return TaskMergeResult{}, errors.New("select exactly one MR")
 	}
@@ -173,6 +186,15 @@ func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string, 
 			ExpectedTargetBranch: item.MR.TargetBranch,
 			ExpectedTargetSHA:    targetSHA,
 			Method:               m.mergeMethodForBranch(svc.Branch),
+		}
+		if queue, ok := m.mergeQueue(client); ok {
+			if err := queue.EnqueueMR(ctx, params); err != nil {
+				recordMergeFailure(&result, item.ServiceName, fmt.Errorf("add !%d to the merge queue: %w", item.MR.Number, err))
+				continue
+			}
+			result.Queued = append(result.Queued, item.ServiceName)
+			result.Steps = append(result.Steps, item.ServiceName+": added to the merge queue; press M again once it merged")
+			continue
 		}
 		if !item.MR.SupportsTargetBinding {
 			_, err := m.mergeMRWithLease(ctx, svc.RepoPath, params, client)
@@ -423,7 +445,7 @@ func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]S
 		return nil, err
 	}
 	var result []ServiceMergeInspection
-	for _, target := range appendUnique(nil, m.flow.BranchTypes[gitflow.BranchTypeHotfix].ReviewTargets...) {
+	for _, target := range appendUnique(nil, m.flow.BranchTypes[gitflow.DetectBranchType(svc.Branch, m.flow)].ReviewTargets...) {
 		item := ServiceMergeInspection{ServiceName: svc.Name, Status: "no_mr", MR: forge.MRReadiness{TargetBranch: target}}
 		matches, _ := matchTargetMRs(rows, svc.Branch, target)
 		if len(matches) > 1 {

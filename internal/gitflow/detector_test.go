@@ -132,9 +132,9 @@ func TestFindActiveReleaseBranch_ReturnsMatchingReleaseBranch(t *testing.T) {
 
 func mustGitFlow(t *testing.T) *ResolvedGitFlow {
 	t.Helper()
-	flow, err := EffectiveConfig(nil)
+	flow, err := Resolve(nil)
 	if err != nil {
-		t.Fatalf("EffectiveConfig(nil) error: %v", err)
+		t.Fatalf("Resolve(nil) error: %v", err)
 	}
 	return flow
 }

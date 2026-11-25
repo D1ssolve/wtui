@@ -9,48 +9,12 @@ import (
 	"github.com/D1ssolve/wtui/internal/forge"
 )
 
+// PromoteRelease fires the release's F event; in git-flow it opens the production reviews.
 func (m *manager) PromoteRelease(ctx context.Context, releaseID string, statusCh chan<- string) (domain.Release, error) {
-	release, err := m.GetRelease(ctx, releaseID)
-	if err != nil {
-		return domain.Release{}, err
-	}
-	if release.Status != domain.ReleaseStatusPrepared {
-		return release, fmt.Errorf("%w: %s -> %s", ErrReleaseInvalidStatusTransition, release.Status, domain.ReleaseStatusAwaitingMasterMerge)
-	}
-	if IsLegacyManifest(release) {
-		return release, fmt.Errorf("%w: reject release %s and prepare it again", ErrReleaseLegacyManifest, release.ID)
-	}
-
-	for i := range release.Services {
-		svc := &release.Services[i]
-		if svc.ProductionMR != nil && strings.EqualFold(svc.ProductionMR.State, "open") {
-			svc.Status = domain.ReleaseStatusAwaitingMasterMerge
-			sendStatus(statusCh, fmt.Sprintf("[%s][promote] production MR already open: %s", svc.Name, svc.ProductionMR.URL))
-			continue
-		}
-
-		if err := m.promoteReleaseService(ctx, &release, svc, statusCh); err != nil {
-			releaseErr := classifyReleaseError(err, svc)
-			_ = m.failRelease(&release, releaseErr)
-			return release, err
-		}
-	}
-
-	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusAwaitingMasterMerge, "awaiting_master_merge", nil); err != nil {
-		return release, err
-	}
-	release, err = m.writeReleaseManifest(release)
-	if err != nil {
-		return release, err
-	}
-	sendStatus(statusCh, "[release][promote] awaiting production MR merge")
-	return release, nil
+	return m.advanceByKey(ctx, releaseID, "F", &releaseRun{statusCh: statusCh})
 }
 
-func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Release, svc *domain.ReleaseService, statusCh chan<- string) error {
-	if m.flow == nil || strings.TrimSpace(m.flow.ProductionBranch) == "" {
-		return fmt.Errorf("release promote: production branch is not configured")
-	}
+func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Release, svc *domain.ReleaseService, source, target, method string, statusCh chan<- string) error {
 
 	remoteURL, err := m.git.RemoteURL(ctx, svc.RepoPath, "origin")
 	if err != nil {
@@ -65,7 +29,14 @@ func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Rel
 		return err
 	}
 
-	sourceSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, svc.ReleaseBranch)
+	sourceRef := source
+	if source != svc.ReleaseBranch {
+		if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
+			return fmt.Errorf("release review: fetch service %s: %w", svc.Name, err)
+		}
+		sourceRef = "origin/" + source
+	}
+	sourceSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, sourceRef)
 	if err != nil {
 		return err
 	}
@@ -73,25 +44,25 @@ func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Rel
 	if worktreePath == "" {
 		worktreePath = svc.RepoPath
 	}
-	mrs, err := client.MRStatus(ctx, svc.ReleaseBranch, repo)
+	mrs, err := client.MRStatus(ctx, source, repo)
 	if err != nil {
 		return fmt.Errorf("release promote: inspect production MR for service %s: %w", svc.Name, err)
 	}
 	for _, mr := range mrs {
 		open := strings.EqualFold(mr.State, "open") || strings.EqualFold(mr.State, "opened")
-		wrongTarget := mr.TargetBranch != "" && !strings.EqualFold(mr.TargetBranch, m.flow.ProductionBranch)
+		wrongTarget := mr.TargetBranch != "" && !strings.EqualFold(mr.TargetBranch, target)
 		if !open || wrongTarget || mr.Number == 0 {
 			continue
 		}
-		svc.ProductionMR = newProductionMRRef(mr.Number, mr.URL, sourceSHA, remoteURL)
+		svc.ProductionMR = newReviewRef(mr.Number, mr.URL, sourceSHA, remoteURL, source, target, method, svc.ReleaseBranch, m.productionBranch())
 		svc.Status = domain.ReleaseStatusAwaitingMasterMerge
 		if err := m.persistCheckpoint(release, "production_mr", nil); err != nil {
 			return err
 		}
-		sendStatus(statusCh, fmt.Sprintf("[%s][promote] production MR already open: %s", svc.Name, mr.URL))
+		sendStatus(statusCh, fmt.Sprintf("[%s][review] %s -> %s already open: %s", svc.Name, source, target, mr.URL))
 		return nil
 	}
-	sendStatus(statusCh, fmt.Sprintf("[%s][promote] creating %s -> %s MR", svc.Name, svc.ReleaseBranch, m.flow.ProductionBranch))
+	sendStatus(statusCh, fmt.Sprintf("[%s][review] creating %s -> %s MR", svc.Name, source, target))
 	title, description := release.Title, release.Description
 	if strings.TrimSpace(title) == "" {
 		title = fmt.Sprintf("Release %s (%s)", svc.Version, svc.Name)
@@ -101,22 +72,22 @@ func (m *manager) promoteReleaseService(ctx context.Context, release *domain.Rel
 	}
 	mr, err := client.CreateMR(ctx, forge.CreateMRParams{
 		WorktreePath: worktreePath,
-		SourceBranch: svc.ReleaseBranch,
-		TargetBranch: m.flow.ProductionBranch,
+		SourceBranch: source,
+		TargetBranch: target,
 		Title:        title,
 		Description:  description,
 		Repo:         repo,
 	})
 	if err != nil {
-		return fmt.Errorf("release promote: create production MR for service %s: %w", svc.Name, err)
+		return fmt.Errorf("release review: create %s -> %s MR for service %s: %w", source, target, svc.Name, err)
 	}
 
-	svc.ProductionMR = newProductionMRRef(mr.Number, mr.URL, sourceSHA, remoteURL)
+	svc.ProductionMR = newReviewRef(mr.Number, mr.URL, sourceSHA, remoteURL, source, target, method, svc.ReleaseBranch, m.productionBranch())
 	svc.Status = domain.ReleaseStatusAwaitingMasterMerge
 	if err := m.persistCheckpoint(release, "production_mr", nil); err != nil {
 		return err
 	}
-	sendStatus(statusCh, fmt.Sprintf("[%s][promote] production MR open: %s", svc.Name, mr.URL))
+	sendStatus(statusCh, fmt.Sprintf("[%s][review] %s -> %s open: %s", svc.Name, source, target, mr.URL))
 	return nil
 }
 
@@ -132,4 +103,18 @@ func newProductionMRRef(number int, url, sourceSHA, remoteURL string) *domain.Pr
 		Repo:         forge.ExtractRepoPath(remoteURL),
 		ProviderHost: forge.RemoteHost(remoteURL),
 	}
+}
+
+// newReviewRef records source, target and method only where they differ from the git-flow
+// release review, so manifests of that flow keep their previous shape.
+func newReviewRef(number int, url, sourceSHA, remoteURL, source, target, method, releaseBranch, production string) *domain.ProductionMRRef {
+	ref := newProductionMRRef(number, url, sourceSHA, remoteURL)
+	if source != releaseBranch {
+		ref.Source = source
+	}
+	if target != production {
+		ref.Target = target
+	}
+	ref.Method = method
+	return ref
 }

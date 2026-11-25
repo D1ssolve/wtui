@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 )
@@ -72,7 +71,7 @@ func (m *manager) PlanReleaseTaskMerges(ctx context.Context, params CreateReleas
 }
 
 func (m *manager) releasePrepareTaskMergeEnabled() bool {
-	return m != nil && m.cfg != nil && m.cfg.GitFlow != nil && m.cfg.GitFlow.TaskMerge != nil && m.cfg.GitFlow.TaskMerge.Timing == config.TaskMergeTimingReleasePrepare
+	return m != nil && m.flow.TaskMergeAtReleasePrepare()
 }
 
 func (m *manager) planReleaseTaskMerges(ctx context.Context, plan releasePlan) (ReleaseTaskMergePlan, error) {

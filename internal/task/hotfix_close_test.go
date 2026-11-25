@@ -792,7 +792,7 @@ func hotfixManager(t *testing.T) (*manager, *mockGitClient, *hotfixForge) {
 		return "", nil
 	}, isAncestorFn: func(string, string, string) (bool, error) { return true, nil }}
 	cfg := newCloseTestConfig(root, tasks)
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg)
 	rule := flow.BranchTypes[gitflow.BranchTypeHotfix]
 	rule.CloseStrategy = gitflow.CloseStrategyReviewRequest
 	flow.BranchTypes[gitflow.BranchTypeHotfix] = rule

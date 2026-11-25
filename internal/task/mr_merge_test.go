@@ -719,3 +719,35 @@ func newMRMergeTestManager(t *testing.T, services map[string]string, remoteURL s
 	})
 	return mgr.(*manager), gitMock
 }
+
+type queueForgeClient struct {
+	mergeForgeClient
+	queued []forge.MergeMRParams
+}
+
+func (f *queueForgeClient) EnqueueMR(_ context.Context, params forge.MergeMRParams) error {
+	f.queued = append(f.queued, params)
+	return nil
+}
+
+func TestMergeTaskMRs_MergeQueueEnqueuesInsteadOfPushing(t *testing.T) {
+	ready := forge.MRReadiness{Number: 1, State: "open", SourceBranch: "feature/a", TargetBranch: "develop", HeadSHA: "a-sha", Ready: true}
+	client := &queueForgeClient{mergeForgeClient: mergeForgeClient{
+		readiness:         map[string]forge.MRReadiness{"feature/a": ready},
+		readinessByNumber: map[int]forge.MRReadiness{1: ready},
+	}}
+	mgr, g := newMRMergeTestManager(t, map[string]string{"a": "feature/a"}, "git@gitlab.com:group/repo.git", client)
+	configureDirectMergeGit(t, g, "origin/develop-sha", "a-sha")
+	mgr.cfg.Forge.MergeQueue = true
+
+	result, err := mgr.MergeTaskMRs(t.Context(), "TASK-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.queued) != 1 || client.queued[0].ExpectedHeadSHA != "a-sha" || len(leasePushes(g)) != 0 || len(client.merges) != 0 {
+		t.Fatalf("queued = %#v, pushes = %#v, merges = %#v", client.queued, leasePushes(g), client.merges)
+	}
+	if !slices.Equal(result.Queued, []string{"a"}) || len(result.Merged) != 0 {
+		t.Fatalf("result = %#v, want a queued, not merged", result)
+	}
+}

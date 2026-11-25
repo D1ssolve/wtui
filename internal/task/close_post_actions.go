@@ -25,8 +25,9 @@ const closePostActionsProofVersion = 1
 const closePostActionsProofFileName = ".close-post-actions.json"
 
 const (
-	closePostActionTag      = "tag"
-	closePostActionPipeline = "pipeline"
+	closePostActionTag        = "tag"
+	closePostActionPipeline   = "pipeline"
+	closePostActionCherryPick = "cherry_pick"
 )
 
 // closePostActionProof is the durable, per-service record that the required
@@ -55,6 +56,9 @@ func closePostActionsRequired(rule gitflow.BranchTypeRule) []string {
 	required := make([]string, 0, 2)
 	if rule.TagOnClose {
 		required = append(required, closePostActionTag)
+	}
+	if rule.CherryPickToOpenReleases {
+		required = append(required, closePostActionCherryPick)
 	}
 	if rule.TriggerPipelineOnClose {
 		required = append(required, closePostActionPipeline)

@@ -51,6 +51,8 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 		Services:    append([]domain.ReleaseService(nil), plan.Services...),
 		CreatedAt:   now,
 		UpdatedAt:   now,
+
+		FlowFingerprint: m.flow.ReleaseFingerprint(),
 	}
 
 	release.Tag = sharedTagOrEmpty(release.Services)
@@ -87,46 +89,8 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 		return domain.Release{}, err
 	}
 
-	if m.releasePrepareTaskMergeEnabled() {
-		if err := m.integrateReleaseTaskMRs(ctx, &release, params.ConfirmedTaskMergePlan, params.StatusCh); err != nil {
-			return release, err
-		}
-		release, err = m.writeReleaseManifest(release)
-		if err != nil {
-			return domain.Release{}, err
-		}
-	} else {
-		if err := m.moveReleaseStatus(&release, domain.ReleaseStatusMerging, "merging", nil); err != nil {
-			return release, err
-		}
-		release, err = m.writeReleaseManifest(release)
-		if err != nil {
-			return domain.Release{}, err
-		}
-	}
-
-	for i := range release.Services {
-		svc := &release.Services[i]
-		if execErr := m.executePrepareService(ctx, &release, svc, params.StatusCh); execErr != nil {
-			releaseErr := classifyReleaseError(execErr, svc)
-			_ = m.failRelease(&release, releaseErr)
-			return release, execErr
-		}
-	}
-
-	if err := m.ensureReleaseReadyForPrepared(&release); err != nil {
-		return release, err
-	}
-	preparedAt := defaultReleaseNow().UTC()
-	release.PreparedAt = &preparedAt
-	release.Error = nil
-
-	release, err = m.writeReleaseManifest(release)
-	if err != nil {
-		return domain.Release{}, err
-	}
-
-	return release, nil
+	release.State = m.releaseMachine().Initial
+	return m.runReleaseMachine(ctx, release, &releaseRun{statusCh: params.StatusCh, taskMergePlan: params.ConfirmedTaskMergePlan})
 }
 
 func (m *manager) executePrepareService(ctx context.Context, release *domain.Release, svc *domain.ReleaseService, statusCh chan<- string) (err error) {
@@ -186,7 +150,7 @@ func (m *manager) executePrepareService(ctx context.Context, release *domain.Rel
 	for fbIdx := range svc.FeatureBranches {
 		fb := &svc.FeatureBranches[fbIdx]
 		if !m.releasePrepareTaskMergeEnabled() {
-			merged, verifyErr := m.git.IsAncestor(ctx, svc.RepoPath, fb.Branch, "origin/"+svc.IntegrationBranch)
+			merged, verifyErr := m.branchMergedInto(ctx, svc.RepoPath, fb.Branch, "origin/"+svc.IntegrationBranch)
 			if verifyErr != nil {
 				return fmt.Errorf("release prepare: verify task branch service=%s branch=%s integration=origin/%s: %w", svc.Name, fb.Branch, svc.IntegrationBranch, verifyErr)
 			}
@@ -380,7 +344,8 @@ func (m *manager) resolveReleaseRefSHA(ctx context.Context, repoPath, ref string
 
 func (m *manager) moveReleaseStatus(release *domain.Release, status domain.ReleaseStatus, checkpoint string, releaseErr *domain.ReleaseError) error {
 	if release.Status != status {
-		if err := validateReleaseStatusTransition(release.Status, status); err != nil {
+		// A release driven by a workflow machine changes status as its states dictate.
+		if err := validateReleaseStatusTransition(release.Status, status); err != nil && release.State == "" {
 			return err
 		}
 		release.Status = status

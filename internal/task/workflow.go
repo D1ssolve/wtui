@@ -2,8 +2,10 @@ package task
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 var taskWorkflowSteps = []domain.WorkflowStep{
@@ -14,16 +16,10 @@ var taskWorkflowSteps = []domain.WorkflowStep{
 	{Phase: domain.TaskWorkflowReleaseEligible, Label: "release"},
 }
 
-var releaseWorkflowSteps = []domain.WorkflowStep{
-	{Phase: domain.ReleaseWorkflowDevelop, Label: "develop"},
-	{Phase: domain.ReleaseWorkflowReleaseBranch, Label: "release"},
-	{Phase: domain.ReleaseWorkflowRegression, Label: "regression"},
-	{Phase: domain.ReleaseWorkflowMasterMR, Label: "master MR"},
-	{Phase: domain.ReleaseWorkflowTag, Label: "tag"},
-}
-
-func ReleaseWorkflow(release domain.Release) domain.WorkflowSummary {
-	current, next, blocker := releaseServiceGuidance(release.Status, release.Error)
+func ReleaseWorkflow(release domain.Release, flow *gitflow.ResolvedGitFlow) domain.WorkflowSummary {
+	mach := releaseMachineOf(flow)
+	current := releaseStateIDOf(mach, release)
+	next, blocker := releaseGuidance(mach, current, release.Status, release.Error)
 	done := release.Status == domain.ReleaseStatusReleased
 	blocked := release.Status == domain.ReleaseStatusTaskMergeBlocked ||
 		release.Status == domain.ReleaseStatusTaskMergePartial ||
@@ -43,7 +39,11 @@ func ReleaseWorkflow(release domain.Release) domain.WorkflowSummary {
 			}
 			detail += summary
 		}
-		rowCurrent, rowNext, rowBlocker := releaseServiceGuidance(service.Status, service.Error)
+		rowState := current
+		if _, ok := mach.State(string(service.Status)); ok {
+			rowState = string(service.Status)
+		}
+		rowNext, rowBlocker := releaseGuidance(mach, rowState, service.Status, service.Error)
 		if detail == "" && rowBlocker != "" {
 			detail = rowBlocker
 		}
@@ -51,7 +51,7 @@ func ReleaseWorkflow(release domain.Release) domain.WorkflowSummary {
 			ServiceName: service.Name,
 			Status:      string(service.Status),
 			Detail:      detail,
-			Current:     rowCurrent,
+			Current:     domain.WorkflowPhase(rowState),
 			NextAction:  rowNext,
 			Blocker:     rowBlocker,
 		}
@@ -59,61 +59,116 @@ func ReleaseWorkflow(release domain.Release) domain.WorkflowSummary {
 	if actions := workflowBlockerActions(rows); blocked && actions != "" {
 		next = actions
 	}
-	return workflowSummaryWithServices(releaseWorkflowSteps, current, next, blocker, done, blocked, rows)
+	return workflowSummaryWithServices(releasePath(mach, current), domain.WorkflowPhase(current), next, blocker, done, blocked, rows)
 }
 
-// releaseServiceGuidance maps a release status to its current phase, next
-// action, and per-service blocker, shared by the release summary and rows.
-func releaseServiceGuidance(status domain.ReleaseStatus, serviceErr *domain.ReleaseError) (domain.WorkflowPhase, string, string) {
+// releasePath is the machine's main line from the initial state, following each state's
+// next or first event; the current state is spliced in when it lies off that line.
+func releasePath(mach *gitflow.Machine, current string) []domain.WorkflowStep {
+	var steps []domain.WorkflowStep
+	seen := map[string]bool{}
+	for id := mach.Initial; id != "" && !seen[id]; {
+		seen[id] = true
+		st, ok := mach.State(id)
+		if !ok {
+			break
+		}
+		if st.Kind != gitflow.StateFinal {
+			steps = append(steps, domain.WorkflowStep{Phase: domain.WorkflowPhase(st.ID), Label: st.Label, Kind: releaseStepKind(st)})
+		}
+		id = st.Next
+		if st.Kind == gitflow.StateWait && st.Wait == gitflow.WaitManual && len(st.Events) > 0 {
+			id = st.Events[0].To
+		}
+	}
+	if st, ok := mach.State(current); ok && !seen[current] && st.Kind != gitflow.StateFinal {
+		steps = append(steps, domain.WorkflowStep{Phase: domain.WorkflowPhase(st.ID), Label: st.Label, Kind: releaseStepKind(st)})
+	}
+	return steps
+}
+
+func releaseStepKind(st *gitflow.State) string {
+	if st.Kind == gitflow.StateWait {
+		if st.Wait == gitflow.WaitReviewMerged {
+			return "review"
+		}
+		return "gate"
+	}
+	for _, step := range st.Run {
+		switch step.Kind {
+		case gitflow.StepTag:
+			return "tag"
+		case gitflow.StepReview:
+			return "review"
+		}
+	}
+	return ""
+}
+
+// releaseGuidance names the next action and blocker for a release or service status in state.
+func releaseGuidance(mach *gitflow.Machine, state string, status domain.ReleaseStatus, serviceErr *domain.ReleaseError) (string, string) {
 	blocker := ""
 	if serviceErr != nil {
 		blocker = serviceErr.Message
 	}
 	switch status {
+	case domain.ReleaseStatusDraft:
+		return "prepare release", blocker
 	case domain.ReleaseStatusValidating:
-		return domain.ReleaseWorkflowDevelop, "validating release", blocker
+		return "validating release", blocker
 	case domain.ReleaseStatusMerging:
-		return domain.ReleaseWorkflowDevelop, "preparing release", blocker
+		return "preparing release", blocker
 	case domain.ReleaseStatusBranching:
-		return domain.ReleaseWorkflowReleaseBranch, "creating release branches", blocker
+		return "creating release branches", blocker
 	case domain.ReleaseStatusPushing:
-		return domain.ReleaseWorkflowReleaseBranch, "pushing release branches", blocker
+		return "pushing", blocker
 	case domain.ReleaseStatusAwaitingTaskMerge:
-		return domain.ReleaseWorkflowDevelop, "awaiting task MR confirmation", blocker
+		return "awaiting task MR confirmation", blocker
 	case domain.ReleaseStatusIntegratingTasks:
-		return domain.ReleaseWorkflowDevelop, "integrating task MRs (press ctrl+r to review retry)", blocker
+		return "integrating task MRs (press ctrl+r to review retry)", blocker
 	case domain.ReleaseStatusTaskMergeBlocked:
-		return domain.ReleaseWorkflowDevelop, "press ctrl+r to review blocked task MRs", blocker
+		return "press ctrl+r to review blocked task MRs", blocker
 	case domain.ReleaseStatusTaskMergePartial:
-		return domain.ReleaseWorkflowDevelop, "press ctrl+r to review partial task MRs", blocker
-	case domain.ReleaseStatusPrepared:
-		return domain.ReleaseWorkflowRegression, "press F to create master MRs", blocker
-	case domain.ReleaseStatusAwaitingMasterMerge:
-		return domain.ReleaseWorkflowMasterMR, "merge ready MRs in forge, then press M to reconcile", blocker
-	case domain.ReleaseStatusMasterMerged:
-		return domain.ReleaseWorkflowTag, "press F to sync develop and tag", blocker
+		return "press ctrl+r to review partial task MRs", blocker
 	case domain.ReleaseStatusSyncingDevelop:
-		return domain.ReleaseWorkflowTag, "syncing develop", blocker
+		return "back-merging", blocker
 	case domain.ReleaseStatusTagging:
-		return domain.ReleaseWorkflowTag, "tagging release", blocker
+		return "tagging release", blocker
 	case domain.ReleaseStatusReleased:
-		return domain.ReleaseWorkflowTag, "release complete", blocker
+		return "release complete", blocker
 	case domain.ReleaseStatusFailed:
 		if blocker == "" {
 			blocker = "Release failed; completion is unverified"
 		}
 		if serviceErr != nil && serviceErr.Recoverable {
-			return domain.ReleaseWorkflowDevelop, "inspect failure and remote state; press ctrl+r to review recovery", blocker
+			return "inspect failure and remote state; press ctrl+r to review recovery", blocker
 		}
-		return domain.ReleaseWorkflowDevelop, "inspect failure and remote state; manual recovery required", blocker
+		return "inspect failure and remote state; manual recovery required", blocker
 	case domain.ReleaseStatusRejected:
 		if blocker == "" {
 			blocker = "Release was rejected"
 		}
-		return domain.ReleaseWorkflowDevelop, "review rejection; prepare a new release if intended", blocker
-	default:
-		return domain.ReleaseWorkflowDevelop, "prepare release", blocker
+		return "review rejection; prepare a new release if intended", blocker
 	}
+	st, ok := mach.State(state)
+	if !ok {
+		return "prepare release", blocker
+	}
+	switch {
+	case st.Kind == gitflow.StateRun:
+		return "running " + st.Label, blocker
+	case st.Kind == gitflow.StateFinal:
+		return "release complete", blocker
+	case st.Wait == gitflow.WaitReviewMerged:
+		return "merge ready MRs in forge, then press M to reconcile", blocker
+	case st.Wait == gitflow.WaitCIGreen:
+		return "waiting for green CI on " + st.WaitOn + "; press F to re-check", blocker
+	}
+	actions := make([]string, 0, len(st.Events))
+	for _, ev := range st.Events {
+		actions = append(actions, "press "+ev.Key+" to "+ev.Label)
+	}
+	return strings.Join(actions, " · "), blocker
 }
 
 func taskMergeProgressDetail(branches []domain.ReleaseFeatureBranch) string {

@@ -1,0 +1,21 @@
+branches:
+  production: main
+  integration: main
+default_type: change
+task_types:
+  change:
+    from: production
+    close:
+      - review: {into: production, merge: squash}
+  fix:
+    prefixes: ["fix/"]
+    from: production
+    close:
+      - review: {into: production, merge: squash}
+      - cherry_pick: {into: open_releases}
+release:
+  branch: "release/{{.Version}}"
+  steps:
+    - cut_branch: {from: integration}
+    - gate: {label: qualification}
+    - tag: {on: release_branch}

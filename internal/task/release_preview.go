@@ -27,8 +27,7 @@ type ReleasePreview struct {
 	PushIntegration     bool
 	PushReleaseBranches bool
 	PushTags            bool
-	// TaskMergeDuringPrepare reports config-only whether task MRs merge during
-	// release prepare (git_flow.task_merge.timing: release_prepare).
+	// TaskMergeDuringPrepare reports whether the release flow starts with integrate_tasks.
 	TaskMergeDuringPrepare bool
 	Err                    error
 }
@@ -39,13 +38,13 @@ func BuildReleasePreview(cfg config.Config, versions map[string]string) (Release
 		return ReleasePreview{}, fmt.Errorf("release preview: effective config: %w", err)
 	}
 
-	flow, err := gitflow.EffectiveConfig(effectiveCfg.GitFlow)
+	flow, err := gitflow.Resolve(effectiveCfg)
 	if err != nil {
-		return ReleasePreview{}, fmt.Errorf("release preview: git flow: %w", err)
+		return ReleasePreview{}, fmt.Errorf("release preview: %w", err)
 	}
 
 	if _, ok := flow.BranchTypes[gitflow.BranchTypeRelease]; !ok {
-		return ReleasePreview{}, fmt.Errorf("%w: git_flow.branch_types.release is required for releases", ErrReleaseNoReleaseRule)
+		return ReleasePreview{}, fmt.Errorf("%w: configure workflow.release to use releases", ErrReleaseNoReleaseRule)
 	}
 
 	rows := make([]ReleasePreviewRow, 0, len(versions))
@@ -81,13 +80,12 @@ func BuildReleasePreview(cfg config.Config, versions map[string]string) (Release
 	})
 
 	return ReleasePreview{
-		Rows:                rows,
-		IntegrationBranch:   flow.IntegrationBranch,
-		PushIntegration:     boolPtrOrTrue(effectiveCfg.Release.PushIntegration),
-		PushReleaseBranches: boolPtrOrTrue(effectiveCfg.Release.PushReleaseBranches),
-		PushTags:            boolPtrOrTrue(effectiveCfg.Release.PushTags),
-		TaskMergeDuringPrepare: effectiveCfg.GitFlow != nil && effectiveCfg.GitFlow.TaskMerge != nil &&
-			effectiveCfg.GitFlow.TaskMerge.Timing == config.TaskMergeTimingReleasePrepare,
+		Rows:                   rows,
+		IntegrationBranch:      flow.IntegrationBranch,
+		PushIntegration:        boolPtrOrTrue(effectiveCfg.Release.PushIntegration),
+		PushReleaseBranches:    boolPtrOrTrue(effectiveCfg.Release.PushReleaseBranches),
+		PushTags:               boolPtrOrTrue(effectiveCfg.Release.PushTags),
+		TaskMergeDuringPrepare: flow.TaskMergeAtReleasePrepare(),
 	}, nil
 }
 

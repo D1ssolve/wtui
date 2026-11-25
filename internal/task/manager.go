@@ -121,6 +121,8 @@ type Manager interface {
 	MergeTaskMRs(ctx context.Context, taskID string) (TaskMergeResult, error)
 	MergeServiceMR(ctx context.Context, taskID, serviceName string, selection ...MRSelection) (TaskMergeResult, error)
 	TaskWorkflow(ctx context.Context, taskID string) (domain.WorkflowSummary, error)
+	// AdvanceTask fires a workflow event of the task's machine; an empty event re-checks its wait or retries a failed run state.
+	AdvanceTask(ctx context.Context, taskID, event string, statusCh chan<- string) error
 
 	ListReleases(ctx context.Context) ([]domain.Release, error)
 
@@ -128,6 +130,9 @@ type Manager interface {
 
 	CreateRelease(ctx context.Context, params CreateReleaseParams) (domain.Release, error)
 	PromoteRelease(ctx context.Context, releaseID string, statusCh chan<- string) (domain.Release, error)
+	// AdvanceRelease fires a workflow event of the release's current state; an empty event re-checks its wait condition.
+	AdvanceRelease(ctx context.Context, releaseID, event string, statusCh chan<- string) (domain.Release, error)
+	ReleaseEvents(release domain.Release) []ReleaseEvent
 	InspectReleaseMerge(ctx context.Context, releaseID string) (ReleaseMergeInspection, error)
 	MergeReleaseMRs(ctx context.Context, releaseID string, statusCh chan<- string) (domain.Release, ReleaseMergeResult, error)
 
@@ -150,6 +155,9 @@ type Manager interface {
 	RetryReleaseTaskMerges(ctx context.Context, releaseID string, confirmed *ReleaseTaskMergePlan) (domain.Release, error)
 
 	RejectRelease(ctx context.Context, releaseID string) (domain.Release, error)
+	// PlanReleaseTaskAdd pins and checks the tasks to add to a prepared release; AddReleaseTasks executes that plan.
+	PlanReleaseTaskAdd(ctx context.Context, releaseID string, taskIDs []string) (ReleaseTaskAddPlan, error)
+	AddReleaseTasks(ctx context.Context, plan ReleaseTaskAddPlan, statusCh chan<- string) (domain.Release, error)
 
 	RemoveRelease(ctx context.Context, releaseID string) error
 	PlanReleaseCleanup(ctx context.Context, releaseID string, selection ReleaseCleanupSelection) (ReleaseCleanupPlan, error)

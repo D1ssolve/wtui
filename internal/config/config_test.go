@@ -109,7 +109,6 @@ func TestLoad_FlagPath_FileExists(t *testing.T) {
 	path := writeTempConfig(t, `
 root_dir: /tmp/root
 tasks_root: /tmp/tasks
-branch_prefix: "fix/"
 editor: vim
 discovery_depth: 3
 output_panel_lines: 10
@@ -126,9 +125,6 @@ log_level: DEBUG
 	}
 	if cfg.TasksRoot != "/tmp/tasks" {
 		t.Errorf("TasksRoot: got %q, want %q", cfg.TasksRoot, "/tmp/tasks")
-	}
-	if cfg.BranchPrefix != "fix/" {
-		t.Errorf("BranchPrefix: got %q, want %q", cfg.BranchPrefix, "fix/")
 	}
 	if cfg.Editor != "vim" {
 		t.Errorf("Editor: got %q, want %q", cfg.Editor, "vim")
@@ -221,7 +217,7 @@ log_level: [unclosed bracket
 func TestEffective_AllDefaults(t *testing.T) {
 
 	unsetenv(t, "WTUI_ROOT")
-	unsetenv(t, "TASKFLOW_ROOT")
+	unsetenv(t, "WTUI_TASKS_ROOT")
 	unsetenv(t, "EDITOR")
 
 	cfg := &Config{}
@@ -234,9 +230,6 @@ func TestEffective_AllDefaults(t *testing.T) {
 	wantTasksRoot := filepath.Join(cwd, ".tasks")
 	if cfg.TasksRoot != wantTasksRoot {
 		t.Errorf("TasksRoot default: got %q, want %q", cfg.TasksRoot, wantTasksRoot)
-	}
-	if cfg.BranchPrefix != "feature/" {
-		t.Errorf("BranchPrefix default: got %q, want feature/", cfg.BranchPrefix)
 	}
 	if cfg.Editor != "code" {
 		t.Errorf("Editor default: got %q, want code", cfg.Editor)
@@ -257,13 +250,12 @@ func TestEffective_AllDefaults(t *testing.T) {
 
 func TestEffective_ExplicitValuesNotOverridden(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
-	unsetenv(t, "TASKFLOW_ROOT")
+	unsetenv(t, "WTUI_TASKS_ROOT")
 	unsetenv(t, "EDITOR")
 
 	cfg := &Config{
 		RootDir:          "/explicit/root",
 		TasksRoot:        "/explicit/tasks",
-		BranchPrefix:     "bugfix/",
 		Editor:           "nvim",
 		Concurrency:      12,
 		DiscoveryDepth:   5,
@@ -277,9 +269,6 @@ func TestEffective_ExplicitValuesNotOverridden(t *testing.T) {
 	}
 	if cfg.TasksRoot != "/explicit/tasks" {
 		t.Errorf("TasksRoot overwritten: got %q", cfg.TasksRoot)
-	}
-	if cfg.BranchPrefix != "bugfix/" {
-		t.Errorf("BranchPrefix overwritten: got %q", cfg.BranchPrefix)
 	}
 	if cfg.Editor != "nvim" {
 		t.Errorf("Editor overwritten: got %q", cfg.Editor)
@@ -300,7 +289,7 @@ func TestEffective_ExplicitValuesNotOverridden(t *testing.T) {
 
 func TestEffective_EnvVarWTUI_ROOT_OverridesRootDir(t *testing.T) {
 	setenv(t, "WTUI_ROOT", "/env/root")
-	unsetenv(t, "TASKFLOW_ROOT")
+	unsetenv(t, "WTUI_TASKS_ROOT")
 	unsetenv(t, "EDITOR")
 
 	cfg := &Config{RootDir: "/file/root"}
@@ -311,22 +300,22 @@ func TestEffective_EnvVarWTUI_ROOT_OverridesRootDir(t *testing.T) {
 	}
 }
 
-func TestEffective_EnvVarTASKFLOW_ROOT_OverridesTasksRoot(t *testing.T) {
+func TestEffective_EnvVarWTUI_TASKS_ROOT_OverridesTasksRoot(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
-	setenv(t, "TASKFLOW_ROOT", "/env/tasks")
+	setenv(t, "WTUI_TASKS_ROOT", "/env/tasks")
 	unsetenv(t, "EDITOR")
 
 	cfg := &Config{TasksRoot: "/file/tasks"}
 	mustEffective(t, cfg)
 
 	if cfg.TasksRoot != "/env/tasks" {
-		t.Errorf("TASKFLOW_ROOT not applied: got %q, want /env/tasks", cfg.TasksRoot)
+		t.Errorf("WTUI_TASKS_ROOT not applied: got %q, want /env/tasks", cfg.TasksRoot)
 	}
 }
 
 func TestEffective_EnvVarEDITOR_OverridesEditor(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
-	unsetenv(t, "TASKFLOW_ROOT")
+	unsetenv(t, "WTUI_TASKS_ROOT")
 	setenv(t, "EDITOR", "emacs")
 
 	cfg := &Config{Editor: "code"}
@@ -339,7 +328,7 @@ func TestEffective_EnvVarEDITOR_OverridesEditor(t *testing.T) {
 
 func TestEffective_EnvVarEDITOR_AppliedWhenFieldEmpty(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
-	unsetenv(t, "TASKFLOW_ROOT")
+	unsetenv(t, "WTUI_TASKS_ROOT")
 	setenv(t, "EDITOR", "nano")
 
 	cfg := &Config{}
@@ -352,7 +341,7 @@ func TestEffective_EnvVarEDITOR_AppliedWhenFieldEmpty(t *testing.T) {
 
 func TestEffective_TasksRoot_DerivedFromRootDir(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
-	unsetenv(t, "TASKFLOW_ROOT")
+	unsetenv(t, "WTUI_TASKS_ROOT")
 	unsetenv(t, "EDITOR")
 
 	cfg := &Config{RootDir: "/projects"}
@@ -366,7 +355,7 @@ func TestEffective_TasksRoot_DerivedFromRootDir(t *testing.T) {
 
 func TestEffective_DiscoveryDepth(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
-	unsetenv(t, "TASKFLOW_ROOT")
+	unsetenv(t, "WTUI_TASKS_ROOT")
 	unsetenv(t, "EDITOR")
 
 	cases := []struct {
@@ -394,7 +383,7 @@ func TestEffective_DiscoveryDepth(t *testing.T) {
 
 func TestEffective_OutputPanelLines(t *testing.T) {
 	unsetenv(t, "WTUI_ROOT")
-	unsetenv(t, "TASKFLOW_ROOT")
+	unsetenv(t, "WTUI_TASKS_ROOT")
 	unsetenv(t, "EDITOR")
 
 	cases := []struct {
@@ -510,60 +499,8 @@ func TestEffective_ChainReturn(t *testing.T) {
 	}
 }
 
-func TestEffective_BaseBranch_Default(t *testing.T) {
-	unsetenv(t, "WTUI_ROOT")
-	unsetenv(t, "TASKFLOW_ROOT")
-	unsetenv(t, "EDITOR")
-	unsetenv(t, "WTUI_BASE_BRANCH")
-
-	cfg := &Config{}
-	mustEffective(t, cfg)
-
-	if cfg.BaseBranch != "develop" {
-		t.Errorf("BaseBranch default: got %q, want %q", cfg.BaseBranch, "develop")
-	}
-}
-
-func TestEffective_BaseBranch_FromYAML(t *testing.T) {
-	unsetenv(t, "WTUI_ROOT")
-	unsetenv(t, "TASKFLOW_ROOT")
-	unsetenv(t, "EDITOR")
-	unsetenv(t, "WTUI_BASE_BRANCH")
-
-	cfg := &Config{BaseBranch: "develop"}
-	mustEffective(t, cfg)
-
-	if cfg.BaseBranch != "develop" {
-		t.Errorf("BaseBranch from YAML: got %q, want %q", cfg.BaseBranch, "develop")
-	}
-}
-
-func TestEffective_BaseBranch_FromEnv(t *testing.T) {
-	unsetenv(t, "WTUI_ROOT")
-	unsetenv(t, "TASKFLOW_ROOT")
-	unsetenv(t, "EDITOR")
-	setenv(t, "WTUI_BASE_BRANCH", "release/1.0")
-
-	cfg := &Config{BaseBranch: "develop"}
-	mustEffective(t, cfg)
-
-	if cfg.BaseBranch != "release/1.0" {
-		t.Errorf("WTUI_BASE_BRANCH env override: got %q, want %q", cfg.BaseBranch, "release/1.0")
-	}
-}
-
 func TestLoad_NewBlocksParsing(t *testing.T) {
 	path := writeTempConfig(t, `
-git_flow:
-  preset: git-flow
-  production_branch: master
-  integration_branch: develop
-  default_branch_type: feature
-  allow_mixed_branch_types_on_close: true
-  branch_types:
-    feature:
-      prefixes: ["feature/"]
-      base_branch: develop
 forge:
   default_provider: auto
   gitlab_host: gitlab.example.com
@@ -597,9 +534,6 @@ release:
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	if cfg.GitFlow == nil || cfg.GitFlow.Preset != "git-flow" {
-		t.Fatalf("GitFlow parsing failed: %+v", cfg.GitFlow)
-	}
 	if cfg.Forge == nil || cfg.Forge.GitLabHost != "gitlab.example.com" {
 		t.Fatalf("Forge parsing failed: %+v", cfg.Forge)
 	}
@@ -617,39 +551,6 @@ release:
 	}
 	if cfg.Release == nil || cfg.Release.RootDir != "/tmp/releases" {
 		t.Fatalf("Release parsing failed: %+v", cfg.Release)
-	}
-}
-
-func TestEffective_BackwardCompat_NoGitFlowBlock(t *testing.T) {
-	cfg := &Config{BranchPrefix: "bugfix/", BaseBranch: "integration"}
-	mustEffective(t, cfg)
-
-	if cfg.GitFlow == nil {
-		t.Fatal("GitFlow was not synthesized")
-	}
-	if cfg.GitFlow.Preset != "git-flow" {
-		t.Errorf("Preset: got %q, want %q", cfg.GitFlow.Preset, "git-flow")
-	}
-	rule, ok := cfg.GitFlow.BranchTypes["feature"]
-	if !ok {
-		t.Fatal("feature branch type was not synthesized")
-	}
-	if len(rule.Prefixes) != 1 || rule.Prefixes[0] != "bugfix/" {
-		t.Errorf("feature prefixes: got %v, want [bugfix/]", rule.Prefixes)
-	}
-	if rule.BaseBranch != "integration" {
-		t.Errorf("feature base branch: got %q, want %q", rule.BaseBranch, "integration")
-	}
-}
-
-func TestEffective_InvalidGitFlowPreset_ReturnsError(t *testing.T) {
-	cfg := &Config{GitFlow: &GitFlowConfig{Preset: "unknown-preset"}}
-	_, err := cfg.Effective()
-	if err == nil {
-		t.Fatal("expected error for unknown preset, got nil")
-	}
-	if !strings.Contains(err.Error(), "invalid git_flow.preset") {
-		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -733,17 +634,8 @@ release:
 	}
 }
 
-func TestEffective_ReleaseDefaults_UseGitFlowReleaseRuleAndTagPush(t *testing.T) {
+func TestEffective_ReleasePushTagsInheritsTagPush(t *testing.T) {
 	cfg := &Config{
-		BaseBranch: "integration-main",
-		GitFlow: &GitFlowConfig{
-			IntegrationBranch: "integration-branch",
-			BranchTypes: map[string]BranchTypeRule{
-				"release": {
-					Prefixes: []string{"rel/"},
-				},
-			},
-		},
 		Tag: &TagConfig{
 			Push: false,
 		},
@@ -798,5 +690,95 @@ release:
 	}
 	if cfg.Release.RequireCleanBeforeMerge == nil || *cfg.Release.RequireCleanBeforeMerge {
 		t.Errorf("Release.RequireCleanBeforeMerge explicit false not preserved: got %v", cfg.Release.RequireCleanBeforeMerge)
+	}
+}
+
+func TestLoad_PartialBlocks_OmittedFieldsKeepDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+tag:
+  format: "release-{{.Version}}"
+close:
+  continue_on_error: true
+validation:
+  block_untracked: true
+prune:
+  allow_dirty: true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	mustEffective(t, cfg)
+
+	if cfg.Tag.Format != "release-{{.Version}}" || !cfg.Tag.Enabled || !cfg.Tag.Push || !cfg.Tag.Annotated {
+		t.Errorf("tag = %+v, want explicit format with default enabled/push/annotated", cfg.Tag)
+	}
+	if !cfg.Close.ContinueOnError || !cfg.Close.RequireConfirmation || !cfg.Close.ShowPlanBeforeExecute {
+		t.Errorf("close = %+v, want explicit continue_on_error with default confirmations", cfg.Close)
+	}
+	if !cfg.Validation.BlockUntracked || !cfg.Validation.BlockDetachedHead {
+		t.Errorf("validation = %+v, want explicit block_untracked with default block_detached_head", cfg.Validation)
+	}
+	if !cfg.Prune.AllowDirty || !cfg.Prune.RequireConfirmation || !cfg.Prune.DryRunDefault {
+		t.Errorf("prune = %+v, want explicit allow_dirty with default confirmation/dry-run", cfg.Prune)
+	}
+}
+
+func TestLoad_PartialBlocks_ExplicitFalseWins(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+tag:
+  push: false
+close:
+  require_confirmation: false
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	mustEffective(t, cfg)
+
+	if cfg.Tag.Push || !cfg.Tag.Enabled {
+		t.Errorf("tag = %+v, want push=false enabled=true", cfg.Tag)
+	}
+	if cfg.Close.RequireConfirmation || !cfg.Close.ShowPlanBeforeExecute {
+		t.Errorf("close = %+v, want require_confirmation=false show_plan=true", cfg.Close)
+	}
+}
+
+func TestLoad_RemovedLegacyKeys_ReturnMigrationError(t *testing.T) {
+	for key, src := range map[string]string{
+		"git_flow":      "git_flow:\n  preset: git-flow\n",
+		"branch_prefix": "branch_prefix: feature/\n",
+		"base_branch":   "base_branch: develop\n",
+	} {
+		t.Run(key, func(t *testing.T) {
+			_, err := Load(writeTempConfig(t, src))
+			if err == nil || !strings.Contains(err.Error(), key+" is no longer supported") || !strings.Contains(err.Error(), "workflow") {
+				t.Fatalf("Load() error = %v, want a migration hint for %s", err, key)
+			}
+		})
+	}
+}
+
+func TestEffective_WithoutWorkflow_DefaultsToGitFlowPreset(t *testing.T) {
+	cfg := &Config{}
+	mustEffective(t, cfg)
+	if cfg.Workflow == nil || cfg.Workflow.Extends != "git-flow" {
+		t.Fatalf("Workflow = %+v, want extends git-flow", cfg.Workflow)
+	}
+}
+
+func TestEffective_InvalidTagBump_ReturnsError(t *testing.T) {
+	cfg := &Config{Tag: &TagConfig{Bump: "auto"}}
+	if _, err := cfg.Effective(); err == nil || !strings.Contains(err.Error(), "tag.bump") {
+		t.Fatalf("Effective() error = %v, want tag.bump error", err)
 	}
 }

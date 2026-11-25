@@ -14,15 +14,13 @@ import (
 type Config struct {
 	RootDir          string            `yaml:"root_dir"`
 	TasksRoot        string            `yaml:"tasks_root"`
-	BranchPrefix     string            `yaml:"branch_prefix"`
-	BaseBranch       string            `yaml:"base_branch"`
 	Editor           string            `yaml:"editor"`
 	Concurrency      int               `yaml:"concurrency"`
 	DiscoveryDepth   int               `yaml:"discovery_depth"`
 	OutputPanelLines int               `yaml:"output_panel_lines"`
 	LogLevel         string            `yaml:"log_level"`
 	AI               *AIConfig         `yaml:"ai"`
-	GitFlow          *GitFlowConfig    `yaml:"git_flow"`
+	Workflow         *WorkflowConfig   `yaml:"workflow"`
 	Forge            *ForgeConfig      `yaml:"forge"`
 	Tag              *TagConfig        `yaml:"tag"`
 	Release          *ReleaseConfig    `yaml:"release"`
@@ -48,36 +46,9 @@ type ReleaseConfig struct {
 	RequireCleanBeforeMerge  *bool  `yaml:"require_clean_before_merge"`
 }
 
-type GitFlowConfig struct {
-	Preset                       string                    `yaml:"preset"`
-	ProductionBranch             string                    `yaml:"production_branch"`
-	IntegrationBranch            string                    `yaml:"integration_branch"`
-	DefaultBranchType            string                    `yaml:"default_branch_type"`
-	AllowMixedBranchTypesOnClose bool                      `yaml:"allow_mixed_branch_types_on_close"`
-	TaskMerge                    *TaskMergeConfig          `yaml:"task_merge"`
-	BranchTypes                  map[string]BranchTypeRule `yaml:"branch_types"`
-}
-
-const TaskMergeTimingReleasePrepare = "release_prepare"
-
-type TaskMergeConfig struct {
-	Timing string `yaml:"timing"`
-}
-
-type BranchTypeRule struct {
-	Prefixes               []string `yaml:"prefixes"`
-	BaseBranch             string   `yaml:"base_branch"`
-	MergeTargets           []string `yaml:"merge_targets"`
-	ReviewTargets          []string `yaml:"review_targets"`
-	CloseStrategy          string   `yaml:"close_strategy"`
-	MergeStrategy          string   `yaml:"merge_strategy"`
-	RequiresClean          bool     `yaml:"requires_clean"`
-	TagOnClose             bool     `yaml:"tag_on_close"`
-	TagSource              string   `yaml:"tag_source"`
-	TriggerPipelineOnClose bool     `yaml:"trigger_pipeline_on_close"`
-}
-
 type ForgeConfig struct {
+	// MergeQueue sends GitHub merges through the repository's merge queue instead of merging directly.
+	MergeQueue      bool   `yaml:"merge_queue"`
 	DefaultProvider string `yaml:"default_provider"`
 	GitLabHost      string `yaml:"gitlab_host"`
 	GitHubHost      string `yaml:"github_host"`
@@ -142,11 +113,37 @@ func Load(flagPath string) (*Config, error) {
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
 	}
 
+	if err := rejectRemovedKeys(data); err != nil {
+		return nil, fmt.Errorf("config: %s: %w", path, err)
+	}
+
+	// Pre-filled blocks keep their defaults for fields a partial YAML block omits.
+	cfg.Tag, cfg.Validation, cfg.Close, cfg.Prune = defaultTag(), defaultValidation(), defaultClose(), defaultPrune()
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 
 	return cfg, nil
+}
+
+// removedKeys were replaced by `workflow`; silently ignoring them would run a different flow.
+var removedKeys = map[string]string{
+	"git_flow":      "describe the flow under `workflow` (see docs/configuration.md#workflow)",
+	"branch_prefix": "set the prefixes of the default type under `workflow.task_types`",
+	"base_branch":   "set `workflow.branches.integration`",
+}
+
+func rejectRemovedKeys(data []byte) error {
+	var top map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &top); err != nil {
+		return nil // the typed parse reports syntax errors
+	}
+	for key, hint := range removedKeys {
+		if _, ok := top[key]; ok {
+			return fmt.Errorf("%s is no longer supported: %s", key, hint)
+		}
+	}
+	return nil
 }
 
 func resolvePath(flagPath string) (string, error) {
@@ -189,25 +186,23 @@ func (c *Config) Effective() (*Config, error) {
 	if v := os.Getenv("WTUI_ROOT"); v != "" {
 		c.RootDir = v
 	}
-	if v := os.Getenv("TASKFLOW_ROOT"); v != "" {
+	if v := os.Getenv("WTUI_TASKS_ROOT"); v != "" {
 		c.TasksRoot = v
 	}
 	if v := os.Getenv("EDITOR"); v != "" {
 		c.Editor = v
 	}
-	if v := os.Getenv("WTUI_BASE_BRANCH"); v != "" {
-		c.BaseBranch = v
-	}
 
 	c.effectivePaths()
-	c.effectiveLegacyBranching()
-
-	if err := c.effectiveGitFlow(); err != nil {
-		return nil, err
+	if c.Workflow == nil {
+		c.Workflow = &WorkflowConfig{Extends: "git-flow"}
 	}
 
 	c.effectiveForge()
 	c.effectiveTag()
+	if c.Tag.Bump != "manual" && c.Tag.Bump != "conventional" {
+		return nil, fmt.Errorf("config: tag.bump: expected manual or conventional, got %q", c.Tag.Bump)
+	}
 	c.effectiveRelease()
 	c.effectiveValidation()
 	c.effectiveClose()
@@ -313,14 +308,6 @@ func (c *Config) effectivePaths() {
 		c.TasksRoot = filepath.Join(c.RootDir, ".tasks")
 	}
 
-	if c.BranchPrefix == "" {
-		c.BranchPrefix = "feature/"
-	}
-
-	if c.BaseBranch == "" {
-		c.BaseBranch = "develop"
-	}
-
 	if c.Editor == "" {
 		c.Editor = "code"
 	}
@@ -353,78 +340,6 @@ func (c *Config) effectivePaths() {
 	}
 }
 
-func (c *Config) effectiveLegacyBranching() {
-	if c.GitFlow != nil {
-		return
-	}
-
-	c.GitFlow = &GitFlowConfig{
-		Preset:            "git-flow",
-		ProductionBranch:  "master",
-		IntegrationBranch: c.BaseBranch,
-		DefaultBranchType: "feature",
-		BranchTypes: map[string]BranchTypeRule{
-			"feature": {
-				Prefixes:      []string{c.BranchPrefix},
-				BaseBranch:    c.BaseBranch,
-				MergeTargets:  []string{c.BaseBranch},
-				ReviewTargets: []string{c.BaseBranch},
-				CloseStrategy: "direct_merge",
-				MergeStrategy: "merge_commit",
-				RequiresClean: true,
-			},
-		},
-	}
-}
-
-func (c *Config) effectiveGitFlow() error {
-	if c.GitFlow == nil {
-		return nil
-	}
-
-	switch c.GitFlow.Preset {
-	case "", "git-flow", "github-flow", "gitlab-flow", "custom":
-	default:
-		return fmt.Errorf("config: invalid git_flow.preset %q: expected one of git-flow, github-flow, gitlab-flow, custom", c.GitFlow.Preset)
-	}
-
-	if c.GitFlow.Preset == "" {
-		c.GitFlow.Preset = "git-flow"
-	}
-
-	if c.GitFlow.DefaultBranchType == "" {
-		c.GitFlow.DefaultBranchType = "feature"
-	}
-
-	if c.GitFlow.TaskMerge != nil {
-		switch c.GitFlow.TaskMerge.Timing {
-		case "", TaskMergeTimingReleasePrepare:
-		default:
-			return fmt.Errorf("config: invalid git_flow.task_merge.timing %q: expected release_prepare", c.GitFlow.TaskMerge.Timing)
-		}
-	}
-
-	if c.GitFlow.ProductionBranch == "" {
-		switch c.GitFlow.Preset {
-		case "git-flow":
-			c.GitFlow.ProductionBranch = "master"
-		default:
-			c.GitFlow.ProductionBranch = "main"
-		}
-	}
-
-	if c.GitFlow.IntegrationBranch == "" {
-		switch c.GitFlow.Preset {
-		case "git-flow":
-			c.GitFlow.IntegrationBranch = "develop"
-		default:
-			c.GitFlow.IntegrationBranch = c.GitFlow.ProductionBranch
-		}
-	}
-
-	return nil
-}
-
 func (c *Config) effectiveForge() {
 	if c.Forge == nil {
 		c.Forge = &ForgeConfig{
@@ -448,19 +363,7 @@ func (c *Config) effectiveForge() {
 
 func (c *Config) effectiveTag() {
 	if c.Tag == nil {
-		c.Tag = &TagConfig{
-			Enabled:               true,
-			Format:                "v{{.Version}}",
-			VersionScheme:         "semver",
-			Parser:                "masterminds-semver",
-			Strict:                true,
-			Bump:                  "manual",
-			Annotated:             true,
-			MessageTemplate:       "Release {{.Tag}} for {{.TaskID}}",
-			Source:                "production_branch",
-			Push:                  true,
-			CreateAfterAllTargets: true,
-		}
+		c.Tag = defaultTag()
 		return
 	}
 
@@ -487,13 +390,7 @@ func (c *Config) effectiveTag() {
 
 func (c *Config) effectiveValidation() {
 	if c.Validation == nil {
-		c.Validation = &ValidationConfig{
-			BlockDetachedHead:          true,
-			BlockInterruptedOperations: true,
-			RequireUpstreamForSync:     true,
-			CommandTimeout:             "10s",
-			Concurrency:                8,
-		}
+		c.Validation = defaultValidation()
 		return
 	}
 
@@ -508,29 +405,63 @@ func (c *Config) effectiveValidation() {
 
 func (c *Config) effectiveClose() {
 	if c.Close == nil {
-		c.Close = &CloseConfig{
-			RequireConfirmation:         true,
-			PushSourceBeforeReview:      true,
-			PushTargetsAfterDirectMerge: true,
-			ShowPlanBeforeExecute:       true,
-		}
+		c.Close = defaultClose()
 	}
 }
 
 func (c *Config) effectivePrune() {
 	if c.Prune == nil {
-		c.Prune = &PruneConfig{
-			Fetch:               true,
-			DryRunDefault:       true,
-			RequireConfirmation: true,
-			RemoveEmptyTaskDir:  true,
-			RunGitWorktreePrune: true,
-			Concurrency:         4,
-		}
+		c.Prune = defaultPrune()
 		return
 	}
 
 	if c.Prune.Concurrency <= 0 {
 		c.Prune.Concurrency = 4
+	}
+}
+
+func defaultTag() *TagConfig {
+	return &TagConfig{
+		Enabled:               true,
+		Format:                "v{{.Version}}",
+		VersionScheme:         "semver",
+		Parser:                "masterminds-semver",
+		Strict:                true,
+		Bump:                  "manual",
+		Annotated:             true,
+		MessageTemplate:       "Release {{.Tag}} for {{.TaskID}}",
+		Source:                "production_branch",
+		Push:                  true,
+		CreateAfterAllTargets: true,
+	}
+}
+
+func defaultValidation() *ValidationConfig {
+	return &ValidationConfig{
+		BlockDetachedHead:          true,
+		BlockInterruptedOperations: true,
+		RequireUpstreamForSync:     true,
+		CommandTimeout:             "10s",
+		Concurrency:                8,
+	}
+}
+
+func defaultClose() *CloseConfig {
+	return &CloseConfig{
+		RequireConfirmation:         true,
+		PushSourceBeforeReview:      true,
+		PushTargetsAfterDirectMerge: true,
+		ShowPlanBeforeExecute:       true,
+	}
+}
+
+func defaultPrune() *PruneConfig {
+	return &PruneConfig{
+		Fetch:               true,
+		DryRunDefault:       true,
+		RequireConfirmation: true,
+		RemoveEmptyTaskDir:  true,
+		RunGitWorktreePrune: true,
+		Concurrency:         4,
 	}
 }

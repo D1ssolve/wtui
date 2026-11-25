@@ -36,19 +36,7 @@ type serviceMergeState struct {
 	err     error
 }
 
-func (m *manager) TaskWorkflow(ctx context.Context, taskID string) (domain.WorkflowSummary, error) {
-	services, err := m.ListServices(ctx, taskID)
-	if err != nil {
-		return domain.WorkflowSummary{}, err
-	}
-	if len(services) == 0 {
-		return domain.WorkflowSummary{NextAction: "task has no services"}, nil
-	}
-
-	if m.allHotfixReview(services) {
-		return m.hotfixReviewWorkflow(ctx, taskID)
-	}
-
+func (m *manager) workflowPlans(services []domain.Service) ([]serviceWorkflowPlan, bool, bool, error) {
 	plans := make([]serviceWorkflowPlan, len(services))
 	hasReview, hasDirect := false, false
 	for i, svc := range services {
@@ -75,9 +63,35 @@ func (m *manager) TaskWorkflow(ctx context.Context, taskID string) (domain.Workf
 			hasDirect = true
 		case gitflow.CloseStrategyNone:
 		default:
-			return domain.WorkflowSummary{}, fmt.Errorf("workflow: unsupported close strategy %q for service %s", rule.CloseStrategy, svc.Name)
+			return nil, false, false, fmt.Errorf("workflow: unsupported close strategy %q for service %s", rule.CloseStrategy, svc.Name)
 		}
 		plans[i] = plan
+	}
+
+	return plans, hasReview, hasDirect, nil
+}
+
+func (m *manager) TaskWorkflow(ctx context.Context, taskID string) (domain.WorkflowSummary, error) {
+	services, err := m.ListServices(ctx, taskID)
+	if err != nil {
+		return domain.WorkflowSummary{}, err
+	}
+	if len(services) == 0 {
+		return domain.WorkflowSummary{NextAction: "task has no services"}, nil
+	}
+	if tf, err := m.loadTaskFlow(ctx, taskID); err != nil {
+		return domain.WorkflowSummary{Blocker: err.Error()}, nil
+	} else if tf != nil {
+		return m.taskMachineWorkflow(tf), nil
+	}
+
+	if m.allHotfixReview(services) {
+		return m.hotfixReviewWorkflow(ctx, taskID)
+	}
+
+	plans, hasReview, hasDirect, err := m.workflowPlans(services)
+	if err != nil {
+		return domain.WorkflowSummary{}, err
 	}
 
 	states, err := m.workflowMergeStates(ctx, plans)
@@ -98,9 +112,6 @@ func (m *manager) integrationBranch() string {
 	if m.flow != nil && m.flow.IntegrationBranch != "" {
 		return m.flow.IntegrationBranch
 	}
-	if m.cfg != nil && m.cfg.BaseBranch != "" {
-		return m.cfg.BaseBranch
-	}
 	return "develop"
 }
 
@@ -109,7 +120,7 @@ func (m *manager) allHotfixReview(services []domain.Service) bool {
 		return false
 	}
 	for _, svc := range services {
-		if !m.isHotfixReview(svc.Branch) {
+		if !m.isMultiTargetReview(svc.Branch) {
 			return false
 		}
 	}

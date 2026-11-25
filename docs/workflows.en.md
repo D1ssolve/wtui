@@ -2,7 +2,7 @@
 
 [Русский](workflows.md)
 
-Short guide for a normal `git-flow` setup: `develop` is integration and `master` is production.
+Short guide for the `git-flow` preset (`workflow: {extends: git-flow}`): `develop` is integration and `master` is production. The [trunk-based](#trunk-based) section covers `extends: trunk-based`. Run `wtui flow` to see what your configuration does at every step.
 
 ## Before You Start
 
@@ -30,7 +30,7 @@ flowchart LR
 ![Feature task state before working in external tools](images/workflows/feature-02-overview.png)
 3. Press `V`. This checks Git state, not application tests. `S` synchronizes branches with the remote.
 ![Feature task Git-state validation error in wtui](images/workflows/feature-03-validation-error.png)
-4. Press `C`, review the plan, and confirm. With `close_strategy: review_request`, wtui pushes branches and creates MRs/PRs into `develop`. With `direct_merge`, it updates configured target branches without an MR/PR.
+4. Press `C`, review the plan, and confirm. With a `review` close step (the preset's `feature`), wtui pushes branches and creates MRs/PRs into `develop`. With a `merge` step, it updates the target branches directly without an MR/PR.
 ![Feature Close confirmation in wtui](images/workflows/feature-04-close-confirm.png)
 5. Complete review and wait for CI in the forge. wtui does not delete the task.
 ![Ready MRs before merging through wtui](images/workflows/feature-05-mr-ready.png)
@@ -51,9 +51,9 @@ flowchart LR
     F --> G["D/P: manual cleanup"]
 ```
 
-1. In Releases (`3`), press `N`, choose root feature tasks and service versions. The suggested version is the next patch after the local semver tag; without tags it is `0.1.0`.
+1. In Releases (`3`), press `N`, choose root tasks of the default type (`feature`) and service versions. The suggested version is the next patch after the local semver tag; without tags it is `0.1.0`.
 ![Feature task selection for a new release in wtui](images/workflows/release-01-create.png)
-2. Review the preview and confirm prepare. By default every task branch must already be in `origin/develop`. With `git_flow.task_merge.timing: release_prepare`, each service instead needs one ready MR/PR into `develop`.
+2. Review the preview and confirm prepare. By default every task branch must already be in `origin/develop`. With an `integrate_tasks` release step, each service instead needs one ready MR/PR into `develop`.
 ![Release prepare confirmation in wtui](images/workflows/release-02-prepare-confirm.png)
 3. In `prepared`, run regression manually. If fixes are needed, test, commit, and push them in the release worktree before promotion.
 ![Prepared release state before external regression](images/workflows/release-03-prepared.png)
@@ -79,6 +79,23 @@ flowchart LR
     E --> F["D/P: manual cleanup"]
 ```
 
+These steps are for a hotfix that closes through MRs/PRs:
+
+```yaml
+workflow:
+  extends: git-flow
+  task_types:
+    hotfix:
+      prefixes: ["hotfix/"]
+      from: production
+      shared: true
+      close:
+        - review: {into: [production, integration]}
+        - tag: {on: production}
+```
+
+The preset's own hotfix instead merges directly into `master` and `develop` and tags in a single `C`.
+
 1. Create a task with `i` and choose the `hotfix` type. `hotfix/<TASK>` starts from `master`.
 ![Hotfix creation dialog from master in wtui](images/workflows/hotfix-01-init.png)
 2. Develop and check Git state as for a feature task.
@@ -93,6 +110,28 @@ flowchart LR
 ![Manual hotfix cleanup candidates in wtui](images/workflows/cleanup-candidates-80x24.png)
 
 `H` on a hotfix converts it to a feature task: wtui creates `feature/<TARGET>` from the confirmed SHA, pushes branches with a lease, and deletes only unchanged local hotfix branches. The remote source branch remains.
+
+## Trunk-based
+
+With `workflow: {extends: trunk-based}` there is one long-lived branch, `main`.
+
+```mermaid
+flowchart LR
+    A["i: change"] --> B["C: squash MR/PR into main"]
+    B --> C["M: merge"]
+    C --> D["3, N: cut release/<version> from main"]
+    D --> E["qualification"]
+    E --> F["F: tag the release branch"]
+```
+
+1. Any task without a known prefix is a `change`: its branch is the task ID, it starts from `main`, and `C` opens a squash MR/PR into `main`.
+2. Releases are cut from `main` (`N`). There is no production MR and no back-merge.
+3. A bug found during qualification is fixed on `main` with a `fix/<TASK>` task. After its MR/PR is merged, `C` cherry-picks the accepted merge into the release branch of every open release (`git cherry-pick -x`, pushed with a lease). Releases that already contain the fix are skipped; releases whose tag commit is already accepted are reported as not picked.
+4. `F` tags the current tip of the release branch. A retry keeps that commit and refuses if the branch was rewritten.
+
+## Your Own Release Lifecycle
+
+Releases run on a state machine. Besides `extends` presets you can describe it in `workflow.release.machine`: QA sign-off with a reject-and-fix loop, staging deploy hooks, waiting for green CI, environment chains such as `main → pre-production → production`. In the Releases panel the footer shows the keys of the current state; `F` advances or re-checks, `M` merges the reviews the release waits for. See [Release state machine](configuration.md#release-state-machine).
 
 ## Manual Cleanup
 

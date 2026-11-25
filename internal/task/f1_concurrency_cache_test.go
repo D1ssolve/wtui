@@ -78,7 +78,7 @@ func TestListServices_WorktreeCacheDedupesConcurrentMisses(t *testing.T) {
 		},
 	}
 
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code", Concurrency: 4}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code", Concurrency: 4}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
@@ -179,7 +179,7 @@ func TestListServices_BoundedConcurrencyHonorsConfig(t *testing.T) {
 		},
 	}
 
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code", Concurrency: 2}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code", Concurrency: 2}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
@@ -259,7 +259,7 @@ func TestAddWorktreesForServices_BoundedConcurrencyHonorsConfig(t *testing.T) {
 		},
 	}
 
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code", Concurrency: 2}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code", Concurrency: 2}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
@@ -351,7 +351,7 @@ func TestAdd_BoundedConcurrencyHonorsConfig(t *testing.T) {
 		},
 	}
 
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code", Concurrency: 1}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code", Concurrency: 1}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}
@@ -521,7 +521,7 @@ func TestSyncTask_BoundedConcurrencyHonorsConfig(t *testing.T) {
 		},
 	}
 
-	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code", Concurrency: 1}
+	cfg := &config.Config{TasksRoot: tasksRoot, RootDir: rootDir, Editor: "code", Concurrency: 1}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
 	}

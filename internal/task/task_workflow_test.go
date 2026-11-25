@@ -57,7 +57,7 @@ func newStrategyWorkflowManager(t *testing.T, flow *gitflow.ResolvedGitFlow, bra
 
 func defaultWorkflowFlow(t *testing.T) *gitflow.ResolvedGitFlow {
 	t.Helper()
-	flow, err := gitflow.EffectiveConfig(nil)
+	flow, err := gitflow.Resolve(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

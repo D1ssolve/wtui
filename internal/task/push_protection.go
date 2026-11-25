@@ -58,13 +58,10 @@ func (m *manager) protectedBranchPolicy() (exact []string, prefixes []string) {
 	if m.flow != nil {
 		exact = appendUnique(exact, m.flow.ProductionBranch, m.flow.IntegrationBranch)
 		for bt, rule := range m.flow.BranchTypes {
-			if bt == gitflow.BranchTypeRelease || bt == gitflow.BranchTypeHotfix {
+			if bt == gitflow.BranchTypeRelease || rule.Shared {
 				prefixes = appendUnique(prefixes, rule.Prefixes...)
 			}
 		}
-	}
-	if m.cfg != nil {
-		exact = appendUnique(exact, m.cfg.BaseBranch)
 	}
 	return exact, prefixes
 }

@@ -439,7 +439,7 @@ func TestInitDialogWithFlow_SelectHotfix_UpdatesPrefixAndBaseAndSubmitBranchType
 		DefaultBranchType: gitflow.BranchTypeFeature,
 		BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
 			gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, BaseBranch: "develop"},
-			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "develop"},
+			gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}, BaseBranch: "master"},
 		},
 	}
 
@@ -572,7 +572,6 @@ func TestConfigModal_ViewContainsConfigValues(t *testing.T) {
 	d := NewConfigModal(&config.Config{
 		RootDir:          "/tmp/root",
 		TasksRoot:        "/tmp/root/.tasks",
-		BranchPrefix:     "feature/",
 		Editor:           "code",
 		DiscoveryDepth:   4,
 		OutputPanelLines: 6,
@@ -586,8 +585,6 @@ func TestConfigModal_ViewContainsConfigValues(t *testing.T) {
 		"/tmp/root",
 		"tasks_root:",
 		"/tmp/root/.tasks",
-		"branch_prefix:",
-		"feature/",
 		"editor:",
 		"code",
 		"discovery_depth:",

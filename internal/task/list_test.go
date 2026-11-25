@@ -52,10 +52,9 @@ func TestList_IgnoresConfiguredReleaseRootInsideTasksRoot(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		TasksRoot:    tasksRoot,
-		RootDir:      rootDir,
-		BranchPrefix: "feature/",
-		Editor:       "code",
+		TasksRoot: tasksRoot,
+		RootDir:   rootDir,
+		Editor:    "code",
 		Release: &config.ReleaseConfig{
 			RootDir: releaseRoot,
 		},
@@ -134,11 +133,10 @@ func TestListServices_NoPartialSuccessWithNilError(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		TasksRoot:    tasksRoot,
-		RootDir:      rootDir,
-		BranchPrefix: "feature/",
-		Editor:       "code",
-		Concurrency:  1,
+		TasksRoot:   tasksRoot,
+		RootDir:     rootDir,
+		Editor:      "code",
+		Concurrency: 1,
 	}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
@@ -260,11 +258,10 @@ func TestList_ConcurrencyCapHonored_Config2(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		TasksRoot:    tasksRoot,
-		RootDir:      rootDir,
-		BranchPrefix: "feature/",
-		Editor:       "code",
-		Concurrency:  2,
+		TasksRoot:   tasksRoot,
+		RootDir:     rootDir,
+		Editor:      "code",
+		Concurrency: 2,
 	}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)
@@ -372,11 +369,10 @@ func TestList_NoMultiplicativeFanOut(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		TasksRoot:    tasksRoot,
-		RootDir:      rootDir,
-		BranchPrefix: "feature/",
-		Editor:       "code",
-		Concurrency:  2,
+		TasksRoot:   tasksRoot,
+		RootDir:     rootDir,
+		Editor:      "code",
+		Concurrency: 2,
 	}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)

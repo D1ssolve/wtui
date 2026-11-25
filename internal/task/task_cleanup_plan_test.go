@@ -833,7 +833,7 @@ func taskCleanupTestManagerIn(t *testing.T, root string) (*manager, *mockGitClie
 			t.Fatal(err)
 		}
 	}
-	cfg := &config.Config{RootDir: root, TasksRoot: tasksRoot, BaseBranch: "develop", Release: &config.ReleaseConfig{RootDir: releaseRoot}}
+	cfg := &config.Config{RootDir: root, TasksRoot: tasksRoot, Release: &config.ReleaseConfig{RootDir: releaseRoot}}
 	flow := &gitflow.ResolvedGitFlow{ProductionBranch: "master", IntegrationBranch: "develop", BranchTypes: map[gitflow.BranchType]gitflow.BranchTypeRule{
 		gitflow.BranchTypeFeature: {Prefixes: []string{"feature/"}, MergeTargets: []string{"master"}, CloseStrategy: gitflow.CloseStrategyDirectMerge},
 		gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},

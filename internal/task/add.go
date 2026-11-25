@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
-	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 func (m *manager) Add(ctx context.Context, params AddParams) (PartialFailureResult, error) {
@@ -24,7 +23,7 @@ func (m *manager) Add(ctx context.Context, params AddParams) (PartialFailureResu
 		return PartialFailureResult{}, fmt.Errorf("add: stat task directory %s: %w", taskDir, err)
 	}
 
-	branchType, rule := m.resolveInitRule(params.BranchType)
+	_, rule := m.resolveInitRule(params.BranchType)
 	branchPrefix := ""
 	if len(rule.Prefixes) > 0 {
 		branchPrefix = strings.TrimSpace(rule.Prefixes[0])
@@ -32,9 +31,6 @@ func (m *manager) Add(ctx context.Context, params AddParams) (PartialFailureResu
 	branchName := m.resolveBranchName(branchPrefix, params.TaskID)
 
 	baseBranch := strings.TrimSpace(rule.BaseBranch)
-	if branchType == gitflow.BranchTypeHotfix && m.flow != nil && strings.TrimSpace(m.flow.ProductionBranch) != "" {
-		baseBranch = strings.TrimSpace(m.flow.ProductionBranch)
-	}
 
 	results := m.addWorktreesForServices(
 		ctx, params.TaskID, params.Services, taskDir, branchName, baseBranch,

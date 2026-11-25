@@ -104,6 +104,16 @@ type Client interface {
 	BuildMergeCommit(ctx context.Context, repoPath, targetSHA, headSHA, method string) (string, error)
 
 	MergeAbort(ctx context.Context, worktreePath string) error
+	// CherryPick applies commit onto HEAD with a "(cherry picked from commit ...)" trailer,
+	// using the first parent as mainline for merge commits; a failed pick is aborted.
+	CherryPick(ctx context.Context, worktreePath, commit string) error
+	// MergeIsNoop reports whether merging branch into base would leave base's tree unchanged,
+	// i.e. branch's changes are already in base (for example through a squash merge).
+	MergeIsNoop(ctx context.Context, repoPath, base, branch string) (bool, error)
+	// MergeConflicts lists the files a merge of ref into base would conflict on, without touching any worktree.
+	MergeConflicts(ctx context.Context, repoPath, base, ref string) ([]string, error)
+	// CommitsMentioning lists commits reachable from ref whose message contains text.
+	CommitsMentioning(ctx context.Context, repoPath, ref, text string) ([]string, error)
 
 	Rebase(ctx context.Context, worktreePath, upstream string) error
 
@@ -135,6 +145,8 @@ type Client interface {
 	TagExists(ctx context.Context, repoPath, tag string) (bool, error)
 
 	LatestSemverTag(ctx context.Context, repoPath, branch string) (string, error)
+	// CommitLog lists commits reachable from to but not from (all of to when from is empty), newest first.
+	CommitLog(ctx context.Context, repoPath, from, to string) ([]domain.Commit, error)
 
 	DeleteBranch(ctx context.Context, repoPath, branch string) error
 	// DeleteBranchIfUnchanged deletes refs/heads/<branch> only when it still
@@ -557,6 +569,84 @@ func (c *CommandClient) MergeFFOnly(ctx context.Context, worktreePath, ref strin
 func (c *CommandClient) MergeAbort(ctx context.Context, worktreePath string) error {
 	_, err := c.execGit(ctx, "-C", worktreePath, "merge", "--abort")
 	return err
+}
+
+// ErrCherryPickEmpty reports a pick whose changes the target already has.
+var ErrCherryPickEmpty = errors.New("cherry-pick: changes already present")
+
+func (c *CommandClient) CherryPick(ctx context.Context, worktreePath, commit string) error {
+	parents, err := c.execGit(ctx, "-C", worktreePath, "rev-list", "--parents", "-n", "1", commit)
+	if err != nil {
+		return err
+	}
+	args := []string{"-C", worktreePath, "cherry-pick", "-x"}
+	if len(strings.Fields(parents)) > 2 {
+		args = append(args, "-m", "1")
+	}
+	if _, err := c.execGit(ctx, append(args, commit)...); err != nil {
+		if _, abortErr := c.execGit(ctx, "-C", worktreePath, "cherry-pick", "--abort"); abortErr != nil {
+			return errors.Join(err, fmt.Errorf("cherry-pick --abort: %w", abortErr))
+		}
+		var execErr *ExecError
+		if errors.As(err, &execErr) && strings.Contains(execErr.Stderr, "is now empty") {
+			return ErrCherryPickEmpty
+		}
+		return err
+	}
+	return nil
+}
+
+func (c *CommandClient) MergeIsNoop(ctx context.Context, repoPath, base, branch string) (bool, error) {
+	out, err := c.execGit(ctx, "-C", repoPath, "merge-tree", "--write-tree", base, branch)
+	if err != nil {
+		var execErr *ExecError
+		if errors.As(err, &execErr) && execErr.ExitCode == 1 {
+			return false, nil // conflicts: the branch is not contained
+		}
+		return false, err
+	}
+	baseTree, err := c.execGit(ctx, "-C", repoPath, "rev-parse", base+"^{tree}")
+	if err != nil {
+		return false, err
+	}
+	merged := strings.Fields(out)
+	return len(merged) > 0 && merged[0] == strings.TrimSpace(baseTree), nil
+}
+
+// MergeConflicts runs git directly because execGit drops stdout on a non-zero exit,
+// and merge-tree reports conflicts as exit 1 with the paths on stdout.
+func (c *CommandClient) MergeConflicts(ctx context.Context, repoPath, base, ref string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, subprocessTimeout)
+	defer cancel()
+	args := []string{"-C", repoPath, "merge-tree", "--write-tree", "--name-only", "--no-messages", base, ref}
+	argv := append([]string{"git"}, args...)
+	c.logger.InfoContext(ctx, "exec git", slog.Any("argv", argv))
+	cmd := exec.CommandContext(ctx, "git", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return nil, nil
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return nil, &ExecError{Argv: argv, ExitCode: -1, Stderr: stderr.String() + err.Error()}
+	}
+	if exitErr.ExitCode() != 1 {
+		return nil, &ExecError{Argv: argv, ExitCode: exitErr.ExitCode(), Stderr: stderr.String()}
+	}
+	// The first line is the merged tree, the rest are the conflicted paths.
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	return lines[1:], nil
+}
+
+func (c *CommandClient) CommitsMentioning(ctx context.Context, repoPath, ref, text string) ([]string, error) {
+	out, err := c.execGit(ctx, "-C", repoPath, "log", "--format=%H", "--fixed-strings", "--grep="+text, ref)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(out), nil
 }
 
 func (c *CommandClient) Rebase(ctx context.Context, worktreePath, upstream string) error {

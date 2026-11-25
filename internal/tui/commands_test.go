@@ -525,6 +525,14 @@ func (m *cmdManager) RetryReleaseTaskMerges(ctx context.Context, releaseID strin
 	return m.retryTaskMergeResult, m.retryTaskMergeErr
 }
 
+func (m *cmdManager) PlanReleaseTaskAdd(context.Context, string, []string) (task.ReleaseTaskAddPlan, error) {
+	return task.ReleaseTaskAddPlan{}, nil
+}
+
+func (m *cmdManager) AddReleaseTasks(context.Context, task.ReleaseTaskAddPlan, chan<- string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
 func (m *cmdManager) RejectRelease(_ context.Context, _ string) (domain.Release, error) {
 	return domain.Release{}, nil
 }
@@ -1093,48 +1101,6 @@ func TestCreateReleaseCmdReturnsErrorInMessage(t *testing.T) {
 	}
 }
 
-func TestFinalizeReleaseCmdReturnsDoneMsg(t *testing.T) {
-	expected := domain.Release{ID: "rel-1", Status: domain.ReleaseStatusPrepared}
-	mgr := &cmdManager{finishReleaseResult: expected}
-
-	cmd := finalizeReleaseCmd(mgr, "rel-1", 11)
-
-	msg2 := cmd()
-	done, ok := msg2.(ReleaseActionDoneMsg)
-	if !ok {
-		t.Fatalf("msg2 = %T, want ReleaseActionDoneMsg", msg2)
-	}
-	if done.Action != "finalize" {
-		t.Fatalf("action = %q, want finalize", done.Action)
-	}
-	if done.Generation != 11 {
-		t.Fatalf("done.Generation = %d, want 11", done.Generation)
-	}
-	if done.Release.ID != "rel-1" {
-		t.Fatalf("done.Release.ID = %q, want rel-1", done.Release.ID)
-	}
-	if done.Err != nil {
-		t.Fatalf("done.Err = %v, want nil", done.Err)
-	}
-	if mgr.finishReleaseCtx == nil {
-		t.Fatal("FinishRelease ctx = nil, want non-nil")
-	}
-	if mgr.finishReleaseParams.ReleaseID != "rel-1" {
-		t.Fatalf("FinishRelease params.ReleaseID = %q, want rel-1", mgr.finishReleaseParams.ReleaseID)
-	}
-	if mgr.finishReleaseParams.StatusCh == nil {
-		t.Fatal("FinishRelease params.StatusCh = nil, want non-nil")
-	}
-	deadline, ok := mgr.finishReleaseCtx.Deadline()
-	if !ok {
-		t.Fatal("FinishRelease ctx has no deadline")
-	}
-	remaining := time.Until(deadline)
-	if remaining > 10*time.Minute || remaining < 9*time.Minute+59*time.Second {
-		t.Fatalf("FinishRelease timeout ~10m, got remaining=%s", remaining)
-	}
-}
-
 func TestRetryReleaseCmdReturnsDoneMsg(t *testing.T) {
 	expected := domain.Release{ID: "rel-1", Status: domain.ReleaseStatusPrepared}
 	mgr := &cmdManager{retryReleaseResult: expected}
@@ -1196,16 +1162,18 @@ func TestMergeServiceMRCmdPreservesTaskAndService(t *testing.T) {
 	}
 }
 
-func TestPromoteReleaseCmdStreamsStatusAndReturnsDone(t *testing.T) {
-	mgr := &cmdManager{promoteResult: domain.Release{ID: "rel-1"}}
-	msg := promoteReleaseCmd(mgr, "rel-1", 21)()
-	line, ok := msg.(OutputLineMsg)
-	if !ok || line.Line != "promoting" {
-		t.Fatalf("first message = %#v, want promoting output", msg)
-	}
-	done, ok := line.Next().(ReleaseActionDoneMsg)
-	if !ok || done.Action != "promote" || done.Release.ID != "rel-1" || mgr.promoteReleaseID != "rel-1" {
-		t.Fatalf("done = %#v, release ID call = %q", done, mgr.promoteReleaseID)
+func TestAdvanceReleaseCmdStreamsStatusAndReturnsDone(t *testing.T) {
+	for _, tc := range []struct{ event, action string }{{"advance", "advance"}, {"", "check"}} {
+		mgr := &cmdManager{promoteResult: domain.Release{ID: "rel-1"}}
+		msg := advanceReleaseCmd(mgr, "rel-1", tc.event, 21)()
+		line, ok := msg.(OutputLineMsg)
+		if !ok || line.Line != "promoting" {
+			t.Fatalf("first message = %#v, want streamed output", msg)
+		}
+		done, ok := line.Next().(ReleaseActionDoneMsg)
+		if !ok || done.Action != tc.action || done.Release.ID != "rel-1" || mgr.promoteReleaseID != "rel-1" {
+			t.Fatalf("event %q: done = %#v, release ID call = %q", tc.event, done, mgr.promoteReleaseID)
+		}
 	}
 }
 
@@ -1492,3 +1460,13 @@ func TestPushTaskCmd_ErrorPathStillClosesChannel(t *testing.T) {
 		t.Fatal("status channel was not closed on error path")
 	}
 }
+
+func (m *cmdManager) AdvanceRelease(ctx context.Context, releaseID, _ string, statusCh chan<- string) (domain.Release, error) {
+	return m.PromoteRelease(ctx, releaseID, statusCh)
+}
+
+func (m *cmdManager) ReleaseEvents(r domain.Release) []task.ReleaseEvent {
+	return gitFlowReleaseEvents(r)
+}
+
+func (m *cmdManager) AdvanceTask(context.Context, string, string, chan<- string) error { return nil }

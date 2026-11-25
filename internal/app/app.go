@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os/exec"
 
+	"github.com/D1ssolve/wtui/internal/ai"
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/discovery"
 	"github.com/D1ssolve/wtui/internal/dotnet"
@@ -20,6 +21,7 @@ import (
 type Dependencies struct {
 	Manager           task.Manager
 	MetadataGenerator task.MetadataGenerator
+	Assistant         ai.Assistant
 	ResolvedFlow      *gitflow.ResolvedGitFlow
 	LazygitAvailable  bool
 	GlabAvailable     bool
@@ -31,10 +33,9 @@ func BuildDependencies(cfg *config.Config, logger *slog.Logger) (Dependencies, e
 	if err != nil {
 		return Dependencies{}, fmt.Errorf("configure AI generation: %w", err)
 	}
-	resolvedFlow, err := gitflow.EffectiveConfig(cfg.GitFlow)
+	resolvedFlow, err := gitflow.Resolve(cfg)
 	if err != nil {
-		logger.Warn("invalid git flow config, using defaults", "err", err)
-		resolvedFlow, _ = gitflow.EffectiveConfig(nil)
+		return Dependencies{}, fmt.Errorf("configure workflow: %w", err)
 	}
 
 	forgeCtx := context.Background()
@@ -47,6 +48,7 @@ func BuildDependencies(cfg *config.Config, logger *slog.Logger) (Dependencies, e
 	return Dependencies{
 		Manager:           manager,
 		MetadataGenerator: task.NewMetadataGenerator(manager, git.NewCommandClient(logger), provider, resolvedFlow),
+		Assistant:         provider,
 		ResolvedFlow:      resolvedFlow,
 		LazygitAvailable:  lazygitErr == nil,
 		GlabAvailable:     glabAvailable,

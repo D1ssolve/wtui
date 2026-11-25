@@ -121,6 +121,9 @@ func (m *manager) integrateReleaseTaskMR(ctx context.Context, release *domain.Re
 	if err := m.persistCheckpoint(release, "task_merge_attempting", nil); err != nil {
 		return err
 	}
+	if _, queued := m.mergeQueue(client); queued {
+		return errors.New("release task merge: integrate_tasks merges task MRs one after another into a moving integration branch, which a merge queue cannot guarantee; merge the task MRs through the queue first and drop integrate_tasks")
+	}
 	params := forge.MergeMRParams{WorktreePath: step.WorktreePath, Repo: step.Repo, Number: step.MRNumber, Method: step.MergeMethod, ExpectedHeadSHA: step.HeadSHA, ExpectedTargetBranch: step.TargetBranch, ExpectedTargetSHA: expected}
 	sendStatus(statusCh, fmt.Sprintf("[%s][task-merge] merging !%d", step.ServiceName, step.MRNumber))
 	if mr.SupportsTargetBinding {

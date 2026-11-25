@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	uitheme "github.com/D1ssolve/wtui/internal/tui/theme"
 )
@@ -50,6 +51,16 @@ func (p *OutputPanel) AppendLine(line string) {
 	p.lines = append(p.lines, formatted)
 	p.rebuildContent()
 	p.viewport.GotoBottom()
+}
+
+// RecentText returns up to n last output lines without styling.
+func (p *OutputPanel) RecentText(n int) string {
+	lines := p.lines[max(0, len(p.lines)-n):]
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = ansi.Strip(line)
+	}
+	return strings.Join(plain, "\n")
 }
 
 func (p *OutputPanel) SetSize(width, height int) {

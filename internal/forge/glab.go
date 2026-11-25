@@ -475,6 +475,7 @@ func (c *GlabClient) PipelineStatus(ctx context.Context, branch, repo string) ([
 		ID     any       `json:"id"`
 		Status string    `json:"status"`
 		Ref    string    `json:"ref"`
+		SHA    string    `json:"sha"`
 		Name   string    `json:"name"`
 		WebURL string    `json:"web_url"`
 		Jobs   []glabJob `json:"jobs"`
@@ -508,6 +509,7 @@ func (c *GlabClient) PipelineStatus(ctx context.Context, branch, repo string) ([
 
 	return []PipelineStatus{{
 		ID:           fmt.Sprint(raw.ID),
+		HeadSHA:      raw.SHA,
 		Status:       raw.Status,
 		Branch:       raw.Ref,
 		URL:          raw.WebURL,

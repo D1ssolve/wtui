@@ -36,7 +36,7 @@ func TestWriteAndLoadReleaseManifest_PersistsVersionAndUTCAndUnknownFields(t *te
 		t.Fatalf("writeReleaseManifest() error = %v", err)
 	}
 
-	if written.ManifestVersion != 2 {
+	if written.ManifestVersion != releaseManifestVersion {
 		t.Fatalf("ManifestVersion = %d, want 2", written.ManifestVersion)
 	}
 	if written.CreatedAt.Location() != time.UTC {
@@ -95,7 +95,7 @@ func TestWriteAndLoadReleaseManifest_PersistsVersionAndUTCAndUnknownFields(t *te
 	if loaded.ID != release.ID {
 		t.Fatalf("loaded.ID = %q, want %q", loaded.ID, release.ID)
 	}
-	if loaded.ManifestVersion != 2 {
+	if loaded.ManifestVersion != releaseManifestVersion {
 		t.Fatalf("loaded.ManifestVersion = %d, want 2", loaded.ManifestVersion)
 	}
 }

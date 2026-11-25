@@ -71,15 +71,16 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 		Services:   make([]ServiceClosePlan, 0, len(services)),
 	}
 	for _, svc := range services {
-		if !m.isHotfixReview(svc.Branch) {
+		if !m.isMultiTargetReview(svc.Branch) {
 			continue
 		}
 		for _, other := range services {
-			if !m.isHotfixReview(other.Branch) {
+			if !m.isMultiTargetReview(other.Branch) {
 				return ClosePlan{}, ErrMixedBranchTypes
 			}
 		}
-		return m.planHotfixClose(ctx, taskID, services, flow.BranchTypes[gitflow.BranchTypeHotfix])
+		bt := gitflow.DetectBranchType(svc.Branch, flow)
+		return m.planHotfixClose(ctx, taskID, services, bt, flow.BranchTypes[bt])
 	}
 
 	for _, svc := range services {
@@ -150,6 +151,8 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 			plan.RequiresForge = true
 		}
 
+		servicePlan.CherryPick = svcRule.CherryPickToOpenReleases
+
 		if svcRule.TriggerPipelineOnClose {
 			branch := svc.Branch
 			if servicePlan.TagPlan != nil {
@@ -166,6 +169,27 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 }
 
 func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseTaskResult, error) {
+	tf, err := m.gateTaskAction(ctx, params.TaskID, gitflow.EventActionClose)
+	if err != nil {
+		if params.StatusCh != nil {
+			sendLine(ctx, params.StatusCh, "[validate] "+err.Error())
+		}
+		return CloseTaskResult{TaskID: params.TaskID, Steps: []CloseTaskStep{{Name: "validate", Status: StepStatusFailed, Message: err.Error()}}}, err
+	}
+	if tf != nil && params.ServiceName != "" {
+		err := fmt.Errorf("%w: task %s follows a workflow machine; close the whole task with C", ErrTaskFlowStep, params.TaskID)
+		return CloseTaskResult{TaskID: params.TaskID}, err
+	}
+	result, err := m.closeTask(ctx, params)
+	if err == nil && result.Success {
+		if flowErr := m.afterTaskAction(ctx, tf, gitflow.EventActionClose, params.StatusCh); flowErr != nil {
+			err = fmt.Errorf("close succeeded, but the task workflow stopped after it: %w", flowErr)
+		}
+	}
+	return result, err
+}
+
+func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseTaskResult, error) {
 	result := CloseTaskResult{TaskID: params.TaskID}
 	anyFailed := false
 
@@ -510,7 +534,7 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 		// verified merged code. A review_request service whose MR was created
 		// or is still open waits: merging happens in the forge, and tagging or
 		// triggering pipelines before the merge would act on unmerged code.
-		if svcPlan.CloseStrategy == gitflow.CloseStrategyReviewRequest && !reviewVerified && (svcPlan.TagPlan != nil || svcPlan.PipelinePlan != nil) {
+		if svcPlan.CloseStrategy == gitflow.CloseStrategyReviewRequest && !reviewVerified && (svcPlan.TagPlan != nil || svcPlan.PipelinePlan != nil || svcPlan.CherryPick) {
 			result.Waiting = true
 			continue
 		}
@@ -652,6 +676,17 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 			}
 		}
 
+		if svcPlan.CherryPick {
+			if pickErr := m.cherryPickIntoOpenReleases(ctx, params.TaskID, svc, reviewMergeSHA, step); pickErr != nil {
+				step(svc.Name+":cherry-pick", StepStatusFailed, pickErr.Error())
+				if !continueOnError {
+					return result, pickErr
+				}
+				anyFailed = true
+				continue
+			}
+		}
+
 		if svcPlan.PipelinePlan != nil {
 			forgeClient, clientErr := m.forgeClientForService(ctx, svc)
 			if clientErr != nil {
@@ -709,17 +744,14 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 }
 
 // effectiveMergeTargets substitutes the integration target with the active
-// release branch for hotfix direct merges, matching what CloseTask will merge
+// release branch for rules with ViaActiveRelease, matching what CloseTask will merge
 // into. Shared by close planning and workflow guidance. The returned warning
 // (non-empty when detection fails) is informational; targets stay unchanged.
 func (m *manager) effectiveMergeTargets(ctx context.Context, svc domain.Service, branchType gitflow.BranchType, targets []string) ([]string, string) {
-	if branchType != gitflow.BranchTypeHotfix || m.flow == nil {
+	if m.flow == nil || !m.flow.BranchTypes[branchType].ViaActiveRelease || m.flow.Release == nil {
 		return targets, ""
 	}
-	releasePrefix := "release/"
-	if releaseRule, ok := m.flow.BranchTypes[gitflow.BranchTypeRelease]; ok && len(releaseRule.Prefixes) > 0 {
-		releasePrefix = releaseRule.Prefixes[0]
-	}
+	releasePrefix := m.flow.Release.BranchPrefix
 	activeRelease, activeErr := gitflow.FindActiveReleaseBranch(ctx, m.git, svc.WorktreePath, releasePrefix)
 	if activeErr != nil {
 		return targets, fmt.Sprintf("[%s] active release detection failed: %v", svc.Name, activeErr)
@@ -759,15 +791,15 @@ func (m *manager) proposeTag(ctx context.Context, taskID string, svc domain.Serv
 		if err != nil {
 			return "", "", err
 		}
-		if latest != "" {
-			v, parseErr := semver.NewVersion(latest)
-			if parseErr == nil {
-				version = v.IncPatch().String()
-			}
+		v, parseErr := semver.NewVersion(latest)
+		if latest == "" || parseErr != nil {
+			latest, v = "", nil
 		}
-	}
-	if version == "" {
-		version = "0.1.0"
+		next, err := m.nextVersion(ctx, svc.RepoPath, latest, v, sourceBranch)
+		if err != nil {
+			return "", "", err
+		}
+		version = next
 	}
 	if normalized := normalizeVersion(version); normalized != "" {
 		version = normalized

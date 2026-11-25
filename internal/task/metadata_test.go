@@ -68,7 +68,7 @@ func TestMetadataGenerator_CollectsSelectedBranchesAndComputesVersions(t *testin
 			},
 		}, nil
 	})
-	flow, err := gitflow.EffectiveConfig(nil)
+	flow, err := gitflow.Resolve(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestMetadataGenerator_CollectsSelectedBranchesAndComputesVersions(t *testin
 
 func TestMetadataGenerator_ReportsFailuresWithoutCallingProvider(t *testing.T) {
 	failure := errors.New("cannot read selected branch")
-	flow, err := gitflow.EffectiveConfig(nil)
+	flow, err := gitflow.Resolve(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestMetadataGenerator_PreservesProviderFailure(t *testing.T) {
 	provider := metadataProvider(func(context.Context, ai.Request) (ai.Draft, error) {
 		return ai.Draft{}, ai.ErrUsageLimit
 	})
-	flow, err := gitflow.EffectiveConfig(nil)
+	flow, err := gitflow.Resolve(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestMetadataGenerator_TagNotesIncludeChangesAlreadyMergedIntoProduction(t *
 			{Name: "api", Bump: ai.BumpPatch, Reason: "Billing bug", TagDescription: "Fix billing"},
 		}}, nil
 	})
-	flow, err := gitflow.EffectiveConfig(nil)
+	flow, err := gitflow.Resolve(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestMetadataGenerator_ReleaseIncludesUnreleasedIntegrationChanges(t *testin
 			{Name: "api", Bump: ai.BumpMinor, Reason: "Features", TagDescription: "Release features"},
 		}}, nil
 	})
-	flow, err := gitflow.EffectiveConfig(nil)
+	flow, err := gitflow.Resolve(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

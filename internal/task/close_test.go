@@ -49,7 +49,7 @@ func TestPlanCloseTask_FeatureBranch_MergesToDevelopOnly(t *testing.T) {
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	flow, err := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, err := closeTestFlow(cfg)
 	if err != nil {
 		t.Fatalf("flow: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestPlanCloseTask_ReleaseBranch_HasMasterDevelopAndTag(t *testing.T) {
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg)
 	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
 
 	plan, err := mgr.PlanCloseTask(context.Background(), taskID)
@@ -130,7 +130,7 @@ func TestCloseTask_DirtyServiceFailsValidation_NoMerge(t *testing.T) {
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg)
 	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
 
 	_, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
@@ -168,7 +168,7 @@ func TestCloseTask_AlreadyMerged_SkipsMerge(t *testing.T) {
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg)
 	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
 
 	res, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
@@ -208,7 +208,7 @@ func TestCloseTask_DryRun_NoGitMutations(t *testing.T) {
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg)
 	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
 
 	res, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID, DryRun: true})
@@ -261,7 +261,7 @@ func TestCloseTask_RestoreBranchFailure_ReturnsErrorWhenContinueOnErrorDisabled(
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg)
 	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
 
 	res, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
@@ -344,7 +344,7 @@ func TestCloseTask_RestoreBranchFailure_ContinueOnErrorMarksResultFailed(t *test
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
 	cfg.Close.ContinueOnError = true
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg)
 	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
 
 	res, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
@@ -372,22 +372,22 @@ func TestCloseTask_RestoreBranchFailure_ContinueOnErrorMarksResultFailed(t *test
 // recorded as failed under continue_on_error must leave Success=false, while
 // later services still progress.
 func TestCloseTask_ContinueOnError_RecordedFailureForcesUnsuccessful(t *testing.T) {
-	tagRule := func(cfg *config.Config) {
-		featureRule := cfg.GitFlow.BranchTypes["feature"]
+	tagRule := func(flow *gitflow.ResolvedGitFlow) {
+		featureRule := flow.BranchTypes[gitflow.BranchTypeFeature]
 		featureRule.TagOnClose = true
 		featureRule.TagSource = "develop"
-		cfg.GitFlow.BranchTypes["feature"] = featureRule
+		flow.BranchTypes[gitflow.BranchTypeFeature] = featureRule
 	}
-	pipelineRule := func(cfg *config.Config) {
-		featureRule := cfg.GitFlow.BranchTypes["feature"]
+	pipelineRule := func(flow *gitflow.ResolvedGitFlow) {
+		featureRule := flow.BranchTypes[gitflow.BranchTypeFeature]
 		featureRule.TriggerPipelineOnClose = true
-		cfg.GitFlow.BranchTypes["feature"] = featureRule
+		flow.BranchTypes[gitflow.BranchTypeFeature] = featureRule
 	}
 
 	cases := []struct {
 		name           string
 		mutate         func(taskID string, gitMock *mockGitClient)
-		mutateCfg      func(cfg *config.Config)
+		mutateFlow     func(flow *gitflow.ResolvedGitFlow)
 		wantFailedStep string
 	}{
 		{
@@ -439,8 +439,8 @@ func TestCloseTask_ContinueOnError_RecordedFailureForcesUnsuccessful(t *testing.
 			wantFailedStep: "svc-a:push:develop",
 		},
 		{
-			name:      "tag",
-			mutateCfg: tagRule,
+			name:       "tag",
+			mutateFlow: tagRule,
 			mutate: func(_ string, gitMock *mockGitClient) {
 				createTagCalls := 0
 				gitMock.createTagFn = func(repoPath, tag, target, message string) error {
@@ -454,8 +454,8 @@ func TestCloseTask_ContinueOnError_RecordedFailureForcesUnsuccessful(t *testing.
 			wantFailedStep: "svc-a:tag",
 		},
 		{
-			name:      "push tag",
-			mutateCfg: tagRule,
+			name:       "push tag",
+			mutateFlow: tagRule,
 			mutate: func(_ string, gitMock *mockGitClient) {
 				gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
 					if ref == "refs/tags/v0.1.0" {
@@ -478,8 +478,8 @@ func TestCloseTask_ContinueOnError_RecordedFailureForcesUnsuccessful(t *testing.
 			wantFailedStep: "svc-a:push-tag",
 		},
 		{
-			name:      "pipeline",
-			mutateCfg: pipelineRule,
+			name:       "pipeline",
+			mutateFlow: pipelineRule,
 			mutate: func(_ string, gitMock *mockGitClient) {
 				gitMock.remoteURLRes = "git@gitlab.com:group/svc-a.git"
 			},
@@ -539,10 +539,11 @@ func TestCloseTask_ContinueOnError_RecordedFailureForcesUnsuccessful(t *testing.
 
 			cfg := newCloseTestConfig(rootDir, tasksRoot)
 			cfg.Close.ContinueOnError = true
-			if tc.mutateCfg != nil {
-				tc.mutateCfg(cfg)
+			var edits []func(*gitflow.ResolvedGitFlow)
+			if tc.mutateFlow != nil {
+				edits = append(edits, tc.mutateFlow)
 			}
-			flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+			flow, _ := closeTestFlow(cfg, edits...)
 
 			forgeClients := map[forge.ForgeProvider]forge.ForgeClient{
 				forge.ForgeProviderGitLab: &mockForgeClient{
@@ -610,7 +611,7 @@ func TestCloseTask_PushTagFailure_RollsBackLocalTagWithLease(t *testing.T) {
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg)
 	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
 
 	_, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
@@ -667,16 +668,17 @@ func TestCloseTask_DirectMergeClose_DoesNotDeleteBranch(t *testing.T) {
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	cfg.GitFlow.BranchTypes["feature"] = config.BranchTypeRule{
-		Prefixes:      []string{"feature/"},
-		BaseBranch:    "develop",
-		MergeTargets:  []string{"develop"},
-		ReviewTargets: []string{"develop"},
-		CloseStrategy: "direct_merge",
-		MergeStrategy: "merge_commit",
-		RequiresClean: true,
-	}
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg, func(flow *gitflow.ResolvedGitFlow) {
+		flow.BranchTypes["feature"] = gitflow.BranchTypeRule{
+			Prefixes:      []string{"feature/"},
+			BaseBranch:    "develop",
+			MergeTargets:  []string{"develop"},
+			ReviewTargets: []string{"develop"},
+			CloseStrategy: gitflow.CloseStrategyDirectMerge,
+			MergeStrategy: gitflow.MergeStrategyMerge,
+			RequiresClean: true,
+		}
+	})
 	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
 
 	result, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
@@ -718,16 +720,17 @@ func TestCloseTask_ReviewRequest_NeverRequestsSourceRemoval(t *testing.T) {
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
 	cfg.Close.PushSourceBeforeReview = false
-	cfg.GitFlow.BranchTypes["feature"] = config.BranchTypeRule{
-		Prefixes:      []string{"feature/"},
-		BaseBranch:    "develop",
-		MergeTargets:  []string{"develop"},
-		ReviewTargets: []string{"develop"},
-		CloseStrategy: "review_request",
-		MergeStrategy: "merge_commit",
-		RequiresClean: true,
-	}
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg, func(flow *gitflow.ResolvedGitFlow) {
+		flow.BranchTypes["feature"] = gitflow.BranchTypeRule{
+			Prefixes:      []string{"feature/"},
+			BaseBranch:    "develop",
+			MergeTargets:  []string{"develop"},
+			ReviewTargets: []string{"develop"},
+			CloseStrategy: gitflow.CloseStrategyReviewRequest,
+			MergeStrategy: gitflow.MergeStrategyMerge,
+			RequiresClean: true,
+		}
+	})
 
 	var createParams []forge.CreateMRParams
 	forgeClient := &mockForgeClient{createMRFn: func(_ context.Context, params forge.CreateMRParams) (forge.MRInfo, error) {
@@ -803,7 +806,7 @@ func TestCloseTask_MergeError_AbortsMergeAndRestoresBranch(t *testing.T) {
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg)
 	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
 
 	_, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
@@ -860,7 +863,7 @@ func TestPlanCloseTask_TagExists_KeepsTagPlanWithVerificationPendingWarning(t *t
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg)
 	mgr := newTestManagerWithDeps(t, cfg, gitMock, flow, nil)
 
 	plan, err := mgr.PlanCloseTask(context.Background(), taskID)
@@ -919,7 +922,7 @@ func newTagCloseFixture(t *testing.T, taskID string, mutate func(*mockGitClient,
 	if mutate != nil {
 		mutate(gitMock, cfg)
 	}
-	flow, _ := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, _ := closeTestFlow(cfg)
 	return newTestManagerWithDeps(t, cfg, gitMock, flow, nil), gitMock
 }
 
@@ -1073,17 +1076,32 @@ func closeStepStatus(res CloseTaskResult, name string) (StepStatus, string) {
 }
 
 func newCloseTestConfig(rootDir, tasksRoot string) *config.Config {
-	cfg := &config.Config{RootDir: rootDir, TasksRoot: tasksRoot, BranchPrefix: "feature/", BaseBranch: "develop", Editor: "code"}
+	cfg := &config.Config{RootDir: rootDir, TasksRoot: tasksRoot, Editor: "code"}
 	if _, err := cfg.Effective(); err != nil {
 		panic(err)
 	}
-	releaseRule := cfg.GitFlow.BranchTypes[string(gitflow.BranchTypeRelease)]
-	releaseRule.CloseStrategy = string(gitflow.CloseStrategyDirectMerge)
-	releaseRule.TagOnClose = true
-	cfg.GitFlow.BranchTypes[string(gitflow.BranchTypeRelease)] = releaseRule
 	cfg.RootDir = rootDir
 	cfg.TasksRoot = tasksRoot
 	return cfg
+}
+
+// closeTestFlow compiles cfg with the rule shapes these close tests were written against:
+// feature closes by direct merge into develop, release by direct merge with a tag.
+func closeTestFlow(cfg *config.Config, edits ...func(*gitflow.ResolvedGitFlow)) (*gitflow.ResolvedGitFlow, error) {
+	flow, err := gitflow.Resolve(cfg)
+	if err != nil {
+		return nil, err
+	}
+	feature := flow.BranchTypes[gitflow.BranchTypeFeature]
+	feature.CloseStrategy = gitflow.CloseStrategyDirectMerge
+	flow.BranchTypes[gitflow.BranchTypeFeature] = feature
+	release := flow.BranchTypes[gitflow.BranchTypeRelease]
+	release.CloseStrategy, release.TagOnClose = gitflow.CloseStrategyDirectMerge, true
+	flow.BranchTypes[gitflow.BranchTypeRelease] = release
+	for _, edit := range edits {
+		edit(flow)
+	}
+	return flow, nil
 }
 
 func newTestManagerWithDeps(t *testing.T, cfg *config.Config, gitMock *mockGitClient, flow *gitflow.ResolvedGitFlow, forgeClients map[forge.ForgeProvider]forge.ForgeClient) Manager {

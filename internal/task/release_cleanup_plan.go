@@ -142,7 +142,7 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 	if release.ID != releaseID {
 		plan.block("manifest release ID mismatch")
 	}
-	if release.ManifestVersion != releaseManifestVersion {
+	if release.ManifestVersion != releaseManifestVersion && release.ManifestVersion != 2 {
 		plan.block("unsupported release manifest version")
 	}
 	if !selection.DeleteRelease && release.Status != domain.ReleaseStatusReleased {

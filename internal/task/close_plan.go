@@ -28,6 +28,7 @@ type ServiceClosePlan struct {
 	TagPlan        *TagPlan
 	ForgePlan      *ReviewRequestPlan
 	PipelinePlan   *PipelinePlan
+	CherryPick     bool
 }
 
 type TagPlan struct {

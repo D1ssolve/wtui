@@ -23,7 +23,7 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 
 	taskDir := m.taskDir(params.TaskID)
 
-	branchType, rule := m.resolveInitRule(params.BranchType)
+	_, rule := m.resolveInitRule(params.BranchType)
 	branchPrefix := strings.TrimSpace(params.BranchPrefix)
 	if branchPrefix == "" && len(rule.Prefixes) > 0 {
 		branchPrefix = strings.TrimSpace(rule.Prefixes[0])
@@ -57,9 +57,6 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 	baseBranch := strings.TrimSpace(params.BaseBranch)
 	if baseBranch == "" {
 		baseBranch = strings.TrimSpace(rule.BaseBranch)
-	}
-	if branchType == gitflow.BranchTypeHotfix && m.flow != nil && strings.TrimSpace(m.flow.ProductionBranch) != "" {
-		baseBranch = strings.TrimSpace(m.flow.ProductionBranch)
 	}
 
 	results := m.addWorktreesForServices(
@@ -472,10 +469,7 @@ func sendStatus(ch chan<- string, line string) {
 }
 
 func (m *manager) resolveBranchName(prefix, taskID string) string {
-	if prefix != "" {
-		return prefix + taskID
-	}
-	return m.cfg.BranchPrefix + taskID
+	return prefix + taskID
 }
 
 func (m *manager) resolveInitRule(rawBranchType string) (gitflow.BranchType, gitflow.BranchTypeRule) {

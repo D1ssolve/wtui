@@ -7,14 +7,15 @@ import (
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 func (m *manager) releaseTaskMergeConfigInput() string {
-	if m == nil || m.cfg == nil || m.cfg.Release == nil || m.cfg.GitFlow == nil || m.cfg.GitFlow.TaskMerge == nil {
+	if m == nil || m.cfg == nil || m.cfg.Release == nil || !m.flow.TaskMergeAtReleasePrepare() {
 		return ""
 	}
 	return fmt.Sprintf("timing=%s\x00push_integration=%t\x00push_release=%t\x00worktrees=%t\x00keep_integration=%t",
-		m.cfg.GitFlow.TaskMerge.Timing,
+		gitflow.StepIntegrateTasks,
 		m.cfg.Release.PushIntegration != nil && *m.cfg.Release.PushIntegration,
 		m.cfg.Release.PushReleaseBranches != nil && *m.cfg.Release.PushReleaseBranches,
 		m.cfg.Release.CreateReleaseWorktrees != nil && *m.cfg.Release.CreateReleaseWorktrees,

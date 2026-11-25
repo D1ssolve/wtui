@@ -127,10 +127,7 @@ func (m *manager) reviewTarget(branch string) string {
 			}
 		}
 	}
-	if m.cfg != nil {
-		return m.cfg.BaseBranch
-	}
-	return ""
+	return m.integrationBranch()
 }
 
 func (m *manager) ForgePipelineStatus(ctx context.Context, taskID, serviceName string, branch string) ([]forge.PipelineStatus, error) {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"log/slog"
 	"maps"
 	"os"
@@ -28,10 +27,12 @@ import (
 	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 type mockManager struct {
-	mu sync.Mutex
+	releaseEvents []task.ReleaseEvent
+	mu            sync.Mutex
 
 	listTasksResult    []domain.Task
 	listTasksErr       error
@@ -121,6 +122,9 @@ type mockManager struct {
 	planTaskMergeErr            error
 	planTaskMergeRetryCalls     int
 	planTaskMergeRetryReleaseID string
+	planTaskAddTaskIDs          []string
+	planTaskAddResult           task.ReleaseTaskAddPlan
+	addReleaseTasksPlans        []task.ReleaseTaskAddPlan
 	planTaskMergeRetryResult    task.ReleaseTaskMergePlan
 	planTaskMergeRetryErr       error
 	retryReleaseCalls           int
@@ -336,6 +340,16 @@ func (m *mockManager) RetryReleaseTaskMerges(_ context.Context, releaseID string
 	return m.retryTaskMergeResult, m.retryTaskMergeErr
 }
 
+func (m *mockManager) PlanReleaseTaskAdd(_ context.Context, _ string, taskIDs []string) (task.ReleaseTaskAddPlan, error) {
+	m.planTaskAddTaskIDs = taskIDs
+	return m.planTaskAddResult, nil
+}
+
+func (m *mockManager) AddReleaseTasks(_ context.Context, plan task.ReleaseTaskAddPlan, _ chan<- string) (domain.Release, error) {
+	m.addReleaseTasksPlans = append(m.addReleaseTasksPlans, plan)
+	return domain.Release{ID: plan.ReleaseID}, nil
+}
+
 func (m *mockManager) RejectRelease(_ context.Context, _ string) (domain.Release, error) {
 	return domain.Release{}, nil
 }
@@ -387,7 +401,6 @@ func newTestConfig() *config.Config {
 	cfg := &config.Config{
 		RootDir:          "/tmp/wtui-test",
 		TasksRoot:        "/tmp/wtui-test/.tasks",
-		BranchPrefix:     "feature/",
 		Editor:           "code",
 		DiscoveryDepth:   4,
 		OutputPanelLines: 12,
@@ -1237,9 +1250,6 @@ func TestUpdate_OpenConfigModalMsg_OpensConfigModal(t *testing.T) {
 	view := cm.View()
 	if !strings.Contains(view, m.cfg.Editor) {
 		t.Errorf("config modal view should contain editor %q", m.cfg.Editor)
-	}
-	if !strings.Contains(view, m.cfg.BranchPrefix) {
-		t.Errorf("config modal view should contain branch prefix %q", m.cfg.BranchPrefix)
 	}
 }
 
@@ -3133,3 +3143,27 @@ func TestModel_PushTask_OpProgressFailureFinish(t *testing.T) {
 		t.Fatalf("a state = %d, want failed after errored finish", got)
 	}
 }
+
+func (m *mockManager) AdvanceRelease(ctx context.Context, releaseID, _ string, statusCh chan<- string) (domain.Release, error) {
+	return m.PromoteRelease(ctx, releaseID, statusCh)
+}
+
+func (m *mockManager) ReleaseEvents(r domain.Release) []task.ReleaseEvent {
+	if m.releaseEvents != nil {
+		return m.releaseEvents
+	}
+	return gitFlowReleaseEvents(r)
+}
+
+// gitFlowReleaseEvents mirrors the events of the git-flow release machine for test managers.
+func gitFlowReleaseEvents(r domain.Release) []task.ReleaseEvent {
+	switch r.Status {
+	case domain.ReleaseStatusPrepared, domain.ReleaseStatusMasterMerged:
+		return []task.ReleaseEvent{{Name: "advance", Key: "F"}}
+	case domain.ReleaseStatusAwaitingMasterMerge:
+		return []task.ReleaseEvent{{Name: "merge", Key: "M", Action: "merge_reviews"}}
+	}
+	return nil
+}
+
+func (m *mockManager) AdvanceTask(context.Context, string, string, chan<- string) error { return nil }

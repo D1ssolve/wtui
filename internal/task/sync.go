@@ -73,11 +73,7 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 		return nil
 	}
 
-	baseBranch := m.cfg.BaseBranch
-	if baseBranch == "" {
-		baseBranch = "develop"
-	}
-	upstream := "origin/" + baseBranch
+	upstream := "origin/" + m.integrationBranch()
 
 	var (
 		wg       sync.WaitGroup

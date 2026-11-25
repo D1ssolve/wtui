@@ -14,7 +14,7 @@ import (
 
 const (
 	releaseManifestFileName = "release.json"
-	releaseManifestVersion  = 2
+	releaseManifestVersion  = 3 // 3 adds workflow-machine state; older binaries refuse it instead of dropping it
 )
 
 func (m *manager) releasesRootDir() string {
@@ -159,7 +159,7 @@ func (m *manager) loadReleaseManifestWithContext(ctx context.Context, releaseID 
 		return domain.Release{}, err
 	}
 
-	if release.ManifestVersion != releaseManifestVersion && !IsLegacyManifest(release) {
+	if release.ManifestVersion != releaseManifestVersion && release.ManifestVersion != 2 && !IsLegacyManifest(release) {
 		return domain.Release{}, fmt.Errorf("%w: manifest version %d unsupported", ErrReleaseManifestInvalid, release.ManifestVersion)
 	}
 

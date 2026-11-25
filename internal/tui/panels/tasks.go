@@ -77,14 +77,11 @@ func renderTaskCard(task domain.Task, selected bool, width int) string {
 }
 
 func taskBranchLabel(task domain.Task) string {
-	if task.Phase == string(gitflow.BranchTypeRelease) || task.Phase == string(gitflow.BranchTypeHotfix) {
-		if task.Version != "" {
-			return task.Phase + "/" + task.Version
-		}
-		return task.Phase
+	if task.Version != "" {
+		return task.Phase + "/" + task.Version
 	}
-	if task.Phase == string(gitflow.BranchTypeFeature) || task.Phase == "" {
-		return "feature/" + task.ID
+	if task.Phase == "" {
+		return task.ID
 	}
 	return task.Phase + "/" + task.ID
 }
@@ -614,13 +611,7 @@ func isTreeMode(flow *gitflow.ResolvedGitFlow) bool {
 	if flow == nil {
 		return false
 	}
-	if _, ok := flow.BranchTypes[gitflow.BranchTypeRelease]; ok {
-		return true
-	}
-	if _, ok := flow.BranchTypes[gitflow.BranchTypeHotfix]; ok {
-		return true
-	}
-	return false
+	return len(flow.BranchTypes) > 1
 }
 
 func phaseOrder(phase string) int {
@@ -869,18 +860,7 @@ func treeTaskLabel(task *domain.Task) string {
 		return ""
 	}
 
-	if task.Phase == string(gitflow.BranchTypeRelease) || task.Phase == string(gitflow.BranchTypeHotfix) {
-		if task.Version != "" {
-			return task.Phase + "/" + task.Version
-		}
-		return task.Phase
-	}
-
-	if task.Phase == string(gitflow.BranchTypeFeature) {
-		return task.Phase + "/" + task.ID
-	}
-
-	return task.ID
+	return taskBranchLabel(*task)
 }
 
 type dims struct{ w, h int }

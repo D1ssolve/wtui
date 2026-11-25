@@ -27,11 +27,75 @@ const (
 )
 
 type ResolvedGitFlow struct {
+	Preset            string `json:"-"`
 	ProductionBranch  string
 	IntegrationBranch string
 	DefaultBranchType BranchType
 	AllowMixed        bool
 	BranchTypes       map[BranchType]BranchTypeRule
+	Release           *ReleaseFlow
+}
+
+// Step is one compiled flow block; branch aliases are already resolved.
+type Step struct {
+	Kind  string        `json:"kind"`
+	Into  []string      `json:"into,omitempty"`
+	From  string        `json:"from,omitempty"`
+	Merge MergeStrategy `json:"merge,omitempty"`
+	On    string        `json:"on,omitempty"`
+	Label string        `json:"label,omitempty"`
+	When  string        `json:"when,omitempty"`
+	// ViaActiveRelease: merge into the active release branch instead of integration when one exists.
+	ViaActiveRelease bool   `json:"via_active_release,omitempty"`
+	Name             string `json:"name,omitempty"`
+	Command          string `json:"command,omitempty"`
+	Timeout          string `json:"timeout,omitempty"`
+}
+
+type ReleaseFlow struct {
+	BranchPrefix string
+	Steps        []Step
+	Machine      *Machine
+	// FromMachine marks a release described by `release.machine` rather than `release.steps`.
+	FromMachine bool
+	DependsOn   map[string][]string
+}
+
+const (
+	StepIntegrateTasks = "integrate_tasks"
+	StepCutBranch      = "cut_branch"
+	StepGate           = "gate"
+	StepReview         = "review"
+	StepMerge          = "merge"
+	StepBackMerge      = "back_merge"
+	StepTag            = "tag"
+	StepPipeline       = "pipeline"
+	StepCherryPick     = "cherry_pick"
+
+	// OpenReleases targets the release branches of wtui releases that are cut but not yet finished.
+	OpenReleases = "open_releases"
+)
+
+func (f *ResolvedGitFlow) TaskMergeAtReleasePrepare() bool {
+	return f.ReleaseHasStep(StepIntegrateTasks)
+}
+
+func (f *ResolvedGitFlow) ReleaseHasStep(kind string) bool {
+	if f == nil || f.Release == nil {
+		return false
+	}
+	for _, step := range f.Release.Steps {
+		if step.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// TagsReleaseBranch reports a configured release flow without a production review:
+// the release is finished by tagging the release branch itself.
+func (f *ResolvedGitFlow) TagsReleaseBranch() bool {
+	return f != nil && f.Release != nil && !f.ReleaseHasStep(StepReview)
 }
 
 type BranchTypeRule struct {
@@ -45,4 +109,13 @@ type BranchTypeRule struct {
 	TagOnClose             bool
 	TagSource              string
 	TriggerPipelineOnClose bool
+	// Shared branches are long-lived team branches: never task-owned, always push-protected.
+	Shared bool
+	// ViaActiveRelease redirects integration targets to the active release branch when one exists.
+	ViaActiveRelease bool
+	// CherryPickToOpenReleases picks the accepted review merge into every open release branch.
+	CherryPickToOpenReleases bool
+	Close                    []Step
+	// Machine is the optional task lifecycle compiled from task_types.<name>.machine.
+	Machine *Machine `json:"-"`
 }

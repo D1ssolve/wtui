@@ -460,3 +460,24 @@ fi
 		t.Fatalf("merge argv = %q, want unpinned merge", args)
 	}
 }
+
+func TestGhEnqueueMR_UsesAutoMergeWithHeadPinAndNoMethod(t *testing.T) {
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args")
+	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$ARGS_FILE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("ARGS_FILE", argsFile)
+
+	if err := NewGhClient(t.TempDir()).EnqueueMR(t.Context(), MergeMRParams{Repo: "org/repo", Number: 7, Method: "squash", ExpectedHeadSHA: "abc"}); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := os.ReadFile(argsFile)
+	if got := strings.TrimSpace(string(args)); got != "pr merge 7 --auto --match-head-commit abc --repo org/repo" {
+		t.Fatalf("args = %q", got)
+	}
+	if err := NewGhClient(t.TempDir()).EnqueueMR(t.Context(), MergeMRParams{Repo: "org/repo", Number: 7}); err == nil {
+		t.Fatal("enqueue without a head pin must be refused")
+	}
+}

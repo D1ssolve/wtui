@@ -2,6 +2,7 @@ package task
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"text/template"
@@ -153,26 +154,9 @@ func isReleaseTerminalStatus(status domain.ReleaseStatus) bool {
 	}
 }
 
+// isReleaseActiveStatus covers every in-progress status, including wait states named by a workflow machine.
 func isReleaseActiveStatus(status domain.ReleaseStatus) bool {
-	switch status {
-	case domain.ReleaseStatusDraft,
-		domain.ReleaseStatusValidating,
-		domain.ReleaseStatusMerging,
-		domain.ReleaseStatusBranching,
-		domain.ReleaseStatusAwaitingTaskMerge,
-		domain.ReleaseStatusIntegratingTasks,
-		domain.ReleaseStatusTaskMergeBlocked,
-		domain.ReleaseStatusTaskMergePartial,
-		domain.ReleaseStatusPrepared,
-		domain.ReleaseStatusAwaitingMasterMerge,
-		domain.ReleaseStatusMasterMerged,
-		domain.ReleaseStatusSyncingDevelop,
-		domain.ReleaseStatusTagging,
-		domain.ReleaseStatusPushing:
-		return true
-	default:
-		return false
-	}
+	return status != "" && !isReleaseTerminalStatus(status)
 }
 
 func canTransitionReleaseStatus(from, to domain.ReleaseStatus) bool {
@@ -207,7 +191,8 @@ func canTransitionReleaseStatus(from, to domain.ReleaseStatus) bool {
 	case domain.ReleaseStatusAwaitingMasterMerge:
 		return to == domain.ReleaseStatusMasterMerged
 	case domain.ReleaseStatusMasterMerged:
-		return to == domain.ReleaseStatusSyncingDevelop
+		// Tagging directly when the release flow has no back_merge step.
+		return to == domain.ReleaseStatusSyncingDevelop || to == domain.ReleaseStatusTagging
 	case domain.ReleaseStatusSyncingDevelop:
 		return to == domain.ReleaseStatusTagging
 	case domain.ReleaseStatusFailed:
@@ -227,4 +212,29 @@ func validateReleaseStatusTransition(from, to domain.ReleaseStatus) error {
 	}
 
 	return fmt.Errorf("%w: %s -> %s", ErrReleaseInvalidStatusTransition, from, to)
+}
+
+// ensureReleaseFlowUnchanged refuses to continue a release under a different release process.
+func (m *manager) ensureReleaseFlowUnchanged(release domain.Release) error {
+	if release.FlowFingerprint == "" {
+		// Releases without a fingerprint were created by the fixed git-flow sequence.
+		if m.flow != nil && m.flow.Release != nil && (m.flow.Release.FromMachine || !m.flow.ReleaseHasStep(gitflow.StepReview) || !m.flow.ReleaseHasStep(gitflow.StepBackMerge)) {
+			return fmt.Errorf("%w: release %s predates workflow.release; finish it with the previous configuration or reject it and prepare again", ErrReleaseFlowChanged, release.ID)
+		}
+		return nil
+	}
+	if release.FlowFingerprint != m.flow.ReleaseFingerprint() {
+		return fmt.Errorf("%w: release %s; restore the release configuration it started with, or reject it and prepare again", ErrReleaseFlowChanged, release.ID)
+	}
+	return nil
+}
+
+// branchMergedInto reports whether branch is in into, by ancestry or, for squash and rebase
+// merges that leave no ancestry, because merging it would change nothing.
+func (m *manager) branchMergedInto(ctx context.Context, repoPath, branch, into string) (bool, error) {
+	merged, err := m.git.IsAncestor(ctx, repoPath, branch, into)
+	if err != nil || merged {
+		return merged, err
+	}
+	return m.git.MergeIsNoop(ctx, repoPath, into, branch)
 }

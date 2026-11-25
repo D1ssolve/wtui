@@ -24,11 +24,9 @@ func TestReleaseExecuteConfirmDialog_ViewShowsDetails(t *testing.T) {
 
 	cfg := config.Config{
 		Tag: &config.TagConfig{Format: "release-{{.Version}}"},
-		GitFlow: &config.GitFlowConfig{
-			Preset: "git-flow",
-			BranchTypes: map[string]config.BranchTypeRule{
-				"release": {Prefixes: []string{"rel/"}},
-			},
+		Workflow: &config.WorkflowConfig{
+			Extends: "git-flow",
+			Release: &config.ReleaseFlowConfig{Branch: "rel/{{.Version}}"},
 		},
 		Release: &config.ReleaseConfig{
 			PushIntegration:     &pushIntegration,

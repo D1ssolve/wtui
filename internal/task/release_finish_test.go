@@ -12,6 +12,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/git"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 func newFinishTestManager(t *testing.T) (*manager, *mockGitClient) {
@@ -60,6 +61,8 @@ func writeRelease(t *testing.T, m *manager, status domain.ReleaseStatus, svc dom
 		Services:   []domain.ReleaseService{svc},
 		CreatedAt:  fixed,
 		UpdatedAt:  fixed,
+
+		FlowFingerprint: m.flow.ReleaseFingerprint(),
 	}
 	release, err := m.writeReleaseManifest(release)
 	if err != nil {
@@ -606,5 +609,129 @@ func TestFinalizeRelease_RemovalLeavesPathBehindBlocks(t *testing.T) {
 	}
 	if stored.Services[0].IntegrationWorktreePath != leftoverPath {
 		t.Fatalf("manifest path = %q, want preserved leftover path", stored.Services[0].IntegrationWorktreePath)
+	}
+}
+
+func useReleaseBranchTagFlow(m *manager) {
+	m.flow.Release = &gitflow.ReleaseFlow{BranchPrefix: "release/", Steps: []gitflow.Step{
+		{Kind: gitflow.StepCutBranch, From: m.flow.IntegrationBranch},
+		{Kind: gitflow.StepGate, Label: "qualification"},
+		{Kind: gitflow.StepTag, On: "release_branch"},
+	}}
+}
+
+func releaseBranchTip(gitMock *mockGitClient, tip, tagged string) {
+	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
+		switch ref {
+		case "origin/release/1.2.3":
+			return tip, nil
+		case "tag-object-sha^{commit}":
+			return tagged, nil
+		case "refs/tags/v1.2.3":
+			return "tag-object-sha", nil
+		default:
+			return ref + "-sha", nil
+		}
+	}
+}
+
+// failedAfterAcceptingReleaseTip is a release whose finish failed after it fixed its tag commit.
+func failedAfterAcceptingReleaseTip(t *testing.T, m *manager) domain.Release {
+	t.Helper()
+	release := writeRelease(t, m, domain.ReleaseStatusFailed, finalizeService(m))
+	prepared := release.CreatedAt
+	release.PreparedAt = &prepared
+	release.Error = &domain.ReleaseError{Code: "push", Recoverable: true}
+	release, err := m.writeReleaseManifest(release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return release
+}
+
+func TestPromoteRelease_WithoutProductionReview_TagsReleaseBranchTip(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	useReleaseBranchTagFlow(m)
+	releaseBranchTip(gitMock, "release-tip", "release-tip")
+	svc := finalizeService(m)
+	svc.AcceptedMergeSHA = ""
+	svc.Status = domain.ReleaseStatusPrepared
+	release := writeRelease(t, m, domain.ReleaseStatusPrepared, svc)
+
+	got, err := m.PromoteRelease(t.Context(), release.ID, nil)
+	if err != nil {
+		t.Fatalf("PromoteRelease() error = %v", err)
+	}
+	if got.Status != domain.ReleaseStatusReleased || !got.Services[0].PushedTag || got.Services[0].AcceptedMergeSHA != "release-tip" {
+		t.Fatalf("release = %#v", got)
+	}
+	if len(gitMock.mergeFFOnlyCalls) != 0 || len(gitMock.mergeCalls) != 0 || len(gitMock.pushBranchExplicitCalls) != 0 {
+		t.Fatalf("release without back_merge touched integration: ff=%v merge=%v push=%v", gitMock.mergeFFOnlyCalls, gitMock.mergeCalls, gitMock.pushBranchExplicitCalls)
+	}
+	if len(gitMock.createTagCallList) != 1 || gitMock.createTagCallList[0].Target != "release-tip" {
+		t.Fatalf("CreateTag calls = %#v, want tag at release branch tip", gitMock.createTagCallList)
+	}
+}
+
+func TestFinalizeRelease_WithoutProductionReview_RetryKeepsAcceptedReleaseSHA(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	useReleaseBranchTagFlow(m)
+	releaseBranchTip(gitMock, "later-tip", "accepted-sha")
+	gitMock.isAncestorFn = func(_, ancestor, descendant string) (bool, error) {
+		return ancestor == "accepted-sha" && descendant == "origin/release/1.2.3", nil
+	}
+	release := failedAfterAcceptingReleaseTip(t, m)
+
+	if _, err := m.RetryRelease(t.Context(), release.ID); err != nil {
+		t.Fatalf("RetryRelease() error = %v", err)
+	}
+	if len(gitMock.createTagCallList) != 1 || gitMock.createTagCallList[0].Target != "accepted-sha" {
+		t.Fatalf("CreateTag calls = %#v, want the already accepted release SHA", gitMock.createTagCallList)
+	}
+}
+
+func TestFinalizeRelease_WithoutProductionReview_RewrittenReleaseBranchBlocks(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	useReleaseBranchTagFlow(m)
+	releaseBranchTip(gitMock, "rewritten-tip", "accepted-sha")
+	release := failedAfterAcceptingReleaseTip(t, m)
+
+	got, err := m.RetryRelease(t.Context(), release.ID)
+	if !errors.Is(err, ErrReleaseMasterMoved) || got.Status != domain.ReleaseStatusFailed || len(gitMock.createTagCallList) != 0 {
+		t.Fatalf("err = %v status = %s tags = %v, want blocked without tag", err, got.Status, gitMock.createTagCallList)
+	}
+}
+
+func TestFinalizeRelease_FlowChangedSinceCreation_Blocks(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	svc := finalizeService(m)
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, svc)
+	release.FlowFingerprint = "fingerprint-of-another-flow"
+	if _, err := m.writeReleaseManifest(release); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := m.FinalizeRelease(t.Context(), FinishReleaseParams{ReleaseID: release.ID})
+	if !errors.Is(err, ErrReleaseFlowChanged) || len(gitMock.createTagCallList) != 0 {
+		t.Fatalf("err = %v tags = %v, want ErrReleaseFlowChanged without tagging", err, gitMock.createTagCallList)
+	}
+}
+
+func TestFinalizeRelease_LegacyReleaseUnderFlowWithoutBackMerge_Blocks(t *testing.T) {
+	m, gitMock := newFinishTestManager(t)
+	matchingMaster(gitMock)
+	m.flow.Release = &gitflow.ReleaseFlow{BranchPrefix: "release/", Steps: []gitflow.Step{
+		{Kind: gitflow.StepCutBranch}, {Kind: gitflow.StepReview, From: "release", Into: []string{"master"}}, {Kind: gitflow.StepTag, On: "accepted_merge"},
+	}}
+	release := writeRelease(t, m, domain.ReleaseStatusMasterMerged, finalizeService(m))
+	release.FlowFingerprint = ""
+	if _, err := m.writeReleaseManifest(release); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := m.FinalizeRelease(t.Context(), FinishReleaseParams{ReleaseID: release.ID})
+	if !errors.Is(err, ErrReleaseFlowChanged) || len(gitMock.createTagCallList) != 0 {
+		t.Fatalf("err = %v tags = %v, want the pre-workflow release blocked instead of silently skipping back-merge", err, gitMock.createTagCallList)
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/git"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 )
@@ -15,7 +14,7 @@ import (
 // newDirectMergeCloseFixture builds a single-service task whose branch rule
 // closes by direct merge. resolveSHAs maps refs to SHAs for the fresh remote
 // target and merged local target resolutions.
-func newDirectMergeCloseFixture(t *testing.T, taskID, branch string, targets []string, mutate func(*mockGitClient, *config.Config)) (Manager, *mockGitClient) {
+func newDirectMergeCloseFixture(t *testing.T, taskID, branch string, targets []string, mutate func(*mockGitClient, *gitflow.ResolvedGitFlow)) (Manager, *mockGitClient) {
 	t.Helper()
 	rootDir := t.TempDir()
 	tasksRoot := filepath.Join(rootDir, ".tasks")
@@ -57,12 +56,12 @@ func newDirectMergeCloseFixture(t *testing.T, taskID, branch string, targets []s
 	}
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	if mutate != nil {
-		mutate(gitMock, cfg)
-	}
-	flow, err := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, err := closeTestFlow(cfg)
 	if err != nil {
 		t.Fatalf("flow: %v", err)
+	}
+	if mutate != nil {
+		mutate(gitMock, flow)
 	}
 	return newTestManagerWithDeps(t, cfg, gitMock, flow, nil), gitMock
 }
@@ -116,7 +115,7 @@ func TestCloseTask_DirectMerge_PublishesMergedTargetWithLease(t *testing.T) {
 
 func TestCloseTask_DirectMerge_RemoteConcurrentMoveFails(t *testing.T) {
 	mgr, gitMock := newDirectMergeCloseFixture(t, "IN-CLOSE-DM-RACE", "feature/IN-CLOSE-DM-RACE", []string{"develop"},
-		func(gitMock *mockGitClient, _ *config.Config) {
+		func(gitMock *mockGitClient, _ *gitflow.ResolvedGitFlow) {
 			gitMock.pushRefWithLeaseFn = func(_, _, _, _, _, _ string) error {
 				return errors.New("lease failed: remote ref changed")
 			}
@@ -140,7 +139,7 @@ func TestCloseTask_DirectMerge_RemoteConcurrentMoveFails(t *testing.T) {
 
 func TestCloseTask_DirectMerge_PriorLocalMergeUnpushedRetryPublishes(t *testing.T) {
 	mgr, gitMock := newDirectMergeCloseFixture(t, "IN-CLOSE-DM-RETRY", "feature/IN-CLOSE-DM-RETRY", []string{"develop"},
-		func(gitMock *mockGitClient, _ *config.Config) {
+		func(gitMock *mockGitClient, _ *gitflow.ResolvedGitFlow) {
 			// Local develop already contains the source; the fresh remote
 			// develop does not. Retry must publish, not skip.
 			gitMock.isAncestorFn = func(_ string, ancestor, descendant string) (bool, error) {
@@ -175,7 +174,7 @@ func TestCloseTask_DirectMerge_PriorLocalMergeUnpushedRetryPublishes(t *testing.
 
 func TestCloseTask_DirectMerge_PushURLMismatchFailsWithoutPush(t *testing.T) {
 	mgr, gitMock := newDirectMergeCloseFixture(t, "IN-CLOSE-DM-PUSHURL", "feature/IN-CLOSE-DM-PUSHURL", []string{"develop"},
-		func(gitMock *mockGitClient, _ *config.Config) {
+		func(gitMock *mockGitClient, _ *gitflow.ResolvedGitFlow) {
 			gitMock.pushURLFn = func(string, string) (string, error) {
 				return "git@evil.example.com:group/svc-a.git", nil
 			}
@@ -197,10 +196,10 @@ func TestCloseTask_DirectMerge_ProtectedTargetsPublishWithLease(t *testing.T) {
 	// Release branch closes directly into protected production and
 	// integration targets; both publish via lease, never the generic guard.
 	mgr, gitMock := newDirectMergeCloseFixture(t, "IN-CLOSE-DM-REL", "release/1.2.0", []string{"master", "develop"},
-		func(_ *mockGitClient, cfg *config.Config) {
-			releaseRule := cfg.GitFlow.BranchTypes[string(gitflow.BranchTypeRelease)]
+		func(_ *mockGitClient, flow *gitflow.ResolvedGitFlow) {
+			releaseRule := flow.BranchTypes[gitflow.BranchTypeRelease]
 			releaseRule.TagOnClose = false
-			cfg.GitFlow.BranchTypes[string(gitflow.BranchTypeRelease)] = releaseRule
+			flow.BranchTypes[gitflow.BranchTypeRelease] = releaseRule
 		})
 
 	res, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: "IN-CLOSE-DM-REL"})
@@ -236,7 +235,7 @@ func TestCloseTask_DirectMerge_ProtectedTargetsPublishWithLease(t *testing.T) {
 
 func TestCloseTask_DirectMerge_RemoteAlreadyContainsSourceSkipsPush(t *testing.T) {
 	mgr, gitMock := newDirectMergeCloseFixture(t, "IN-CLOSE-DM-SKIP", "feature/IN-CLOSE-DM-SKIP", []string{"develop"},
-		func(gitMock *mockGitClient, _ *config.Config) {
+		func(gitMock *mockGitClient, _ *gitflow.ResolvedGitFlow) {
 			gitMock.isAncestorFn = func(_ string, _, _ string) (bool, error) { return true, nil }
 		})
 
@@ -258,7 +257,7 @@ func TestCloseTask_DirectMerge_RemoteAlreadyContainsSourceSkipsPush(t *testing.T
 
 func TestCloseTask_DirectMerge_StaleLocalTargetDivergedFailsWithoutPush(t *testing.T) {
 	mgr, gitMock := newDirectMergeCloseFixture(t, "IN-CLOSE-DM-STALE", "feature/IN-CLOSE-DM-STALE", []string{"develop"},
-		func(gitMock *mockGitClient, _ *config.Config) {
+		func(gitMock *mockGitClient, _ *gitflow.ResolvedGitFlow) {
 			gitMock.isAncestorFn = func(_, _, _ string) (bool, error) {
 				// Remote develop does not contain the source (merge path),
 				// and the merged local target does not build on the fresh
@@ -285,7 +284,7 @@ func TestCloseTask_DirectMerge_StaleLocalTargetDivergedFailsWithoutPush(t *testi
 
 func TestCloseTask_DirectMerge_CapturedPushURLSurvivesConcurrentPushurlChange(t *testing.T) {
 	mgr, gitMock := newDirectMergeCloseFixture(t, "IN-CLOSE-DM-PURL", "feature/IN-CLOSE-DM-PURL", []string{"develop"},
-		func(gitMock *mockGitClient, _ *config.Config) {
+		func(gitMock *mockGitClient, _ *gitflow.ResolvedGitFlow) {
 			calls := 0
 			gitMock.pushURLFn = func(string, string) (string, error) {
 				calls++
@@ -314,7 +313,7 @@ func TestCloseTask_DirectMerge_CapturedPushURLSurvivesConcurrentPushurlChange(t 
 
 func TestCloseTask_DirectMerge_ResolveRemoteTargetFailureFailsClosed(t *testing.T) {
 	mgr, gitMock := newDirectMergeCloseFixture(t, "IN-CLOSE-DM-NOREMOTE", "feature/IN-CLOSE-DM-NOREMOTE", []string{"develop"},
-		func(gitMock *mockGitClient, _ *config.Config) {
+		func(gitMock *mockGitClient, _ *gitflow.ResolvedGitFlow) {
 			gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
 				if strings.HasPrefix(ref, "origin/") {
 					return "", errors.New("remote target unresolvable")

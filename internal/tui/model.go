@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/D1ssolve/wtui/internal/ai"
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
@@ -30,6 +31,8 @@ import (
 
 type Model struct {
 	MetadataGenerator  task.MetadataGenerator
+	assistant          ai.Assistant
+	explaining         bool
 	metadataRequest    *metadataRequest
 	metadataGeneration uint64
 	cfg                *config.Config
@@ -129,6 +132,7 @@ type Model struct {
 	cleanupQueueCurrent   *cleanupQueueItem
 
 	releaseTaskMergeGeneration uint64
+	releaseTaskAddGeneration   uint64
 	releaseTaskMerge           *releaseTaskMergeRequest
 }
 
@@ -172,6 +176,7 @@ type shellInputState struct {
 
 type Options struct {
 	MetadataGenerator task.MetadataGenerator
+	Assistant         ai.Assistant
 	LogLevel          *slog.LevelVar
 	LazygitAvailable  bool
 	GlabAvailable     bool
@@ -204,6 +209,7 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 
 	m := Model{
 		MetadataGenerator: opts.MetadataGenerator,
+		assistant:         opts.Assistant,
 		cfg:               cfg,
 		logger:            logger,
 		mgr:               mgr,
@@ -386,6 +392,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modal = m.newSystemInfoModal()
 			return m, nil
 
+		case msg.String() == "E" && m.assistant != nil:
+			if m.explaining {
+				return m, nil
+			}
+			subject, request := m.failureRequest()
+			m.explaining = true
+			m.outputPanel.AppendLine("Asking AI why " + subject + " failed...")
+			return m, tea.Batch(explainFailureCmd(m.assistant, subject, request), m.spinner.Tick)
+
+		case msg.String() == "W" && m.flow != nil:
+			m.modal = modal.NewFlowOverlay(m.flow, m.flowPosition())
+			m.modal.SetTerminalSize(m.width, m.height)
+			return m, nil
+
 		case msg.String() == ":" || msg.String() == "ctrl+p":
 			m.modal = modal.NewCommandPalette(paletteItems(m))
 			m.modal.SetTerminalSize(m.width, m.height)
@@ -416,6 +436,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case m.focus == FocusReleases && msg.String() == "ctrl+r":
 			return m.startReleaseRetry()
+
+		case m.focus == FocusReleases && msg.String() == "A":
+			return m.startAddReleaseTasks()
+
+		case m.taskEventKey(msg.String()):
+			if m.opRunning {
+				return m, nil
+			}
+			return m.fireTaskEvent(msg.String())
+
+		case m.focus == FocusReleases && m.releaseEventKey(msg.String()):
+			if m.releaseMutationBlocked() {
+				return m, nil
+			}
+			return m.fireReleaseEvent(*m.releasesPanel.SelectedRelease(), msg.String())
 		}
 
 		switch m.focus {
@@ -453,6 +488,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recalculateDimensions()
 			return m, cmd
 		}
+
+	case TaskAdvanceDoneMsg:
+		if msg.Generation != m.operationGeneration {
+			return m, nil
+		}
+		m.opRunning = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow: " + msg.Err.Error())
+		} else {
+			m.outputPanel.AppendLine("Task " + msg.TaskID + " workflow updated.")
+		}
+		if selected := m.tasksPanel.SelectedTask(); selected != nil && selected.ID == msg.TaskID {
+			return m, m.loadTaskSelectionCmd(msg.TaskID)
+		}
+		return m, nil
+
+	case ExplanationMsg:
+		m.explaining = false
+		if msg.Err != nil {
+			m.outputPanel.AppendLine("AI explanation failed: " + msg.Err.Error())
+			return m, nil
+		}
+		if m.modal != nil {
+			// Never replace an open dialog, such as a close or merge confirmation.
+			m.outputPanel.AppendLine("AI: " + msg.Explanation.Cause)
+			for i, step := range msg.Explanation.Steps {
+				m.outputPanel.AppendLine(fmt.Sprintf("AI step %d: %s", i+1, step))
+			}
+			return m, nil
+		}
+		m.modal = modal.NewExplanationModal(msg.Subject, msg.Explanation)
+		m.modal.SetTerminalSize(m.width, m.height)
+		return m, nil
 
 	case panels.TaskSelectionChangedMsg:
 		selected := m.tasksPanel.SelectedTask()
@@ -528,7 +596,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panels.OpenInitDialogMsg:
 		flow := m.flow
 		if len(m.repos) > 0 {
-			m.modal = modal.NewInitDialogWithFlow(m.cfg.BranchPrefix, flow, m.repos, m.width, m.height)
+			m.modal = modal.NewInitDialogWithFlow(m.defaultBranchPrefix(), flow, m.repos, m.width, m.height)
 			return m, nil
 		}
 		m.outputPanel.AppendLine("Loading repository cache for init dialog...")
@@ -536,7 +604,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadReposCmd(m.mgr, false)
 
 	case panels.OpenImportRemoteBranchDialogMsg:
-		m.modal = modal.NewImportRemoteBranchDialog(m.flow, m.cfg.BranchPrefix)
+		m.modal = modal.NewImportRemoteBranchDialog(m.flow, m.defaultBranchPrefix())
 		return m, nil
 
 	case panels.OpenCloneDialogMsg:
@@ -582,6 +650,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case panels.PlanCloseTaskMsg:
+		if blocked := m.taskWorkflowBlocks(msg.TaskID, gitflow.EventActionClose); blocked != "" {
+			m.outputPanel.AppendLine(blocked)
+			return m, nil
+		}
 		if selected := m.tasksPanel.SelectedTask(); selected != nil && selected.ID == msg.TaskID {
 			taskCopy := *selected
 			m.pendingCloseTask = &taskCopy
@@ -994,6 +1066,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal = modal.NewReleaseExecuteConfirmDialogWithTaskMerge(submit.Title, submit.TaskIDs, submit.Versions, req.preview, plan.Rows, req.generation, submit.Description)
 		m.modal.SetTerminalSize(m.width, m.height)
 		return m, nil
+
+	case modal.SubmitAddReleaseTasksMsg:
+		dlg, ok := m.modal.(*modal.AddReleaseTasksDialog)
+		if !ok || msg.Generation != m.releaseTaskAddGeneration || dlg.Generation() != msg.Generation || m.releaseMutationBlocked() {
+			return m, nil
+		}
+		m.opRunning = true
+		return m, tea.Batch(planReleaseTaskAddCmd(m.mgr, msg.ReleaseID, msg.TaskIDs, msg.Generation), m.spinner.Tick)
+
+	case ReleaseTaskAddPlanReadyMsg:
+		if msg.Generation != m.releaseTaskAddGeneration {
+			return m, nil
+		}
+		m.opRunning = false
+		dlg, ok := m.modal.(*modal.AddReleaseTasksDialog)
+		if !ok || dlg.Generation() != msg.Generation {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.modal = nil
+			m.outputPanel.AppendLine("Plan adding tasks to release failed: " + msg.Err.Error())
+			return m, nil
+		}
+		dlg.SetPlan(msg.Plan)
+		return m, nil
+
+	case modal.ConfirmAddReleaseTasksMsg:
+		dlg, ok := m.modal.(*modal.AddReleaseTasksDialog)
+		if !ok || msg.Generation != m.releaseTaskAddGeneration || dlg.Generation() != msg.Generation || dlg.Plan() == nil || !dlg.Plan().Ready() || m.releaseMutationBlocked() {
+			return m, nil
+		}
+		plan := *dlg.Plan()
+		m.modal = nil
+		m.releaseTaskAddGeneration++
+		m.opRunning = true
+		m.operationGeneration++
+		m.outputPanel.AppendLine("Adding " + strings.Join(plan.TaskIDs, ", ") + " to release " + plan.ReleaseID + "...")
+		return m, tea.Batch(addReleaseTasksCmd(m.mgr, plan, m.operationGeneration), m.spinner.Tick)
 
 	case ReleaseTaskMergeRetryPlanReadyMsg:
 		req := m.releaseTaskMerge
@@ -1728,7 +1838,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outputPanel.AppendLine("Error: source task " + msg.SourceTaskID + " has no services to clone.")
 			return m, nil
 		}
-		m.modal = modal.NewCloneInitDialogWithFlow(msg.SourceTaskID, m.cfg.BranchPrefix, m.flow, msg.Services, m.width, m.height)
+		m.modal = modal.NewCloneInitDialogWithFlow(msg.SourceTaskID, m.defaultBranchPrefix(), m.flow, msg.Services, m.width, m.height)
 		return m, nil
 
 	case ReposLoadedMsg:
@@ -1748,7 +1858,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.initDialogPending {
 			m.initDialogPending = false
-			m.modal = modal.NewInitDialogWithFlow(m.cfg.BranchPrefix, m.flow, msg.Repos, m.width, m.height)
+			m.modal = modal.NewInitDialogWithFlow(m.defaultBranchPrefix(), m.flow, msg.Repos, m.width, m.height)
 		}
 		if m.addDialogPending != nil {
 			pending := *m.addDialogPending
@@ -2349,6 +2459,10 @@ func (m Model) startMergeInspection() (Model, tea.Cmd) {
 			m.outputPanel.AppendLine("Merge MRs unavailable: no task selected.")
 			return m, nil
 		}
+		if blocked := m.taskWorkflowBlocks(taskItem.ID, gitflow.EventActionMergeReviews); blocked != "" {
+			m.outputPanel.AppendLine(blocked)
+			return m, nil
+		}
 		m.opRunning = true
 		m.beginMergeInspection(FocusTasks, taskItem.ID, "", "")
 		m.outputPanel.AppendLine("Inspecting MRs for task " + taskItem.ID + "...")
@@ -2358,8 +2472,8 @@ func (m Model) startMergeInspection() (Model, tea.Cmd) {
 			return m, nil
 		}
 		release := m.releasesPanel.SelectedRelease()
-		if release == nil || release.Status != domain.ReleaseStatusAwaitingMasterMerge {
-			m.outputPanel.AppendLine("Merge MRs unavailable: release must be awaiting_master_merge.")
+		if release == nil || !releaseCanMerge(m) {
+			m.outputPanel.AppendLine("Merge MRs unavailable: the release is not waiting for reviews to merge.")
 			return m, nil
 		}
 		m.opRunning = true
@@ -2383,20 +2497,119 @@ func (m Model) startReleaseAction() (Model, tea.Cmd) {
 		m.outputPanel.AppendLine("Release action unavailable: no release selected.")
 		return m, nil
 	}
-	m.opRunning = true
-	m.operationGeneration++
-	switch release.Status {
-	case domain.ReleaseStatusPrepared:
-		m.outputPanel.AppendLine("Promoting release " + release.ID + "...")
-		return m, tea.Batch(promoteReleaseCmd(m.mgr, release.ID, m.operationGeneration), m.spinner.Tick)
-	case domain.ReleaseStatusMasterMerged:
-		m.outputPanel.AppendLine("Finalizing release " + release.ID + "...")
-		return m, tea.Batch(finalizeReleaseCmd(m.mgr, release.ID, m.operationGeneration), m.spinner.Tick)
-	default:
-		m.opRunning = false
+	return m.fireReleaseEvent(*release, "F")
+}
+
+// fireReleaseEvent runs the event bound to key in the release's current state.
+func (m Model) fireReleaseEvent(release domain.Release, key string) (Model, tea.Cmd) {
+	event, found := "", false
+	for _, ev := range m.mgr.ReleaseEvents(release) {
+		if ev.Key == key && ev.Action == "" {
+			event, found = ev.Name, true
+			break
+		}
+	}
+	if !found {
 		m.outputPanel.AppendLine("Release action unavailable for status " + string(release.Status) + ".")
 		return m, nil
 	}
+	m.opRunning = true
+	m.operationGeneration++
+	if event != "" {
+		m.outputPanel.AppendLine("Release " + release.ID + ": " + event + "...")
+	} else {
+		m.outputPanel.AppendLine("Re-checking release " + release.ID + "...")
+	}
+	return m, tea.Batch(advanceReleaseCmd(m.mgr, release.ID, event, m.operationGeneration), m.spinner.Tick)
+}
+
+// taskWorkflowBlocks explains why a gated task cannot close or merge in its current state.
+func (m Model) taskWorkflowBlocks(taskID, action string) string {
+	w := m.taskWorkflow
+	if w == nil || !w.Gated || m.tasksPanel.SelectedTask() == nil || m.tasksPanel.SelectedTask().ID != taskID {
+		return ""
+	}
+	for _, ev := range w.Events {
+		if ev.Action == action {
+			return ""
+		}
+	}
+	return "Task " + taskID + " is in workflow state " + string(w.Current) + "; " + w.NextAction + "."
+}
+
+// taskEventKey reports whether key fires a workflow event of the selected task.
+func (m Model) taskEventKey(key string) bool {
+	if m.focus != FocusTasks || key == "C" || key == "M" {
+		return false
+	}
+	return slices.ContainsFunc(taskEventActions(m), func(ev domain.WorkflowEvent) bool { return ev.Key == key })
+}
+
+func (m Model) fireTaskEvent(key string) (Model, tea.Cmd) {
+	selected := m.tasksPanel.SelectedTask()
+	for _, ev := range taskEventActions(m) {
+		if ev.Key != key || selected == nil {
+			continue
+		}
+		m.opRunning = true
+		m.operationGeneration++
+		label := ev.Name
+		if label == "" {
+			label = ev.Label
+		}
+		m.outputPanel.AppendLine("Task " + selected.ID + ": " + label + "...")
+		return m, tea.Batch(advanceTaskCmd(m.mgr, selected.ID, ev.Name, m.operationGeneration), m.spinner.Tick)
+	}
+	return m, nil
+}
+
+// releaseEventKey reports whether key fires a workflow event of the selected release.
+func (m Model) releaseEventKey(key string) bool {
+	release := m.releasesPanel.SelectedRelease()
+	if release == nil || key == "F" || key == "M" {
+		return false
+	}
+	for _, ev := range m.mgr.ReleaseEvents(*release) {
+		if ev.Key == key && ev.Action == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) startAddReleaseTasks() (Model, tea.Cmd) {
+	rel := m.releasesPanel.SelectedRelease()
+	if rel == nil || m.releaseMutationBlocked() {
+		return m, nil
+	}
+	if err := task.CanAddReleaseTasks(*rel); err != nil {
+		m.outputPanel.AppendLine("Adding tasks unavailable: " + err.Error())
+		return m, nil
+	}
+	candidates := m.addableReleaseTasks(*rel)
+	if len(candidates) == 0 {
+		m.outputPanel.AppendLine("No tasks to add: every root task is already in release " + rel.ID)
+		return m, nil
+	}
+	m.releaseTaskAddGeneration++
+	m.modal = modal.NewAddReleaseTasksDialog(rel.ID, candidates, m.releaseTaskAddGeneration)
+	m.modal.SetTerminalSize(m.width, m.height)
+	return m, nil
+}
+
+// addableReleaseTasks are the loaded root tasks of the default type that the release does not ship yet.
+func (m Model) addableReleaseTasks(rel domain.Release) []domain.Task {
+	rootType := string(gitflow.BranchTypeFeature)
+	if m.flow != nil && m.flow.DefaultBranchType != "" {
+		rootType = string(m.flow.DefaultBranchType)
+	}
+	var candidates []domain.Task
+	for _, t := range m.tasks {
+		if t.ParentID == "" && t.Phase == rootType && !slices.Contains(rel.TaskIDs, t.ID) {
+			candidates = append(candidates, t)
+		}
+	}
+	return candidates
 }
 
 func (m Model) startReleaseRetry() (Model, tea.Cmd) {
@@ -2658,6 +2871,8 @@ func releaseCleanupMutatingMessage(msg tea.Msg) bool {
 		modal.SubmitCreateReleaseMsg,
 		modal.ConfirmReleaseExecuteMsg,
 		modal.ConfirmReleaseTaskMergeRetryMsg,
+		modal.SubmitAddReleaseTasksMsg,
+		modal.ConfirmAddReleaseTasksMsg,
 		modal.ConfirmMergeMsg,
 		modal.SubmitCleanupMsg,
 		modal.ConfirmTaskCleanupMsg,
@@ -2756,11 +2971,22 @@ func (m *Model) finishOpProgress(err error) {
 	m.servicesPanel.SetOperationProgress(m.opProgress)
 }
 
+// defaultBranchPrefix is the first prefix of the workflow's default task type.
+func (m Model) defaultBranchPrefix() string {
+	if m.flow == nil {
+		return ""
+	}
+	if prefixes := m.flow.BranchTypes[m.flow.DefaultBranchType].Prefixes; len(prefixes) > 0 {
+		return prefixes[0]
+	}
+	return ""
+}
+
 func (m *Model) setSelectedReleaseWorkflow() {
 	release := m.releasesPanel.SelectedRelease()
 	var workflow *domain.WorkflowSummary
 	if release != nil {
-		value := task.ReleaseWorkflow(*release)
+		value := task.ReleaseWorkflow(*release, m.flow)
 		workflow = &value
 	}
 	m.releaseWorkflow = workflow
@@ -2860,10 +3086,51 @@ func (m Model) resolveCloseTask(taskID string) domain.Task {
 	return domain.Task{ID: taskID}
 }
 
+// failureRequest describes the failure in view: the selected release's error on Releases,
+// otherwise the recent output, where wtui reports every failed operation.
+func (m Model) failureRequest() (string, ai.FailureRequest) {
+	request := ai.FailureRequest{Output: m.outputPanel.RecentText(40)}
+	if m.flow != nil {
+		request.Workflow = m.flow.Describe()
+	}
+	subject := "the last operation"
+	if r := m.releasesPanel.SelectedRelease(); r != nil && m.focus == FocusReleases {
+		summary := task.ReleaseWorkflow(*r, m.flow)
+		subject = "release " + r.ID
+		request.Operation = "release " + r.ID + " (status " + string(r.Status) + ")"
+		request.State, request.Guidance = string(summary.Current), summary.NextAction
+		if r.Error != nil {
+			request.Error = strings.TrimSpace(r.Error.Message + "\n" + r.Error.Cause)
+		}
+	} else if t := m.tasksPanel.SelectedTask(); t != nil {
+		subject = "task " + t.ID
+		request.Operation = "task " + t.ID
+	}
+	return subject, request
+}
+
+// flowPosition locates the selected task's type and, on Releases, the selected release's state.
+func (m Model) flowPosition() modal.FlowPosition {
+	var pos modal.FlowPosition
+	if t := m.tasksPanel.SelectedTask(); t != nil && m.focus != FocusReleases {
+		pos.TaskType = t.Phase
+		if m.taskWorkflow != nil && m.taskWorkflow.Gated {
+			pos.TaskState = string(m.taskWorkflow.Current)
+		}
+	}
+	if r := m.releasesPanel.SelectedRelease(); r != nil && m.focus == FocusReleases {
+		pos.ReleaseState = string(task.ReleaseWorkflow(*r, m.flow).Current)
+		for _, h := range r.History {
+			pos.Visited = append(pos.Visited, h.From)
+		}
+	}
+	return pos
+}
+
 func (m Model) newSystemInfoModal() modal.Modal {
 	preset := ""
-	if m.cfg != nil && m.cfg.GitFlow != nil {
-		preset = m.cfg.GitFlow.Preset
+	if m.flow != nil {
+		preset = m.flow.Preset
 	}
 	gitlabHost := "gitlab.com"
 	githubHost := "github.com"

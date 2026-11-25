@@ -7,8 +7,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/D1ssolve/wtui/internal/config"
+	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/git"
 	"github.com/D1ssolve/wtui/internal/gitflow"
@@ -57,19 +59,20 @@ func reviewCloseEnv(t *testing.T, taskID string, mutateGit func(*mockGitClient))
 
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
 	cfg.Close.PushSourceBeforeReview = false
-	cfg.GitFlow.BranchTypes["feature"] = config.BranchTypeRule{
-		Prefixes:               []string{"feature/"},
-		BaseBranch:             "develop",
-		MergeTargets:           []string{"develop"},
-		ReviewTargets:          []string{"develop"},
-		CloseStrategy:          "review_request",
-		MergeStrategy:          "merge_commit",
-		TagOnClose:             true,
-		TagSource:              "develop",
-		TriggerPipelineOnClose: true,
-		RequiresClean:          true,
-	}
-	flow, err := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, err := closeTestFlow(cfg, func(flow *gitflow.ResolvedGitFlow) {
+		flow.BranchTypes["feature"] = gitflow.BranchTypeRule{
+			Prefixes:               []string{"feature/"},
+			BaseBranch:             "develop",
+			MergeTargets:           []string{"develop"},
+			ReviewTargets:          []string{"develop"},
+			CloseStrategy:          gitflow.CloseStrategyReviewRequest,
+			MergeStrategy:          gitflow.MergeStrategyMerge,
+			TagOnClose:             true,
+			TagSource:              "develop",
+			TriggerPipelineOnClose: true,
+			RequiresClean:          true,
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,5 +343,123 @@ func TestHotfixClose_SourceMovementAfterPlanBlocksRemainingMutations(t *testing.
 	}
 	if len(proof.Services) != 0 {
 		t.Fatalf("proof persisted after source movement: %+v", proof.Services)
+	}
+}
+
+func cherryPickCloseEnv(t *testing.T, taskID string, picked bool, mutateRelease ...func(*domain.Release)) (*manager, *mockGitClient, *mockForgeClient) {
+	t.Helper()
+	mgr, gitMock, forgeClient := reviewCloseEnv(t, taskID, func(g *mockGitClient) {
+		g.isAncestorFn = func(_, ancestor, descendant string) (bool, error) {
+			return !(ancestor == "squash-sha" && descendant == "origin/release/1.0"), nil
+		}
+		if picked {
+			g.commitsMentioningFn = func(_, _, _ string) ([]string, error) { return []string{"picked-sha"}, nil }
+		}
+	})
+	rule := mgr.flow.BranchTypes[gitflow.BranchTypeFeature]
+	rule.TagOnClose, rule.TriggerPipelineOnClose, rule.CherryPickToOpenReleases = false, false, true
+	mgr.flow.BranchTypes[gitflow.BranchTypeFeature] = rule
+	mgr.flow.Release = &gitflow.ReleaseFlow{BranchPrefix: "release/", Steps: []gitflow.Step{{Kind: gitflow.StepCutBranch}, {Kind: gitflow.StepTag, On: "release_branch"}}}
+
+	prepared := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	repo := filepath.Join(filepath.Dir(mgr.cfg.TasksRoot), "repos", "svc-a")
+	if _, err := mgr.ensureReleaseDir("rel-1.0", false); err != nil {
+		t.Fatal(err)
+	}
+	release := domain.Release{
+		ID: "rel-1.0", Status: domain.ReleaseStatusPrepared, Checkpoint: "prepared", PreparedAt: &prepared, CreatedAt: prepared, UpdatedAt: prepared,
+		TaskIDs:  []string{"OTHER-1"},
+		Services: []domain.ReleaseService{{Name: "svc-a", RepoPath: repo, ReleaseBranch: "release/1.0", Version: "1.0.0", Tag: "v1.0.0", Status: domain.ReleaseStatusPrepared}},
+	}
+	for _, mutate := range mutateRelease {
+		mutate(&release)
+	}
+	if _, err := mgr.writeReleaseManifest(release); err != nil {
+		t.Fatal(err)
+	}
+	forgeClient.mrHistoryFn = func(context.Context, string, string) ([]forge.MRInfo, error) {
+		return []forge.MRInfo{{Number: 7, State: "merged", SourceBranch: "feature/" + taskID, TargetBranch: "develop"}}, nil
+	}
+	forgeClient.mrReadinessByNumberFn = func(_ context.Context, n int, _, _ string) (forge.MRReadiness, error) {
+		return forge.MRReadiness{Number: n, State: "merged", SourceBranch: "feature/" + taskID, TargetBranch: "develop", HeadSHA: "task-head", MergedSHA: "squash-sha"}, nil
+	}
+	return mgr, gitMock, forgeClient
+}
+
+func TestCloseTask_ReviewMerged_CherryPicksAcceptedMergeIntoOpenRelease(t *testing.T) {
+	mgr, gitMock, _ := cherryPickCloseEnv(t, "IN-PICK", false)
+
+	res, err := mgr.CloseTask(t.Context(), CloseTaskParams{TaskID: "IN-PICK"})
+	if err != nil || !res.Success {
+		t.Fatalf("CloseTask = %+v, %v; want success", res, err)
+	}
+	gitMock.mu.Lock()
+	defer gitMock.mu.Unlock()
+	if !slices.Equal(gitMock.cherryPickCalls, []string{"squash-sha"}) {
+		t.Fatalf("CherryPick calls = %v, want the accepted merge squash-sha", gitMock.cherryPickCalls)
+	}
+	if len(gitMock.pushRefWithLeaseCalls) != 1 {
+		t.Fatalf("lease pushes = %+v, want one push of the release branch", gitMock.pushRefWithLeaseCalls)
+	}
+	push := gitMock.pushRefWithLeaseCalls[0]
+	if push.TargetRef != "refs/heads/release/1.0" || push.LeaseRef != "refs/heads/release/1.0" || push.LeaseOID != "origin-tip" {
+		t.Fatalf("lease push = %+v, want release/1.0 leased on its observed tip", push)
+	}
+	proof, err := mgr.loadClosePostActionProof("IN-PICK")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(proofActions(t, proof, "svc-a"), closePostActionCherryPick) {
+		t.Fatal("cherry_pick post-action not recorded in proof")
+	}
+}
+
+func TestCloseTask_ReviewMerged_AlreadyPickedReleaseIsSkipped(t *testing.T) {
+	mgr, gitMock, _ := cherryPickCloseEnv(t, "IN-PICKED", true)
+
+	res, err := mgr.CloseTask(t.Context(), CloseTaskParams{TaskID: "IN-PICKED"})
+	if err != nil || !res.Success {
+		t.Fatalf("CloseTask = %+v, %v; want success", res, err)
+	}
+	gitMock.mu.Lock()
+	defer gitMock.mu.Unlock()
+	if len(gitMock.cherryPickCalls) != 0 || len(gitMock.pushRefWithLeaseCalls) != 0 {
+		t.Fatalf("picks=%v pushes=%v, want an idempotent skip", gitMock.cherryPickCalls, gitMock.pushRefWithLeaseCalls)
+	}
+}
+
+func TestCloseTask_CherryPick_FailedPreparedReleaseStillReceivesFix(t *testing.T) {
+	mgr, gitMock, _ := cherryPickCloseEnv(t, "IN-PICK-FAILED", false, func(r *domain.Release) {
+		r.Status = domain.ReleaseStatusFailed
+		r.Error = &domain.ReleaseError{Code: "push", Message: "push failed", Recoverable: true}
+	})
+
+	if res, err := mgr.CloseTask(t.Context(), CloseTaskParams{TaskID: "IN-PICK-FAILED"}); err != nil || !res.Success {
+		t.Fatalf("CloseTask = %+v, %v", res, err)
+	}
+	if !slices.Equal(gitMock.cherryPickCalls, []string{"squash-sha"}) {
+		t.Fatalf("CherryPick calls = %v, want the recoverable release to receive the fix", gitMock.cherryPickCalls)
+	}
+}
+
+func TestCloseTask_CherryPick_AcceptedReleaseIsReportedNotPicked(t *testing.T) {
+	mgr, gitMock, _ := cherryPickCloseEnv(t, "IN-PICK-ACCEPTED", false, func(r *domain.Release) {
+		r.Status = domain.ReleaseStatusMasterMerged
+		r.Services[0].AcceptedMergeSHA = "accepted-sha"
+	})
+
+	res, err := mgr.CloseTask(t.Context(), CloseTaskParams{TaskID: "IN-PICK-ACCEPTED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gitMock.cherryPickCalls) != 0 || len(gitMock.pushRefWithLeaseCalls) != 0 {
+		t.Fatalf("picked into an accepted release: picks=%v pushes=%v", gitMock.cherryPickCalls, gitMock.pushRefWithLeaseCalls)
+	}
+	reported := false
+	for _, step := range res.Steps {
+		reported = reported || (step.Status == StepStatusSkipped && strings.Contains(step.Message, "NOT picked") && strings.Contains(step.Message, "rel-1.0"))
+	}
+	if !reported {
+		t.Fatalf("steps = %+v, want an explicit not-picked report for rel-1.0", res.Steps)
 	}
 }

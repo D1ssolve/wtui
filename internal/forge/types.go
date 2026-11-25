@@ -85,6 +85,7 @@ type MRMergeResult struct {
 
 type PipelineStatus struct {
 	ID           string
+	HeadSHA      string
 	Status       string
 	Conclusion   string
 	Branch       string

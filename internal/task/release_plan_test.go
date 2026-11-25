@@ -396,11 +396,9 @@ func newReleasePlanTestManager(t *testing.T, gitMock *mockGitClient) (*manager, 
 	tasksRoot := filepath.Join(rootDir, ".tasks")
 
 	cfg := &config.Config{
-		TasksRoot:    tasksRoot,
-		RootDir:      rootDir,
-		BranchPrefix: "feature/",
-		BaseBranch:   "develop",
-		Editor:       "code",
+		TasksRoot: tasksRoot,
+		RootDir:   rootDir,
+		Editor:    "code",
 	}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)

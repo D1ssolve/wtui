@@ -4,6 +4,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -631,4 +632,119 @@ func removeRemoteIfExists(t *testing.T, dir, name string) {
 		return
 	}
 	mustGit(t, dir, "remote", "remove", name)
+}
+
+func TestCherryPick_Integration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not in PATH, skipping integration test")
+	}
+	repo := t.TempDir()
+	gitc := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@example.com", "-c", "user.name=T"}, args...)...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	gitc("init", "-b", "main")
+	writeFile(t, filepath.Join(repo, "a.txt"), "base\n")
+	gitc("add", ".")
+	gitc("commit", "-m", "base")
+	gitc("branch", "release/1.0")
+	gitc("checkout", "-b", "fix")
+	writeFile(t, filepath.Join(repo, "fix.txt"), "fix\n")
+	gitc("add", ".")
+	gitc("commit", "-m", "fix")
+	gitc("checkout", "main")
+	gitc("merge", "--no-ff", "fix", "-m", "merge fix")
+	mergeSHA := gitc("rev-parse", "HEAD")
+	writeFile(t, filepath.Join(repo, "a.txt"), "main change\n")
+	gitc("commit", "-am", "main edits a")
+	conflictSHA := gitc("rev-parse", "HEAD")
+
+	client := NewCommandClient(slog.Default())
+	wt := filepath.Join(t.TempDir(), "pick")
+	if err := client.AddDetachedWorktree(t.Context(), repo, wt, "release/1.0"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := exec.Command("git", "-C", wt, "config", "user.email", "t@example.com")
+	if out, err := cfg.CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", wt, "config", "user.name", "T").CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+
+	if err := client.CherryPick(t.Context(), wt, mergeSHA); err != nil {
+		t.Fatalf("CherryPick(merge commit) error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "fix.txt")); err != nil {
+		t.Fatalf("picked change missing: %v", err)
+	}
+	picked, err := client.CommitsMentioning(t.Context(), wt, "HEAD", "(cherry picked from commit "+mergeSHA+")")
+	if err != nil || len(picked) != 1 {
+		t.Fatalf("CommitsMentioning = %v, %v; want the picked commit", picked, err)
+	}
+
+	if err := client.CherryPick(t.Context(), wt, mergeSHA); !errors.Is(err, ErrCherryPickEmpty) {
+		t.Fatalf("CherryPick(already applied) error = %v, want ErrCherryPickEmpty", err)
+	}
+	if states, err := client.OperationState(t.Context(), wt); err != nil || len(states) != 0 {
+		t.Fatalf("worktree state after empty pick = %v, %v; want aborted and clean", states, err)
+	}
+
+	writeFile(t, filepath.Join(wt, "a.txt"), "release change\n")
+	if out, err := exec.Command("git", "-C", wt, "commit", "-am", "release edits a").CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if err := client.CherryPick(t.Context(), wt, conflictSHA); err == nil {
+		t.Fatal("CherryPick(conflicting commit) error = nil, want conflict")
+	}
+	if states, err := client.OperationState(t.Context(), wt); err != nil || len(states) != 0 {
+		t.Fatalf("worktree state after failed pick = %v, %v; want aborted and clean", states, err)
+	}
+}
+
+func TestMergeIsNoop_Integration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not in PATH, skipping integration test")
+	}
+	repo := t.TempDir()
+	gitc := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@example.com", "-c", "user.name=T"}, args...)...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	gitc("init", "-b", "main")
+	writeFile(t, filepath.Join(repo, "a.txt"), "base\n")
+	gitc("add", ".")
+	gitc("commit", "-m", "base")
+	for _, b := range []string{"squashed", "pending"} {
+		gitc("checkout", "-b", b, "main")
+		writeFile(t, filepath.Join(repo, b+".txt"), b+"\n")
+		gitc("add", ".")
+		gitc("commit", "-m", b+" one")
+		writeFile(t, filepath.Join(repo, b+".txt"), b+" two\n")
+		gitc("commit", "-am", b+" two")
+	}
+	gitc("checkout", "main")
+	gitc("merge", "--squash", "squashed")
+	gitc("commit", "-m", "squash merge")
+	writeFile(t, filepath.Join(repo, "later.txt"), "later\n")
+	gitc("add", ".")
+	gitc("commit", "-m", "later work on main")
+
+	client := NewCommandClient(slog.Default())
+	if noop, err := client.MergeIsNoop(t.Context(), repo, "main", "squashed"); err != nil || !noop {
+		t.Fatalf("MergeIsNoop(squash-merged) = %v, %v; want true", noop, err)
+	}
+	if noop, err := client.MergeIsNoop(t.Context(), repo, "main", "pending"); err != nil || noop {
+		t.Fatalf("MergeIsNoop(unmerged) = %v, %v; want false", noop, err)
+	}
 }

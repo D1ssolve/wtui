@@ -118,6 +118,15 @@ func (m *manager) directMergeContained(ctx context.Context, repoPath string, pro
 }
 
 // mergeMRWithLease never lets mutable MR metadata choose the push destination.
+// mergeQueue returns the client's queue when forge.merge_queue is on and the forge has one.
+func (m *manager) mergeQueue(client forge.ForgeClient) (forge.MergeQueuer, bool) {
+	if m.cfg == nil || m.cfg.Forge == nil || !m.cfg.Forge.MergeQueue {
+		return nil, false
+	}
+	q, ok := client.(forge.MergeQueuer)
+	return q, ok
+}
+
 func (m *manager) mergeMRWithLease(ctx context.Context, repoPath string, params forge.MergeMRParams, client forge.ForgeClient) (forge.MRMergeResult, error) {
 	if params.ExpectedHeadSHA == "" || params.ExpectedTargetBranch == "" || params.ExpectedTargetSHA == "" || params.Repo == "" || params.Number <= 0 {
 		return forge.MRMergeResult{}, errors.New("direct merge requires complete source, target and MR identity")

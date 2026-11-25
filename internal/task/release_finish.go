@@ -5,109 +5,61 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
+// FinalizeRelease fires the release's F event; in git-flow it back-merges and tags.
 func (m *manager) FinalizeRelease(ctx context.Context, params FinishReleaseParams) (domain.Release, error) {
-	release, err := m.GetRelease(ctx, params.ReleaseID)
-	if err != nil {
-		return domain.Release{}, err
+	mach := m.releaseMachine()
+	tags := func(ev gitflow.Event) bool {
+		target, ok := mach.State(ev.To)
+		return ev.Key == "F" && ok && slices.ContainsFunc(target.Run, func(s gitflow.Step) bool { return s.Kind == gitflow.StepTag })
 	}
-	if IsLegacyManifest(release) {
-		return release, fmt.Errorf("%w: reject release %s and prepare it again", ErrReleaseLegacyManifest, release.ID)
+	release, fired, err := m.advanceRelease(ctx, params.ReleaseID, tags, "", &releaseRun{statusCh: params.StatusCh})
+	if fired == nil && err == nil {
+		err = fmt.Errorf("%w: release %s cannot be finalized from state %s", ErrReleaseInvalidStatusTransition, params.ReleaseID, release.State)
 	}
-	if release.Status != domain.ReleaseStatusMasterMerged {
-		return release, fmt.Errorf("%w: %s -> %s", ErrReleaseInvalidStatusTransition, release.Status, domain.ReleaseStatusSyncingDevelop)
-	}
-
-	for i := range release.Services {
-		svc := &release.Services[i]
-		sendStatus(params.StatusCh, fmt.Sprintf("[%s][finalize_fetch] fetching %s", svc.Name, svc.RepoPath))
-		if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
-			return m.failFinalization(&release, svc, fmt.Errorf("release finalize: fetch service=%s: %w", svc.Name, err))
-		}
-		masterSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+m.flow.ProductionBranch)
-		if err != nil {
-			return m.failFinalization(&release, svc, err)
-		}
-		if masterSHA != svc.AcceptedMergeSHA {
-			return m.failFinalization(&release, svc, fmt.Errorf("%w: service=%s expected=%s actual=%s", ErrReleaseMasterMoved, svc.Name, svc.AcceptedMergeSHA, masterSHA))
-		}
-		if err := m.validateFinalizeTag(ctx, *svc); err != nil {
-			return m.failFinalization(&release, svc, err)
-		}
-	}
-
-	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusSyncingDevelop, "syncing_develop", nil); err != nil {
-		return release, err
-	}
-	if release, err = m.writeReleaseManifest(release); err != nil {
-		return release, err
-	}
-	for i := range release.Services {
-		if err := m.syncFinalizeService(ctx, &release, &release.Services[i], params.StatusCh); err != nil {
-			return m.failFinalization(&release, &release.Services[i], err)
-		}
-	}
-
-	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusTagging, "tagging", nil); err != nil {
-		return release, err
-	}
-	if release, err = m.writeReleaseManifest(release); err != nil {
-		return release, err
-	}
-	for i := range release.Services {
-		if err := m.tagFinalizeService(ctx, &release, &release.Services[i], params.StatusCh); err != nil {
-			return m.failFinalization(&release, &release.Services[i], err)
-		}
-	}
-
-	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusPushing, "pushing", nil); err != nil {
-		return release, err
-	}
-	if release, err = m.writeReleaseManifest(release); err != nil {
-		return release, err
-	}
-	for i := range release.Services {
-		svc := &release.Services[i]
-		if m.cfg.Release != nil && m.cfg.Release.PushTags != nil && *m.cfg.Release.PushTags {
-			sendStatus(params.StatusCh, fmt.Sprintf("[%s][push] pushing tag %s", svc.Name, svc.Tag))
-			// Prove the push destination before publishing: a tag pushed to a
-			// fetch-vs-push mismatched remote ships nothing the release
-			// identity covers. The captured URL is the push target, never
-			// the mutable remote name.
-			pushURL, err := m.verifiedRepoPushURL(ctx, svc.Name, svc.RepoPath)
-			if err != nil {
-				return m.failFinalization(&release, svc, fmt.Errorf("release finalize: verify push destination for service=%s: %w", svc.Name, err))
-			}
-			tagObjectSHA, err := m.resolveTagObjectSHA(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA)
-			if err != nil {
-				return m.failFinalization(&release, svc, err)
-			}
-			if err := m.git.PushTag(ctx, svc.RepoPath, pushURL, svc.Tag, tagObjectSHA); err != nil {
-				return m.failFinalization(&release, svc, fmt.Errorf("%w: service=%s tag=%s: %v", ErrReleaseTagPushFailed, svc.Name, svc.Tag, err))
-			}
-			svc.PushedTag = true
-		}
-		svc.Status = domain.ReleaseStatusReleased
-		svc.Error = nil
-		if err := m.persistCheckpoint(&release, "push_tag", nil); err != nil {
-			return release, err
-		}
-	}
-
-	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusReleased, "final", nil); err != nil {
-		return release, err
-	}
-	completedAt := defaultReleaseNow().UTC()
-	release.CompletedAt = &completedAt
-	release.Error = nil
-	return m.writeReleaseManifest(release)
+	return release, err
 }
 
-func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Release, svc *domain.ReleaseService, statusCh chan<- string) (err error) {
+// acceptReleaseBranchTip records the remote release branch tip as the release SHA on the
+// first finalize; a retry keeps the recorded SHA as long as the branch still contains it.
+func (m *manager) acceptReleaseBranchTip(ctx context.Context, svc *domain.ReleaseService) error {
+	remoteRelease := "origin/" + svc.ReleaseBranch
+	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, remoteRelease)
+	if err != nil {
+		return err
+	}
+	// Review merges also set AcceptedMergeSHA; only a recorded release-branch tip may pin a retry.
+	accepted, recorded := svc.Accepted[svc.ReleaseBranch]
+	if !recorded && len(svc.Accepted) == 0 {
+		accepted = svc.AcceptedMergeSHA // manifests written before Accepted existed
+	}
+	if accepted != "" && accepted != tip {
+		contained, err := m.git.IsAncestor(ctx, svc.RepoPath, accepted, remoteRelease)
+		if err != nil {
+			return err
+		}
+		if !contained {
+			return fmt.Errorf("%w: service=%s release branch %s no longer contains accepted %s (tip %s)", ErrReleaseMasterMoved, svc.Name, svc.ReleaseBranch, accepted, tip)
+		}
+		tip = accepted
+	}
+	if svc.Accepted == nil {
+		svc.Accepted = map[string]string{}
+	}
+	svc.Accepted[svc.ReleaseBranch] = tip
+	svc.AcceptedMergeSHA = tip
+	return nil
+}
+
+// syncFinalizeService merges fromRef into the into branch through a temporary worktree
+// when into does not already contain it, then publishes into.
+func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Release, svc *domain.ReleaseService, fromRef, into string, statusCh chan<- string) (err error) {
 	integrationPath := filepath.Join(release.Dir, ".work", svc.Name+"-finalize-integration")
 	if err := os.MkdirAll(filepath.Dir(integrationPath), 0o755); err != nil {
 		return fmt.Errorf("%w: %v", ErrReleaseManifestInvalid, err)
@@ -118,7 +70,7 @@ func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Relea
 		}
 		svc.IntegrationWorktreePath = ""
 	}
-	remoteIntegration := "origin/" + svc.IntegrationBranch
+	remoteIntegration := "origin/" + into
 	if err := m.git.AddDetachedWorktree(ctx, svc.RepoPath, integrationPath, remoteIntegration); err != nil {
 		return err
 	}
@@ -141,21 +93,21 @@ func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Relea
 	}
 
 	if err := m.git.MergeFFOnly(ctx, integrationPath, remoteIntegration); err != nil {
-		return fmt.Errorf("release finalize: fast-forward service=%s integration=%s: %w", svc.Name, svc.IntegrationBranch, err)
+		return fmt.Errorf("release finalize: fast-forward service=%s integration=%s: %w", svc.Name, into, err)
 	}
-	alreadyMerged, err := m.git.IsAncestor(ctx, integrationPath, svc.ReleaseBranch, "HEAD")
+	alreadyMerged, err := m.git.IsAncestor(ctx, integrationPath, fromRef, "HEAD")
 	if err != nil {
 		return err
 	}
 	if alreadyMerged {
-		sendStatus(statusCh, fmt.Sprintf("[%s][sync] %s already contains %s", svc.Name, svc.IntegrationBranch, svc.ReleaseBranch))
+		sendStatus(statusCh, fmt.Sprintf("[%s][sync] %s already contains %s", svc.Name, into, fromRef))
 	} else {
-		sendStatus(statusCh, fmt.Sprintf("[%s][sync] merging %s into %s", svc.Name, svc.ReleaseBranch, svc.IntegrationBranch))
-		if err := m.git.Merge(ctx, integrationPath, svc.ReleaseBranch); err != nil {
+		sendStatus(statusCh, fmt.Sprintf("[%s][sync] merging %s into %s", svc.Name, fromRef, into))
+		if err := m.git.Merge(ctx, integrationPath, fromRef); err != nil {
 			states, stateErr := m.git.OperationState(ctx, integrationPath)
 			if stateErr == nil && containsMergeConflictState(states) {
 				_ = m.git.MergeAbort(ctx, integrationPath)
-				return fmt.Errorf("%w: service=%s branch=%s", ErrReleaseMergeConflict, svc.Name, svc.ReleaseBranch)
+				return fmt.Errorf("%w: service=%s branch=%s", ErrReleaseMergeConflict, svc.Name, fromRef)
 			}
 			return err
 		}
@@ -168,10 +120,13 @@ func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Relea
 		if _, err := m.verifiedRepoPushURL(ctx, svc.Name, svc.RepoPath); err != nil {
 			return fmt.Errorf("release finalize: verify push destination for service=%s: %w", svc.Name, err)
 		}
-		if err := m.git.PushRef(ctx, integrationPath, "HEAD", svc.IntegrationBranch); err != nil {
-			return fmt.Errorf("release finalize: push service=%s integration=%s: %w", svc.Name, svc.IntegrationBranch, err)
+		if err := m.git.PushRef(ctx, integrationPath, "HEAD", into); err != nil {
+			return fmt.Errorf("release finalize: push service=%s integration=%s: %w", svc.Name, into, err)
 		}
 		svc.PushedIntegration = true
+	}
+	if into != svc.IntegrationBranch {
+		return m.persistCheckpoint(release, "back_merge", nil)
 	}
 	sha, err := m.resolveReleaseRefSHA(ctx, integrationPath, "HEAD")
 	if err != nil {
@@ -208,7 +163,11 @@ func (m *manager) tagFinalizeService(ctx context.Context, release *domain.Releas
 	}
 	if !exists {
 		sendStatus(statusCh, fmt.Sprintf("[%s][tag] creating %s", svc.Name, svc.Tag))
-		if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA, releaseTagMessage(release.ID, svc.TagDescription)); err != nil {
+		message, err := m.releaseTagMessageFor(ctx, release, svc)
+		if err != nil {
+			return err
+		}
+		if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA, message); err != nil {
 			return fmt.Errorf("%w: service=%s tag=%s: %v", ErrReleaseTagCreateFailed, svc.Name, svc.Tag, err)
 		}
 	}
@@ -237,7 +196,11 @@ func (m *manager) runFinishService(ctx context.Context, release *domain.Release,
 		return err
 	}
 	if !exists {
-		if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA, releaseTagMessage(release.ID, svc.TagDescription)); err != nil {
+		message, err := m.releaseTagMessageFor(ctx, release, svc)
+		if err != nil {
+			return err
+		}
+		if err := m.git.CreateTag(ctx, svc.RepoPath, svc.Tag, svc.AcceptedMergeSHA, message); err != nil {
 			return fmt.Errorf("%w: %v", ErrReleaseTagCreateFailed, err)
 		}
 	}

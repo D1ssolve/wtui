@@ -56,7 +56,7 @@ func detectTaskPhase(services []domain.Service, flow *gitflow.ResolvedGitFlow) (
 	}
 
 	phase = string(detectedPhase)
-	if detectedPhase != gitflow.BranchTypeRelease && detectedPhase != gitflow.BranchTypeHotfix {
+	if detectedPhase == flow.DefaultBranchType {
 		return phase, ""
 	}
 

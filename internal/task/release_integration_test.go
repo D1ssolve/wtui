@@ -247,11 +247,9 @@ func newReleaseIntegrationEnvWithGitClient(t *testing.T, client git.Client) rele
 	mustGit(t, repoPath, "push", "-u", "origin", "develop")
 
 	cfg := &config.Config{
-		TasksRoot:    tasksRoot,
-		RootDir:      rootDir,
-		BranchPrefix: "feature/",
-		BaseBranch:   "develop",
-		Editor:       "code",
+		TasksRoot: tasksRoot,
+		RootDir:   rootDir,
+		Editor:    "code",
 	}
 	if _, err := cfg.Effective(); err != nil {
 		t.Fatalf("cfg.Effective(): %v", err)

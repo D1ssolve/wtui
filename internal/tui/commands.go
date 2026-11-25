@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/D1ssolve/wtui/internal/ai"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/logutil"
@@ -600,12 +601,23 @@ func mergeReleaseMRsCmd(mgr task.Manager, releaseID string, generation uint64) t
 	return readStatusOrDone(statusCh, doneCh)
 }
 
-func promoteReleaseCmd(mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
-	return releaseActionCmd(mgr, "promote", releaseID, generation)
-}
-
-func finalizeReleaseCmd(mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
-	return releaseActionCmd(mgr, "finalize", releaseID, generation)
+// advanceReleaseCmd fires a workflow event; an empty event re-checks the current wait condition.
+func advanceReleaseCmd(mgr task.Manager, releaseID, event string, generation uint64) tea.Cmd {
+	statusCh := make(chan string, 32)
+	doneCh := make(chan ReleaseActionDoneMsg, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		release, err := mgr.AdvanceRelease(ctx, releaseID, event, statusCh)
+		close(statusCh)
+		action := event
+		if action == "" {
+			action = "check"
+		}
+		doneCh <- ReleaseActionDoneMsg{Generation: generation, Action: action, Release: release, Err: err}
+		close(doneCh)
+	}()
+	return readStatusOrDone(statusCh, doneCh)
 }
 
 func retryReleaseCmd(mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
@@ -626,6 +638,29 @@ func planReleaseTaskMergesCmd(mgr task.Manager, params task.CreateReleaseParams,
 	}
 }
 
+func planReleaseTaskAddCmd(mgr task.Manager, releaseID string, taskIDs []string, generation uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		plan, err := mgr.PlanReleaseTaskAdd(ctx, releaseID, taskIDs)
+		return ReleaseTaskAddPlanReadyMsg{Generation: generation, Plan: plan, Err: err}
+	}
+}
+
+func addReleaseTasksCmd(mgr task.Manager, plan task.ReleaseTaskAddPlan, generation uint64) tea.Cmd {
+	statusCh := make(chan string, 32)
+	doneCh := make(chan ReleaseActionDoneMsg, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		release, err := mgr.AddReleaseTasks(ctx, plan, statusCh)
+		close(statusCh)
+		doneCh <- ReleaseActionDoneMsg{Generation: generation, Action: "add tasks to", Release: release, Err: err}
+		close(doneCh)
+	}()
+	return readStatusOrDone(statusCh, doneCh)
+}
+
 func planReleaseTaskMergeRetryCmd(mgr task.Manager, releaseID string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -642,26 +677,6 @@ func retryReleaseTaskMergesCmd(mgr task.Manager, releaseID string, plan *task.Re
 		release, err := mgr.RetryReleaseTaskMerges(ctx, releaseID, plan)
 		return ReleaseActionDoneMsg{Generation: generation, Action: "retry", Release: release, Err: err}
 	}
-}
-
-func releaseActionCmd(mgr task.Manager, action, releaseID string, generation uint64) tea.Cmd {
-	statusCh := make(chan string, 32)
-	doneCh := make(chan ReleaseActionDoneMsg, 1)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-		var release domain.Release
-		var err error
-		if action == "promote" {
-			release, err = mgr.PromoteRelease(ctx, releaseID, statusCh)
-		} else {
-			release, err = mgr.FinalizeRelease(ctx, task.FinishReleaseParams{ReleaseID: releaseID, StatusCh: statusCh})
-		}
-		close(statusCh)
-		doneCh <- ReleaseActionDoneMsg{Generation: generation, Action: action, Release: release, Err: err}
-		close(doneCh)
-	}()
-	return readStatusOrDone(statusCh, doneCh)
 }
 
 func loadTaskWorkflowCmd(mgr task.Manager, taskID string, generation uint64) tea.Cmd {
@@ -739,6 +754,19 @@ func forgeOpCmd(mgr task.Manager, op string, taskID string, serviceName string, 
 }
 
 func readStatusOrDone[T any](statusCh <-chan string, doneCh <-chan T) tea.Cmd {
+	// select picks randomly among ready cases, so lines still buffered when done
+	// arrives are delivered before it rather than dropped.
+	var flush func(done T) tea.Msg
+	flush = func(done T) tea.Msg {
+		select {
+		case line, ok := <-statusCh:
+			if ok {
+				return OutputLineMsg{Line: line, Next: func() tea.Msg { return flush(done) }}
+			}
+		default:
+		}
+		return any(done).(tea.Msg)
+	}
 	var next func() tea.Cmd
 	next = func() tea.Cmd {
 		return func() tea.Msg {
@@ -760,11 +788,10 @@ func readStatusOrDone[T any](statusCh <-chan string, doneCh <-chan T) tea.Cmd {
 					return OutputLineMsg{Line: line, Next: next()}
 				}
 			case msg := <-doneCh:
-				return any(msg).(tea.Msg)
+				return flush(msg)
 			}
 
-			msg := <-doneCh
-			return any(msg).(tea.Msg)
+			return flush(<-doneCh)
 		}
 	}
 
@@ -811,4 +838,37 @@ func execTeaProcess(c *exec.Cmd, op string, generation uint64) tea.Cmd {
 
 func execProcessDoneMsg(op string, err error, generation uint64) tea.Msg {
 	return CommandDoneMsg{Generation: generation, Err: err, Op: op}
+}
+
+type ExplanationMsg struct {
+	Subject     string
+	Explanation ai.Explanation
+	Err         error
+}
+
+func explainFailureCmd(assistant ai.Assistant, subject string, request ai.FailureRequest) tea.Cmd {
+	return func() tea.Msg {
+		explanation, err := assistant.Explain(context.Background(), request)
+		return ExplanationMsg{Subject: subject, Explanation: explanation, Err: err}
+	}
+}
+
+type TaskAdvanceDoneMsg struct {
+	Generation uint64
+	TaskID     string
+	Err        error
+}
+
+func advanceTaskCmd(mgr task.Manager, taskID, event string, generation uint64) tea.Cmd {
+	statusCh := make(chan string, 32)
+	doneCh := make(chan TaskAdvanceDoneMsg, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		err := mgr.AdvanceTask(ctx, taskID, event, statusCh)
+		close(statusCh)
+		doneCh <- TaskAdvanceDoneMsg{Generation: generation, TaskID: taskID, Err: err}
+		close(doneCh)
+	}()
+	return readStatusOrDone(statusCh, doneCh)
 }

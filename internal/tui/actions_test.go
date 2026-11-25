@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/gitflow"
@@ -28,7 +29,7 @@ func actionFixtures(t *testing.T) []Model {
 		gitflow.BranchTypeHotfix:  {Prefixes: []string{"hotfix/"}},
 	}}
 	base := func(task domain.Task) Model {
-		m := newTestModelWithOptions(t, &mockManager{}, Options{ResolvedFlow: flow})
+		m := newTestModelWithOptions(t, &mockManager{}, Options{ResolvedFlow: flow, Assistant: &fakeAssistant{}})
 		m = sendWindowSize(m, 160, 50)
 		m.lazygitAvailable = true
 		m.servicesPanel.SetLazygitAvailable(true)
@@ -41,15 +42,17 @@ func actionFixtures(t *testing.T) []Model {
 		base(domain.Task{ID: "T-1", Services: []domain.Service{{Name: "api", Branch: "feature/T-1"}}}),
 		base(domain.Task{ID: "T-2-hotfix", Phase: "hotfix"}),
 	}
+	prepared := time.Now()
 	for _, rel := range []domain.Release{
 		{Status: domain.ReleaseStatusDraft},
-		{Status: domain.ReleaseStatusPrepared},
-		{Status: domain.ReleaseStatusAwaitingMasterMerge},
+		{Status: domain.ReleaseStatusPrepared, PreparedAt: &prepared},
+		{Status: domain.ReleaseStatusAwaitingMasterMerge, PreparedAt: &prepared},
 		{Status: domain.ReleaseStatusMasterMerged},
 		{Status: domain.ReleaseStatusReleased},
 		{Status: domain.ReleaseStatusFailed, Error: &domain.ReleaseError{Recoverable: true}},
 	} {
 		m := base(domain.Task{ID: "T-1"})
+		m.tasks = []domain.Task{{ID: "T-9", Phase: "feature"}}
 		rel.ID, rel.Dir = "rel-1", t.TempDir()
 		m.releasesPanel.SetReleases([]domain.Release{rel})
 		fixtures = append(fixtures, m)

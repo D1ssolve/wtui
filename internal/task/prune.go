@@ -162,17 +162,13 @@ func (m *manager) pruneMergeTarget(branch string) string {
 	flow := m.flow
 	if flow != nil {
 		base = flow.IntegrationBranch
-		branchType := gitflow.DetectBranchType(branch, flow)
-		if branchType == gitflow.BranchTypeHotfix || branchType == gitflow.BranchTypeRelease {
-			base = flow.ProductionBranch
+		if rule := flow.BranchTypes[gitflow.DetectBranchType(branch, flow)]; len(rule.Close) > 0 && len(rule.Close[0].Into) > 0 {
+			base = rule.Close[0].Into[0]
 		}
 	}
 
 	if base == "" {
-		base = m.cfg.BaseBranch
-	}
-	if base == "" {
-		base = "develop"
+		base = m.integrationBranch()
 	}
 
 	return "origin/" + base

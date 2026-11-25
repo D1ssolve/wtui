@@ -32,20 +32,18 @@ type ReleaseMergeResult struct {
 }
 
 func (m *manager) InspectReleaseMerge(ctx context.Context, releaseID string) (ReleaseMergeInspection, error) {
-	inspection, _, err := m.inspectReleaseMerge(ctx, releaseID)
-	return inspection, err
-}
-
-func (m *manager) inspectReleaseMerge(ctx context.Context, releaseID string) (ReleaseMergeInspection, domain.Release, error) {
 	release, err := m.GetRelease(ctx, releaseID)
 	if err != nil {
-		return ReleaseMergeInspection{}, domain.Release{}, err
+		return ReleaseMergeInspection{}, err
 	}
-	if release.Status != domain.ReleaseStatusAwaitingMasterMerge {
-		return ReleaseMergeInspection{}, release, fmt.Errorf("%w: %s -> %s", ErrReleaseInvalidStatusTransition, release.Status, domain.ReleaseStatusMasterMerged)
+	if st, err := m.releaseState(release); err != nil || st.Kind != gitflow.StateWait || st.Wait != gitflow.WaitReviewMerged || release.Status == domain.ReleaseStatusFailed {
+		return ReleaseMergeInspection{}, fmt.Errorf("%w: release %s is not waiting for reviews to merge", ErrReleaseInvalidStatusTransition, release.ID)
 	}
+	return m.inspectReleaseReviews(ctx, release), nil
+}
 
-	inspection := ReleaseMergeInspection{ReleaseID: releaseID, Services: make([]ReleaseServiceMergeInspection, len(release.Services))}
+func (m *manager) inspectReleaseReviews(ctx context.Context, release domain.Release) ReleaseMergeInspection {
+	inspection := ReleaseMergeInspection{ReleaseID: release.ID, Services: make([]ReleaseServiceMergeInspection, len(release.Services))}
 	sem := make(chan struct{}, m.concurrency())
 	var wg sync.WaitGroup
 	for i, svc := range release.Services {
@@ -73,10 +71,10 @@ func (m *manager) inspectReleaseMerge(ctx context.Context, releaseID string) (Re
 
 			item.MR, detailErr = client.MRReadinessByNumber(ctx, svc.ProductionMR.Number, repo, worktreePath)
 			if detailErr == nil {
-				_, detailErr = m.reconcileDirectMR(ctx, svc.RepoPath, m.releaseMergeMethod(), &item.MR)
+				_, detailErr = m.reconcileDirectMR(ctx, svc.RepoPath, m.reviewMethod(svc), &item.MR)
 			}
 			item.Blockers = append([]string(nil), item.MR.Blockers...)
-			identity := releaseProductionMRBlockers(svc, m.productionBranch(), item.MR)
+			identity := m.releaseReviewBlockers(svc, item.MR)
 			item.Blockers = append(item.Blockers, identity...)
 			switch {
 			case detailErr != nil:
@@ -96,16 +94,22 @@ func (m *manager) inspectReleaseMerge(ctx context.Context, releaseID string) (Re
 	}
 	wg.Wait()
 
-	return inspection, release, nil
+	return inspection
 }
 
+// MergeReleaseMRs fires the merge_reviews event of the current review_merged wait.
 func (m *manager) MergeReleaseMRs(ctx context.Context, releaseID string, statusCh chan<- string) (domain.Release, ReleaseMergeResult, error) {
-	inspection, release, err := m.inspectReleaseMerge(ctx, releaseID)
-	if err != nil {
-		return release, ReleaseMergeResult{ReleaseID: releaseID}, err
+	run := &releaseRun{statusCh: statusCh, mergeResult: ReleaseMergeResult{ReleaseID: releaseID}}
+	release, fired, err := m.advanceRelease(ctx, releaseID, func(ev gitflow.Event) bool { return ev.Action == gitflow.EventActionMergeReviews }, "", run)
+	if fired == nil && err == nil {
+		err = fmt.Errorf("%w: release %s has no merge event in its current state", ErrReleaseInvalidStatusTransition, releaseID)
 	}
+	return release, run.mergeResult, err
+}
 
-	result := ReleaseMergeResult{ReleaseID: releaseID}
+func (m *manager) mergeReleaseReviews(ctx context.Context, release *domain.Release, statusCh chan<- string) (ReleaseMergeResult, error) {
+	inspection := m.inspectReleaseReviews(ctx, *release)
+	result := ReleaseMergeResult{ReleaseID: release.ID}
 	for i, item := range inspection.Services {
 		svc := &release.Services[i]
 		// A merged MR whose head no longer matches the recorded source SHA is
@@ -126,22 +130,29 @@ func (m *manager) MergeReleaseMRs(ctx context.Context, releaseID string, statusC
 				authoritative, serviceErr = m.verifyMergedReleaseService(ctx, svc, mergeSHA)
 			}
 			if serviceErr == nil {
-				serviceErr = m.persistMergedReleaseService(&release, svc, authoritative)
+				serviceErr = m.persistMergedReleaseService(release, svc, authoritative)
 			}
 			if serviceErr != nil {
-				if persistErr := m.markReleaseMergeServiceFailed(&release, svc, serviceErr); persistErr != nil {
-					return release, result, persistErr
+				if persistErr := m.markReleaseMergeServiceFailed(release, svc, serviceErr); persistErr != nil {
+					return result, persistErr
 				}
 				result.Failed = append(result.Failed, svc.Name)
 				sendStatus(statusCh, fmt.Sprintf("[%s][merge] failed: %v", svc.Name, serviceErr))
 				continue
 			}
 			result.Skipped = append(result.Skipped, svc.Name)
-			sendStatus(statusCh, fmt.Sprintf("[%s][merge] production MR already merged", svc.Name))
+			sendStatus(statusCh, fmt.Sprintf("[%s][merge] review into %s already merged", svc.Name, m.releaseReviewTarget(*svc)))
+		case item.Status == "ready" && waitingDependency(*release, *svc, m.releaseDependencies()) != "":
+			dep := waitingDependency(*release, *svc, m.releaseDependencies())
+			result.Skipped = append(result.Skipped, svc.Name)
+			sendStatus(statusCh, fmt.Sprintf("[%s][merge] waiting for %s, which it depends on, to merge first", svc.Name, dep))
 		case item.Status == "ready":
-			if err := m.mergeReleaseServiceMR(ctx, &release, svc, item, statusCh); err != nil {
-				if persistErr := m.markReleaseMergeServiceFailed(&release, svc, err); persistErr != nil {
-					return release, result, persistErr
+			if err := m.mergeReleaseServiceMR(ctx, release, svc, item, statusCh); errors.Is(err, errMergeQueued) {
+				result.Skipped = append(result.Skipped, svc.Name)
+				continue
+			} else if err != nil {
+				if persistErr := m.markReleaseMergeServiceFailed(release, svc, err); persistErr != nil {
+					return result, persistErr
 				}
 				result.Failed = append(result.Failed, svc.Name)
 				sendStatus(statusCh, fmt.Sprintf("[%s][merge] failed: %v", svc.Name, err))
@@ -158,19 +169,10 @@ func (m *manager) MergeReleaseMRs(ctx context.Context, releaseID string, statusC
 		}
 	}
 
-	if allReleaseServicesMerged(release.Services) {
-		if err := m.moveReleaseStatus(&release, domain.ReleaseStatusMasterMerged, "master_merged", nil); err != nil {
-			return release, result, err
-		}
-		release, err = m.writeReleaseManifest(release)
-		if err != nil {
-			return release, result, err
-		}
-		sendStatus(statusCh, "[release][merge] all production MRs merged")
-	}
-
-	return release, result, nil
+	return result, nil
 }
+
+var errMergeQueued = errors.New("merge queued")
 
 func (m *manager) markReleaseMergeServiceFailed(release *domain.Release, svc *domain.ReleaseService, err error) error {
 	svc.Status = domain.ReleaseStatusFailed
@@ -195,7 +197,7 @@ func (m *manager) mergeReleaseServiceMR(ctx context.Context, release *domain.Rel
 	if err != nil {
 		return fmt.Errorf("recheck production MR !%d: %w", svc.ProductionMR.Number, err)
 	}
-	reconciled, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.releaseMergeMethod(), &fresh)
+	reconciled, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.reviewMethod(*svc), &fresh)
 	if err != nil {
 		return err
 	}
@@ -206,7 +208,7 @@ func (m *manager) mergeReleaseServiceMR(ctx context.Context, release *domain.Rel
 		}
 		return m.persistMergedReleaseService(release, svc, authoritative)
 	}
-	if err := validateReleaseMRForMerge(*svc, m.productionBranch(), fresh); err != nil {
+	if err := validateReleaseMRForMerge(*svc, m.reviewSource(*svc), m.releaseReviewTarget(*svc), fresh); err != nil {
 		return err
 	}
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
@@ -220,10 +222,18 @@ func (m *manager) mergeReleaseServiceMR(ctx context.Context, release *domain.Rel
 		WorktreePath:         worktreePath,
 		Repo:                 repo,
 		Number:               svc.ProductionMR.Number,
-		Method:               m.releaseMergeMethod(),
+		Method:               m.reviewMethod(*svc),
 		ExpectedHeadSHA:      svc.ProductionMR.SourceSHA,
 		ExpectedTargetBranch: fresh.TargetBranch,
 		ExpectedTargetSHA:    targetSHA,
+	}
+	if queue, ok := m.mergeQueue(client); ok {
+		params.ExpectedTargetSHA = ""
+		if err := queue.EnqueueMR(ctx, params); err != nil {
+			return fmt.Errorf("add MR %d to the merge queue: %w", params.Number, err)
+		}
+		sendStatus(statusCh, fmt.Sprintf("[%s][merge] MR %d added to the merge queue; press M again once it merged", svc.Name, params.Number))
+		return errMergeQueued
 	}
 	sendStatus(statusCh, fmt.Sprintf("[%s][merge] merging production MR %d", svc.Name, params.Number))
 	var merged forge.MRMergeResult
@@ -287,7 +297,7 @@ func releaseProductionMRHeadBlockers(svc domain.ReleaseService, mr forge.MRReadi
 // from the recorded source head. Shared by merge inspection, the pre-merge
 // gate, post-merge acceptance, and merge-SHA recovery so a retargeted or
 // drifted MR can never authorize a production merge or its acceptance.
-func releaseProductionMRBlockers(svc domain.ReleaseService, productionBranch string, mr forge.MRReadiness) []string {
+func releaseProductionMRBlockers(svc domain.ReleaseService, sourceBranch, productionBranch string, mr forge.MRReadiness) []string {
 	if svc.ProductionMR == nil {
 		return []string{"production MR is not recorded"}
 	}
@@ -302,8 +312,8 @@ func releaseProductionMRBlockers(svc domain.ReleaseService, productionBranch str
 	if mr.Number != svc.ProductionMR.Number {
 		blockers = append(blockers, fmt.Sprintf("production MR number changed: got !%d, want !%d", mr.Number, svc.ProductionMR.Number))
 	}
-	if mr.SourceBranch != svc.ReleaseBranch {
-		blockers = append(blockers, fmt.Sprintf("production MR source is %s, want %s", mr.SourceBranch, svc.ReleaseBranch))
+	if mr.SourceBranch != sourceBranch {
+		blockers = append(blockers, fmt.Sprintf("production MR source is %s, want %s", mr.SourceBranch, sourceBranch))
 	}
 	if productionBranch == "" {
 		blockers = append(blockers, "production branch not configured")
@@ -313,12 +323,16 @@ func releaseProductionMRBlockers(svc domain.ReleaseService, productionBranch str
 	return blockers
 }
 
+func (m *manager) releaseReviewBlockers(svc domain.ReleaseService, mr forge.MRReadiness) []string {
+	return releaseProductionMRBlockers(svc, m.reviewSource(svc), m.releaseReviewTarget(svc), mr)
+}
+
 // validateReleaseMRForMerge is the strict gate immediately before a production
 // merge: exact recorded identity, undrifted head, open ready state, and a
 // server-side head pin when using the atomic server path. Direct merges use
 // the exact head object and a fixed target lease.
-func validateReleaseMRForMerge(svc domain.ReleaseService, productionBranch string, mr forge.MRReadiness) error {
-	if blockers := releaseProductionMRBlockers(svc, productionBranch, mr); len(blockers) > 0 {
+func validateReleaseMRForMerge(svc domain.ReleaseService, sourceBranch, productionBranch string, mr forge.MRReadiness) error {
+	if blockers := releaseProductionMRBlockers(svc, sourceBranch, productionBranch, mr); len(blockers) > 0 {
 		return errors.New(strings.Join(blockers, "; "))
 	}
 	state := strings.ToLower(strings.TrimSpace(mr.State))
@@ -355,10 +369,10 @@ func (m *manager) verifyAcceptedMergeSHA(ctx context.Context, svc *domain.Releas
 	if err != nil {
 		return "", fmt.Errorf("release merge: verify merged MR %d: %w", svc.ProductionMR.Number, err)
 	}
-	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.releaseMergeMethod(), &fresh); err != nil {
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.reviewMethod(*svc), &fresh); err != nil {
 		return "", err
 	}
-	if blockers := releaseProductionMRBlockers(*svc, m.productionBranch(), fresh); len(blockers) > 0 {
+	if blockers := m.releaseReviewBlockers(*svc, fresh); len(blockers) > 0 {
 		return "", fmt.Errorf("release merge: merged MR %d identity rejected: %s", svc.ProductionMR.Number, strings.Join(blockers, "; "))
 	}
 	if !strings.EqualFold(strings.TrimSpace(fresh.State), "merged") {
@@ -380,7 +394,7 @@ func (m *manager) verifyAcceptedMergeSHA(ctx context.Context, svc *domain.Releas
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 		return "", fmt.Errorf("release merge: fetch for production verification: %w", err)
 	}
-	production := m.productionBranch()
+	production := m.releaseReviewTarget(*svc)
 	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+production)
 	if err != nil {
 		return "", err
@@ -411,13 +425,13 @@ func (m *manager) recoverMissingReleaseMergeSHAWithClient(ctx context.Context, s
 	if err != nil {
 		return "", fmt.Errorf("release merge: inspect merged MR %d: %w", svc.ProductionMR.Number, err)
 	}
-	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.releaseMergeMethod(), &fresh); err != nil {
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.reviewMethod(*svc), &fresh); err != nil {
 		return "", err
 	}
 	if !strings.EqualFold(fresh.State, "merged") {
 		return "", fmt.Errorf("release merge: merge commit SHA unavailable for MR %d (state=%s)", svc.ProductionMR.Number, fresh.State)
 	}
-	if blockers := releaseProductionMRBlockers(*svc, m.productionBranch(), fresh); len(blockers) > 0 {
+	if blockers := m.releaseReviewBlockers(*svc, fresh); len(blockers) > 0 {
 		return "", fmt.Errorf("release merge: merged MR %d identity rejected: %s", svc.ProductionMR.Number, strings.Join(blockers, "; "))
 	}
 	if strings.TrimSpace(fresh.MergedSHA) != "" {
@@ -425,8 +439,8 @@ func (m *manager) recoverMissingReleaseMergeSHAWithClient(ctx context.Context, s
 	}
 	if strings.TrimSpace(fresh.HeadSHA) != "" {
 		targetBranch := fresh.TargetBranch
-		if targetBranch == "" && m.flow != nil {
-			targetBranch = m.flow.ProductionBranch
+		if targetBranch == "" {
+			targetBranch = m.releaseReviewTarget(*svc)
 		}
 		if targetBranch != "" {
 			targetSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+targetBranch)
@@ -448,6 +462,10 @@ func (m *manager) persistMergedReleaseService(release *domain.Release, svc *doma
 
 	svc.ProductionMR.State = "merged"
 	svc.AcceptedMergeSHA = mergeSHA
+	if svc.Accepted == nil {
+		svc.Accepted = map[string]string{}
+	}
+	svc.Accepted[m.releaseReviewTarget(*svc)] = mergeSHA
 	svc.Status = domain.ReleaseStatusMasterMerged
 	svc.Error = nil
 	return m.persistCheckpoint(release, "production_mr_merge", nil)
@@ -514,9 +532,13 @@ func productionMRRepositoryBlockers(svc domain.ReleaseService, remoteURL string)
 	return nil
 }
 
+func releaseServiceMerged(svc domain.ReleaseService) bool {
+	return svc.ProductionMR != nil && strings.EqualFold(svc.ProductionMR.State, "merged") && strings.TrimSpace(svc.AcceptedMergeSHA) != ""
+}
+
 func allReleaseServicesMerged(services []domain.ReleaseService) bool {
 	for _, svc := range services {
-		if svc.ProductionMR == nil || !strings.EqualFold(svc.ProductionMR.State, "merged") || strings.TrimSpace(svc.AcceptedMergeSHA) == "" {
+		if !releaseServiceMerged(svc) {
 			return false
 		}
 	}

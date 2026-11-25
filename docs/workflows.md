@@ -2,7 +2,7 @@
 
 [English](workflows.en.md)
 
-Короткий путь для обычного `git-flow`: `develop` — интеграция, `master` — production.
+Короткий путь для пресета `git-flow` (`workflow: {extends: git-flow}`): `develop` — интеграция, `master` — production. Раздел [Trunk-based](#trunk-based) описывает `extends: trunk-based`. Команда `wtui flow` показывает, что ваша конфигурация делает на каждом шаге.
 
 ## Перед началом
 
@@ -30,7 +30,7 @@ flowchart LR
 ![Состояние feature-задачи в wtui перед работой во внешних инструментах](images/workflows/feature-02-overview.png)
 3. Нажмите `V`. Это проверка Git-состояния, а не тесты приложения. `S` синхронизирует ветки с remote.
 ![Ошибка проверки Git-состояния feature-задачи в wtui](images/workflows/feature-03-validation-error.png)
-4. Нажмите `C`, проверьте план и подтвердите. При `close_strategy: review_request` wtui пушит ветки и создаёт MR в `develop`. При `direct_merge` он обновляет настроенные target-ветки без MR.
+4. Нажмите `C`, проверьте план и подтвердите. Если тип закрывается шагом `review` (как `feature` в пресете), wtui пушит ветки и создаёт MR в `develop`. Шаг `merge` обновляет target-ветки напрямую, без MR.
 ![Подтверждение Close для feature-задачи в wtui](images/workflows/feature-04-close-confirm.png)
 5. Проведите review и дождитесь CI в forge. wtui не удаляет задачу.
 ![Готовые MR перед merge через wtui](images/workflows/feature-05-mr-ready.png)
@@ -51,9 +51,9 @@ flowchart LR
     F --> G["D/P: очистить вручную"]
 ```
 
-1. В Releases (`3`) нажмите `N`, выберите root feature-задачи и версии сервисов. Предложенная версия — следующий patch от локального semver-тега; без тегов — `0.1.0`.
+1. В Releases (`3`) нажмите `N`, выберите root-задачи типа по умолчанию (`feature`) и версии сервисов. Предложенная версия — следующий patch от локального semver-тега; без тегов — `0.1.0`.
 ![Выбор feature-задачи для нового release в wtui](images/workflows/release-01-create.png)
-2. Проверьте preview и подтвердите prepare. По умолчанию каждая task-ветка уже должна быть в `origin/develop`. С `git_flow.task_merge.timing: release_prepare` вместо этого нужен один ready MR каждого сервиса в `develop`.
+2. Проверьте preview и подтвердите prepare. По умолчанию каждая task-ветка уже должна быть в `origin/develop`. С шагом релиза `integrate_tasks` вместо этого нужен один ready MR каждого сервиса в `develop`.
 ![Подтверждение prepare release в wtui](images/workflows/release-02-prepare-confirm.png)
 3. В статусе `prepared` выполните regression вручную. Если нужны исправления, протестируйте, закоммитьте и опубликуйте их в release-worktree до promote.
 ![Статус prepared в wtui перед внешней regression](images/workflows/release-03-prepared.png)
@@ -79,6 +79,23 @@ flowchart LR
     E --> F["D/P: очистить вручную"]
 ```
 
+Шаги ниже — для hotfix, который закрывается через MR:
+
+```yaml
+workflow:
+  extends: git-flow
+  task_types:
+    hotfix:
+      prefixes: ["hotfix/"]
+      from: production
+      shared: true
+      close:
+        - review: {into: [production, integration]}
+        - tag: {on: production}
+```
+
+Hotfix самого пресета вместо этого сливается в `master` и `develop` напрямую и ставит тег одним `C`.
+
 1. Создайте задачу через `i`, выберите тип `hotfix`. Ветка `hotfix/<TASK>` начинается от `master`.
 ![Диалог создания hotfix от master в wtui](images/workflows/hotfix-01-init.png)
 2. Разрабатывайте и проверяйте Git-состояние так же, как feature-задачу.
@@ -93,6 +110,28 @@ flowchart LR
 ![Кандидаты на ручную очистку hotfix в wtui](images/workflows/cleanup-candidates-80x24.png)
 
 `H` на hotfix конвертирует задачу в feature: создаёт `feature/<TARGET>` от подтверждённого SHA, пушит ветки с lease и удаляет только неизменённые локальные hotfix-ветки. Remote source-ветка сохраняется.
+
+## Trunk-based
+
+С `workflow: {extends: trunk-based}` есть одна долгоживущая ветка — `main`.
+
+```mermaid
+flowchart LR
+    A["i: change"] --> B["C: squash MR в main"]
+    B --> C["M: merge"]
+    C --> D["3, N: отрезать release/<version> от main"]
+    D --> E["qualification"]
+    E --> F["F: тег на release-ветке"]
+```
+
+1. Задача без известного префикса — это `change`: ветка называется ID задачи, начинается от `main`, а `C` открывает squash MR в `main`.
+2. Релиз отрезается от `main` (`N`). Production MR и back-merge нет.
+3. Баг, найденный на qualification, чинится в `main` задачей `fix/<TASK>`. После merge её MR `C` переносит принятый merge в release-ветку каждого открытого релиза (`git cherry-pick -x`, push с lease). Релизы, где фикс уже есть, пропускаются; релизы с уже принятым коммитом тега помечаются как «не перенесено».
+4. `F` ставит тег на текущую вершину release-ветки. Повтор после сбоя сохраняет этот коммит и отказывается, если ветку переписали.
+
+## Свой жизненный цикл релиза
+
+Релиз работает на state machine. Кроме пресетов через `extends` её можно описать в `workflow.release.machine`: QA с циклом «отклонить → исправить», хуки деплоя на staging, ожидание зелёного CI, цепочки окружений вроде `main → pre-production → production`. В панели Releases футер показывает клавиши текущего состояния; `F` продвигает релиз или перепроверяет условие, `M` сливает ревью, которых ждёт релиз. Подробно: [Release state machine](configuration.md#release-state-machine).
 
 ## Ручная очистка
 

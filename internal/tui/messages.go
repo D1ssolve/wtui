@@ -120,6 +120,12 @@ type ReleaseTaskMergePlanReadyMsg struct {
 	Err        error
 }
 
+type ReleaseTaskAddPlanReadyMsg struct {
+	Generation uint64
+	Plan       task.ReleaseTaskAddPlan
+	Err        error
+}
+
 type ReleaseTaskMergeRetryPlanReadyMsg struct {
 	ReleaseID  string
 	Generation uint64

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/gitflow"
@@ -225,7 +227,7 @@ func TestValidateReleaseStatusTransition(t *testing.T) {
 		{name: "rejected to validating forbidden", from: domain.ReleaseStatusRejected, to: domain.ReleaseStatusValidating, wantErr: true},
 		{name: "none to validating forbidden", from: "", to: domain.ReleaseStatusValidating, wantErr: true},
 		{name: "awaiting master merge to tagging forbidden", from: domain.ReleaseStatusAwaitingMasterMerge, to: domain.ReleaseStatusTagging, wantErr: true},
-		{name: "master merged to tagging forbidden", from: domain.ReleaseStatusMasterMerged, to: domain.ReleaseStatusTagging, wantErr: true},
+		{name: "master merged to tagging when the flow has no back_merge", from: domain.ReleaseStatusMasterMerged, to: domain.ReleaseStatusTagging, wantErr: false},
 		{name: "syncing develop to released forbidden", from: domain.ReleaseStatusSyncingDevelop, to: domain.ReleaseStatusReleased, wantErr: true},
 	}
 
@@ -344,10 +346,7 @@ func TestBuildReleasePreview(t *testing.T) {
 
 func TestBuildReleasePreview_TaskMergeDuringPrepare(t *testing.T) {
 	base := func() config.Config {
-		return config.Config{
-			Tag:     &config.TagConfig{Format: "v{{.Version}}"},
-			GitFlow: &config.GitFlowConfig{Preset: "git-flow"},
-		}
+		return config.Config{Tag: &config.TagConfig{Format: "v{{.Version}}"}}
 	}
 
 	preview, err := BuildReleasePreview(base(), map[string]string{"svc": "1.2.3"})
@@ -359,7 +358,20 @@ func TestBuildReleasePreview_TaskMergeDuringPrepare(t *testing.T) {
 	}
 
 	withTiming := base()
-	withTiming.GitFlow.TaskMerge = &config.TaskMergeConfig{Timing: config.TaskMergeTimingReleasePrepare}
+	if err := yaml.Unmarshal([]byte(`
+workflow:
+  extends: git-flow
+  release:
+    steps:
+      - integrate_tasks: {}
+      - cut_branch: {from: integration}
+      - gate: {label: regression}
+      - review: {from: release, into: production}
+      - back_merge: {from: release, into: integration}
+      - tag: {on: accepted_merge}
+`), &withTiming); err != nil {
+		t.Fatal(err)
+	}
 	preview, err = BuildReleasePreview(withTiming, map[string]string{"svc": "1.2.3"})
 	if err != nil {
 		t.Fatalf("BuildReleasePreview() error = %v", err)

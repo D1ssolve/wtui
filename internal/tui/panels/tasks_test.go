@@ -49,12 +49,12 @@ func makeTaskWithMeta(id, parentID, phase, version string, serviceCount int) dom
 }
 
 func makeFlow(types ...gitflow.BranchType) *gitflow.ResolvedGitFlow {
-	bt := make(map[gitflow.BranchType]gitflow.BranchTypeRule, len(types))
+	bt := map[gitflow.BranchType]gitflow.BranchTypeRule{gitflow.BranchTypeFeature: {}}
 	for _, t := range types {
 		bt[t] = gitflow.BranchTypeRule{}
 	}
 
-	return &gitflow.ResolvedGitFlow{BranchTypes: bt}
+	return &gitflow.ResolvedGitFlow{DefaultBranchType: gitflow.BranchTypeFeature, BranchTypes: bt}
 }
 
 func sendKey(key string) tea.KeyMsg {

@@ -44,6 +44,17 @@ type Release struct {
 	CompletedAt     *time.Time       `json:"completed_at,omitempty"`
 	CreatedBy       string           `json:"created_by,omitempty"`
 	Error           *ReleaseError    `json:"error,omitempty"`
+	FlowFingerprint string           `json:"flow_fingerprint,omitempty"`
+	// State is the workflow machine state; empty in manifests written before release machines.
+	State   string              `json:"state,omitempty"`
+	History []ReleaseTransition `json:"history,omitempty"`
+}
+
+type ReleaseTransition struct {
+	From  string    `json:"from"`
+	To    string    `json:"to"`
+	Event string    `json:"event,omitempty"`
+	At    time.Time `json:"at"`
 }
 
 type ReleaseTaskRef struct {
@@ -78,6 +89,9 @@ type ReleaseService struct {
 	PushedReleaseBranch     bool                   `json:"pushed_release_branch"`
 	PushedTag               bool                   `json:"pushed_tag"`
 	Error                   *ReleaseError          `json:"error,omitempty"`
+	// Accepted records the verified merge SHA of every review per target branch.
+	Accepted  map[string]string `json:"accepted,omitempty"`
+	HooksDone []string          `json:"hooks_done,omitempty"`
 }
 
 type ProductionMRRef struct {
@@ -92,6 +106,10 @@ type ProductionMRRef struct {
 	// repository must never authorize a production merge.
 	Repo         string `json:"repo,omitempty"`
 	ProviderHost string `json:"provider_host,omitempty"`
+	// Source/Target/Method describe the review; empty means release branch into production.
+	Source string `json:"source,omitempty"`
+	Target string `json:"target,omitempty"`
+	Method string `json:"method,omitempty"`
 }
 
 type ReleaseFeatureBranch struct {

@@ -9,7 +9,12 @@ import (
 	"github.com/D1ssolve/wtui/internal/config"
 )
 
-func buildAIProvider(settings *config.AIConfig) (ai.Provider, error) {
+// BuildAssistant returns the configured AI provider.
+func BuildAssistant(settings *config.AIConfig) (ai.Assistant, error) {
+	return buildAIProvider(settings)
+}
+
+func buildAIProvider(settings *config.AIConfig) (ai.Assistant, error) {
 	if settings == nil {
 		settings = &config.AIConfig{}
 	}

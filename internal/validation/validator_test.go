@@ -292,3 +292,23 @@ func TestTaskValidator_ValidateTask_ConcurrencyAndSemaphoreBound(t *testing.T) {
 		t.Fatalf("max concurrent RepoStatus = %d, want >= 2 to prove parallelism", maxActive)
 	}
 }
+
+func (m *mockValidationGitClient) CherryPick(context.Context, string, string) error {
+	panic("mockValidationGitClient.CherryPick called unexpectedly")
+}
+
+func (m *mockValidationGitClient) CommitsMentioning(context.Context, string, string, string) ([]string, error) {
+	panic("mockValidationGitClient.CommitsMentioning called unexpectedly")
+}
+
+func (m *mockValidationGitClient) MergeIsNoop(context.Context, string, string, string) (bool, error) {
+	panic("mockValidationGitClient.MergeIsNoop called unexpectedly")
+}
+
+func (m *mockValidationGitClient) MergeConflicts(context.Context, string, string, string) ([]string, error) {
+	panic("mockValidationGitClient.MergeConflicts called unexpectedly")
+}
+
+func (m *mockValidationGitClient) CommitLog(context.Context, string, string, string) ([]domain.Commit, error) {
+	return nil, nil
+}

@@ -24,8 +24,14 @@ type HotfixReview struct {
 	MergeSHA string
 }
 
-func (m *manager) isHotfixReview(branch string) bool {
-	return m.flow != nil && gitflow.DetectBranchType(branch, m.flow) == gitflow.BranchTypeHotfix && m.flow.BranchTypes[gitflow.BranchTypeHotfix].CloseStrategy == gitflow.CloseStrategyReviewRequest
+// isMultiTargetReview reports review closes into several targets (e.g. hotfix into production and integration),
+// which wait for every target MR before tagging.
+func (m *manager) isMultiTargetReview(branch string) bool {
+	if m.flow == nil {
+		return false
+	}
+	rule := m.flow.BranchTypes[gitflow.DetectBranchType(branch, m.flow)]
+	return rule.CloseStrategy == gitflow.CloseStrategyReviewRequest && len(appendUnique(nil, rule.ReviewTargets...)) > 1
 }
 
 type hotfixCheckpoint struct {
@@ -97,15 +103,15 @@ func (m *manager) saveHotfixCheckpoint(taskID string, cp hotfixCheckpoint) error
 	return os.Rename(f.Name(), filepath.Join(m.taskDir(taskID), ".hotfix-close.json"))
 }
 
-func (m *manager) planHotfixClose(ctx context.Context, taskID string, services []domain.Service, rule gitflow.BranchTypeRule) (ClosePlan, error) {
-	plan := ClosePlan{TaskID: taskID, BranchType: gitflow.BranchTypeHotfix, HotfixReview: true, RequiresForge: true, SharedVersion: m.cfg.Tag != nil && m.cfg.Tag.SharedVersion}
+func (m *manager) planHotfixClose(ctx context.Context, taskID string, services []domain.Service, branchType gitflow.BranchType, rule gitflow.BranchTypeRule) (ClosePlan, error) {
+	plan := ClosePlan{TaskID: taskID, BranchType: branchType, HotfixReview: true, RequiresForge: true, SharedVersion: m.cfg.Tag != nil && m.cfg.Tag.SharedVersion}
 	cp, err := m.loadHotfixCheckpoint(taskID)
 	if err != nil {
 		return plan, err
 	}
 	allMerged := true
 	for _, svc := range services {
-		if gitflow.DetectBranchType(svc.Branch, m.flow) != gitflow.BranchTypeHotfix {
+		if gitflow.DetectBranchType(svc.Branch, m.flow) != branchType {
 			return plan, ErrMixedBranchTypes
 		}
 		sha, err := m.resolveFreshSourceSHA(ctx, svc)
@@ -230,7 +236,7 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 }
 
 func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, plan ClosePlan) (CloseTaskResult, error) {
-	result := CloseTaskResult{TaskID: p.TaskID, BranchType: gitflow.BranchTypeHotfix}
+	result := CloseTaskResult{TaskID: p.TaskID, BranchType: plan.BranchType}
 	step := func(name string, status StepStatus, text string) {
 		result.Steps = append(result.Steps, CloseTaskStep{Name: name, Status: status, Message: text})
 		sendStatus(p.StatusCh, "["+name+"] "+text)
@@ -396,7 +402,7 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 		}
 	}
 	if !result.Waiting {
-		rule := m.flow.BranchTypes[gitflow.BranchTypeHotfix]
+		rule := m.flow.BranchTypes[plan.BranchType]
 		if rule.TriggerPipelineOnClose {
 			for _, sp := range plan.Services {
 				svc, err := m.findService(ctx, p.TaskID, sp.ServiceName)

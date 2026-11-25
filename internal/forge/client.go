@@ -14,3 +14,10 @@ type ForgeClient interface {
 	TriggerPipeline(ctx context.Context, params TriggerPipelineParams) error
 	ListIssues(ctx context.Context, params ListIssuesParams) ([]IssueInfo, error)
 }
+
+// MergeQueuer is implemented by forges that can add a reviewed MR to a merge queue.
+type MergeQueuer interface {
+	// EnqueueMR queues the MR for merging once its head still equals ExpectedHeadSHA;
+	// the merge happens later on the forge.
+	EnqueueMR(ctx context.Context, params MergeMRParams) error
+}

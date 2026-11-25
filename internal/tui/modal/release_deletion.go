@@ -2,7 +2,6 @@ package modal
 
 import (
 	"fmt"
-	"github.com/D1ssolve/wtui/internal/tui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -11,9 +10,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
-const releaseDeletionScope = "Removes release worktrees, manifest and directory.\nDeletes local and origin release branches and tags.\nTasks, task branches and merged develop/master history are retained."
+const releaseDeletionScope = "Removes release worktrees, manifest and directory.\nDeletes local and origin release branches and tags.\nTasks, task branches and merged integration/production history are retained."
 
 // Both approval stages keep the deletion scope visible while refs scroll.
 type releaseDeletionReview struct {

@@ -313,8 +313,17 @@ func (c *GhClient) MergeMR(ctx context.Context, params MergeMRParams) (MRMergeRe
 	return result, nil
 }
 
+func (c *GhClient) EnqueueMR(ctx context.Context, params MergeMRParams) error {
+	if params.ExpectedHeadSHA == "" {
+		return errors.New("gh merge queue: a head SHA pin is required")
+	}
+	// No method flag: the queue's own merge method applies; --auto waits for required checks.
+	_, _, err := c.run(ctx, pickWorktree(c.worktreePath, params.WorktreePath), "pr", "merge", strconv.Itoa(params.Number), "--auto", "--match-head-commit", params.ExpectedHeadSHA, "--repo", params.Repo)
+	return err
+}
+
 func (c *GhClient) PipelineStatus(ctx context.Context, branch, repo string) ([]PipelineStatus, error) {
-	args := []string{"run", "list", "--branch", branch, "--json", "status,conclusion,url,workflowName", "--repo", repo}
+	args := []string{"run", "list", "--branch", branch, "--json", "status,conclusion,url,workflowName,headSha", "--repo", repo}
 	stdout, _, err := c.run(ctx, c.worktreePath, args...)
 	if err != nil {
 		return nil, err
@@ -325,6 +334,7 @@ func (c *GhClient) PipelineStatus(ctx context.Context, branch, repo string) ([]P
 		Conclusion   string `json:"conclusion"`
 		URL          string `json:"url"`
 		WorkflowName string `json:"workflowName"`
+		HeadSHA      string `json:"headSha"`
 	}
 
 	var raw []ghRun
@@ -335,6 +345,7 @@ func (c *GhClient) PipelineStatus(ctx context.Context, branch, repo string) ([]P
 	out := make([]PipelineStatus, 0, len(raw))
 	for _, item := range raw {
 		out = append(out, PipelineStatus{
+			HeadSHA:      item.HeadSHA,
 			Status:       item.Status,
 			Conclusion:   item.Conclusion,
 			Branch:       branch,

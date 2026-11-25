@@ -150,7 +150,7 @@ func (m *manager) completeAcceptedPreparation(ctx context.Context, release domai
 	if err != nil {
 		return domain.Release{}, err
 	}
-	return release, nil
+	return m.continueAfterPreparation(ctx, release)
 }
 
 func (m *manager) planReleaseTaskMergeRetryRow(ctx context.Context, svc domain.ReleaseService, fb domain.ReleaseFeatureBranch, client forge.ForgeClient, repo string) (ReleaseTaskMergeRow, releaseTaskMergeStep, error) {

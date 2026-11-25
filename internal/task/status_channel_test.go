@@ -10,7 +10,6 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/git"
-	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 // Regression tests: SyncTask, SyncService, PushTask, PushService, and
@@ -261,7 +260,7 @@ func closeChannelTestManager(t *testing.T, taskID string, gitMock *mockGitClient
 		}
 	}
 	cfg := newCloseTestConfig(rootDir, tasksRoot)
-	flow, err := gitflow.EffectiveConfig(cfg.GitFlow)
+	flow, err := closeTestFlow(cfg)
 	if err != nil {
 		t.Fatalf("flow: %v", err)
 	}

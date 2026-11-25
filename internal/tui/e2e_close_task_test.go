@@ -200,6 +200,14 @@ func (m *closeTaskE2EManager) RetryReleaseTaskMerges(_ context.Context, _ string
 	return domain.Release{}, nil
 }
 
+func (m *closeTaskE2EManager) PlanReleaseTaskAdd(context.Context, string, []string) (task.ReleaseTaskAddPlan, error) {
+	return task.ReleaseTaskAddPlan{}, nil
+}
+
+func (m *closeTaskE2EManager) AddReleaseTasks(context.Context, task.ReleaseTaskAddPlan, chan<- string) (domain.Release, error) {
+	return domain.Release{}, nil
+}
+
 func (m *closeTaskE2EManager) RejectRelease(_ context.Context, _ string) (domain.Release, error) {
 	return domain.Release{}, nil
 }
@@ -500,4 +508,16 @@ func drainCloseCommand(cmd tea.Cmd) (CloseTaskFinishedMsg, bool) {
 	}
 
 	return CloseTaskFinishedMsg{}, false
+}
+
+func (m *closeTaskE2EManager) AdvanceRelease(ctx context.Context, releaseID, _ string, statusCh chan<- string) (domain.Release, error) {
+	return m.PromoteRelease(ctx, releaseID, statusCh)
+}
+
+func (m *closeTaskE2EManager) ReleaseEvents(r domain.Release) []task.ReleaseEvent {
+	return gitFlowReleaseEvents(r)
+}
+
+func (m *closeTaskE2EManager) AdvanceTask(context.Context, string, string, chan<- string) error {
+	return nil
 }

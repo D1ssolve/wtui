@@ -21,7 +21,7 @@ func TestRetryRelease_TaskPrepareRejectsChangedEvidence(t *testing.T) {
 			mr := x.f.readiness[1]
 			switch change {
 			case "disabled":
-				x.m.cfg.GitFlow.TaskMerge = nil
+				setReleasePrepareTaskMerge(t, x.m, false)
 			case "source":
 				mr.SourceBranch = "feature/other"
 			case "target":
@@ -58,8 +58,9 @@ func TestRetryRelease_TaskPrepareRejectsChangedEvidence(t *testing.T) {
 			// When
 			_, err = x.m.RetryRelease(t.Context(), failed.ID)
 			// Then
-			if !errors.Is(err, ErrReleaseRetryUnsafe) {
-				t.Fatalf("error=%v, want unsafe retry", err)
+			// Disabling task merge changes the release flow itself, which the flow guard rejects first.
+			if want := map[bool]error{true: ErrReleaseFlowChanged, false: ErrReleaseRetryUnsafe}[change == "disabled"]; !errors.Is(err, want) {
+				t.Fatalf("error=%v, want %v", err, want)
 			}
 			if len(x.g.createBranchFromBranchCalls) != branches || len(x.g.pushBranchExplicitCalls) != pushes || x.f.mergeCalls != 2 || len(x.g.mergeFFOnlyCalls) != 0 {
 				t.Fatal("unsafe retry mutated repositories")

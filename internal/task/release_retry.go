@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 var retryCheckpoints = map[string]struct{}{
@@ -40,23 +41,34 @@ func (m *manager) RetryRelease(ctx context.Context, releaseID string) (domain.Re
 	if release.Error == nil || !release.Error.Recoverable {
 		return domain.Release{}, fmt.Errorf("%w: failed release is not recoverable", ErrReleaseInvalidStatusTransition)
 	}
+	if err := m.ensureReleaseFlowUnchanged(release); err != nil {
+		return domain.Release{}, err
+	}
 
 	if hasTaskMR, _ := awaitingTaskMergeMetadataState(release); release.PreparedAt == nil && hasTaskMR {
 		return m.retryAcceptedPreparation(ctx, release)
 	}
 
 	if !IsLegacyManifest(release) {
-		switch {
-		case release.PreparedAt == nil:
+		st, err := m.releaseState(release)
+		if err != nil {
+			return domain.Release{}, err
+		}
+		if st.Kind != gitflow.StateRun {
+			return domain.Release{}, fmt.Errorf("%w: failed release %s is not in a run state", ErrReleaseInvalidStatusTransition, release.ID)
+		}
+		if release.PreparedAt == nil {
 			if err := m.validateRetrySafety(ctx, release); err != nil {
 				return domain.Release{}, err
 			}
-			return m.retryPrepareRelease(ctx, release)
-		case releaseHasAcceptedMerges(release):
-			return m.retryFinalizeRelease(ctx, release)
-		default:
-			return m.retryPromoteRelease(ctx, release)
 		}
+		release.State = st.ID
+		release.Error = nil
+		release.CompletedAt = nil
+		for i := range release.Services {
+			release.Services[i].Error = nil
+		}
+		return m.runReleaseMachine(ctx, release, &releaseRun{retry: true})
 	}
 
 	if err := m.validateRetrySafety(ctx, release); err != nil {
@@ -67,38 +79,6 @@ func (m *manager) RetryRelease(ctx context.Context, releaseID string) (domain.Re
 		return m.retryFinishRelease(ctx, release)
 	}
 	return m.retryPrepareRelease(ctx, release)
-}
-
-func (m *manager) retryPromoteRelease(ctx context.Context, release domain.Release) (domain.Release, error) {
-	release.CompletedAt = nil
-	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusPrepared, "prepared", nil); err != nil {
-		return domain.Release{}, err
-	}
-	for i := range release.Services {
-		if release.Services[i].ProductionMR == nil {
-			release.Services[i].Status = domain.ReleaseStatusPrepared
-		}
-		release.Services[i].Error = nil
-	}
-	if _, err := m.writeReleaseManifest(release); err != nil {
-		return domain.Release{}, err
-	}
-	return m.PromoteRelease(ctx, release.ID, nil)
-}
-
-func (m *manager) retryFinalizeRelease(ctx context.Context, release domain.Release) (domain.Release, error) {
-	release.CompletedAt = nil
-	if err := m.moveReleaseStatus(&release, domain.ReleaseStatusMasterMerged, "master_merged", nil); err != nil {
-		return domain.Release{}, err
-	}
-	for i := range release.Services {
-		release.Services[i].Status = domain.ReleaseStatusMasterMerged
-		release.Services[i].Error = nil
-	}
-	if _, err := m.writeReleaseManifest(release); err != nil {
-		return domain.Release{}, err
-	}
-	return m.FinalizeRelease(ctx, FinishReleaseParams{ReleaseID: release.ID})
 }
 
 func releaseHasAcceptedMerges(release domain.Release) bool {
@@ -372,7 +352,7 @@ func (m *manager) retryPrepareService(ctx context.Context, release *domain.Relea
 
 	for fbIdx := range svc.FeatureBranches {
 		fb := &svc.FeatureBranches[fbIdx]
-		merged, verifyErr := m.git.IsAncestor(ctx, svc.RepoPath, fb.Branch, "origin/"+svc.IntegrationBranch)
+		merged, verifyErr := m.branchMergedInto(ctx, svc.RepoPath, fb.Branch, "origin/"+svc.IntegrationBranch)
 		if verifyErr != nil {
 			return verifyErr
 		}
