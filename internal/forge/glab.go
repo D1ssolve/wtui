@@ -98,9 +98,7 @@ func (c *GlabClient) MRStatus(ctx context.Context, sourceBranch, repo string) ([
 	}
 
 	type glabMR struct {
-		IID          int    `json:"iid"`
-		ID           int    `json:"id"`
-		Number       int    `json:"number"`
+		glabMRIdentity
 		Title        string `json:"title"`
 		State        string `json:"state"`
 		WebURL       string `json:"web_url"`
@@ -115,13 +113,10 @@ func (c *GlabClient) MRStatus(ctx context.Context, sourceBranch, repo string) ([
 	}
 
 	out := make([]MRInfo, 0, len(raw))
-	for _, item := range raw {
-		num := item.Number
-		if num == 0 {
-			num = item.IID
-		}
-		if num == 0 {
-			num = item.ID
+	for i, item := range raw {
+		num, err := item.localNumber()
+		if err != nil {
+			return nil, &ForgeError{Category: ErrCategoryParseError, Cause: fmt.Errorf("MR list row %d: %w", i+1, err)}
 		}
 
 		url := item.URL
@@ -151,10 +146,8 @@ func (c *GlabClient) MRReadiness(ctx context.Context, sourceBranch, repo, worktr
 	}
 
 	type listedMR struct {
-		IID    int    `json:"iid"`
-		ID     int    `json:"id"`
-		Number int    `json:"number"`
-		State  string `json:"state"`
+		glabMRIdentity
+		State string `json:"state"`
 	}
 	var listed []listedMR
 	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
@@ -162,19 +155,13 @@ func (c *GlabClient) MRReadiness(ctx context.Context, sourceBranch, repo, worktr
 	}
 
 	number := 0
-	for _, mr := range listed {
-		if !strings.EqualFold(mr.State, "opened") && !strings.EqualFold(mr.State, "open") {
-			continue
+	for i, mr := range listed {
+		local, err := mr.localNumber()
+		if err != nil {
+			return MRReadiness{}, &ForgeError{Category: ErrCategoryParseError, Cause: fmt.Errorf("MR list row %d: %w", i+1, err)}
 		}
-		number = mr.Number
-		if number == 0 {
-			number = mr.IID
-		}
-		if number == 0 {
-			number = mr.ID
-		}
-		if number != 0 {
-			break
+		if number == 0 && (strings.EqualFold(mr.State, "opened") || strings.EqualFold(mr.State, "open")) {
+			number = local
 		}
 	}
 	if number == 0 {
@@ -197,9 +184,7 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 		Status string `json:"status"`
 	}
 	var detail struct {
-		IID             int    `json:"iid"`
-		ID              int    `json:"id"`
-		Number          int    `json:"number"`
+		glabMRIdentity
 		State           string `json:"state"`
 		WebURL          string `json:"web_url"`
 		URL             string `json:"url"`
@@ -222,12 +207,12 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 		return MRReadiness{}, &ForgeError{Category: ErrCategoryParseError, Cause: err, Stderr: strings.TrimSpace(stdout)}
 	}
 
-	if detail.Number != 0 {
-		number = detail.Number
-	} else if detail.IID != 0 {
-		number = detail.IID
-	} else if detail.ID != 0 {
-		number = detail.ID
+	reported, err := detail.localNumber()
+	if err != nil {
+		return MRReadiness{}, &ForgeError{Category: ErrCategoryParseError, Cause: fmt.Errorf("MR view !%d: %w", number, err)}
+	}
+	if reported != number {
+		return MRReadiness{}, &ForgeError{Category: ErrCategoryParseError, Cause: fmt.Errorf("MR view !%d returned !%d", number, reported)}
 	}
 	state := strings.ToLower(detail.State)
 	if state == "opened" {
@@ -320,7 +305,7 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 	}
 
 	return MRReadiness{
-		Number:                number,
+		Number:                reported,
 		State:                 state,
 		URL:                   url,
 		SourceBranch:          detail.SourceBranch,
@@ -336,7 +321,6 @@ func (c *GlabClient) mrReadinessByNumber(ctx context.Context, number int, repo, 
 		SupportsSHAPin:        supportsSHAPin,
 		SupportsTargetBinding: false, // source head is server pinned; target preflight is non-atomic
 		StatusChecksBlocking:  mergeStatus == "status_checks_must_pass",
-		NumberInferred:        detail.Number == 0 && detail.IID == 0,
 	}, nil
 }
 

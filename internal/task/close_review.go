@@ -129,7 +129,7 @@ func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, 
 		return "", "", err
 	}
 	if removal {
-		if fresh.NumberInferred || fresh.Number != want.Number || fresh.SourceBranch != svc.Branch || fresh.TargetBranch != target {
+		if fresh.Number != want.Number || fresh.SourceBranch != svc.Branch || fresh.TargetBranch != target {
 			return "", "", withRecovery(fmt.Errorf("MR !%d identity changed or is incomplete: got !%d %q → %q, expected %q → %q", want.Number, fresh.Number, fresh.SourceBranch, fresh.TargetBranch, svc.Branch, target), inspect)
 		}
 		if strings.TrimSpace(fresh.HeadSHA) == "" {
