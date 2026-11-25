@@ -88,7 +88,7 @@ Add `--config PATH` to either command to use another file. `wtui --help` lists e
 
 Press `?` at any time for keyboard help for the focused panel, or `:` / `Ctrl+P` to search and run any available action.
 
-While a long operation runs, `Esc` offers to cancel it (`y` confirms). Cancellation stops the remaining steps; it doesn't quit wtui and doesn't undo steps that already finished. wtui reports what completed. Operations that can't stop safely tell you to wait instead.
+While a long operation runs, `Esc` can cancel it only if wtui marks it safe to interrupt; `y` confirms. Other operations just tell you to wait. Cancelling never quits wtui and never rolls back: anything already done stays done, and wtui reports the outcome so you can check it and repeat the action.
 
 ## Everyday flow
 

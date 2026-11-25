@@ -38,6 +38,8 @@ init never overwrites a config by accident. If the target exists, it stops with 
 
 Logs are written to `$XDG_STATE_HOME/wtui/wtui.log`, with `$HOME/.local/state` used when `XDG_STATE_HOME` is unset.
 
+wtui removes the user name and password from URLs (`https://user:token@host/repo` becomes `https://***@host/repo`) in the log file, in warnings on stderr, in the output panel, in release errors it saves, and in what `E` sends to the AI provider. Only URL credentials are removed; other secrets in command output are not detected. Log files and release manifests written before this change are not rewritten, so delete or clean them yourself if they may contain credentials.
+
 Press `L` to view logs inside wtui:
 
 - `Tab`: switch between **Commands** (CLI invocations) and **Application** (all recorded events, levels, task IDs, and full error fields).
@@ -68,6 +70,44 @@ The same workflow as a diagram:
 - In the TUI, `W` opens the diagram for the current configuration, marking the selected task's type or, on Releases, the selected release's state and the states it already passed.
 
 `root_dir` contains service repositories. `tasks_root` contains task worktrees and generated workspace files.
+
+## Strict Keys and Values
+
+wtui checks every key against this reference before it starts. An unknown key stops it with the line and key path, and a suggestion when a known key is close:
+
+```text
+config: /home/you/.config/wtui/config.yaml: line 3: unknown key "concurency", did you mean "concurrency"?
+```
+
+Numbers are checked too. `0` or an omitted value means "use the default". Negative `concurrency`, `validation.concurrency` and `prune.concurrency`, a `discovery_depth` below 2, and an `output_panel_lines` outside `3..40` stop wtui with an error. They aren't silently corrected.
+
+YAML anchors, aliases and merge keys (`<<`) work, and their keys are checked the same way. To keep anchors out of the way, put them under a top-level key starting with `x-`. wtui ignores the contents of those keys:
+
+```yaml
+x-squash: &squash {merge: squash}
+
+workflow:
+  extends: github-flow
+  task_types:
+    feature:
+      prefixes: ["feature/"]
+      from: integration
+      close:
+        - review: {into: integration, <<: *squash}
+```
+
+### Removed keys
+
+These keys were parsed but never changed anything. wtui now refuses to start while one is present (`<key> was removed: it never had an effect; delete it`). Delete them; nothing replaces them.
+
+| Block | Removed keys |
+|---|---|
+| `tag` | `version_scheme`, `parser`, `strict`, `source` |
+| `validation` | `require_upstream_for_sync`, `command_timeout` |
+| `close` | `require_confirmation`, `push_targets_after_direct_merge`, `show_plan_before_execute` |
+| `prune` | `fetch`, `dry_run_default`, `require_confirmation`, `allow_dirty`, `allow_unpushed`, `remove_empty_task_dir`, `run_git_worktree_prune` |
+
+The older top-level `git_flow`, `branch_prefix` and `base_branch` keys are also refused, with the `workflow` key that replaces each one (see [Workflow](#workflow)).
 
 ## Default Semantics
 
@@ -118,13 +158,9 @@ forge:
 tag:
   enabled: true
   format: "v{{.Version}}"
-  version_scheme: semver
-  parser: masterminds-semver
-  strict: true
   bump: manual
   annotated: true
   message_template: "Release {{.Tag}} for {{.TaskID}}"
-  source: production_branch
   push: true
   shared_version: false
   create_after_all_targets: true
@@ -144,25 +180,13 @@ validation:
   block_untracked: false
   block_detached_head: true
   block_interrupted_operations: true
-  require_upstream_for_sync: true
-  command_timeout: 10s
   concurrency: 8
 
 close:
-  require_confirmation: true
   continue_on_error: false
   push_source_before_review: true
-  push_targets_after_direct_merge: true
-  show_plan_before_execute: true
 
 prune:
-  fetch: true
-  dry_run_default: true
-  require_confirmation: true
-  allow_dirty: false
-  allow_unpushed: false
-  remove_empty_task_dir: true
-  run_git_worktree_prune: true
   concurrency: 4
 ```
 
@@ -175,9 +199,9 @@ The complete example shows every key, not a recommended starting point. Prefer t
 | `root_dir` | string | current working directory | Root scanned for Git repositories. |
 | `tasks_root` | string | `<root_dir>/.tasks` | Parent directory for task worktrees and default release storage. |
 | `editor` | string | `code` | Editor executable name or path (without arguments), used by `O`. VS Code, Code Insiders, VSCodium, and Cursor open the generated `.code-workspace`; other editors open the task root folder. |
-| `concurrency` | integer | `4` | Global worker limit for task operations. Values `<= 0` become `4`. |
-| `discovery_depth` | integer | `4` | Maximum repository scan depth. `0` becomes `4`; values below `2` become `2`. |
-| `output_panel_lines` | integer | `12` | Preferred output panel height, clamped to `3..40`. |
+| `concurrency` | integer | `4` | Global worker limit for task operations. `0` uses the default; negative values are rejected. |
+| `discovery_depth` | integer | `4` | Maximum repository scan depth. `0` uses the default; values below `2` are rejected. |
+| `output_panel_lines` | integer | `12` | Preferred output panel height, `3..40`. `0` uses the default; other values outside the range are rejected. |
 | `log_level` | string | `INFO` | File logger level. |
 
 Zed opens tasks and release folders in a new window with `--new`; VS Code and the compatible editors listed above use `--new-window`. Other editors receive only the folder path and use their own window preferences. `R` is a separate action that opens Rider: `<taskID>.sln` on Tasks, the release folder on Releases.
@@ -520,13 +544,9 @@ An absent `tag` block gets all defaults shown below. In a present block, omitted
 |---|---|---|---|
 | `tag.enabled` | bool | `true` | Enables tagging in hotfix review continuation; other close flows do not currently consult this flag. |
 | `tag.format` | string | `v{{.Version}}` | Used to render tag names. Empty values receive the default. |
-| `tag.version_scheme` | string | `semver` | Parsed, currently unused. |
-| `tag.parser` | string | `masterminds-semver` | Parsed, currently unused. |
-| `tag.strict` | bool | `true` | Parsed, currently unused. |
 | `tag.bump` | string | `manual` | How the suggested next version is computed. `manual`: the next patch after the latest semver tag. `conventional`: from [Conventional Commits](https://www.conventionalcommits.org) since that tag (`feat` → minor, `fix`/`perf` → patch, `!` or `BREAKING CHANGE:` → major, minor before 1.0.0); release tags without an entered description then carry a changelog of features, fixes and other changes. The suggestion stays editable. Any other value fails startup. |
 | `tag.annotated` | bool | `true` | Selects annotated or lightweight tags in hotfix review continuation. Other flows create annotated tags. |
 | `tag.message_template` | string | `Release {{.Tag}} for {{.TaskID}}` | Tag annotation template. Empty values receive the default. |
-| `tag.source` | string | `production_branch` | Parsed, currently unused; branch rules use `tag_source`. |
 | `tag.push` | bool | `true` | Push task-close tags and provide the fallback for `release.push_tags`. |
 | `tag.shared_version` | bool | `false` | One version input for all services in hotfix review continuation. Otherwise versions are entered per service. |
 | `tag.create_after_all_targets` | bool | `true` | Hotfix review continuation always waits for every required target, regardless of this flag. Other flows currently do not consult it. |
@@ -579,18 +599,16 @@ Task cleanup also inspects every release that involves the task. An active in-fl
 | `validation.block_untracked` | bool | `false` | Blocks validation when untracked files exist. |
 | `validation.block_detached_head` | bool | `true` | Blocks detached HEAD. |
 | `validation.block_interrupted_operations` | bool | `true` | Blocks merge, rebase, cherry-pick, revert, and bisect state. |
-| `validation.require_upstream_for_sync` | bool | `true` | Parsed, currently unused. |
-| `validation.command_timeout` | string | `10s` | Empty values become `10s`; currently unused by validation commands. |
-| `validation.concurrency` | integer | `8` | Parallel validation workers. Values `<= 0` become `8`. |
+| `validation.concurrency` | integer | `8` | Parallel validation workers. `0` uses the default; negative values are rejected. |
+
 ## Close
 
 | Key | Type | Absent-block default | Runtime status |
 |---|---|---|---|
-| `close.require_confirmation` | bool | `true` | Parsed, currently unused; the TUI always confirms close. |
 | `close.continue_on_error` | bool | `false` | Continue processing remaining targets after a failure. |
 | `close.push_source_before_review` | bool | `true` | Push source branches before opening PRs/MRs. |
-| `close.push_targets_after_direct_merge` | bool | `true` | Parsed, currently unused; direct-merge targets are pushed. |
-| `close.show_plan_before_execute` | bool | `true` | Parsed, currently unused; the TUI always shows the plan. |
+
+The TUI always shows the close plan, asks for confirmation, and pushes direct-merge targets.
 
 ### Hotfix continuation from Tasks
 
@@ -671,15 +689,6 @@ delete it on the forge after the feature target is merged.
 
 ## Prune
 
-Only `prune.concurrency` currently changes prune behavior. Other fields are parsed and normalized for future use.
-
 | Key | Type | Absent-block default | Runtime status |
 |---|---|---|---|
-| `prune.fetch` | bool | `true` | Parsed, currently unused. |
-| `prune.dry_run_default` | bool | `true` | Parsed, currently unused. |
-| `prune.require_confirmation` | bool | `true` | Parsed, currently unused; the TUI confirms pruning. |
-| `prune.allow_dirty` | bool | `false` | Parsed, currently unused. |
-| `prune.allow_unpushed` | bool | `false` | Parsed, currently unused. |
-| `prune.remove_empty_task_dir` | bool | `true` | Parsed, currently unused. |
-| `prune.run_git_worktree_prune` | bool | `true` | Parsed, currently unused. |
-| `prune.concurrency` | integer | `4` | Parallel prune inspections. Values `<= 0` become `4`. |
+| `prune.concurrency` | integer | `4` | Parallel cleanup inspections. `0` uses the default; negative values are rejected. |

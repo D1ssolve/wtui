@@ -6,7 +6,7 @@ Short guide for the `git-flow` preset (`workflow: {extends: git-flow}`): `develo
 
 ## Before You Start
 
-1. Create a config with `wtui init` (see the [README](../README.md)), then check it with `wtui flow`. init never overwrites an existing config without `--force`.
+1. Create a config with `wtui init` (see the [README](../README.md)), then check it with `wtui flow`. init never overwrites an existing config without `--force`. wtui refuses unknown or [removed keys](configuration.md#removed-keys) with the line number and a hint, so fix those first.
 2. Authenticate `glab` for GitLab or `gh` for GitHub.
 3. In wtui, press `,` to view the effective configuration and `.` to check available tools. `W` shows the workflow diagram; `wtui flow --html > flow.html` saves it as a page that opens offline.
 
@@ -158,5 +158,5 @@ More detail: [cleanup.md](cleanup.md). All keys and constraints: [configuration.
 | Merge check | After review and CI pass, repeat `M`. |
 | Release | For a recoverable `failed`, use `Ctrl+R` in Releases. After a partial production merge, use `M`, not `Ctrl+R`. |
 | Cleanup | Removed items are not restored. Press `D` or `P` and create a new plan. |
-| Running operation | `Esc`, then `y`, cancels it. Finished steps stay done and wtui reports them; this is not a rollback and does not quit wtui. Then repeat the action. |
+| Running operation | If wtui marks it safe to interrupt, `Esc` then `y` cancels it; otherwise wtui asks you to wait. There's no rollback and wtui doesn't quit: check the reported outcome, then repeat the action. |
 | Unclear failure | `E` asks the configured AI provider (Codex by default, Claude with `ai.provider: claude`) to explain the cause and next step. It changes nothing. |
