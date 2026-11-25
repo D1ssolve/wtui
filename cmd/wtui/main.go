@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime/debug"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -47,6 +48,8 @@ func resolveVersion() string {
 const usageText = `usage:
   wtui [--config PATH]
   wtui [--config PATH] flow [--mermaid | --html | --draft "TEXT"]
+  wtui [--config PATH] init [--root DIR] [--tasks-root DIR] [--editor CMD]
+                       [--preset git-flow|github-flow|trunk-based] [--yes] [--force]
   wtui -h | --help
   wtui -v | --version
 `
@@ -57,11 +60,15 @@ type cliArgs struct {
 	flow          bool
 	config        string
 	format, draft string // flow output: "" (describe), "--mermaid" or "--html"; or a --draft description
+
+	init                            bool
+	root, tasksRoot, editor, preset string // init answers given as flags
+	yes, force                      bool
 }
 
 // parseArgs reads the whole command line in one pass. An unknown argument wins over every other
-// error; --config PATH and --config=PATH may appear before or after flow, and the token after
-// --config is always its value.
+// error; value flags (--config, --root, ...) take NAME VALUE or NAME=VALUE anywhere on the line,
+// and the token after such a flag is always its value.
 func parseArgs(args []string) (cliArgs, error) {
 	var c cliArgs
 	var bad error // first structural error; reported only if no unknown argument follows
@@ -70,9 +77,51 @@ func parseArgs(args []string) (cliArgs, error) {
 			bad = errors.New(msg)
 		}
 	}
-	modes := 0 // how many of --mermaid, --html, --draft were given
+	valueFlags := map[string]struct {
+		dst  *string
+		noun string
+	}{
+		"--config":     {&c.config, "path"},
+		"--root":       {&c.root, "directory"},
+		"--tasks-root": {&c.tasksRoot, "directory"},
+		"--editor":     {&c.editor, "command"},
+		"--preset":     {&c.preset, "preset name"},
+	}
+	switches := map[string]*bool{"--yes": &c.yes, "--force": &c.force}
+	modes := 0    // how many of --mermaid, --html, --draft were given
+	initOnly := 0 // how many init-only flags were given
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		name, value, inline := strings.Cut(arg, "=")
+		if flag, ok := valueFlags[name]; ok {
+			if name != "--config" {
+				initOnly++
+			}
+			if *flag.dst != "" {
+				fail(name + " given more than once")
+			}
+			if !inline {
+				if i+1 >= len(args) {
+					fail(fmt.Sprintf("%s requires a %s", name, flag.noun))
+					continue
+				}
+				i++
+				value = args[i]
+			}
+			if value == "" {
+				fail(fmt.Sprintf("%s requires a non-empty %s", name, flag.noun))
+			}
+			*flag.dst = value
+			continue
+		}
+		if sw, ok := switches[arg]; ok {
+			initOnly++
+			if *sw {
+				fail(arg + " given more than once")
+			}
+			*sw = true
+			continue
+		}
 		switch {
 		case arg == "-h" || arg == "--help":
 			c.help = true
@@ -83,23 +132,11 @@ func parseArgs(args []string) (cliArgs, error) {
 				fail("flow given more than once")
 			}
 			c.flow = true
-		case arg == "--config" || strings.HasPrefix(arg, "--config="):
-			if c.config != "" {
-				fail("--config given more than once")
+		case arg == "init":
+			if c.init {
+				fail("init given more than once")
 			}
-			value, ok := strings.CutPrefix(arg, "--config=")
-			if !ok {
-				if i+1 >= len(args) {
-					fail("--config requires a path")
-					continue
-				}
-				i++
-				value = args[i]
-			}
-			if value == "" {
-				fail("--config requires a non-empty path")
-			}
-			c.config = value
+			c.init = true
 		case arg == "--mermaid" || arg == "--html":
 			c.format = arg
 			modes++
@@ -122,6 +159,15 @@ func parseArgs(args []string) (cliArgs, error) {
 	if modes > 0 && !c.flow {
 		fail("--mermaid, --html and --draft only apply to the flow subcommand")
 	}
+	if c.init && c.flow {
+		fail("init and flow cannot be combined")
+	}
+	if initOnly > 0 && !c.init {
+		fail("--root, --tasks-root, --editor, --preset, --yes and --force only apply to the init subcommand")
+	}
+	if c.preset != "" && !slices.Contains(gitflow.PresetNames(), c.preset) {
+		fail(fmt.Sprintf("--preset: unknown preset %q: expected one of %s", c.preset, strings.Join(gitflow.PresetNames(), ", ")))
+	}
 	return c, bad
 }
 
@@ -143,6 +189,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if c.version {
 		fmt.Fprint(stdout, versionOutput(resolveVersion()))
 		return 0
+	}
+	if c.init {
+		return initCommand(c, os.Stdin, stdout, stderr, draftWithAssistant)
 	}
 	if c.flow {
 		var out string
