@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -81,17 +82,7 @@ func (m *manager) publishReviewSource(ctx context.Context, svc domain.Service, p
 	return true, m.git.PushRefWithLease(ctx, svc.RepoPath, pushURL, ref, local, ref, remote)
 }
 
-// reconcileReviewClose returns the state and its evidence SHA: the published
-// head for a removal-enabled open review, or the contained merge for a verified review.
-func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, target, repo string, client forge.ForgeClient) (string, string, error) {
-	history, ok := client.(forge.HistoryClient)
-	if !ok {
-		return "", "", errors.New("forge does not support MR history")
-	}
-	rows, err := history.MRHistory(ctx, svc.Branch, repo)
-	if err != nil {
-		return "", "", err
-	}
+func (m *manager) classifyReview(ctx context.Context, svc domain.Service, target, repo string, client forge.ForgeClient, rows []forge.MRInfo) (string, string, error) {
 	removal := m.sourceRemovedOnMerge(svc.Name, svc.Branch)
 	const inspect = "inspect MR source, target and state in the forge; refresh before retrying"
 	if removal || m.hasServiceRule(svc) {
@@ -102,7 +93,7 @@ func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, 
 		// disappear into the same bucket as genuinely empty history.
 		seen := make(map[int]struct{}, len(rows))
 		for _, row := range rows {
-			if row.Number <= 0 || row.SourceBranch != svc.Branch || row.TargetBranch != target {
+			if row.Number <= 0 || row.SourceBranch != svc.Branch || !slices.Contains(m.branchRule(svc.Name, svc.Branch).ReviewTargets, row.TargetBranch) {
 				return "", "", withRecovery(fmt.Errorf("MR history identity is incomplete or unexpected: !%d %q → %q, expected %q → %q", row.Number, row.SourceBranch, row.TargetBranch, svc.Branch, target), inspect)
 			}
 			if _, duplicate := seen[row.Number]; duplicate {

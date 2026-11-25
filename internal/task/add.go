@@ -23,7 +23,7 @@ func (m *manager) Add(ctx context.Context, params AddParams) (PartialFailureResu
 		return PartialFailureResult{}, fmt.Errorf("add: stat task directory %s: %w", taskDir, err)
 	}
 
-	_, rule := m.resolveInitRule(params.BranchType)
+	bt, rule := m.resolveInitRule(params.BranchType)
 	branchPrefix := ""
 	if len(rule.Prefixes) > 0 {
 		branchPrefix = strings.TrimSpace(rule.Prefixes[0])
@@ -31,7 +31,7 @@ func (m *manager) Add(ctx context.Context, params AddParams) (PartialFailureResu
 	branchName := m.resolveBranchName(branchPrefix, params.TaskID)
 
 	results := m.addWorktreesForServices(
-		ctx, params.TaskID, params.Services, taskDir, branchName, "",
+		ctx, params.TaskID, params.Services, taskDir, initBranch{name: branchName, typ: bt},
 		params.RemoteBranchStrategies, params.BranchSuffixes, params.StatusCh,
 	)
 	summary := summarizeServiceResults(params.TaskID, "add", params.Services, results)

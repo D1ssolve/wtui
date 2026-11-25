@@ -28,7 +28,7 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 	defer unlock()
 	taskDir := m.taskDir(params.TaskID)
 
-	_, rule := m.resolveInitRule(params.BranchType)
+	bt, rule := m.resolveInitRule(params.BranchType)
 	branchPrefix := strings.TrimSpace(params.BranchPrefix)
 	if branchPrefix == "" && len(rule.Prefixes) > 0 {
 		branchPrefix = strings.TrimSpace(rule.Prefixes[0])
@@ -64,7 +64,7 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 	baseBranch := strings.TrimSpace(params.BaseBranch)
 
 	results := m.addWorktreesForServices(
-		ctx, params.TaskID, params.Services, taskDir, branchName, baseBranch,
+		ctx, params.TaskID, params.Services, taskDir, initBranch{branchName, bt, baseBranch},
 		params.RemoteBranchStrategies, params.BranchSuffixes, params.StatusCh,
 	)
 	summary := summarizeServiceResults(params.TaskID, "init", params.Services, results)
@@ -142,6 +142,12 @@ func (m *manager) reposWithRemoteBranch(ctx context.Context, branch string, stat
 	return out, nil
 }
 
+type initBranch struct {
+	name string
+	typ  gitflow.BranchType
+	base string
+}
+
 type serviceResult struct {
 	serviceName string
 	added       bool
@@ -153,8 +159,7 @@ func (m *manager) addWorktreesForServices(
 	taskID string,
 	services []string,
 	taskDir string,
-	branchName string,
-	baseBranchOverride string,
+	branch initBranch,
 	remoteBranchStrategies map[string]RemoteBranchStrategy,
 	branchSuffixes map[string]string,
 	statusCh chan<- string,
@@ -174,7 +179,7 @@ func (m *manager) addWorktreesForServices(
 		go func(idx int, tok string) {
 			defer wg.Done()
 			defer sem.Release(1)
-			results[idx] = m.processService(ctx, cache, taskID, tok, taskDir, branchName, baseBranchOverride, remoteBranchStrategies, branchSuffixes, statusCh)
+			results[idx] = m.processService(ctx, cache, taskID, tok, taskDir, branch, remoteBranchStrategies, branchSuffixes, statusCh)
 		}(i, token)
 	}
 	wg.Wait()
@@ -187,8 +192,7 @@ func (m *manager) processService(
 	taskID string,
 	token string,
 	taskDir string,
-	branchName string,
-	baseBranchOverride string,
+	branch initBranch,
 	remoteBranchStrategies map[string]RemoteBranchStrategy,
 	branchSuffixes map[string]string,
 	statusCh chan<- string,
@@ -223,9 +227,10 @@ func (m *manager) processService(
 		return serviceResult{serviceName: serviceName, added: true}
 	}
 
-	baseBranch := baseBranchOverride
+	branchName := branch.name
+	baseBranch := branch.base
 	if baseBranch == "" {
-		baseBranch = m.branchRule(serviceName, branchName).BaseBranch
+		baseBranch = m.flow.RuleFor(serviceName, branch.typ).BaseBranch
 	}
 	if baseBranch == "" {
 		b, baseErr := cache.getBaseBranch(ctx, m.git, repoPath)

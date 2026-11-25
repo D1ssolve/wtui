@@ -273,7 +273,7 @@ func TestAddWorktreesForServices_BoundedConcurrencyHonorsConfig(t *testing.T) {
 
 	done := make(chan []serviceResult, 1)
 	go func() {
-		done <- mgr.addWorktreesForServices(context.Background(), taskID, serviceTokens, taskDir, "feature/IN-INIT-CONC", "develop", nil, nil, nil)
+		done <- mgr.addWorktreesForServices(context.Background(), taskID, serviceTokens, taskDir, initBranch{name: "feature/IN-INIT-CONC", base: "develop"}, nil, nil, nil)
 	}()
 
 	for range len(serviceTokens) {

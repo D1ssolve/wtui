@@ -42,7 +42,9 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 		return ClosePlan{}, err
 	}
 	if len(services) == 0 {
-		return ClosePlan{TaskID: taskID}, nil
+		plan := ClosePlan{TaskID: taskID}
+		plan.Fingerprint = digest(plan)
+		return plan, nil
 	}
 
 	flow := m.flow
@@ -65,17 +67,21 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 		BranchType: firstBranchType,
 		Services:   make([]ServiceClosePlan, 0, len(services)),
 	}
+	multi := 0
 	for _, svc := range services {
-		if !m.isMultiTargetReview(svc.Name, svc.Branch) {
-			continue
+		if m.isMultiTargetReview(svc.Name, svc.Branch) {
+			multi++
 		}
-		for _, other := range services {
-			if !m.isMultiTargetReview(other.Name, other.Branch) {
+	}
+	if multi > 0 {
+		for _, svc := range services {
+			if gitflow.DetectBranchType(svc.Branch, flow) != firstBranchType || m.branchRule(svc.Name, svc.Branch).CloseStrategy != gitflow.CloseStrategyReviewRequest {
 				return ClosePlan{}, ErrMixedBranchTypes
 			}
 		}
-		bt := gitflow.DetectBranchType(svc.Branch, flow)
-		return m.planHotfixClose(ctx, taskID, services, bt)
+		if multi == len(services) {
+			return m.planHotfixClose(ctx, taskID, services, firstBranchType)
+		}
 	}
 
 	if cp, err := m.loadHotfixCheckpoint(taskID); err != nil {
@@ -101,7 +107,8 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 		}
 
 		servicePlan := ServiceClosePlan{
-			ServiceName:    svc.Name,
+			ServiceName: svc.Name,
+			RepoPath:    svc.RepoPath, RemoteURL: svc.RemoteURL,
 			SourceBranch:   svc.Branch,
 			TargetBranches: targets,
 			ReviewTargets:  append([]string(nil), svcRule.ReviewTargets...),
@@ -163,7 +170,11 @@ func (m *manager) PlanCloseTask(ctx context.Context, taskID string) (ClosePlan, 
 		plan.Services = append(plan.Services, servicePlan)
 	}
 
-	plan.Fingerprint = m.closeServiceRules(plan.Services).bind("")
+	// Hash the resolved actions, not the presence of an override. Empty is reserved for unconfirmed callers.
+	plan.Fingerprint = digest(struct {
+		Plan                        ClosePlan
+		PushSource, ContinueOnError bool
+	}{plan, m.cfg.Close == nil || m.cfg.Close.PushSourceBeforeReview, m.cfg.Close != nil && m.cfg.Close.ContinueOnError})
 	return plan, nil
 }
 
@@ -266,6 +277,27 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 		return result, nil
 	}
 
+	// Validate all selected reviews before publishing any service's source or target.
+	prepared := make(map[string]preparedReviews)
+	for _, sp := range services {
+		if sp.CloseStrategy == gitflow.CloseStrategyDirectMerge && sp.MergeStrategy == gitflow.MergeStrategyFFOnly {
+			if err := m.preflightFastForward(ctx, sp); err != nil {
+				return result, err
+			}
+		}
+		if sp.CloseStrategy == gitflow.CloseStrategyReviewRequest {
+			svc, err := m.findService(ctx, params.TaskID, sp.ServiceName)
+			if err != nil {
+				return result, err
+			}
+			reviews, err := m.prepareServiceReviews(ctx, svc, sp)
+			if err != nil {
+				step(sp.ServiceName+":review-request", StepStatusFailed, err.Error())
+				return result, err
+			}
+			prepared[sp.ServiceName] = reviews
+		}
+	}
 	continueOnError := m.cfg.Close != nil && m.cfg.Close.ContinueOnError
 
 	for _, svcPlan := range services {
@@ -342,6 +374,21 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 					continue
 				}
 
+				fastForward := svcPlan.MergeStrategy == gitflow.MergeStrategyFFOnly
+				var sourceOID string
+				if fastForward {
+					sourceOID, err = m.git.ResolveRef(ctx, svc.RepoPath, "refs/heads/"+svcPlan.SourceBranch)
+					if err != nil {
+						return result, err
+					}
+					ok, err := m.git.IsAncestor(ctx, svc.RepoPath, remoteSHA, sourceOID)
+					if err != nil {
+						return result, err
+					}
+					if !ok {
+						return result, fmt.Errorf("%s: cannot fast-forward %s to %s", svc.Name, target, svcPlan.SourceBranch)
+					}
+				}
 				var mergedOID string
 				mergedLocal, ancestorErr := m.git.IsAncestor(ctx, svc.RepoPath, svcPlan.SourceBranch, target)
 				if ancestorErr != nil {
@@ -371,7 +418,12 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 					}
 					step(svc.Name+":checkout:"+target, StepStatusOK, "checked out "+target)
 
-					mergeRunErr := m.git.Merge(ctx, svc.WorktreePath, svcPlan.SourceBranch)
+					var mergeRunErr error
+					if fastForward {
+						mergeRunErr = m.git.MergeFFOnly(ctx, svc.WorktreePath, sourceOID)
+					} else {
+						mergeRunErr = m.git.Merge(ctx, svc.WorktreePath, svcPlan.SourceBranch)
+					}
 					if mergeRunErr != nil {
 						step(svc.Name+":merge:"+target, StepStatusFailed, mergeRunErr.Error())
 
@@ -412,6 +464,10 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 						break
 					}
 					step(svc.Name+":merge:"+target, StepStatusOK, "merged into "+target)
+				}
+
+				if fastForward && mergedOID != sourceOID {
+					return result, fmt.Errorf("%s: local %s is not the approved fast-forward tip", svc.Name, target)
 				}
 
 				// Prove the merged result builds on the fresh remote target
@@ -465,81 +521,16 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 			}
 
 		case gitflow.CloseStrategyReviewRequest:
-			publish := m.cfg.Close == nil || m.cfg.Close.PushSourceBeforeReview
-			classifyFirst := m.sourceRemovedOnMerge(svc.Name, svc.Branch)
-			if publish && !classifyFirst {
-				if pushErr := m.pushBranch(ctx, svc.WorktreePath); pushErr != nil {
-					step(svc.Name+":push-source", StepStatusFailed, pushErr.Error())
-					svcFailed = true
-					break
-				}
-				step(svc.Name+":push-source", StepStatusOK, "source pushed")
+			var reviewErr error
+			reviewVerified, reviewMergeSHA, reviewErr = m.executeServiceReviews(ctx, svc, svcPlan, prepared[svc.Name], params, &result, step)
+			if reviewErr != nil {
+				step(svc.Name+":review-request", StepStatusFailed, reviewErr.Error())
+				svcFailed = true
+			}
+			if len(svcPlan.ReviewTargets) > 1 && !reviewVerified {
+				result.Waiting = true
 			}
 
-			forgeClient, clientErr := m.forgeClientForService(ctx, svc)
-			if clientErr != nil {
-				step(svc.Name+":review-request", StepStatusFailed, clientErr.Error())
-				svcFailed = true
-				break
-			}
-
-			target := ""
-			if svcPlan.ForgePlan != nil {
-				target = svcPlan.ForgePlan.TargetBranch
-			}
-			repo := forge.ExtractRepoPath(svc.RemoteURL)
-			if repo == "" {
-				step(svc.Name+":review-request", StepStatusFailed, fmt.Sprintf("resolve repository path: remote URL %q is not parseable", svc.RemoteURL))
-				svcFailed = true
-				break
-			}
-			state, reviewSHA, reconcileErr := m.reconcileReviewClose(ctx, svc, target, repo, forgeClient)
-			if reconcileErr != nil {
-				step(svc.Name+":review-request", StepStatusFailed, reconcileErr.Error())
-				svcFailed = true
-				break
-			}
-			if publish && classifyFirst && (state == reviewCloseCreate || state == reviewCloseWaiting) {
-				pushed, pushErr := m.publishReviewSource(ctx, svc, reviewSourcePublication{state: state, openHead: reviewSHA})
-				if pushErr != nil {
-					step(svc.Name+":push-source", StepStatusFailed, pushErr.Error())
-					svcFailed = true
-					break
-				}
-				if pushed {
-					step(svc.Name+":push-source", StepStatusOK, "source pushed")
-				}
-			}
-			switch state {
-			case reviewCloseWaiting:
-				step(svc.Name+":review-request", StepStatusSkipped, "waiting for merge")
-			case reviewCloseVerified:
-				reviewVerified, reviewMergeSHA = true, reviewSHA
-				step(svc.Name+":review-request", StepStatusOK, "merged MR verified at "+reviewSHA)
-			default:
-				title, description := svcPlan.ForgePlan.Title, svcPlan.ForgePlan.Description
-				if strings.TrimSpace(params.ReviewTitle) != "" {
-					title = params.ReviewTitle
-				}
-				if strings.TrimSpace(params.ReviewDescription) != "" {
-					description = params.ReviewDescription
-				}
-				mr, createErr := forgeClient.CreateMR(ctx, withMRPolicy(forge.CreateMRParams{
-					WorktreePath: svc.WorktreePath,
-					SourceBranch: svcPlan.SourceBranch,
-					TargetBranch: target,
-					Title:        title,
-					Description:  description,
-					Repo:         repo,
-				}, svcPlan.MR))
-				if createErr != nil {
-					step(svc.Name+":review-request", StepStatusFailed, createErr.Error())
-					svcFailed = true
-					break
-				}
-				result.MRURLs = append(result.MRURLs, mr.URL)
-				step(svc.Name+":review-request", StepStatusOK, "created "+mr.URL)
-			}
 		}
 
 		if svcFailed {
