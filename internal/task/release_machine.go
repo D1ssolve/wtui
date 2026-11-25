@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/gitflow"
+	"github.com/D1ssolve/wtui/internal/shell"
 )
 
 type releaseRun struct {
@@ -601,7 +601,7 @@ func (m *manager) runReleaseHook(ctx context.Context, release *domain.Release, s
 		}
 		sendStatus(statusCh, fmt.Sprintf("[%s][hook] %s: %s", svc.Name, step.Name, step.Command))
 		hookCtx, cancel := context.WithTimeout(ctx, timeout)
-		cmd := exec.CommandContext(hookCtx, "sh", "-c", step.Command)
+		cmd := shell.Command(hookCtx, step.Command)
 		cmd.Dir = dir
 		cmd.WaitDelay = 5 * time.Second // a child holding stdout open must not outlive the timeout
 		cmd.Env = append(os.Environ(),

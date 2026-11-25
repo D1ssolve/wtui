@@ -17,6 +17,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/logutil"
+	"github.com/D1ssolve/wtui/internal/shell"
 	"github.com/D1ssolve/wtui/internal/task"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
@@ -809,7 +810,7 @@ func readNextLine(ch <-chan string) tea.Cmd {
 }
 
 func shellExecCommand(command, dir string) *exec.Cmd {
-	c := exec.Command("sh", "-c", command)
+	c := shell.Command(context.Background(), command)
 	c.Dir = dir
 	return c
 }

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/gitflow"
+	"github.com/D1ssolve/wtui/internal/shell"
 )
 
 const taskFlowFileName = ".wtui-task-flow.json"
@@ -282,7 +282,7 @@ func (m *manager) runTaskHook(ctx context.Context, tf *taskFlow, stateID string,
 	sendStatus(statusCh, fmt.Sprintf("[%s][hook] %s: %s", svc.Name, step.Name, step.Command))
 	hookCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(hookCtx, "sh", "-c", step.Command)
+	cmd := shell.Command(hookCtx, step.Command)
 	cmd.Dir = svc.WorktreePath
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Env = append(os.Environ(),
