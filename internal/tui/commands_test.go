@@ -51,22 +51,40 @@ func TestExecTeaProcessReturnsOriginalErrorAndOp(t *testing.T) {
 }
 
 func TestShellExecCommandUsesPlatformShellAndTaskDir(t *testing.T) {
-	cmd := shellExecCommand("echo hi", "/tmp/.tasks/IN-001")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "marker.txt"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 
-	wantPath := "sh"
-	wantArgs := []string{"sh", "-c", "echo hi"}
+	cmd := shellExecCommand("echo hi", dir)
+	wantShell := "sh"
 	if runtime.GOOS == "windows" {
-		wantPath = "cmd"
-		wantArgs = []string{"cmd"}
+		wantShell = "cmd"
 	}
-	if filepath.Base(cmd.Path) != wantPath {
-		t.Fatalf("Path = %q, want %s", cmd.Path, wantPath)
+	base := strings.ToLower(filepath.Base(cmd.Path))
+	if got := strings.TrimSuffix(base, filepath.Ext(base)); got != wantShell {
+		t.Fatalf("Path = %q, want %s shell", cmd.Path, wantShell)
 	}
-	if !slices.Equal(cmd.Args, wantArgs) {
-		t.Fatalf("Args = %v, want %v", cmd.Args, wantArgs)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("echo command failed: %v, output: %s", err, output)
 	}
-	if cmd.Dir != "/tmp/.tasks/IN-001" {
-		t.Fatalf("Dir = %q, want /tmp/.tasks/IN-001", cmd.Dir)
+	if got := strings.TrimSpace(string(output)); got != "hi" {
+		t.Fatalf("echo output = %q, want hi", got)
+	}
+
+	listCommand := "ls"
+	if runtime.GOOS == "windows" {
+		listCommand = "dir /b"
+	}
+	cmd = shellExecCommand(listCommand, dir)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("directory command failed: %v, output: %s", err, output)
+	}
+	if !strings.Contains(string(output), "marker.txt") {
+		t.Fatalf("directory output = %q, want marker.txt", output)
 	}
 }
 

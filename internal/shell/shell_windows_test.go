@@ -8,7 +8,7 @@ import (
 )
 
 func TestCommandQuotedScript(t *testing.T) {
-	output, err := Command(context.Background(), `echo "a b" && echo c`).Output()
+	output, err := Command(context.Background(), `echo "a b"&& echo c`).Output()
 	if err != nil {
 		t.Fatal(err)
 	}
