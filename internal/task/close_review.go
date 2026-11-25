@@ -8,6 +8,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
+	"github.com/D1ssolve/wtui/internal/gitflow"
 )
 
 // Review-close reconciliation states returned by reconcileReviewClose.
@@ -65,7 +66,10 @@ func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, 
 	// fetch plus an exact local==remote source equality, so a source that
 	// advanced on the remote (or never left this machine) can never
 	// authorize post-actions on stale local code.
-	head, err := m.resolveFreshSourceSHA(ctx, svc)
+	// A forge asked to remove the source on merge leaves no remote ref; only then is the
+	// local head accepted, and only as far as it equals the merged MR head checked below.
+	rule := m.branchRule(svc.Branch)
+	head, err := m.freshSourceSHA(ctx, svc, rule.MR.RemoveSourceBranch && gitflow.SourceNeededAfterReview(rule) == "")
 	if err != nil {
 		return "", "", fmt.Errorf("resolve current source %s: %w", svc.Branch, err)
 	}

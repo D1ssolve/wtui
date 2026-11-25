@@ -61,8 +61,9 @@ type ReleaseFlow struct {
 	// FromMachine marks a release described by `release.machine` rather than `release.steps`.
 	FromMachine bool
 	DependsOn   map[string][]string
-	// MR is applied to the production review MRs a release opens.
-	MR MRPolicy
+	// MR is applied to the production review MRs a release opens; omitzero keeps
+	// hashes of a flow without `mr` (hotfix checkpoint identity) byte-identical to before.
+	MR MRPolicy `json:",omitzero"`
 }
 
 // MRPolicy holds the optional defaults for every MR wtui opens for a task type or release.
@@ -149,7 +150,7 @@ type BranchTypeRule struct {
 	// CherryPickToOpenReleases picks the accepted review merge into every open release branch.
 	CherryPickToOpenReleases bool
 	Close                    []Step
-	MR                       MRPolicy
+	MR                       MRPolicy `json:",omitzero"`
 	// Machine is the optional task lifecycle compiled from task_types.<name>.machine.
 	Machine *Machine `json:"-"`
 }

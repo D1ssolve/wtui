@@ -394,7 +394,7 @@ func (c *compiler) taskType(path string, tt *config.TaskTypeConfig, isDefault bo
 	if rule.MR, err = mrPolicy(path+".mr", tt.MR); err != nil {
 		return BranchTypeRule{}, err
 	}
-	if reason := sourceNeededAfterReview(rule); rule.MR.RemoveSourceBranch && reason != "" {
+	if reason := SourceNeededAfterReview(rule); rule.MR.RemoveSourceBranch && reason != "" {
 		return BranchTypeRule{}, fmt.Errorf("%s.mr.remove_source_branch: %s", path, reason)
 	}
 	return rule, nil
@@ -415,14 +415,16 @@ func mrPolicy(path string, cfg *config.MRConfig) (MRPolicy, error) {
 				return MRPolicy{}, fmt.Errorf("%s.%s[%d]: must not be empty", path, list.name, i)
 			}
 		}
-		*list.out = slices.Clone(list.in)
+		if len(list.in) > 0 { // an empty list stays nil so the policy remains zero
+			*list.out = slices.Clone(list.in)
+		}
 	}
 	return policy, nil
 }
 
-// sourceNeededAfterReview names why wtui still reads the remote source branch after the
-// review merges; a forge-side branch removal would then block close verification.
-func sourceNeededAfterReview(rule BranchTypeRule) string {
+// SourceNeededAfterReview names why wtui still reads the remote source branch after the
+// review merges; empty means a forge-side removal on merge is safe for this rule.
+func SourceNeededAfterReview(rule BranchTypeRule) string {
 	switch {
 	case rule.Shared:
 		return "shared branches are long-lived team branches and are never removed"

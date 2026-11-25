@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -461,5 +462,73 @@ func TestCloseTask_CherryPick_AcceptedReleaseIsReportedNotPicked(t *testing.T) {
 	}
 	if !reported {
 		t.Fatalf("steps = %+v, want an explicit not-picked report for rel-1.0", res.Steps)
+	}
+}
+
+func TestCloseTask_ReviewRequest_ForgeRemovedSourceNeedsExactEvidence(t *testing.T) {
+	networkErr := errors.New("ls-remote: network unreachable")
+	cases := []struct {
+		name               string
+		remove, postAction bool
+		remoteSource       string
+		remoteErr, fetch   error
+		mrHead             string
+		contained          bool
+		want               string // empty: the merged MR is verified
+	}{
+		{name: "removal requested, source removed, exact evidence", remove: true, mrHead: "task-head", contained: true},
+		{name: "no removal policy keeps retained-source guard", mrHead: "task-head", contained: true, want: "has no remote ref"},
+		{name: "removal with post-actions keeps retained-source guard", remove: true, postAction: true, mrHead: "task-head", contained: true, want: "has no remote ref"},
+		{name: "ls-remote failure is not a removed ref", remove: true, remoteErr: networkErr, mrHead: "task-head", contained: true, want: "network unreachable"},
+		{name: "fetch failure blocks", remove: true, fetch: errors.New("fetch: host unreachable"), mrHead: "task-head", contained: true, want: "host unreachable"},
+		{name: "MR head differs from local task head", remove: true, mrHead: "other-head", contained: true, want: "does not match"},
+		{name: "merge not contained in fresh target", remove: true, mrHead: "task-head", want: "not contained"},
+		{name: "source present but diverged", remove: true, remoteSource: "moved-head", mrHead: "task-head", contained: true, want: "diverged"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := "IN-REV-RM"
+			mgr, _, forgeClient := reviewCloseEnv(t, taskID, func(g *mockGitClient) {
+				g.remoteRefSHAFn = func(_ string, ref string) (string, error) {
+					if ref == "refs/heads/feature/"+taskID {
+						return tc.remoteSource, tc.remoteErr
+					}
+					return "", nil
+				}
+				g.fetchErr = tc.fetch
+				g.isAncestorFn = func(_, _, _ string) (bool, error) { return tc.contained, nil }
+			})
+			rule := mgr.flow.BranchTypes["feature"]
+			rule.TagOnClose, rule.TriggerPipelineOnClose = tc.postAction, tc.postAction
+			rule.MR.RemoveSourceBranch = tc.remove
+			mgr.flow.BranchTypes["feature"] = rule
+			forgeClient.mrHistoryFn = func(context.Context, string, string) ([]forge.MRInfo, error) {
+				return []forge.MRInfo{{Number: 7, State: "merged", SourceBranch: "feature/" + taskID, TargetBranch: "develop", URL: "https://gitlab.example/7"}}, nil
+			}
+			forgeClient.mrReadinessByNumberFn = func(_ context.Context, n int, _, _ string) (forge.MRReadiness, error) {
+				return forge.MRReadiness{Number: n, State: "merged", SourceBranch: "feature/" + taskID, TargetBranch: "develop", HeadSHA: tc.mrHead, MergedSHA: "squash-sha", URL: "https://gitlab.example/7"}, nil
+			}
+
+			res, err := mgr.CloseTask(context.Background(), CloseTaskParams{TaskID: taskID})
+			var review CloseTaskStep
+			for _, step := range res.Steps {
+				if step.Name == "svc-a:review-request" {
+					review = step
+				}
+			}
+			if tc.want == "" {
+				if err != nil || !res.Success || !strings.Contains(review.Message, "merged MR verified at squash-sha") {
+					t.Fatalf("CloseTask = %+v, err %v; want the merged MR verified at squash-sha", res, err)
+				}
+				return
+			}
+			blocked := err != nil && strings.Contains(err.Error(), tc.want)
+			for _, step := range res.Steps {
+				blocked = blocked || step.Status == StepStatusFailed && strings.Contains(step.Message, tc.want)
+			}
+			if res.Success || !blocked {
+				t.Fatalf("CloseTask = %+v, err %v; want a failure containing %q", res, err, tc.want)
+			}
+		})
 	}
 }

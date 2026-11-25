@@ -3,6 +3,8 @@ package task
 import (
 	"context"
 	"errors"
+	"github.com/D1ssolve/wtui/internal/config"
+	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
 	"slices"
@@ -995,5 +997,36 @@ func TestHotfixClose_MixedTaskCannotBypassMergeGate(t *testing.T) {
 	}
 	if _, err := m.PlanCloseTask(t.Context(), "H"); !errors.Is(err, ErrMixedBranchTypes) {
 		t.Fatalf("mixed review hotfix must be rejected: %v", err)
+	}
+}
+
+// The hash is what base 356e47a computed for this flow and service: an existing hotfix
+// checkpoint must reopen after upgrading while a configured MR policy still counts as drift.
+func TestHotfixIdentity_AbsentMRPolicyKeepsBaseCheckpointIdentity(t *testing.T) {
+	const baseIdentity = "145666f4b046d7a81026783a64e8aac9fbcf29b0577c2cda9e80f467f7f42ded"
+	const hotfix = "workflow:\n  extends: git-flow\n  task_types:\n    hotfix:\n      prefixes: [hotfix/]\n      from: production\n      close:\n        - review: {into: [production, integration]}\n        - pipeline: {}\n"
+	for _, tc := range []struct {
+		name, mr string
+		same     bool
+	}{
+		{"no mr", "", true},
+		{"empty mr", "      mr: {labels: [], reviewers: []}\n", true},
+		{"configured mr", "      mr: {labels: [urgent]}\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var cfg config.Config
+			if err := yaml.Unmarshal([]byte(hotfix+tc.mr+"tag: {enabled: true, push: true}\n"), &cfg); err != nil {
+				t.Fatal(err)
+			}
+			flow, err := gitflow.Resolve(&cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := &manager{flow: flow, cfg: &cfg}
+			got := m.hotfixIdentity([]ServiceClosePlan{{ServiceName: "gl", RepoPath: "/r/gl", RemoteURL: "ssh://git@gl.fixture.test/g/gl.git", SourceBranch: "hotfix/T", SourceSHA: "71576082cc57640a468fa824972f8c909a5a0bee"}})
+			if (got == baseIdentity) != tc.same {
+				t.Fatalf("identity = %s, base %s, want same=%v", got, baseIdentity, tc.same)
+			}
+		})
 	}
 }
