@@ -973,6 +973,17 @@ func TestLoad_RemovedKeyHints_ThroughMergesAndAliases(t *testing.T) {
 		{"merged removed key (verifier input)", "prune: {<<: {fetch: true}}\n", "line 1: prune.fetch was removed: it never had an effect; delete it"},
 		{"removed key in an anchor", "validation: &v\n  concurrency: 3\nprune:\n  <<: *v\n  dry_run_default: true\n", "line 5: prune.dry_run_default was removed"},
 		{"merged migration key", "relase: {}\n<<: {git_flow: {preset: git-flow}}\n", "line 2: git_flow is no longer supported"},
+		{"hint beats an earlier root typo (verifier)", "relase: {}\nprune: {fetch: true}\n", "line 2: prune.fetch was removed"},
+		{"hint beats an earlier block typo (verifier)", "tag: {formt: x}\nprune: {<<: {fetch: true}}\n", "line 2: prune.fetch was removed"},
+		{"aliased hint beats a typo (verifier)", "x-options: &options {fetch: true}\nrelase: {}\nprune: *options\n", "line 1: prune.fetch was removed"},
+		{"hint beats an unsupported key", "? [a]\n: x\nprune: {fetch: true}\n", "line 3: prune.fetch was removed"},
+		{"earliest of two hints", "x-o: &o {parser: x}\nprune: {fetch: true}\ntag: *o\n", "line 1: tag.parser was removed"},
+		{"migration key in a binary alias (verifier)", "x-m: &k !!binary YmFzZV9icmFuY2g=\n*k : trunk\n", "line 2: base_branch is no longer supported"},
+		{"dotted root key is just unknown (verifier)", "prune.fetch: false\n", `line 1: unknown key "prune.fetch"; expected one of`},
+		{"dotted root key does not mask a removal (verifier)", "tag.parser: x\nprune: {fetch: true}\n", "line 2: prune.fetch was removed"},
+		{"quoted dotted root key (verifier)", "\"prune.fetch\": test\n", `line 1: unknown key "prune.fetch"; expected one of`},
+		{"hint matches struct paths only", "workflow: {task_types: {prune: {fetch: 1}}}\n", `line 1: unknown key "fetch" in workflow.task_types.prune; expected one of`},
+		{"unknown keys in document order", "x-a: &a {formt: 1}\nrelase: {}\ntag: {<<: *a}\n", `line 1: unknown key "formt" in tag, did you mean "format"?`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
