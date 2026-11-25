@@ -15,6 +15,10 @@ func TestIssueLinkIdentity(t *testing.T) {
 		{"https://github.com/ORG/API/issues/12", "git@github.com:org/api.git", "API-12", "Closes #12"},
 		{"https://forge.example/org/sub/api/-/issues/12", "https://forge.example/org/sub/api.git", "API-12", "Closes #12"},
 		{"https://forge.example/org/sub/api/-/issues/12", "https://forge.example/org/api.git", "API-12", "Issue: https://forge.example/org/sub/api/-/issues/12"},
+		{"https://forge.example:8443/org/sub/api/-/issues/42", "https://forge.example:8443/org/sub/api.git", "API-42", "Closes #42"},
+		{"https://forge.example:8443/org/sub/api/-/issues/42", "https://forge.example:8444/org/sub/api.git", "API-42", "Issue: https://forge.example:8443/org/sub/api/-/issues/42"},
+		{"https://forge.example:8443/org/sub/api/-/issues/42", "ssh://git@forge.example:8443/org/sub/api.git", "API-42", "Issue: https://forge.example:8443/org/sub/api/-/issues/42"},
+		{"https://forge.example/org/sub/api/-/issues/42", "ssh://git@forge.example:2222/org/sub/api.git", "API-42", "Closes #42"},
 		{"APP-12", "git@github.com:org/api.git", "APP-12", "Issue: https://jira.example/browse/APP-12"},
 		{"https://jira.example/browse/APP-12", "git@github.com:org/api.git", "APP-12", "Issue: https://jira.example/browse/APP-12"},
 	} {

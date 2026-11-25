@@ -94,6 +94,8 @@ func sameHost(a, b string) bool {
 	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
 }
 
+// ExtractRepoPath returns a forge CLI repository selector. An explicit web
+// port needs a full URL; an SSH transport port does not identify a web forge.
 func ExtractRepoPath(remoteURL string) string {
 	trimmed := strings.TrimSpace(remoteURL)
 	if trimmed == "" {
@@ -112,6 +114,9 @@ func ExtractRepoPath(remoteURL string) string {
 			return ""
 		}
 		repoPath = strings.Trim(u.Path, "/")
+		if u.Scheme == "http" || u.Scheme == "https" {
+			host = webRepoPrefix(u)
+		}
 	} else if at := strings.LastIndex(trimmed, "@"); at >= 0 {
 		rest := trimmed[at+1:]
 		colon := strings.Index(rest, ":")
@@ -143,4 +148,11 @@ func ExtractRepoPath(remoteURL string) string {
 	}
 
 	return host + "/" + repoPath
+}
+
+func webRepoPrefix(u *url.URL) string {
+	if u.Port() != "" {
+		return u.Scheme + "://" + strings.ToLower(u.Host)
+	}
+	return strings.ToLower(u.Host)
 }

@@ -69,7 +69,7 @@ func parseForgeIssueURL(raw string, cfg *config.ForgeConfig) (*domain.Issue, str
 		}
 	}
 	return &domain.Issue{Provider: provider, Key: parts[n-1], URL: raw},
-		strings.ToLower(u.Host) + "/" + strings.Join(project, "/")
+		webRepoPrefix(u) + "/" + strings.Join(project, "/")
 }
 
 func issueHTTPURL(raw string) *url.URL {
@@ -88,19 +88,16 @@ func IssueReference(issue *domain.Issue, remote string, cfg *config.ForgeConfig)
 		return ""
 	}
 	parsed, project := parseForgeIssueURL(issue.URL, cfg)
-	u, err := url.Parse(remote)
-	if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Port() != "" {
-		return "Issue: " + issue.URL
-	}
+	repo := ExtractRepoPath(remote)
 	switch DetectProvider(remote, cfg) {
 	case ForgeProviderGitHub:
 		if issue.Provider == domain.IssueGitHub && parsed != nil && parsed.Provider == issue.Provider &&
-			parsed.Key == issue.Key && strings.EqualFold(project, ExtractRepoPath(remote)) {
+			parsed.Key == issue.Key && strings.EqualFold(project, repo) {
 			return "Closes #" + issue.Key
 		}
 	case ForgeProviderGitLab:
 		if issue.Provider == domain.IssueGitLab && parsed != nil && parsed.Provider == issue.Provider &&
-			parsed.Key == issue.Key && project == ExtractRepoPath(remote) {
+			parsed.Key == issue.Key && project == repo {
 			return "Closes #" + issue.Key
 		}
 	case ForgeProviderUnknown:
