@@ -61,44 +61,28 @@ type ForgeConfig struct {
 type TagConfig struct {
 	Enabled               bool   `yaml:"enabled"`
 	Format                string `yaml:"format"`
-	VersionScheme         string `yaml:"version_scheme"`
-	Parser                string `yaml:"parser"`
-	Strict                bool   `yaml:"strict"`
 	Bump                  string `yaml:"bump"`
 	Annotated             bool   `yaml:"annotated"`
 	MessageTemplate       string `yaml:"message_template"`
-	Source                string `yaml:"source"`
 	Push                  bool   `yaml:"push"`
 	SharedVersion         bool   `yaml:"shared_version"`
 	CreateAfterAllTargets bool   `yaml:"create_after_all_targets"`
 }
 
 type ValidationConfig struct {
-	BlockUntracked             bool   `yaml:"block_untracked"`
-	BlockDetachedHead          bool   `yaml:"block_detached_head"`
-	BlockInterruptedOperations bool   `yaml:"block_interrupted_operations"`
-	RequireUpstreamForSync     bool   `yaml:"require_upstream_for_sync"`
-	CommandTimeout             string `yaml:"command_timeout"`
-	Concurrency                int    `yaml:"concurrency"`
+	BlockUntracked             bool `yaml:"block_untracked"`
+	BlockDetachedHead          bool `yaml:"block_detached_head"`
+	BlockInterruptedOperations bool `yaml:"block_interrupted_operations"`
+	Concurrency                int  `yaml:"concurrency"`
 }
 
 type CloseConfig struct {
-	RequireConfirmation         bool `yaml:"require_confirmation"`
-	ContinueOnError             bool `yaml:"continue_on_error"`
-	PushSourceBeforeReview      bool `yaml:"push_source_before_review"`
-	PushTargetsAfterDirectMerge bool `yaml:"push_targets_after_direct_merge"`
-	ShowPlanBeforeExecute       bool `yaml:"show_plan_before_execute"`
+	ContinueOnError        bool `yaml:"continue_on_error"`
+	PushSourceBeforeReview bool `yaml:"push_source_before_review"`
 }
 
 type PruneConfig struct {
-	Fetch               bool `yaml:"fetch"`
-	DryRunDefault       bool `yaml:"dry_run_default"`
-	RequireConfirmation bool `yaml:"require_confirmation"`
-	AllowDirty          bool `yaml:"allow_dirty"`
-	AllowUnpushed       bool `yaml:"allow_unpushed"`
-	RemoveEmptyTaskDir  bool `yaml:"remove_empty_task_dir"`
-	RunGitWorktreePrune bool `yaml:"run_git_worktree_prune"`
-	Concurrency         int  `yaml:"concurrency"`
+	Concurrency int `yaml:"concurrency"`
 }
 
 func Load(flagPath string) (*Config, error) {
@@ -145,6 +129,15 @@ var removedKeys = map[string]string{
 	"git_flow":      "describe the flow under `workflow` (see docs/configuration.md#workflow)",
 	"branch_prefix": "set the prefixes of the default type under `workflow.task_types`",
 	"base_branch":   "set `workflow.branches.integration`",
+}
+
+// ineffectiveKeys were parsed but never read; rejecting them keeps a config from promising behaviour wtui lacks.
+var ineffectiveKeys = map[string]bool{
+	"tag.version_scheme": true, "tag.parser": true, "tag.strict": true, "tag.source": true,
+	"validation.require_upstream_for_sync": true, "validation.command_timeout": true,
+	"close.require_confirmation": true, "close.push_targets_after_direct_merge": true, "close.show_plan_before_execute": true,
+	"prune.fetch": true, "prune.dry_run_default": true, "prune.require_confirmation": true, "prune.allow_dirty": true,
+	"prune.allow_unpushed": true, "prune.remove_empty_task_dir": true, "prune.run_git_worktree_prune": true,
 }
 
 func rejectRemovedKeys(data []byte) error {
@@ -400,17 +393,8 @@ func (c *Config) effectiveTag() {
 	if c.Tag.Format == "" {
 		c.Tag.Format = "v{{.Version}}"
 	}
-	if c.Tag.VersionScheme == "" {
-		c.Tag.VersionScheme = "semver"
-	}
-	if c.Tag.Parser == "" {
-		c.Tag.Parser = "masterminds-semver"
-	}
 	if c.Tag.Bump == "" {
 		c.Tag.Bump = "manual"
-	}
-	if c.Tag.Source == "" {
-		c.Tag.Source = "production_branch"
 	}
 	if c.Tag.MessageTemplate == "" {
 		c.Tag.MessageTemplate = "Release {{.Tag}} for {{.TaskID}}"
@@ -424,9 +408,6 @@ func (c *Config) effectiveValidation() {
 		return
 	}
 
-	if c.Validation.CommandTimeout == "" {
-		c.Validation.CommandTimeout = "10s"
-	}
 	if c.Validation.Concurrency == 0 {
 		c.Validation.Concurrency = 8
 	}
@@ -454,13 +435,9 @@ func defaultTag() *TagConfig {
 	return &TagConfig{
 		Enabled:               true,
 		Format:                "v{{.Version}}",
-		VersionScheme:         "semver",
-		Parser:                "masterminds-semver",
-		Strict:                true,
 		Bump:                  "manual",
 		Annotated:             true,
 		MessageTemplate:       "Release {{.Tag}} for {{.TaskID}}",
-		Source:                "production_branch",
 		Push:                  true,
 		CreateAfterAllTargets: true,
 	}
@@ -470,28 +447,14 @@ func defaultValidation() *ValidationConfig {
 	return &ValidationConfig{
 		BlockDetachedHead:          true,
 		BlockInterruptedOperations: true,
-		RequireUpstreamForSync:     true,
-		CommandTimeout:             "10s",
 		Concurrency:                8,
 	}
 }
 
 func defaultClose() *CloseConfig {
-	return &CloseConfig{
-		RequireConfirmation:         true,
-		PushSourceBeforeReview:      true,
-		PushTargetsAfterDirectMerge: true,
-		ShowPlanBeforeExecute:       true,
-	}
+	return &CloseConfig{PushSourceBeforeReview: true}
 }
 
 func defaultPrune() *PruneConfig {
-	return &PruneConfig{
-		Fetch:               true,
-		DryRunDefault:       true,
-		RequireConfirmation: true,
-		RemoveEmptyTaskDir:  true,
-		RunGitWorktreePrune: true,
-		Concurrency:         4,
-	}
+	return &PruneConfig{Concurrency: 4}
 }

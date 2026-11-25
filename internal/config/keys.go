@@ -91,6 +91,9 @@ func joinKey(path, key string) string {
 }
 
 func unknownKeyError(key *yaml.Node, path string, known []string) error {
+	if ineffectiveKeys[path] {
+		return fmt.Errorf("line %d: %s was removed: it never had an effect; delete it", key.Line, path)
+	}
 	best, bestDistance := "", 3 // suggest only keys within edit distance 2
 	for _, name := range known {
 		if d := editDistance(key.Value, name); d < bestDistance {

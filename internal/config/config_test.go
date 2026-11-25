@@ -571,7 +571,7 @@ validation:
 close:
   continue_on_error: true
 prune:
-  dry_run_default: true
+  concurrency: 2
 release:
   root_dir: /tmp/releases
   id_format: "rel-{{.Version}}-{{.Timestamp}}"
@@ -601,7 +601,7 @@ release:
 	if cfg.Close == nil || !cfg.Close.ContinueOnError {
 		t.Fatalf("Close parsing failed: %+v", cfg.Close)
 	}
-	if cfg.Prune == nil || !cfg.Prune.DryRunDefault {
+	if cfg.Prune == nil || cfg.Prune.Concurrency != 2 {
 		t.Fatalf("Prune parsing failed: %+v", cfg.Prune)
 	}
 	if cfg.Release == nil || cfg.Release.RootDir != "/tmp/releases" {
@@ -739,8 +739,6 @@ close:
   continue_on_error: true
 validation:
   block_untracked: true
-prune:
-  allow_dirty: true
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -754,14 +752,11 @@ prune:
 	if cfg.Tag.Format != "release-{{.Version}}" || !cfg.Tag.Enabled || !cfg.Tag.Push || !cfg.Tag.Annotated {
 		t.Errorf("tag = %+v, want explicit format with default enabled/push/annotated", cfg.Tag)
 	}
-	if !cfg.Close.ContinueOnError || !cfg.Close.RequireConfirmation || !cfg.Close.ShowPlanBeforeExecute {
-		t.Errorf("close = %+v, want explicit continue_on_error with default confirmations", cfg.Close)
+	if !cfg.Close.ContinueOnError || !cfg.Close.PushSourceBeforeReview {
+		t.Errorf("close = %+v, want explicit continue_on_error with default push_source_before_review", cfg.Close)
 	}
 	if !cfg.Validation.BlockUntracked || !cfg.Validation.BlockDetachedHead {
 		t.Errorf("validation = %+v, want explicit block_untracked with default block_detached_head", cfg.Validation)
-	}
-	if !cfg.Prune.AllowDirty || !cfg.Prune.RequireConfirmation || !cfg.Prune.DryRunDefault {
-		t.Errorf("prune = %+v, want explicit allow_dirty with default confirmation/dry-run", cfg.Prune)
 	}
 }
 
@@ -771,7 +766,7 @@ func TestLoad_PartialBlocks_ExplicitFalseWins(t *testing.T) {
 tag:
   push: false
 close:
-  require_confirmation: false
+  push_source_before_review: false
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -785,8 +780,20 @@ close:
 	if cfg.Tag.Push || !cfg.Tag.Enabled {
 		t.Errorf("tag = %+v, want push=false enabled=true", cfg.Tag)
 	}
-	if cfg.Close.RequireConfirmation || !cfg.Close.ShowPlanBeforeExecute {
-		t.Errorf("close = %+v, want require_confirmation=false show_plan=true", cfg.Close)
+	if cfg.Close.PushSourceBeforeReview {
+		t.Errorf("close = %+v, want push_source_before_review=false", cfg.Close)
+	}
+}
+
+func TestLoad_IneffectiveKeys_ReturnRemovedError(t *testing.T) {
+	for key := range ineffectiveKeys {
+		t.Run(key, func(t *testing.T) {
+			block, field, _ := strings.Cut(key, ".")
+			_, err := Load(writeTempConfig(t, block+":\n  "+field+": x\n"))
+			if err == nil || !strings.Contains(err.Error(), key+" was removed: it never had an effect; delete it") {
+				t.Fatalf("Load() error = %v, want the removed-key hint for %s", err, key)
+			}
+		})
 	}
 }
 
