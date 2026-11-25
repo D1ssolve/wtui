@@ -93,7 +93,7 @@ func TestReleaseLockCrashRecovery(t *testing.T) {
 				t.Fatalf("list while locked: %v, %v", releases, err)
 			}
 			_, err = m.AdvanceRelease(ctx, release.ID, "", nil)
-			want := fmt.Sprintf("release %s is being changed by another wtui (pid %d); wait for it or close it", release.ID, cmd.Process.Pid)
+			want := fmt.Sprintf("release %s is being changed by another wtui (last recorded pid %d); wait for it or close it", release.ID, cmd.Process.Pid)
 			if !errors.Is(err, fsutil.ErrLocked) || err.Error() != want {
 				t.Fatalf("AdvanceRelease = %v; want %s", err, want)
 			}
@@ -142,7 +142,7 @@ func TestTaskLockGatesMutationsButNotDisplay(t *testing.T) {
 		func() error { _, err := m.MergeServiceMR(ctx, id, "a"); return err },
 	} {
 		err := mutate()
-		if !errors.Is(err, fsutil.ErrLocked) || err.Error() != fmt.Sprintf("task %s is being changed by another wtui (pid %d); wait for it or close it", id, os.Getpid()) {
+		if !errors.Is(err, fsutil.ErrLocked) || err.Error() != fmt.Sprintf("task %s is being changed by another wtui (last recorded pid %d); wait for it or close it", id, os.Getpid()) {
 			t.Fatalf("task mutation: %v", err)
 		}
 	}

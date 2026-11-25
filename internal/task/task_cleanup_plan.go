@@ -181,6 +181,10 @@ func (p TaskCleanupPlan) fingerprintAuthentic() bool {
 // the exact task/service/branch identity. Remote branches are deleted only when the
 // request explicitly selects remote task branch deletion.
 func (m *manager) PlanTaskCleanup(ctx context.Context, request TaskCleanupRequest) (TaskCleanupPlan, error) {
+	return m.planTaskCleanup(ctx, request, false)
+}
+
+func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupRequest, allowDirty bool) (TaskCleanupPlan, error) {
 	plan := TaskCleanupPlan{preview: TaskCleanupPreview{TaskID: request.TaskID}}
 	if err := validateTaskID(request.TaskID); err != nil {
 		return plan, err
@@ -260,8 +264,8 @@ func (m *manager) PlanTaskCleanup(ctx context.Context, request TaskCleanupReques
 		}
 
 		worktreeStep := releaseCleanupStep{kind: cleanupTaskWorktree, description: "remove task worktree " + svc.WorktreePath, repoPath: svc.RepoPath, path: svc.WorktreePath, branch: svc.Branch, expectedSHA: sourceSHA}
-		m.validateCleanupWorktree(ctx, &plan, entries, worktreeStep)
-		m.validateTaskCleanupOperations(ctx, &plan, svc)
+		m.validateCleanupWorktree(ctx, &plan, entries, worktreeStep, allowDirty)
+		m.validateTaskCleanupOperations(ctx, &plan, svc, allowDirty)
 
 		branchType := gitflow.DetectBranchType(svc.Branch, m.flow)
 		var closeRule gitflow.BranchTypeRule
@@ -484,7 +488,7 @@ func (m *manager) taskCleanupMergeTargetBranches(branchType gitflow.BranchType) 
 	return []string{resolvedIntegrationBranch(m.flow)}
 }
 
-func (m *manager) validateTaskCleanupOperations(ctx context.Context, plan *TaskCleanupPlan, svc domain.Service) {
+func (m *manager) validateTaskCleanupOperations(ctx context.Context, plan *TaskCleanupPlan, svc domain.Service, allowDirty bool) {
 	ops, err := m.git.OperationState(ctx, svc.WorktreePath)
 	if err != nil {
 		plan.block("worktree %s operation state unreadable", svc.WorktreePath)
@@ -499,7 +503,7 @@ func (m *manager) validateTaskCleanupOperations(ctx context.Context, plan *TaskC
 	status, err := m.git.RepoStatus(ctx, svc.WorktreePath)
 	if err != nil {
 		plan.block("worktree %s status unreadable", svc.WorktreePath)
-	} else if len(status.ChangedEntries) > 0 || len(status.UntrackedPaths) > 0 || len(status.ConflictPaths) > 0 {
+	} else if !allowDirty && (len(status.ChangedEntries) > 0 || len(status.UntrackedPaths) > 0 || len(status.ConflictPaths) > 0) {
 		plan.block("worktree %s is dirty", svc.WorktreePath)
 	}
 }

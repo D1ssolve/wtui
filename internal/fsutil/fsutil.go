@@ -2,6 +2,7 @@
 package fsutil
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -12,13 +13,14 @@ import (
 
 var ErrLocked = errors.New("file is locked")
 
+// PID is the last recorded PID, not a kernel-verified owner. Zero means unknown.
 type LockedError struct{ PID int }
 
 func (e *LockedError) Error() string {
-	if e.PID == 0 {
-		return "locked (owner not yet recorded)"
+	if e.PID <= 0 {
+		return "locked"
 	}
-	return fmt.Sprintf("locked (pid %d)", e.PID)
+	return fmt.Sprintf("locked (last recorded pid %d)", e.PID)
 }
 
 func (e *LockedError) Unwrap() error { return ErrLocked }
@@ -34,7 +36,10 @@ func Lock(path string) (func(), error) {
 		if errors.Is(err, ErrLocked) {
 			var record [32]byte
 			n, _ := f.ReadAt(record[:], 0)
-			pid, _ := strconv.Atoi(strings.TrimSpace(string(record[:n])))
+			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(record[:n])))
+			if parseErr != nil || pid < 0 {
+				pid = 0
+			}
 			err = &LockedError{PID: pid}
 		}
 		f.Close()
@@ -52,15 +57,19 @@ func Lock(path string) (func(), error) {
 // A directory sync error is reported after replacement; the new file is visible.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, ".wtui-state-*")
+	// Pass permissions to open, not chmod: the kernel must also apply the umask.
+	if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+		perm &= info.Mode().Perm()
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, ".wtui-state-"+rand.Text()), os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm.Perm())
 	if err != nil {
 		return err
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp)
-	if _, err = f.Write(data); err == nil {
-		err = f.Chmod(perm)
-	}
+	_, err = f.Write(data)
 	if err == nil {
 		err = f.Sync()
 	}

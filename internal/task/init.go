@@ -21,6 +21,11 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 		return PartialFailureResult{}, err
 	}
 
+	unlock, err := lockTaskIDs(ctx, m.cfg.TasksRoot, "task", []string{params.TaskID})
+	if err != nil {
+		return PartialFailureResult{}, err
+	}
+	defer unlock()
 	taskDir := m.taskDir(params.TaskID)
 
 	_, rule := m.resolveInitRule(params.BranchType)
@@ -46,12 +51,14 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 		}
 	}
 
-	if _, err := os.Stat(taskDir); err == nil {
+	mkdirErr := os.Mkdir(taskDir, 0755)
+	created := mkdirErr == nil
+	if errors.Is(mkdirErr, os.ErrExist) {
 		if len(params.RemoteBranchStrategies) == 0 {
 			return PartialFailureResult{}, fmt.Errorf("%w: %s", ErrTaskExists, params.TaskID)
 		}
-	} else if err := os.MkdirAll(taskDir, 0o755); err != nil {
-		return PartialFailureResult{}, fmt.Errorf("init: create task directory %s: %w", taskDir, err)
+	} else if mkdirErr != nil {
+		return PartialFailureResult{}, fmt.Errorf("init: create task directory %s: %w", taskDir, mkdirErr)
 	}
 
 	baseBranch := strings.TrimSpace(params.BaseBranch)
@@ -66,7 +73,7 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 	summary := summarizeServiceResults(params.TaskID, "init", params.Services, results)
 
 	if len(params.Services) > 0 && len(summary.succeededServices) == 0 {
-		if len(summary.failedServices) == len(params.Services) {
+		if created && len(summary.failedServices) == len(params.Services) {
 			_ = os.RemoveAll(taskDir)
 		}
 		return PartialFailureResult{}, fmt.Errorf("init: no worktrees added for task %s: %w",

@@ -17,6 +17,11 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 		return domain.Release{}, fmt.Errorf("%w: release title must be one line", ErrReleaseManifestInvalid)
 	}
 
+	unreserve, err := m.reserveMembership(ctx, params.TaskIDs)
+	if err != nil {
+		return domain.Release{}, err
+	}
+	defer unreserve()
 	plan, err := m.buildReleasePlan(ctx, params)
 	if err != nil {
 		return domain.Release{}, err

@@ -19,10 +19,12 @@ const (
 )
 
 type ReleaseTaskMergePlan struct {
-	Rows   []ReleaseTaskMergeRow
-	steps  []releaseTaskMergeStep
-	input  string
-	config string
+	Rows                     []ReleaseTaskMergeRow
+	steps                    []releaseTaskMergeStep
+	input                    string
+	config                   string
+	retryID, retryCheckpoint string
+	retryStatus              domain.ReleaseStatus
 }
 
 type ReleaseTaskMergeRow struct {

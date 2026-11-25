@@ -156,7 +156,8 @@ func TestRetryRelease_TaskPrepareLifecycle(t *testing.T) {
 	}
 }
 
-func TestRetryReleaseTaskMerges_PrepareFailureRecovery(t *testing.T) {
+func previewPartialReleaseRetry(t *testing.T) (*taskPrepareRecovery, domain.Release, ReleaseTaskMergePlan) {
+	t.Helper()
 	// Given: real creation stops after the first MR; dedicated retry merges the second.
 	x := newTaskPrepareRecovery(t)
 	after := x.f.afterMerge
@@ -180,6 +181,26 @@ func TestRetryReleaseTaskMerges_PrepareFailureRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return x, partial, plan
+}
+
+func TestStaleRetryAfterRejection(t *testing.T) {
+	x, partial, plan := previewPartialReleaseRetry(t)
+	if _, err := x.m.RejectRelease(t.Context(), partial.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := x.f.mergeCalls
+	if _, err := x.m.RetryReleaseTaskMerges(t.Context(), partial.ID, &plan); !errors.Is(err, ErrReleaseInvalidStatusTransition) {
+		t.Fatalf("stale retry: %v", err)
+	}
+	got, err := x.m.GetRelease(t.Context(), partial.ID)
+	if err != nil || got.Status != domain.ReleaseStatusRejected || x.f.mergeCalls != before {
+		t.Fatalf("stale retry changed release %s or merge count %d: %v", got.Status, x.f.mergeCalls, err)
+	}
+}
+
+func TestRetryReleaseTaskMerges_PrepareFailureRecovery(t *testing.T) {
+	x, partial, plan := previewPartialReleaseRetry(t)
 	x.failure = "push"
 	// When
 	failed, err := x.m.RetryReleaseTaskMerges(t.Context(), partial.ID, &plan)

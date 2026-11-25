@@ -31,6 +31,13 @@ func (m *manager) ExecuteReleaseCleanup(ctx context.Context, plan ReleaseCleanup
 		return result, err
 	}
 	defer unlock()
+	if plan.preview.Selection.RemoveTasks {
+		unlockTasks, err := lockTaskIDs(ctx, m.cfg.TasksRoot, "task", plan.preview.Tasks)
+		if err != nil {
+			return result, err
+		}
+		defer unlockTasks()
+	}
 	fresh, err := m.PlanReleaseCleanup(ctx, plan.preview.ReleaseID, plan.preview.Selection)
 	if err != nil {
 		return result, err

@@ -27,6 +27,11 @@ func (m *manager) ConvertHotfixToFeature(ctx context.Context, params ConvertHotf
 		return err
 	}
 
+	unlock, err := lockTaskIDs(ctx, m.cfg.TasksRoot, "task", []string{params.SourceTaskID, params.TargetTaskID})
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	manifest, exists, err := m.loadConversionManifest(params.SourceTaskID)
 	if err != nil {
 		return err

@@ -48,14 +48,20 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 	if !plan.fingerprintAuthentic() {
 		return result, fmt.Errorf("%w: approved plan fingerprint mismatch", ErrTaskCleanupBlocked)
 	}
-	if !selection.Force {
-		fresh, err := m.PlanTaskCleanup(ctx, TaskCleanupRequest{TaskID: plan.preview.TaskID, DeleteRemoteTaskBranches: taskCleanupDeletesRemoteBranches(plan.steps)})
-		if err != nil {
-			return result, err
-		}
-		if len(fresh.preview.Blockers) > 0 || fresh.fingerprint != plan.fingerprint {
-			return result, fmt.Errorf("%w: approved plan is stale", ErrTaskCleanupBlocked)
-		}
+	unlock, err := m.lockTask(ctx, plan.preview.TaskID)
+	if err != nil {
+		return result, err
+	}
+	defer unlock()
+	fresh, err := m.planTaskCleanup(ctx, TaskCleanupRequest{TaskID: plan.preview.TaskID, DeleteRemoteTaskBranches: taskCleanupDeletesRemoteBranches(plan.steps)}, selection.Force)
+	if err != nil {
+		return result, err
+	}
+	// After a partial cleanup only the directory may remain. In force mode the
+	// original branch steps still recheck their pinned refs before deletion.
+	directoryOnly := selection.Force && len(fresh.steps) == 1 && fresh.steps[0].kind == cleanupTaskDirectory
+	if fresh.Blocked() || (!directoryOnly && fresh.fingerprint != plan.fingerprint) {
+		return result, fmt.Errorf("%w: approved plan is stale", ErrTaskCleanupBlocked)
 	}
 
 	ordered := taskCleanupExecutionOrder(plan.steps)

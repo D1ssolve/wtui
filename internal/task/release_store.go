@@ -144,6 +144,8 @@ func (m *manager) loadReleaseManifestWithContext(ctx context.Context, releaseID 
 
 	if release.ID == "" {
 		release.ID = releaseID
+	} else if release.ID != releaseID {
+		return domain.Release{}, fmt.Errorf("%w: directory %q contains manifest for %q", ErrReleaseManifestInvalid, releaseID, release.ID)
 	}
 	release.Dir = releaseDir
 	normalizeReleaseTimesUTC(&release)
