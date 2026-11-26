@@ -89,7 +89,7 @@ func (m *manager) buildTaskMergeRetryPlan(ctx context.Context, release domain.Re
 		if err := m.git.Fetch(ctx, step.RepoPath); err != nil {
 			return ReleaseTaskMergePlan{}, fmt.Errorf("release task merge retry: fetch target service=%s: %w", step.ServiceName, err)
 		}
-		tip, err := m.resolveReleaseRefSHA(ctx, step.RepoPath, "origin/"+step.TargetBranch)
+		tip, err := m.resolveReleaseRefSHA(ctx, step.RepoPath, m.cfg.ServiceRemote().Tracking(step.TargetBranch))
 		if err != nil {
 			return ReleaseTaskMergePlan{}, err
 		}
@@ -237,14 +237,14 @@ func (m *manager) proveTaskMergeSHA(ctx context.Context, svc domain.ReleaseServi
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 		return fmt.Errorf("release task merge retry: fetch proof service=%s: %w", svc.Name, err)
 	}
-	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+svc.IntegrationBranch)
+	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch))
 	if err != nil {
 		return err
 	}
 	if tip == mergeSHA {
 		return nil
 	}
-	ancestor, err := m.git.IsAncestor(ctx, svc.RepoPath, mergeSHA, "origin/"+svc.IntegrationBranch)
+	ancestor, err := m.git.IsAncestor(ctx, svc.RepoPath, mergeSHA, m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch))
 	if err != nil {
 		return fmt.Errorf("release task merge retry: prove merge ancestry service=%s: %w", svc.Name, err)
 	}

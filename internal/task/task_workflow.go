@@ -31,7 +31,7 @@ type serviceWorkflowPlan struct {
 }
 
 type serviceMergeState struct {
-	targets []string // effective close targets, origin/-prefixed
+	targets []string // effective close targets, configured remote/-prefixed
 	merged  []bool
 	warning string
 	err     error
@@ -193,7 +193,7 @@ func (m *manager) workflowMergeStates(ctx context.Context, taskID string, plans 
 				continue
 			}
 			item := m.inspectPinnedTaskTrain(ctx, plan.svc, pin)
-			st.targets = append(st.targets, "origin/"+pin.Target)
+			st.targets = append(st.targets, m.cfg.ServiceRemote().Tracking(pin.Target))
 			st.merged = append(st.merged, item.Status == "merged")
 			if st.pinned == nil || item.Status != "merged" {
 				st.pinned = &item
@@ -204,7 +204,7 @@ func (m *manager) workflowMergeStates(ctx context.Context, taskID string, plans 
 			// review wait. All configured targets must have a verified pin.
 			for _, target := range m.taskTrainTargets(plan.svc) {
 				if _, exists := pins[taskTrainKey{plan.svc.Name, target}]; !exists {
-					st.targets = append(st.targets, "origin/"+target)
+					st.targets = append(st.targets, m.cfg.ServiceRemote().Tracking(target))
 					st.merged = append(st.merged, false)
 				}
 			}
@@ -216,19 +216,19 @@ func (m *manager) workflowMergeStates(ctx context.Context, taskID string, plans 
 		case gitflow.CloseStrategyDirectMerge:
 			targets, warning := m.effectiveMergeTargets(ctx, plan.svc, plan.branchType, plan.rule.MergeTargets)
 			st.warning = warning
-			st.targets = originPrefixed(targets)
+			st.targets = m.remotePrefixed(targets)
 		case gitflow.CloseStrategyReviewRequest:
 			if len(plan.rule.ReviewTargets) == 0 {
 				return
 			}
-			st.targets = originPrefixed(plan.rule.ReviewTargets)
+			st.targets = m.remotePrefixed(plan.rule.ReviewTargets)
 		}
 		if st.err = m.git.Fetch(ctx, plan.svc.RepoPath); st.err != nil {
 			return
 		}
 		st.merged = make([]bool, len(st.targets))
 		for j, target := range st.targets {
-			if st.merged[j], st.err = m.git.IsAncestor(ctx, plan.svc.RepoPath, plan.svc.Branch, target); st.err != nil {
+			if st.merged[j], st.err = m.git.IsAncestor(ctx, plan.svc.RepoPath, plan.svc.Branch, "refs/remotes/"+target); st.err != nil {
 				return
 			}
 		}

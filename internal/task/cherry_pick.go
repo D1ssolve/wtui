@@ -58,7 +58,7 @@ func (m *manager) cherryPickIntoOpenReleases(ctx context.Context, taskID string,
 }
 
 func (m *manager) cherryPickIntoBranch(ctx context.Context, svc domain.Service, branch, mergeSHA string) (bool, error) {
-	remoteRef := "origin/" + branch
+	remoteRef := m.cfg.ServiceRemote().Tracking(branch)
 	tip, err := m.git.ResolveRef(ctx, svc.RepoPath, remoteRef)
 	if err != nil {
 		return false, fmt.Errorf("resolve %s: %w", remoteRef, err)

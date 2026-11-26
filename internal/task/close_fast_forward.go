@@ -12,7 +12,7 @@ func (m *manager) preflightFastForward(ctx context.Context, sp ServiceClosePlan)
 		return err
 	}
 	for _, target := range sp.TargetBranches {
-		remote := "origin/" + target
+		remote := m.cfg.ServiceRemote().Tracking(target)
 		done, err := m.git.IsAncestor(ctx, sp.RepoPath, sp.SourceBranch, remote)
 		if err != nil {
 			return err

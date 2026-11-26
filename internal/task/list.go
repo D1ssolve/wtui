@@ -260,7 +260,7 @@ func (m *manager) inspectServiceDir(ctx context.Context, cache *gitCache, taskDi
 		return domain.Service{}, false
 	}
 
-	remoteURL, _ := m.git.RemoteURL(ctx, subdirPath, "origin")
+	remoteURL, _ := m.git.RemoteURL(ctx, subdirPath, m.cfg.ServiceRemote().String())
 
 	svc := domain.Service{
 		Name:         entry.Name(),
@@ -288,7 +288,7 @@ func (m *manager) inspectServiceDir(ctx context.Context, cache *gitCache, taskDi
 	go func() {
 		defer wg.Done()
 		if svc.Branch != "" {
-			ahead, behind, aheadBehindErr = m.git.RevListAheadBehind(ctx, subdirPath, "origin/"+svc.Branch)
+			ahead, behind, aheadBehindErr = m.git.RevListAheadBehind(ctx, subdirPath, m.cfg.ServiceRemote().Tracking(svc.Branch))
 		}
 	}()
 	wg.Wait()

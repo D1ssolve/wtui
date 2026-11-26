@@ -53,7 +53,7 @@ func (m *manager) mergeReleaseServiceMR(ctx context.Context, release *domain.Rel
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 		return fmt.Errorf("release merge: fetch service %s: %w", svc.Name, err)
 	}
-	targetSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+fresh.TargetBranch)
+	targetSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(fresh.TargetBranch))
 	if err != nil {
 		return fmt.Errorf("release merge: resolve production target for MR %d: %w", svc.ProductionMR.Number, err)
 	}
@@ -234,7 +234,7 @@ func (m *manager) verifyAcceptedMergeSHA(ctx context.Context, svc *domain.Releas
 		return "", fmt.Errorf("release merge: fetch for production verification: %w", err)
 	}
 	production := m.releaseReviewTarget(*svc)
-	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+production)
+	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(production))
 	if err != nil {
 		return "", err
 	}
@@ -282,7 +282,7 @@ func (m *manager) recoverMissingReleaseMergeSHAWithClient(ctx context.Context, s
 			targetBranch = m.releaseReviewTarget(*svc)
 		}
 		if targetBranch != "" {
-			targetSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+targetBranch)
+			targetSHA, resolveErr := m.resolveReleaseRefSHA(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(targetBranch))
 			if resolveErr != nil {
 				return "", fmt.Errorf("release merge: resolve target branch for MR %d: %w", svc.ProductionMR.Number, resolveErr)
 			}
@@ -330,7 +330,7 @@ func (m *manager) releaseForgeDetails(ctx context.Context, svc domain.ReleaseSer
 	if err != nil {
 		return nil, "", "", err
 	}
-	remoteURL, err := m.git.RemoteURL(ctx, svc.RepoPath, "origin")
+	remoteURL, err := m.git.RemoteURL(ctx, svc.RepoPath, m.cfg.ServiceRemote().String())
 	if err != nil {
 		return nil, "", "", fmt.Errorf("release merge: resolve remote for service %s: %w", svc.Name, err)
 	}
@@ -346,9 +346,9 @@ func (m *manager) releaseForgeDetails(ctx context.Context, svc domain.ReleaseSer
 
 // productionMRRepositoryBlockers binds the persisted production MR proof to
 // the repository identity it was recorded against: the canonical repo path
-// must equal the service's current origin, and the provider host must match
+// must equal the service's current configured remote, and the provider host must match
 // when it was recorded. A legacy record without identity proves nothing and
-// fails closed, so an origin retarget to a repository that happens to serve
+// fails closed, so an configured remote retarget to a repository that happens to serve
 // an MR with the same number and SHAs can never authorize inspection, merge,
 // or reconciliation.
 func productionMRRepositoryBlockers(svc domain.ReleaseService, remoteURL string) []string {
@@ -363,10 +363,10 @@ func productionMRRepositoryBlockers(svc domain.ReleaseService, remoteURL string)
 		return []string{fmt.Sprintf("resolve repository path for service %s: remote URL %q is not parseable", svc.Name, remoteURL)}
 	}
 	if !strings.EqualFold(repo, svc.ProductionMR.Repo) {
-		return []string{fmt.Sprintf("production MR repository %s does not match current origin repository %s", svc.ProductionMR.Repo, repo)}
+		return []string{fmt.Sprintf("production MR repository %s does not match current configured remote repository %s", svc.ProductionMR.Repo, repo)}
 	}
 	if host := strings.TrimSpace(svc.ProductionMR.ProviderHost); host != "" && !strings.EqualFold(host, forge.RemoteHost(remoteURL)) {
-		return []string{fmt.Sprintf("production MR provider host %s does not match current origin host %s", host, forge.RemoteHost(remoteURL))}
+		return []string{fmt.Sprintf("production MR provider host %s does not match current configured remote host %s", host, forge.RemoteHost(remoteURL))}
 	}
 	return nil
 }

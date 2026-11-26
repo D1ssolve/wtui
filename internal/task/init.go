@@ -116,7 +116,7 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 	return PartialFailureResult{}, nil
 }
 
-// reposWithRemoteBranch returns discovered repositories whose origin has branch.
+// reposWithRemoteBranch returns discovered repositories whose configured remote has branch.
 func (m *manager) reposWithRemoteBranch(ctx context.Context, branch string, statusCh chan<- string) ([]domain.Repo, error) {
 	repos, err := m.discoverer.FindAll(ctx)
 	if err != nil {
@@ -145,7 +145,7 @@ func (m *manager) reposWithRemoteBranch(ctx context.Context, branch string, stat
 	for i, repo := range repos {
 		if errs[i] != nil {
 			errs[i] = fmt.Errorf("%s: %w", repo.Name, errs[i])
-			sendStatus(statusCh, "Warning: could not check origin of "+repo.Name+" for "+branch+": "+errs[i].Error())
+			sendStatus(statusCh, "Warning: could not check configured remote of "+repo.Name+" for "+branch+": "+errs[i].Error())
 			continue
 		}
 		if found[i] {
@@ -154,9 +154,9 @@ func (m *manager) reposWithRemoteBranch(ctx context.Context, branch string, stat
 	}
 	if len(out) == 0 {
 		if err := errors.Join(errs...); err != nil {
-			return nil, fmt.Errorf("init: look up remote branch %s (check network access to origin and retry): %w", branch, err)
+			return nil, fmt.Errorf("init: look up remote branch %s (check network access to configured remote and retry): %w", branch, err)
 		}
-		return nil, fmt.Errorf("%w: %s is not on origin in any repository; check the branch name and that it is pushed", ErrRemoteBranchNotFound, branch)
+		return nil, fmt.Errorf("%w: %s is not on configured remote in any repository; check the branch name and that it is pushed", ErrRemoteBranchNotFound, branch)
 	}
 	return out, nil
 }
@@ -228,6 +228,11 @@ func (m *manager) processService(
 	}
 
 	serviceName := filepath.Base(repoPath)
+	if remote := m.cfg.ServiceRemote(); remote.Explicit() {
+		if _, err := m.git.RemoteURL(ctx, repoPath, remote.String()); err != nil {
+			return serviceResult{serviceName: serviceName, err: err}
+		}
+	}
 	dest := filepath.Join(taskDir, serviceName)
 
 	if _, statErr := os.Stat(dest); statErr == nil {

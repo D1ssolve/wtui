@@ -171,5 +171,5 @@ func (m *manager) pruneMergeTarget(service, branch string) string {
 		base = m.integrationBranch()
 	}
 
-	return "origin/" + base
+	return m.cfg.ServiceRemote().Tracking(base)
 }

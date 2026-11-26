@@ -213,7 +213,7 @@ func (m *manager) reconcileDirectMR(ctx context.Context, repoPath, method string
 	if mr.SupportsTargetBinding || mr.Number == 0 || mr.HeadSHA == "" || mr.TargetBranch == "" {
 		return false, nil
 	}
-	remoteURL, err := m.git.RemoteURL(ctx, repoPath, "origin")
+	remoteURL, err := m.git.RemoteURL(ctx, repoPath, m.cfg.ServiceRemote().String())
 	if err != nil {
 		return false, err
 	}

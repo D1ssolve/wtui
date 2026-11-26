@@ -13,7 +13,9 @@ import (
 	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
-const releaseDeletionScope = "Removes release worktrees, manifest and directory.\nDeletes local and origin release branches and tags.\nTasks, task branches and merged integration/production history are retained."
+func releaseDeletionScope(preview task.ReleaseCleanupPreview) string {
+	return "Removes release worktrees, manifest and directory.\nDeletes local and " + preview.Remote.String() + " branches and tags.\nTasks, task branches and merged integration/production history are retained."
+}
 
 // Both approval stages keep the deletion scope visible while refs scroll.
 type releaseDeletionReview struct {
@@ -35,14 +37,14 @@ func newReleaseDeletionReview(preview task.ReleaseCleanupPreview, remote bool) *
 func (m *releaseDeletionReview) header() string {
 	title := "Delete release " + m.preview.ReleaseID
 	if m.remote {
-		title += " on origin?"
+		title += " on " + m.preview.Remote.String() + "?"
 	}
 	return lipgloss.NewStyle().Bold(true).Foreground(modalColorDanger).Render(title) + "\n" +
-		lipgloss.NewStyle().Foreground(modalColorNormal).Render(releaseDeletionScope) + "\n"
+		lipgloss.NewStyle().Foreground(modalColorNormal).Render(releaseDeletionScope(m.preview)) + "\n"
 }
 
 func (m *releaseDeletionReview) footer() string {
-	action := "[Enter/y] review origin deletion"
+	action := "[Enter/y] review deletion"
 	if m.remote {
 		action = "[Enter/y] DELETE release"
 	}

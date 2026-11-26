@@ -1,6 +1,7 @@
 package modal
 
 import (
+	"gopkg.in/yaml.v3"
 	"strings"
 	"testing"
 
@@ -69,22 +70,29 @@ func TestReleaseDeletionChecklist_PreservesFixedScopeAndBlockers(t *testing.T) {
 func TestReleaseDeletionConfirm_RendersScopeAndFitsTerminal(t *testing.T) {
 	preview := cleanupPreview(task.ReleaseDeletionSelection())
 	preview.Services[0].Tag = "v1.2.3"
-	for _, remote := range []bool{false, true} {
-		for _, size := range []struct{ w, h int }{{120, 40}, {60, 24}, {40, 20}} {
-			var m Modal = NewReleaseCleanupConfirmModal(preview, 7)
-			if remote {
-				m = NewReleaseCleanupRemoteConfirmModal(preview, 7)
+	for _, name := range []string{"origin", "upstream"} {
+		if name != "origin" {
+			if err := yaml.Unmarshal([]byte(name), &preview.Remote); err != nil {
+				t.Fatal(err)
 			}
-			m.SetTerminalSize(size.w, size.h)
-			view := stripAnsi(m.View())
-			assertViewFitsContent(t, m.View(), size.w, size.h)
-			for _, want := range []string{"Delete release", "origin", "tags", "retained", "task branches", "integration/production", "cancel"} {
-				if !strings.Contains(strings.ReplaceAll(view, "\n", " "), want) {
-					t.Fatalf("%dx%d remote=%v missing %q:\n%s", size.w, size.h, remote, want, view)
+		}
+		for _, remote := range []bool{false, true} {
+			for _, size := range []struct{ w, h int }{{120, 40}, {60, 24}, {40, 20}} {
+				var m Modal = NewReleaseCleanupConfirmModal(preview, 7)
+				if remote {
+					m = NewReleaseCleanupRemoteConfirmModal(preview, 7)
 				}
-			}
-			if size.w == 120 && (!strings.Contains(view, "release/1.2.3") || !strings.Contains(view, "v1.2.3")) {
-				t.Fatalf("exact deletion refs missing:\n%s", view)
+				m.SetTerminalSize(size.w, size.h)
+				view := stripAnsi(m.View())
+				assertViewFitsContent(t, m.View(), size.w, size.h)
+				for _, want := range []string{"Delete release", name, "tags", "retained", "task branches", "integration/production", "cancel"} {
+					if !strings.Contains(strings.ReplaceAll(view, "\n", " "), want) {
+						t.Fatalf("%dx%d remote=%v missing %q:\n%s", size.w, size.h, remote, want, view)
+					}
+				}
+				if size.w == 120 && (!strings.Contains(view, "release/1.2.3") || !strings.Contains(view, "v1.2.3")) {
+					t.Fatalf("exact deletion refs missing:\n%s", view)
+				}
 			}
 		}
 	}
@@ -161,6 +169,9 @@ func TestReleaseCleanupChecklist_BlockedUnchangedSelectionCannotSubmitButChanged
 
 func TestReleaseCleanupModals_CancelAndTwoStageConfirm(t *testing.T) {
 	preview := cleanupPreview(task.ReleaseCleanupSelection{RemoveTasks: true, DeleteRemoteTaskBranches: true})
+	if err := yaml.Unmarshal([]byte("upstream"), &preview.Remote); err != nil {
+		t.Fatal(err)
+	}
 	confirm := NewReleaseCleanupConfirmModal(preview, 7)
 	_, cmd := confirm.Update(sendSpecialKey(tea.KeyEnter))
 	msg, ok := execCmd(cmd).(ConfirmReleaseCleanupMsg)
@@ -172,6 +183,15 @@ func TestReleaseCleanupModals_CancelAndTwoStageConfirm(t *testing.T) {
 	}
 
 	remote := NewReleaseCleanupRemoteConfirmModal(preview, 7)
+	for _, stage := range []Modal{confirm, remote} {
+		for _, width := range []int{120, 40} {
+			stage.SetTerminalSize(width, 20)
+			v := stripAnsi(stage.Title() + "\n" + stage.View())
+			if !strings.Contains(v, "upstream") || strings.Contains(v, "unsupported") || !strings.Contains(v, "feature/TASK-1") || strings.Contains(v, "release/1.2.3") {
+				t.Errorf("wrong confirmation scope: %s", v)
+			}
+		}
+	}
 	remoteView := stripAnsi(remote.View())
 	for _, want := range []string{"Remote branches", "feature/TASK-1", "delete remote branches"} {
 		if !strings.Contains(remoteView, want) {

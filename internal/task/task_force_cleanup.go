@@ -39,6 +39,13 @@ func (m *manager) ForceTaskCleanup(ctx context.Context, taskID string, deleteRem
 		if !pathWithin(taskDir, svc.WorktreePath) {
 			return result, fmt.Errorf("service %s worktree outside task directory", svc.Name)
 		}
+		var url string
+		if deleteRemoteBranches && !m.isCleanupProtectedBranch(ctx, svc.Branch, taskID) {
+			url, err = m.verifiedPushURL(ctx, svc)
+			if err != nil {
+				return result, err
+			}
+		}
 		if svc.WorktreePath != "" {
 			if _, err := os.Stat(svc.WorktreePath); err == nil {
 				commonDir, err := m.git.CommonDir(ctx, svc.RepoPath)
@@ -70,12 +77,12 @@ func (m *manager) ForceTaskCleanup(ctx context.Context, taskID string, deleteRem
 			continue
 		}
 		if deleteRemoteBranches {
-			remoteSHA, err := m.git.RemoteRefSHA(ctx, svc.RepoPath, "refs/heads/"+svc.Branch)
+			remoteSHA, err := m.git.RemoteRefSHAAt(ctx, svc.RepoPath, url, "refs/heads/"+svc.Branch)
 			if err != nil {
 				return result, err
 			}
 			if remoteSHA != "" {
-				if err := m.git.DeleteRemoteBranchIfUnchanged(ctx, svc.RepoPath, svc.Branch, remoteSHA); err != nil {
+				if err := m.git.DeleteRemoteRefIfUnchanged(ctx, svc.RepoPath, url, "refs/heads/"+svc.Branch, remoteSHA); err != nil {
 					return result, err
 				}
 			}

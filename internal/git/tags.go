@@ -75,7 +75,8 @@ func (c *CommandClient) PushTag(ctx context.Context, worktreePath, capturedRemot
 	if !validObjectID(tagObjectOID) {
 		return fmt.Errorf("invalid tag object OID %q", tagObjectOID)
 	}
-	_, err = c.execGit(ctx, "-C", worktreePath, "push", "--", capturedRemoteURL, tagObjectOID+":"+ref)
+	args, operand := pinnedRemoteArgs(worktreePath, capturedRemoteURL)
+	_, err = c.execGit(ctx, append(args, "push", "--", operand, tagObjectOID+":"+ref)...)
 	if err != nil && ctx.Err() != nil {
 		return ctx.Err()
 	}

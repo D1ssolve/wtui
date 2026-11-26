@@ -85,7 +85,7 @@ func (m *manager) integrateReleaseTaskMR(ctx context.Context, release *domain.Re
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 		return fmt.Errorf("release task merge: fetch %s: %w", svc.Name, err)
 	}
-	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+svc.IntegrationBranch)
+	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch))
 	if err != nil {
 		return err
 	}
@@ -160,7 +160,7 @@ func (m *manager) integrateReleaseTaskMR(ctx context.Context, release *domain.Re
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 		return fmt.Errorf("release task merge: fetch after merge %s: %w", svc.Name, err)
 	}
-	tip, err = m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+svc.IntegrationBranch)
+	tip, err = m.resolveReleaseRefSHA(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch))
 	if err != nil {
 		return err
 	}
@@ -194,7 +194,7 @@ func (m *manager) reconcileTaskMRMerge(ctx context.Context, release *domain.Rele
 	if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 		return false, fmt.Errorf("release task merge: reconcile fetch %s: %w", svc.Name, err)
 	}
-	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+svc.IntegrationBranch)
+	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch))
 	if err != nil {
 		return false, err
 	}

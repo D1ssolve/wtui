@@ -568,6 +568,7 @@ What it is used for:
 
 | Key | Type | Effective default | Description |
 |---|---|---|---|
+| `forge.remote` | string | `origin` | Named Git remote in each service repository (for example, `upstream` when `origin` is a fork). Use a name, not a URL or path. Guarded operations stay bound to their approved endpoint. |
 | `forge.default_provider` | string | `auto` | Displayed in system status. Actual operation routing is detected from each service remote URL. |
 | `forge.merge_queue` | bool | `false` | GitHub repositories whose protected branches require a [merge queue](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-a-pull-request-with-a-merge-queue). `M` then adds each ready PR to the queue (`gh pr merge --auto --match-head-commit`) instead of merging; press `M` again after the queue merged it to record the result. Release preparation with `integrate_tasks` is refused, because it merges task MRs one after another. |
 | `forge.gitlab_host` | string | `gitlab.com` | GitLab hostname recognized in remote URLs. |

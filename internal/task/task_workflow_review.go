@@ -26,7 +26,7 @@ func (m *manager) inspectWorkflowReviewMR(ctx context.Context, svc domain.Servic
 	}
 	client, clientErr := m.forgeClientForService(ctx, svc)
 	if clientErr != nil {
-		return failedWorkflowInspection(item, clientErr, "inspect origin URL and forge provider configuration")
+		return failedWorkflowInspection(item, clientErr, "inspect configured remote URL and forge provider configuration")
 	}
 	repo := forge.ExtractRepoPath(svc.RemoteURL)
 	if repo == "" {
@@ -51,7 +51,7 @@ func (m *manager) inspectWorkflowReviewMR(ctx context.Context, svc domain.Servic
 			break
 		}
 		if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Name, svc.Branch), &item.MR); err != nil {
-			return failedWorkflowInspection(item, err, "inspect saved merge proof and origin push destination")
+			return failedWorkflowInspection(item, err, "inspect saved merge proof and configured remote push destination")
 		}
 		item.Blockers = append([]string(nil), item.MR.Blockers...)
 		item.NextAction = item.MR.NextAction
@@ -119,7 +119,7 @@ func (m *manager) reconcileMergedReviewMR(ctx context.Context, svc domain.Servic
 		item.MR.URL = active[0].URL
 	}
 	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Name, svc.Branch), &mr); err != nil {
-		return fail(withRecovery(err, "inspect saved merge proof and origin push destination"))
+		return fail(withRecovery(err, "inspect saved merge proof and configured remote push destination"))
 	}
 	currentSHA, err := m.resolveFreshSourceSHA(ctx, svc)
 	if err != nil {

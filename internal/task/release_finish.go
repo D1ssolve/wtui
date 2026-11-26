@@ -29,7 +29,7 @@ func (m *manager) FinalizeRelease(ctx context.Context, params FinishReleaseParam
 // acceptReleaseBranchTip records the remote release branch tip as the release SHA on the
 // first finalize; a retry keeps the recorded SHA as long as the branch still contains it.
 func (m *manager) acceptReleaseBranchTip(ctx context.Context, svc *domain.ReleaseService) error {
-	remoteRelease := "origin/" + svc.ReleaseBranch
+	remoteRelease := m.cfg.ServiceRemote().Tracking(svc.ReleaseBranch)
 	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, remoteRelease)
 	if err != nil {
 		return err
@@ -70,7 +70,7 @@ func (m *manager) syncFinalizeService(ctx context.Context, release *domain.Relea
 		}
 		svc.IntegrationWorktreePath = ""
 	}
-	remoteIntegration := "origin/" + into
+	remoteIntegration := m.cfg.ServiceRemote().Tracking(into)
 	if err := m.git.AddDetachedWorktree(ctx, svc.RepoPath, integrationPath, remoteIntegration); err != nil {
 		return err
 	}

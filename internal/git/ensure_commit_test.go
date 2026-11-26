@@ -43,7 +43,7 @@ exit 0
 	}
 	args, _ := os.ReadFile(argsFile)
 	want := "-C /repo cat-file -e " + ensureCommitTestSHA + "^{commit}\n" +
-		"-C /repo fetch --no-tags origin " + ensureCommitTestSHA + "\n"
+		"-C /repo remote get-url origin\n" + "-C /repo fetch --no-tags origin " + ensureCommitTestSHA + "\n"
 	if string(args) != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}

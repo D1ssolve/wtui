@@ -71,7 +71,7 @@ func (m *manager) SyncService(ctx context.Context, taskID, serviceName string, s
 		return fmt.Errorf("sync %s/%s: fetch: %w", taskID, serviceName, err)
 	}
 
-	upstream := "origin/" + m.integrationBranch()
+	upstream := m.cfg.ServiceRemote().Tracking(m.integrationBranch())
 
 	// Re-check behind count after fetch
 	_, behind, abErr := m.git.RevListAheadBehind(ctx, worktreePath, upstream)

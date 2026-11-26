@@ -84,7 +84,7 @@ func (m *manager) planReleaseTaskMerges(ctx context.Context, plan releasePlan) (
 		if err := m.git.Fetch(ctx, svc.RepoPath); err != nil {
 			return ReleaseTaskMergePlan{}, fmt.Errorf("release task merge plan: fetch %s: %w", svc.Name, err)
 		}
-		target := "origin/" + svc.IntegrationBranch
+		target := m.cfg.ServiceRemote().Tracking(svc.IntegrationBranch)
 		targetSHA, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, target)
 		if err != nil {
 			return ReleaseTaskMergePlan{}, err
@@ -249,7 +249,7 @@ func (m *manager) releaseServiceRemoteURL(ctx context.Context, svc domain.Releas
 	if m.git == nil {
 		return "", errors.New("release service remote URL: git client is nil")
 	}
-	remoteURL, err := m.git.RemoteURL(ctx, svc.RepoPath, "origin")
+	remoteURL, err := m.git.RemoteURL(ctx, svc.RepoPath, m.cfg.ServiceRemote().String())
 	if err != nil {
 		return "", fmt.Errorf("release service remote URL: service=%s: %w", svc.Name, err)
 	}

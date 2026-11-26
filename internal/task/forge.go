@@ -126,7 +126,7 @@ func (m *manager) mrCreateConfirmReason(ctx context.Context, svc domain.Service,
 		}
 	}
 	if err := m.git.Fetch(ctx, svc.WorktreePath); err == nil {
-		ahead, err := m.git.RevListCount(ctx, svc.WorktreePath, svc.Branch, "origin/"+target)
+		ahead, err := m.git.RevListCount(ctx, svc.WorktreePath, svc.Branch, m.cfg.ServiceRemote().Tracking(target))
 		if err == nil && ahead == 0 {
 			return fmt.Sprintf("no changes vs %s; MR will be empty", target)
 		}
@@ -231,7 +231,7 @@ func (m *manager) forgeClientForService(ctx context.Context, svc domain.Service)
 		return nil, forge.ErrForgeUnavailable
 	}
 
-	remoteURL, err := m.git.RemoteURL(ctx, svc.WorktreePath, "origin")
+	remoteURL, err := m.git.RemoteURL(ctx, svc.WorktreePath, m.cfg.ServiceRemote().String())
 	if err != nil {
 		return nil, fmt.Errorf("resolve forge provider for %s: %w", svc.Name, err)
 	}

@@ -428,7 +428,13 @@ func cleanupTestManager(t *testing.T, status domain.ReleaseStatus) (*manager, *m
 		t.Fatal(err)
 	}
 
-	gitMock := &mockGitClient{branchExistsRes: true}
+	gitMock := &mockGitClient{branchExistsRes: true, remoteURLRes: "/fixture.git"}
+	gitMock.remoteRefSHAAtFn = func(repo, url, ref string) (string, error) {
+		if url != gitMock.remoteURLRes {
+			t.Fatalf("unapproved destination %q", url)
+		}
+		return gitMock.remoteRefSHAFn(repo, ref)
+	}
 	gitMock.resolveRefFn = func(_ string, ref string) (string, error) {
 		switch ref {
 		case "refs/heads/feature/APP-1":

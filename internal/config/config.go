@@ -52,6 +52,7 @@ type ReleaseConfig struct {
 }
 
 type ForgeConfig struct {
+	Remote RemoteName `yaml:"remote"`
 	// MergeQueue sends GitHub merges through the repository's merge queue instead of merging directly.
 	MergeQueue      bool   `yaml:"merge_queue"`
 	DefaultProvider string `yaml:"default_provider"`

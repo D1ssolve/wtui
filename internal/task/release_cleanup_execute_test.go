@@ -94,8 +94,8 @@ func TestExecuteReleaseCleanup_TargetMovementBlocksBranchDeletion(t *testing.T) 
 				return ancestor == sourceSHA && descendant != movedTargetSHA, nil
 			}
 			gitMock.deleteBranchIfUnchangedFn = func(_, _, _ string) error { deleted = true; return nil }
-			gitMock.deleteRemoteBranchIfUnchangedFn = func(_, _, _ string) error { deleted = true; return nil }
-			step := releaseCleanupStep{kind: tc.kind, repoPath: mgr.cfg.RootDir, branch: "feature/APP-1", expectedSHA: sourceSHA,
+			gitMock.deleteRemoteRefIfUnchangedFn = func(_, _, _, _ string) error { deleted = true; return nil }
+			step := releaseCleanupStep{kind: tc.kind, remoteURL: gitMock.remoteURLRes, repoPath: mgr.cfg.RootDir, branch: "feature/APP-1", expectedSHA: sourceSHA,
 				targets: []releaseCleanupTarget{{ref: "refs/heads/develop", plannedSHA: plannedTargetSHA}}}
 			if !tc.remote {
 				gitMock.branchExistsRes = true
@@ -121,7 +121,7 @@ func TestExecuteReleaseCleanup_RemoteDeleteSelectionUsesExpectedSHA(t *testing.T
 	selection.DeleteRemoteTaskBranches = true
 	selection.DeleteRemoteReleaseBranches = true
 	var calls []string
-	gitMock.deleteRemoteBranchIfUnchangedFn = func(_, branch, expectedSHA string) error {
+	gitMock.deleteRemoteRefIfUnchangedFn = func(_, _, branch, expectedSHA string) error {
 		calls = append(calls, branch+"@"+expectedSHA)
 		return nil
 	}
@@ -143,7 +143,7 @@ func TestExecuteReleaseCleanup_RemoteDeleteSelectionUsesExpectedSHA(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(calls, "feature/APP-1@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") || !slices.Contains(calls, "release/1.0.0@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") {
+	if !slices.Contains(calls, "refs/heads/feature/APP-1@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") || !slices.Contains(calls, "refs/heads/release/1.0.0@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") {
 		t.Fatalf("remote delete calls = %q", calls)
 	}
 }

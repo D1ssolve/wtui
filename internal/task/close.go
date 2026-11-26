@@ -257,7 +257,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 	if params.DryRun {
 		step("validate", StepStatusOK, "plan ready")
 		for _, svc := range services {
-			step(svc.ServiceName+":fetch", StepStatusOK, "dry-run: fetch origin")
+			step(svc.ServiceName+":fetch", StepStatusOK, "dry-run: fetch "+m.cfg.ServiceRemote().String())
 			switch svc.CloseStrategy {
 			case gitflow.CloseStrategyDirectMerge:
 				for _, target := range svc.TargetBranches {
@@ -318,7 +318,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 			}
 			continue
 		}
-		step(svc.Name+":fetch", StepStatusOK, "fetched origin")
+		step(svc.Name+":fetch", StepStatusOK, "fetched "+m.cfg.ServiceRemote().String())
 
 		svcFailed := false
 		reviewVerified := false
@@ -351,7 +351,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 				// fresh after the fetch above. A concurrent remote move
 				// between this resolution and the lease push fails the push
 				// instead of overwriting foreign work.
-				remoteSHA, resolveErr := m.git.ResolveRef(ctx, svc.RepoPath, "origin/"+target)
+				remoteSHA, resolveErr := m.git.ResolveRef(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(target))
 				if resolveErr != nil || remoteSHA == "" {
 					if resolveErr == nil {
 						resolveErr = fmt.Errorf("resolve remote target %s: empty SHA", target)
@@ -364,7 +364,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 				// Skip only when the fresh remote target already contains the
 				// source; local target ancestry alone cannot prove the merge
 				// was published.
-				onRemote, ancestorErr := m.git.IsAncestor(ctx, svc.RepoPath, svcPlan.SourceBranch, "origin/"+target)
+				onRemote, ancestorErr := m.git.IsAncestor(ctx, svc.RepoPath, svcPlan.SourceBranch, m.cfg.ServiceRemote().Tracking(target))
 				if ancestorErr != nil {
 					step(svc.Name+":merge:"+target, StepStatusFailed, ancestorErr.Error())
 					svcFailed = true
@@ -473,9 +473,9 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 
 				// Prove the merged result builds on the fresh remote target
 				// before any push: a local target that is stale or diverged
-				// from origin/<target> would publish history that discards
+				// from <remote>/<target> would publish history that discards
 				// remote work the lease alone cannot detect. Fail closed; the
-				// user must reset the local target to origin/<target> and
+				// user must reset the local target to <remote>/<target> and
 				// retry.
 				descends, ancestorErr := m.git.IsAncestor(ctx, svc.RepoPath, remoteSHA, mergedOID)
 				if ancestorErr != nil {
@@ -484,7 +484,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 					break
 				}
 				if !descends {
-					divergedErr := fmt.Errorf("local target %s diverged from origin/%s: %s does not contain remote %s; reset the local target to origin/%s and retry", target, target, mergedOID, remoteSHA, target)
+					divergedErr := fmt.Errorf("local target %s diverged from "+m.cfg.ServiceRemote().String()+"/%s: %s does not contain remote %s; reset the local target to "+m.cfg.ServiceRemote().String()+"/%s and retry", target, target, mergedOID, remoteSHA, target)
 					step(svc.Name+":push:"+target, StepStatusFailed, divergedErr.Error())
 					svcFailed = true
 					break
@@ -493,7 +493,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 				// Prove the push destination before mutating the remote, then
 				// publish the exact merged OID under a lease on the fresh
 				// pre-merge remote target OID to the captured URL, never the
-				// mutable remote name: a concurrent pushurl/origin retarget
+				// mutable remote name: a concurrent pushurl/configured remote retarget
 				// cannot redirect the push. The lease is the safety guard, so
 				// the generic protected-branch push check stays out of this
 				// workflow-owned target push.

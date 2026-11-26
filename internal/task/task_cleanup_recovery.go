@@ -14,7 +14,7 @@ func (m *manager) checkTaskCleanupDestinations(ctx context.Context, plan TaskCle
 		if step.kind != cleanupTaskWorktree {
 			continue
 		}
-		url, err := m.git.PushURL(ctx, step.repoPath, "origin")
+		url, err := m.git.PushURL(ctx, step.repoPath, m.cfg.ServiceRemote().String())
 		if err != nil {
 			return fmt.Errorf("%w: resolve push destination for %s: %w", ErrTaskCleanupBlocked, step.repoPath, err)
 		}

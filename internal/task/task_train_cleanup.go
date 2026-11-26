@@ -95,7 +95,7 @@ func (m *manager) verifyTaskTrainCleanup(ctx context.Context, plan TaskCleanupPl
 			return err
 		}
 		if client.Provider() != forge.ForgeProviderGitLab || repo != pin.Repo {
-			return fmt.Errorf("origin does not identify recorded GitLab project %s", pin.Repo)
+			return fmt.Errorf("%s does not identify recorded GitLab project %s", m.cfg.ServiceRemote(), pin.Repo)
 		}
 		mr, err := client.MRReadinessByNumber(ctx, pin.Number, repo, path)
 		if err != nil {

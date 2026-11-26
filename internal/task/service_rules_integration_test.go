@@ -17,11 +17,21 @@ import (
 
 func serviceRulesGitEnv(t *testing.T) (*manager, string, map[string]string) {
 	t.Helper()
+	return serviceRulesGitEnvWithRemote(t, "origin")
+}
+
+// serviceRulesGitEnvWithRemote clones every service under remote only, so no origin exists unless named.
+func serviceRulesGitEnvWithRemote(t *testing.T, remoteName string) (*manager, string, map[string]string) {
+	t.Helper()
 	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
 	root := resolvedPath(t, t.TempDir())
 	taskRoot := filepath.Join(root, ".tasks")
 	path := filepath.Join(root, "config.yaml")
-	writeFile(t, path, `workflow:
+	forgeBlock := ""
+	if remoteName != "origin" {
+		forgeBlock = "forge: {remote: " + remoteName + "}\n"
+	}
+	writeFile(t, path, forgeBlock+`workflow:
   extends: git-flow
   branches: {production: main}
   task_types:
@@ -47,20 +57,20 @@ func serviceRulesGitEnv(t *testing.T) (*manager, string, map[string]string) {
 		remotes[name] = remote
 		repo := filepath.Join(root, name)
 		mustGit(t, root, "init", "--bare", "-b", "main", remote)
-		mustGit(t, root, "clone", remote, repo)
+		mustGit(t, root, "clone", "-o", remoteName, remote, repo)
 		mustGit(t, repo, "config", "user.email", "test@example.com")
 		mustGit(t, repo, "config", "user.name", "Test")
 		mustGit(t, repo, "commit", "--allow-empty", "-m", "main tip")
 		mustGit(t, repo, "checkout", "-b", "develop")
 		mustGit(t, repo, "commit", "--allow-empty", "-m", "develop tip")
-		mustGit(t, repo, "push", "origin", "main", "develop")
+		mustGit(t, repo, "push", remoteName, "main", "develop")
 		mustGit(t, repo, "checkout", "--detach")
 	}
 	if err := os.MkdirAll(taskRoot, 0755); err != nil {
 		t.Fatal(err)
 	}
 	logger := newIntegrationLogger()
-	g := git.NewCommandClient(logger)
+	g := git.NewRemoteCommandClient(logger, cfg.ServiceRemote()) // as app.BuildDependencies wires it
 	m := New(cfg, g, discovery.New(cfg, g, logger), &recordingSlnGenerator{}, validation.NewTaskValidator(g), flow, nil, logger)
 	return m.(*manager), root, remotes
 }
@@ -148,6 +158,29 @@ func TestServiceRules_DivergedFFOnlyLeavesBareRefsUnchanged(t *testing.T) {
 	}
 	if after := gitOutput(t, remotes["api"], "show-ref", "--heads"); after != before {
 		t.Fatalf("bare refs changed: %s -> %s", before, after)
+	}
+}
+
+func TestServiceRules_FFOnlyCloseUsesConfiguredRemote(t *testing.T) {
+	m, _, remotes := serviceRulesGitEnvWithRemote(t, "upstream")
+	ctx := t.Context()
+	const id = "T-REMOTE"
+	if _, err := m.Init(ctx, InitParams{TaskID: id, Services: []string{"api"}}); err != nil {
+		t.Fatal(err)
+	}
+	wt := filepath.Join(m.cfg.TasksRoot, id, "api")
+	writeFile(t, filepath.Join(wt, "work"), "api")
+	mustGit(t, wt, "add", "work")
+	mustGit(t, wt, "commit", "-m", "task change")
+	plan, err := m.PlanCloseTask(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := m.CloseTask(ctx, CloseTaskParams{TaskID: id, Fingerprint: plan.Fingerprint}); err != nil || !result.Success {
+		t.Fatalf("ff_only close through upstream: %+v, %v", result, err)
+	}
+	if got := gitOutput(t, remotes["api"], "show", "main:work"); got != "api" {
+		t.Fatalf("main:work = %q, want api", got)
 	}
 }
 

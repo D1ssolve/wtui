@@ -339,7 +339,7 @@ func (m *manager) serviceForgeTarget(ctx context.Context, svc domain.Service) (f
 	if err != nil {
 		return nil, "", err
 	}
-	remoteURL, err := m.git.RemoteURL(ctx, svc.WorktreePath, "origin")
+	remoteURL, err := m.git.RemoteURL(ctx, svc.WorktreePath, m.cfg.ServiceRemote().String())
 	if err != nil {
 		return nil, "", err
 	}

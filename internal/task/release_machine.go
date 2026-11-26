@@ -492,7 +492,7 @@ func (m *manager) backMergeRelease(ctx context.Context, release *domain.Release,
 		if from == gitflow.ReleaseBranchRef {
 			from = svc.ReleaseBranch
 		} else {
-			from = "origin/" + from
+			from = m.cfg.ServiceRemote().Tracking(from)
 		}
 		if err := m.syncFinalizeService(ctx, release, svc, from, step.Into[0], statusCh); err != nil {
 			return serviceFailure(svc, err)
@@ -534,7 +534,7 @@ func (m *manager) verifyAcceptedReviewMerge(ctx context.Context, svc *domain.Rel
 	if expected == "" {
 		return fmt.Errorf("%w: service=%s has no accepted merge into %s", ErrReleaseRetryUnsafe, svc.Name, branch)
 	}
-	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, "origin/"+branch)
+	tip, err := m.resolveReleaseRefSHA(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(branch))
 	if err != nil {
 		return err
 	}
@@ -684,7 +684,7 @@ func (m *manager) releaseForgeTarget(ctx context.Context, svc domain.ReleaseServ
 	if err != nil {
 		return nil, "", "", err
 	}
-	remoteURL, err := m.git.RemoteURL(ctx, svc.RepoPath, "origin")
+	remoteURL, err := m.git.RemoteURL(ctx, svc.RepoPath, m.cfg.ServiceRemote().String())
 	if err != nil {
 		return nil, "", "", fmt.Errorf("resolve remote for service %s: %w", svc.Name, err)
 	}

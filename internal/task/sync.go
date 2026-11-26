@@ -73,7 +73,7 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 		return nil
 	}
 
-	upstream := "origin/" + m.integrationBranch()
+	upstream := m.cfg.ServiceRemote().Tracking(m.integrationBranch())
 
 	var (
 		wg       sync.WaitGroup

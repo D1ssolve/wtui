@@ -198,10 +198,10 @@ func TestDeleteBranchIfUnchanged_UsesExpectedSHA(t *testing.T) {
 	}, "-C /repo update-ref --no-deref -d refs/heads/feature/ABC-1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
 }
 
-func TestDeleteRemoteBranchIfUnchanged_UsesExactLease(t *testing.T) {
+func TestDeleteRemoteTaskRef_UsesExactLease(t *testing.T) {
 	assertGitArgs(t, func(client *CommandClient) error {
-		return client.DeleteRemoteBranchIfUnchanged(t.Context(), "/repo", "feature/ABC-1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	}, "-C /repo push --force-with-lease=refs/heads/feature/ABC-1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa origin :refs/heads/feature/ABC-1\n")
+		return client.DeleteRemoteRefIfUnchanged(t.Context(), "/repo", "/approved.git", "refs/heads/feature/ABC-1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	}, "-C /repo -c url..insteadOf=<pin> -c url..pushInsteadOf=<pin> push --force-with-lease=refs/heads/feature/ABC-1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- <pin>/approved.git :refs/heads/feature/ABC-1\n")
 }
 
 func TestPushRefWithLease_AbsentTargetUsesEmptyExpectLease(t *testing.T) {
@@ -215,7 +215,7 @@ func TestPushRefWithLease_AbsentTargetUsesEmptyExpectLease(t *testing.T) {
 			"refs/heads/feature/ABC-1",
 			"",
 		)
-	}, "-C /repo push --force-with-lease=refs/heads/feature/ABC-1: -- git@gitlab.com:group/repo.git bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/feature/ABC-1\n")
+	}, "-C /repo -c url..insteadOf=<pin> -c url..pushInsteadOf=<pin> push --force-with-lease=refs/heads/feature/ABC-1: -- <pin>git@gitlab.com:group/repo.git bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/feature/ABC-1\n")
 }
 
 func TestPushRefWithLease_RejectsInvalidArguments(t *testing.T) {
@@ -365,7 +365,7 @@ exit 0
 	if err != nil {
 		t.Fatalf("read args file: %v", err)
 	}
-	want := "-C /repo ls-remote --exit-code --heads origin feature/ABC-123\n"
+	want := "-C /repo remote get-url origin\n-C /repo ls-remote --exit-code --heads origin feature/ABC-123\n"
 	if string(args) != want {
 		t.Fatalf("git args = %q, want %q", string(args), want)
 	}
@@ -375,6 +375,7 @@ func TestCommandClient_RemoteBranchExistsReturnsFalseWhenLiveRemoteHasNoMatch(t 
 	binDir := t.TempDir()
 	fakeGit := filepath.Join(binDir, "git")
 	script := `#!/bin/sh
+[ "$3" = remote ] && exit 0
 exit 2
 `
 	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
@@ -671,8 +672,8 @@ exit 0
 	if err != nil {
 		t.Fatalf("read args file: %v", err)
 	}
-	want := "-C /repo push -- " + remoteURL + " " + oid + ":refs/tags/v1.2.0\n"
-	if string(args) != want {
+	want := "-C /repo -c url..insteadOf=<pin> -c url..pushInsteadOf=<pin> push -- <pin>" + remoteURL + " " + oid + ":refs/tags/v1.2.0\n"
+	if normalizePinnedArgs(string(args)) != want {
 		t.Fatalf("git args = %q, want %q", string(args), want)
 	}
 }
@@ -898,7 +899,7 @@ exit 0
 		if err != nil {
 			t.Fatalf("read args file: %v", err)
 		}
-		want := "-C /worktree push -u origin release/1.2.0\n"
+		want := "-C /worktree remote get-url origin\n-C /worktree push -u origin release/1.2.0\n"
 		if string(args) != want {
 			t.Fatalf("git args = %q, want %q", string(args), want)
 		}

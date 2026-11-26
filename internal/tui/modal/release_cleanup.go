@@ -259,7 +259,7 @@ func (m *ReleaseCleanupChecklistModal) body() string {
 	b.WriteString(renderCleanupOwnership(m.preview, normalStyle, dimStyle))
 	b.WriteString("\n")
 	if m.selection.DeleteRelease {
-		b.WriteString(dimStyle.Render(releaseDeletionScope))
+		b.WriteString(dimStyle.Render(releaseDeletionScope(m.preview)))
 	} else {
 		b.WriteString(dimStyle.Render("Local task and release branches are removed. Remote deletion requires a separate confirmation."))
 	}
@@ -394,7 +394,7 @@ func (m *ReleaseCleanupConfirmModal) View() string {
 	}
 	warning := "Review cleanup for selected groups."
 	if cleanupHasRemoteSelection(m.preview.Selection) {
-		warning += " Remote branch deletion is unsupported and fails before any mutation."
+		warning += " Selected remote branches require separate confirmation."
 	}
 	return cleanupConfirmView(m.preview, warning, "[Enter/y] confirm  [Esc/n] cancel", false)
 }
@@ -411,7 +411,7 @@ func NewReleaseCleanupRemoteConfirmModal(preview task.ReleaseCleanupPreview, gen
 
 func (m *ReleaseCleanupRemoteConfirmModal) Title() string {
 	if m.deletion != nil {
-		return "Confirm Release Deletion on Origin"
+		return "Confirm Release Deletion on " + m.preview.Remote.String()
 	}
 	return "Confirm Remote Branch Deletion"
 }
@@ -462,7 +462,7 @@ func cleanupConfirmView(preview task.ReleaseCleanupPreview, warning, footer stri
 	b.WriteString(renderCleanupSelection(preview.Selection, normalStyle))
 	if cleanupHasRemoteSelection(preview.Selection) {
 		b.WriteString("\n")
-		b.WriteString(normalStyle.Bold(true).Render("Remote branches"))
+		b.WriteString(normalStyle.Bold(true).Render("Remote branches on " + preview.Remote.String()))
 		b.WriteString("\n")
 		b.WriteString(normalStyle.Render(remoteReleaseBranches(preview)))
 	}

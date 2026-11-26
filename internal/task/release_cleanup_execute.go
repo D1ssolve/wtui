@@ -154,7 +154,7 @@ func (m *manager) executeReleaseCleanupStep(ctx context.Context, plan ReleaseCle
 		if err := m.recheckCleanupTargets(ctx, step); err != nil {
 			return err
 		}
-		sha, err := m.git.RemoteRefSHA(ctx, step.repoPath, "refs/heads/"+step.branch)
+		sha, err := m.git.RemoteRefSHAAt(ctx, step.repoPath, step.remoteURL, "refs/heads/"+step.branch)
 		if err != nil {
 			return err
 		}
@@ -164,7 +164,7 @@ func (m *manager) executeReleaseCleanupStep(ctx context.Context, plan ReleaseCle
 		if sha != step.expectedSHA {
 			return fmt.Errorf("remote branch moved: expected %s, got %s", step.expectedSHA, sha)
 		}
-		return m.git.DeleteRemoteBranchIfUnchanged(ctx, step.repoPath, step.branch, step.expectedSHA)
+		return m.git.DeleteRemoteRefIfUnchanged(ctx, step.repoPath, step.remoteURL, "refs/heads/"+step.branch, step.expectedSHA)
 	case cleanupReleaseDirectory:
 		data, err := os.ReadFile(m.releaseManifestPath(plan.preview.ReleaseID))
 		if err != nil {

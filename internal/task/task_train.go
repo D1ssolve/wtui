@@ -168,7 +168,7 @@ func (m *manager) inspectPinnedTaskTrain(ctx context.Context, svc domain.Service
 		return fail(err)
 	}
 	if client.Provider() != forge.ForgeProviderGitLab || repo != pin.Repo {
-		return fail(fmt.Errorf("origin no longer identifies recorded GitLab project %s", pin.Repo))
+		return fail(fmt.Errorf("%s no longer identifies recorded GitLab project %s", m.cfg.ServiceRemote(), pin.Repo))
 	}
 	mr, err := client.MRReadinessByNumber(ctx, pin.Number, pin.Repo, svc.WorktreePath)
 	if err != nil {

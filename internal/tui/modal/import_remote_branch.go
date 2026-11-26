@@ -100,7 +100,7 @@ func (d *ImportRemoteBranchDialog) View() string {
 	view := title.Render("Import remote branch as task") + "\n\n" +
 		normal.Render("Remote branch") + "\n" + d.input.View() + "\n\n" +
 		normal.Render("Creates a task from every repository whose") + "\n" +
-		normal.Render("origin has this branch, so it can be released.")
+		normal.Render("The configured remote has this branch, so it can be released.")
 	if d.errorMsg != "" {
 		view += "\n\n" + danger.Render(d.errorMsg)
 	}
