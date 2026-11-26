@@ -98,6 +98,9 @@ func (m *mockValidationGitClient) Stash(context.Context, string, bool, bool) err
 func (m *mockValidationGitClient) CreateTag(context.Context, string, string, string, string) error {
 	return nil
 }
+func (m *mockValidationGitClient) TagMessage(context.Context, string, string) (string, error) {
+	return "", nil
+}
 func (m *mockValidationGitClient) EnsureCommit(context.Context, string, string) error { return nil }
 func (m *mockValidationGitClient) PushTag(context.Context, string, string, string, string) error {
 	return nil

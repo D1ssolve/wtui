@@ -53,6 +53,9 @@ type Step struct {
 	Name             string `json:"name,omitempty"`
 	Command          string `json:"command,omitempty"`
 	Timeout          string `json:"timeout,omitempty"`
+	// Title and Notes configure a publish step; omitempty keeps digests of flows without one unchanged.
+	Title string `json:"title,omitempty"`
+	Notes string `json:"notes,omitempty"`
 }
 
 type ReleaseFlow struct {
@@ -106,6 +109,8 @@ const (
 	StepTag            = "tag"
 	StepPipeline       = "pipeline"
 	StepCherryPick     = "cherry_pick"
+	// StepPublish creates a forge Release object for each service's already existing tag.
+	StepPublish = "publish"
 
 	// OpenReleases targets the release branches of wtui releases that are cut but not yet finished.
 	OpenReleases = "open_releases"

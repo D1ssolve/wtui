@@ -128,6 +128,8 @@ type Client interface {
 	Stash(ctx context.Context, worktreePath string, pop bool, includeUntracked bool) error
 
 	CreateTag(ctx context.Context, repoPath, tag, ref, message string) error
+	// TagMessage reads the message of an annotated tag object, signature excluded.
+	TagMessage(ctx context.Context, repoPath, tagObjectOID string) (string, error)
 
 	// PushTag publishes tagObjectOID to refs/tags/<tag> on the captured
 	// remote URL (never a mutable remote name) without force; a tag that

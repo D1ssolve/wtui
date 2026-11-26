@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"text/template"
 
 	"github.com/D1ssolve/wtui/internal/config"
 	"gopkg.in/yaml.v3"
@@ -204,6 +205,7 @@ var stepSpecs = map[string]map[stepContext][]string{
 	StepCutBranch:      {contextRelease: {"from"}},
 	StepGate:           {contextRelease: {"label"}},
 	StepBackMerge:      {contextRelease: {"from", "into", "when"}},
+	StepPublish:        {contextRelease: {"title", "notes"}},
 }
 
 func (c *compiler) branch(path, value string) (string, error) {
@@ -279,6 +281,12 @@ func (c *compiler) step(path string, ctx stepContext, raw config.StepConfig) (St
 		return Step{}, err
 	}
 	if step.When, err = single("when"); err != nil {
+		return Step{}, err
+	}
+	if step.Title, err = single("title"); err != nil {
+		return Step{}, err
+	}
+	if step.Notes, err = single("notes"); err != nil {
 		return Step{}, err
 	}
 	via, err := single("via_active_release")
@@ -483,7 +491,7 @@ func applyCloseSteps(path string, rule *BranchTypeRule) error {
 }
 
 // ponytail: release steps run on the existing release executor, which supports
-// [integrate_tasks] cut_branch [gate] ( review [back_merge] tag | tag ).
+// [integrate_tasks] cut_branch [gate] ( review [back_merge] tag | tag ) [publish].
 func validateReleaseSequence(kinds []string, steps []Step) error {
 	rest := kinds
 	take := func(kind string) bool {
@@ -500,11 +508,13 @@ func validateReleaseSequence(kinds []string, steps []Step) error {
 	if review {
 		take(StepBackMerge)
 	}
-	ok = ok && take(StepTag) && len(rest) == 0
-	if !ok {
-		return fmt.Errorf("workflow.release.steps: sequence [%s] is not supported; use [integrate_tasks] cut_branch [gate] (review [back_merge] tag | tag)", strings.Join(kinds, ", "))
+	ok = ok && take(StepTag)
+	tagAt := len(kinds) - len(rest) - 1
+	take(StepPublish)
+	if !ok || len(rest) != 0 {
+		return fmt.Errorf("workflow.release.steps: sequence [%s] is not supported; use [integrate_tasks] cut_branch [gate] (review [back_merge] tag | tag) [publish]", strings.Join(kinds, ", "))
 	}
-	tag := steps[len(steps)-1]
+	tag := steps[tagAt]
 	if review && tag.On != "accepted_merge" {
 		return fmt.Errorf("workflow.release.steps: tag after a production review must use on: accepted_merge")
 	}
@@ -601,8 +611,48 @@ func (c *compiler) releaseStep(path string, step *Step) error {
 		if step.On != "accepted_merge" && step.On != "release_branch" {
 			return fmt.Errorf("%s.on: expected accepted_merge or release_branch", path)
 		}
+	case StepPublish:
+		return validatePublish(path, step)
 	}
 	return err
+}
+
+const (
+	// PublishNotesChangelog uses the annotated tag message, which carries the conventional changelog.
+	PublishNotesChangelog = "changelog"
+	// PublishNotesDescription uses the release description entered for the service.
+	PublishNotesDescription = "description"
+)
+
+// PublishTitle renders a publish title template over Version, Tag, Service and ReleaseID;
+// an empty template is the tag name.
+func PublishTitle(tmpl string, fields map[string]string) (string, error) {
+	if tmpl == "" {
+		return fields["Tag"], nil
+	}
+	t, err := template.New("title").Option("missingkey=error").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	if err := t.Execute(&out, fields); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+func validatePublish(path string, step *Step) error {
+	if step.Notes == "" {
+		step.Notes = PublishNotesChangelog
+	}
+	if step.Notes != PublishNotesChangelog && step.Notes != PublishNotesDescription {
+		return fmt.Errorf("%s.notes: expected changelog or description, got %q", path, step.Notes)
+	}
+	sample := map[string]string{"Version": "1.2.3", "Tag": "v1.2.3", "Service": "api", "ReleaseID": "rel-1"}
+	if title, err := PublishTitle(step.Title, sample); err != nil || title == "" {
+		return fmt.Errorf("%s.title: expected a template over .Version, .Tag, .Service and .ReleaseID that renders text: %v", path, err)
+	}
+	return nil
 }
 
 func (c *compiler) legacyReleaseRule() BranchTypeRule {

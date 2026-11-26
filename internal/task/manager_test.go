@@ -139,6 +139,7 @@ type mockGitClient struct {
 	ensureCommitFn       func(repoPath, sha string) error
 	buildMergeCommitFn   func(repoPath, targetSHA, headSHA, method string) (string, error)
 	remoteRefSHAAtFn     func(repoPath, remoteURL, ref string) (string, error)
+	tagMessageFn         func(repoPath, tagObjectOID string) (string, error)
 
 	addWorktreeWithTrackingErr error
 	createBranchFromBranchErr  error
@@ -667,6 +668,13 @@ func (m *mockGitClient) RemoteRefSHAAt(_ context.Context, repoPath, remoteURL, r
 		return m.remoteRefSHAAtFn(repoPath, remoteURL, ref)
 	}
 	return "", errors.New("unexpected RemoteRefSHAAt")
+}
+
+func (m *mockGitClient) TagMessage(_ context.Context, repoPath, tagObjectOID string) (string, error) {
+	if m.tagMessageFn != nil {
+		return m.tagMessageFn(repoPath, tagObjectOID)
+	}
+	return "", errors.New("unexpected TagMessage")
 }
 
 func (m *mockGitClient) BuildMergeCommit(_ context.Context, repoPath, targetSHA, headSHA, method string) (string, error) {

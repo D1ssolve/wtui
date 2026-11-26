@@ -21,3 +21,10 @@ type MergeQueuer interface {
 	// the merge happens later on the forge.
 	EnqueueMR(ctx context.Context, params MergeMRParams) error
 }
+
+// ReleasePublisher is implemented by forges that can publish a Release object for a tag
+// that already exists on the forge. It never creates or moves a tag: an existing release
+// is returned as is, and creation happens only after the lookup confirmed absence.
+type ReleasePublisher interface {
+	PublishRelease(ctx context.Context, params PublishParams) (url string, err error)
+}

@@ -274,9 +274,9 @@ func FormatReference() string {
 		}
 	}
 	b.WriteString("Task close order: [merge|review] [tag] [cherry_pick] [pipeline]. Merge strategies: merge_commit, squash, rebase, ff_only.\n")
-	b.WriteString("release.steps shorthand: [integrate_tasks] cut_branch [gate] then review [back_merge] tag{on: accepted_merge} or tag{on: release_branch}.\n")
+	b.WriteString("release.steps shorthand: [integrate_tasks] cut_branch [gate] then review [back_merge] tag{on: accepted_merge} or tag{on: release_branch}, then optionally publish{title: <template over .Version .Tag .Service .ReleaseID>, notes: changelog|description}.\n")
 	b.WriteString("release.machine: {initial, states: {<id>: exactly one of run: [steps] + next (+ on_error) | wait: manual|review_merged|ci_green|{ci_green: <branch>} + next (not for manual) + on: {<event>: {key, to|action: merge_reviews, when: ci_green, label}} | final: released|rejected}}.\n")
-	b.WriteString("Machine rules: every state reachable, a final state exists, loops pass a manual wait, cut_branch and integrate_tasks only in the initial state, tag on a branch needs a merged review into it on every path, merge_reviews uses key M and has no to; a task machine close event uses key C with to.\n")
+	b.WriteString("Machine rules: every state reachable, a final state exists, loops pass a manual wait, cut_branch and integrate_tasks only in the initial state, tag on a branch needs a merged review into it on every path, publish needs a tag on every path and never creates or pushes one, merge_reviews uses key M and has no to; a task machine close event uses key C with to.\n")
 	fmt.Fprintf(&b, "Keys release events must not use: %s\nKeys task events must not use: %s\n", strings.Join(reservedReleaseKeys, " "), strings.Join(reservedTaskKeys, " "))
 	for _, name := range PresetNames() {
 		data, _ := presetFS.ReadFile("presets/" + name + ".yaml")

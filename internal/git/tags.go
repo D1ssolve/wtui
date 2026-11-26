@@ -31,6 +31,25 @@ func (c *CommandClient) CreateLightweightTag(ctx context.Context, repoPath, tag,
 	return err
 }
 
+// TagMessage returns the message of the annotated tag object tagObjectOID without its
+// signature; reading the object, not the ref, binds the text to a verified tag.
+func (c *CommandClient) TagMessage(ctx context.Context, repoPath, tagObjectOID string) (string, error) {
+	if !validObjectID(tagObjectOID) {
+		return "", fmt.Errorf("invalid tag object OID %q", tagObjectOID)
+	}
+	out, err := c.execGit(ctx, "-C", repoPath, "cat-file", "tag", tagObjectOID)
+	if err != nil {
+		return "", err
+	}
+	_, message, _ := strings.Cut(out, "\n\n")
+	for _, marker := range []string{"-----BEGIN PGP SIGNATURE-----", "-----BEGIN SSH SIGNATURE-----", "-----BEGIN SIGNED MESSAGE-----"} {
+		if i := strings.LastIndex("\n"+message, "\n"+marker); i >= 0 {
+			message = message[:i]
+		}
+	}
+	return strings.TrimSpace(message), nil
+}
+
 func (c *CommandClient) CreateTag(ctx context.Context, repoPath, tag, ref, message string) error {
 	if _, err := tagRef(tag); err != nil {
 		return err

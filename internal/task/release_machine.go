@@ -384,6 +384,8 @@ func (m *manager) runReleaseState(ctx context.Context, release *domain.Release, 
 			err = m.runReleaseHook(ctx, release, st.ID, fmt.Sprintf("%s/%d/%s", st.ID, i, step.Name), step, run.statusCh)
 		case gitflow.StepPipeline:
 			err = m.triggerReleasePipelines(ctx, release, step, run.statusCh)
+		case gitflow.StepPublish:
+			err = m.publishReleases(ctx, release, step, run.statusCh)
 		default:
 			err = fmt.Errorf("release action %s is not supported", step.Kind)
 		}
