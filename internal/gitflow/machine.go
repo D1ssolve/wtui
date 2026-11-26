@@ -640,6 +640,10 @@ func validateMachineDataFlow(base string, m *Machine, byID map[string]*State, su
 				if s.Kind == StateWait && s.Wait == WaitReviewMerged && to == s.Next && slices.ContainsFunc(s.Events, func(ev Event) bool { return ev.To == to }) {
 					out = transfer(s, in[s.ID])
 				}
+				if to == s.OnError {
+					// The first step may be the one that failed: only facts held on entry survive.
+					out = in[s.ID]
+				}
 				meet := map[machineFact]bool{}
 				for f := range in[to] {
 					if out[f] {
