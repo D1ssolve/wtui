@@ -116,7 +116,7 @@ func TestTaskWorkflow_DirectMergeHotfix_NoForgeNoMRSteps(t *testing.T) {
 		t.Fatalf("ancestry checks = %d, want one per target per service", len(descendants))
 	}
 	for _, d := range descendants {
-		if d != "refs/remotes/origin/master" && d != "refs/remotes/origin/develop" {
+		if d != "origin/master" && d != "origin/develop" {
 			t.Fatalf("descendant = %q, want remote-tracking master or develop", d)
 		}
 	}
@@ -222,8 +222,8 @@ func TestTaskWorkflow_ReviewFeature_UsesEffectiveReviewTarget(t *testing.T) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if len(descendants) != 1 || descendants[0] != "refs/remotes/origin/staging" {
-			t.Fatalf("descendants = %v, want [refs/remotes/origin/staging]", descendants)
+		if len(descendants) != 1 || descendants[0] != "origin/staging" {
+			t.Fatalf("descendants = %v, want [origin/staging]", descendants)
 		}
 		if summary.Current != domain.TaskWorkflowMR {
 			t.Fatalf("Current = %q, want %q", summary.Current, domain.TaskWorkflowMR)

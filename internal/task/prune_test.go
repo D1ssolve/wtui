@@ -50,8 +50,8 @@ func TestScanPrunableTasks_AllServicesMerged_PrunableTrue(t *testing.T) {
 		if !svc.IsMerged || svc.IsStale {
 			t.Fatalf("service %+v expected merged and not stale", svc)
 		}
-		if svc.MergeTarget != "origin/develop" {
-			t.Fatalf("MergeTarget = %q, want origin/develop", svc.MergeTarget)
+		if svc.MergeTarget != "refs/remotes/origin/develop" {
+			t.Fatalf("MergeTarget = %q, want refs/remotes/origin/develop", svc.MergeTarget)
 		}
 	}
 }

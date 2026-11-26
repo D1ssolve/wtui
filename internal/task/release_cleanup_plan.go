@@ -554,7 +554,7 @@ func (m *manager) localStoreMirrorRef(ref string) string {
 	if !ok || branch == "" {
 		return ""
 	}
-	return "refs/remotes/" + m.cfg.ServiceRemote().Tracking(branch)
+	return m.cfg.ServiceRemote().Tracking(branch)
 }
 
 func (m *manager) cleanupRemoteBranchRef(branch string) string {
@@ -562,9 +562,7 @@ func (m *manager) cleanupRemoteBranchRef(branch string) string {
 	if strings.HasPrefix(branch, "refs/heads/") {
 		return branch
 	}
-	if strings.HasPrefix(branch, m.cfg.ServiceRemote().Tracking("")) {
-		branch = strings.TrimPrefix(branch, m.cfg.ServiceRemote().Tracking(""))
-	}
+	// Configured targets are branch names: "team/main" is a branch, never a tracking ref to strip.
 	if branch == "" || strings.HasPrefix(branch, "refs/") {
 		return ""
 	}

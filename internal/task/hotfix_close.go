@@ -205,7 +205,7 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 			plan.RequiresTag = true
 		}
 	}
-	plan.Warnings = append(plan.Warnings, "Cleanup is manual: press D to review and confirm cleanup candidates; Prune is separate and checks "+m.cfg.ServiceRemote().Tracking(m.flow.ProductionBranch)+" only; remote branch deletion remains unsupported.")
+	plan.Warnings = append(plan.Warnings, "Cleanup is manual: press D to review and confirm cleanup candidates; Prune is separate and checks "+m.cfg.ServiceRemote().Label(m.flow.ProductionBranch)+" only; remote branch deletion remains unsupported.")
 	return plan, nil
 }
 

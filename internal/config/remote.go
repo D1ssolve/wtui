@@ -34,7 +34,13 @@ func (r RemoteName) String() string {
 	}
 	return r.name
 }
-func (r RemoteName) Tracking(branch string) string { return r.String() + "/" + branch }
+
+// Tracking is the full remote-tracking ref of branch: a short "<remote>/<branch>"
+// resolves to a same-named local branch first.
+func (r RemoteName) Tracking(branch string) string { return "refs/remotes/" + r.Label(branch) }
+
+// Label is the short "<remote>/<branch>" form, for text only.
+func (r RemoteName) Label(branch string) string { return r.String() + "/" + branch }
 func (c *Config) ServiceRemote() RemoteName {
 	if c == nil || c.Forge == nil {
 		return RemoteName{}

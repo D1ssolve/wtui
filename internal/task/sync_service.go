@@ -84,7 +84,7 @@ func (m *manager) SyncService(ctx context.Context, taskID, serviceName string, s
 
 	switch strategy {
 	case SyncStrategyMerge:
-		if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] merging %s...", serviceName, upstream)) {
+		if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] merging %s...", serviceName, m.cfg.ServiceRemote().Label(m.integrationBranch()))) {
 			return ctx.Err()
 		}
 		if err := m.git.Merge(ctx, worktreePath, upstream); err != nil {
@@ -92,7 +92,7 @@ func (m *manager) SyncService(ctx context.Context, taskID, serviceName string, s
 			return fmt.Errorf("sync %s/%s: merge: %w", taskID, serviceName, err)
 		}
 	case SyncStrategyRebase:
-		if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] rebasing onto %s...", serviceName, upstream)) {
+		if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] rebasing onto %s...", serviceName, m.cfg.ServiceRemote().Label(m.integrationBranch()))) {
 			return ctx.Err()
 		}
 		if err := m.git.Rebase(ctx, worktreePath, upstream); err != nil {

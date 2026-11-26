@@ -362,7 +362,11 @@ func (m *mockGitClient) AddWorktree(_ context.Context, repoPath, dest, branch st
 	return m.addWorktreeErr
 }
 
+// shortRef lets mocks keyed by "origin/x" serve the full refs/remotes/ form production passes.
+func shortRef(ref string) string { return strings.TrimPrefix(ref, "refs/remotes/") }
+
 func (m *mockGitClient) AddDetachedWorktree(ctx context.Context, repoPath, dest, ref string) error {
+	ref = shortRef(ref)
 	return m.AddWorktree(ctx, repoPath, dest, ref, false, "")
 }
 
@@ -430,6 +434,7 @@ func (m *mockGitClient) OperationState(_ context.Context, path string) ([]domain
 }
 
 func (m *mockGitClient) IsAncestor(_ context.Context, repoPath, ancestor, descendant string) (bool, error) {
+	ancestor, descendant = shortRef(ancestor), shortRef(descendant)
 	m.mu.Lock()
 	m.isAncestorCalls = append(m.isAncestorCalls, isAncestorCall{
 		RepoPath:   repoPath,
@@ -449,6 +454,7 @@ func (m *mockGitClient) Version(_ context.Context) (int, int, error) {
 }
 
 func (m *mockGitClient) RevListCount(_ context.Context, path, tip, base string) (int, error) {
+	tip, base = shortRef(tip), shortRef(base)
 	if m.revListCountFn != nil {
 		return m.revListCountFn(path, tip, base)
 	}
@@ -456,6 +462,7 @@ func (m *mockGitClient) RevListCount(_ context.Context, path, tip, base string) 
 }
 
 func (m *mockGitClient) ResolveRef(_ context.Context, repoPath, ref string) (string, error) {
+	ref = shortRef(ref)
 	m.mu.Lock()
 	m.resolveRefCalls = append(m.resolveRefCalls, resolveRefCall{RepoPath: repoPath, Ref: ref})
 	m.mu.Unlock()
@@ -472,6 +479,7 @@ func (m *mockGitClient) ResolveRef(_ context.Context, repoPath, ref string) (str
 }
 
 func (m *mockGitClient) RevListAheadBehind(_ context.Context, path, originBranch string) (int, int, error) {
+	originBranch = shortRef(originBranch)
 	if m.revListAheadBehindFn != nil {
 		return m.revListAheadBehindFn(path, originBranch)
 	}
@@ -491,6 +499,7 @@ func (m *mockGitClient) Fetch(_ context.Context, path string) error {
 }
 
 func (m *mockGitClient) Rebase(_ context.Context, path, upstream string) error {
+	upstream = shortRef(upstream)
 	m.mu.Lock()
 	m.rebaseCalls = append(m.rebaseCalls, rebaseCall{WorktreePath: path, Upstream: upstream})
 	m.mu.Unlock()
@@ -503,6 +512,7 @@ func (m *mockGitClient) Rebase(_ context.Context, path, upstream string) error {
 }
 
 func (m *mockGitClient) Merge(_ context.Context, path, branch string) error {
+	branch = shortRef(branch)
 	m.mu.Lock()
 	m.mergeCalls = append(m.mergeCalls, mergeCall{WorktreePath: path, Branch: branch})
 	m.mu.Unlock()
@@ -527,6 +537,7 @@ func (m *mockGitClient) MergeNoFF(_ context.Context, path, ref string) error {
 }
 
 func (m *mockGitClient) MergeFFOnly(_ context.Context, path, ref string) error {
+	ref = shortRef(ref)
 	m.mu.Lock()
 	m.mergeFFOnlyCalls = append(m.mergeFFOnlyCalls, mergeFFOnlyCall{WorktreePath: path, Ref: ref})
 	m.mu.Unlock()

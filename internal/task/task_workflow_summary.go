@@ -362,7 +362,7 @@ func unmergedTargets(st serviceMergeState) []string {
 func (m *manager) remotePrefixed(targets []string) []string {
 	prefixed := make([]string, len(targets))
 	for i, target := range targets {
-		prefixed[i] = m.cfg.ServiceRemote().Tracking(target)
+		prefixed[i] = m.cfg.ServiceRemote().Label(target)
 	}
 	return prefixed
 }

@@ -134,7 +134,7 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 
 			switch strategy {
 			case SyncStrategyMerge:
-				if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] merging %s...", svc.Name, upstream)) {
+				if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] merging %s...", svc.Name, m.cfg.ServiceRemote().Label(m.integrationBranch()))) {
 					setFirstErr(ctx.Err())
 					return
 				}
@@ -144,7 +144,7 @@ func (m *manager) SyncTask(ctx context.Context, taskID string, strategy SyncStra
 					return
 				}
 			case SyncStrategyRebase:
-				if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] rebasing onto %s...", svc.Name, upstream)) {
+				if !sendLine(ctx, lineCh, fmt.Sprintf("[%s] rebasing onto %s...", svc.Name, m.cfg.ServiceRemote().Label(m.integrationBranch()))) {
 					setFirstErr(ctx.Err())
 					return
 				}

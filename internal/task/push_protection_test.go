@@ -100,7 +100,7 @@ workflow:
 	if m.isMultiTargetReview("svc", "story/APP-1") {
 		t.Fatal("single-target review classified as multi-target")
 	}
-	if got := m.pruneMergeTarget("svc", "emergency/APP-1"); got != "origin/main" {
-		t.Fatalf("pruneMergeTarget = %q, want origin/main", got)
+	if got := m.pruneMergeTarget("svc", "emergency/APP-1"); got != "refs/remotes/origin/main" {
+		t.Fatalf("pruneMergeTarget = %q, want refs/remotes/origin/main", got)
 	}
 }

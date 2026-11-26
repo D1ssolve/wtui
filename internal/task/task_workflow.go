@@ -193,7 +193,7 @@ func (m *manager) workflowMergeStates(ctx context.Context, taskID string, plans 
 				continue
 			}
 			item := m.inspectPinnedTaskTrain(ctx, plan.svc, pin)
-			st.targets = append(st.targets, m.cfg.ServiceRemote().Tracking(pin.Target))
+			st.targets = append(st.targets, m.cfg.ServiceRemote().Label(pin.Target))
 			st.merged = append(st.merged, item.Status == "merged")
 			if st.pinned == nil || item.Status != "merged" {
 				st.pinned = &item
@@ -204,7 +204,7 @@ func (m *manager) workflowMergeStates(ctx context.Context, taskID string, plans 
 			// review wait. All configured targets must have a verified pin.
 			for _, target := range m.taskTrainTargets(plan.svc) {
 				if _, exists := pins[taskTrainKey{plan.svc.Name, target}]; !exists {
-					st.targets = append(st.targets, m.cfg.ServiceRemote().Tracking(target))
+					st.targets = append(st.targets, m.cfg.ServiceRemote().Label(target))
 					st.merged = append(st.merged, false)
 				}
 			}

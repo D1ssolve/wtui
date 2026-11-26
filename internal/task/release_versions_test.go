@@ -80,7 +80,7 @@ func TestProposeReleaseVersions_ConventionalBumpFromCommits(t *testing.T) {
 	if versions["api"] != "1.5.0" || versions["worker"] != "1.4.3" {
 		t.Fatalf("versions = %#v", versions)
 	}
-	if len(ranges) != 2 || !strings.HasPrefix(ranges[0], "v1.4.2..origin/") {
+	if len(ranges) != 2 || !strings.HasPrefix(ranges[0], "v1.4.2..refs/remotes/origin/") {
 		t.Fatalf("ranges = %v, want from the latest tag to the integration branch", ranges)
 	}
 }
