@@ -105,9 +105,8 @@ func (m processTestModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func runProcessTestCmd(t *testing.T, cmd tea.Cmd) CommandDoneMsg {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	model, err := tea.NewProgram(processTestModel{cmd: cmd}, tea.WithContext(ctx),
+	// No wall-clock budget: it failed loaded runs; a real hang is caught by go test -timeout.
+	model, err := tea.NewProgram(processTestModel{cmd: cmd}, tea.WithContext(t.Context()),
 		tea.WithInput(strings.NewReader("")), tea.WithOutput(io.Discard), tea.WithoutRenderer()).Run()
 	if err != nil {
 		t.Fatal(err)
@@ -599,7 +598,7 @@ func TestValidateTaskCmdReturnsValidationResult(t *testing.T) {
 func TestPlanCloseTaskCmdReturnsClosePlanReadyMsg(t *testing.T) {
 	mgr := &cmdManager{planResult: task.ClosePlan{TaskID: "T14"}}
 
-	msg := planCloseTaskCmd(mgr, "T14", 7)()
+	msg := planCloseTaskCmd(t.Context(), mgr, "T14", 7)()
 	got, ok := msg.(ClosePlanReadyMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want ClosePlanReadyMsg", msg)
