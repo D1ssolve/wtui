@@ -98,6 +98,17 @@ func (m *manager) taskTrainTargets(svc domain.Service) []string {
 	return []string{m.reviewTarget(svc.Name, svc.Branch)}
 }
 
+// staleTaskTrainPin returns a recorded pin of svc for a target its current rule no longer reviews into.
+func (m *manager) staleTaskTrainPin(svc domain.Service, pins map[taskTrainKey]taskTrainPin) (taskTrainPin, bool) {
+	targets := m.taskTrainTargets(svc)
+	for _, pin := range pins {
+		if pin.Service == svc.Name && !slices.Contains(targets, pin.Target) {
+			return pin, true
+		}
+	}
+	return taskTrainPin{}, false
+}
+
 func takeTaskTrainPins(pins map[taskTrainKey]taskTrainPin, service string) []taskTrainPin {
 	var recorded []taskTrainPin
 	for key, pin := range pins {

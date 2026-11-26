@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 
@@ -77,11 +76,9 @@ func (m *manager) inspectTaskMerge(ctx context.Context, taskID string) (TaskMerg
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			for _, pin := range pins {
-				if pin.Service == svc.Name && !slices.Contains(m.taskTrainTargets(svc), pin.Target) {
-					inspection.Services[i] = m.inspectPinnedTaskTrain(ctx, svc, pin)
-					return
-				}
+			if pin, stale := m.staleTaskTrainPin(svc, pins); stale {
+				inspection.Services[i] = m.inspectPinnedTaskTrain(ctx, svc, pin)
+				return
 			}
 			if m.isMultiTargetReview(svc.Name, svc.Branch) {
 				rows, err := m.inspectHotfixMRs(ctx, svc, pins)

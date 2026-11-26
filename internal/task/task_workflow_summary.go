@@ -119,7 +119,10 @@ func (m *manager) reviewWorkflowSummary(ctx context.Context, taskID string, plan
 			rows = append(rows, directWorkflowRow(*plan, states[i]))
 		case gitflow.CloseStrategyReviewRequest:
 			var items []ServiceMergeInspection
-			if m.isMultiTargetReview(plan.svc.Name, plan.svc.Branch) {
+			if pin, stale := m.staleTaskTrainPin(plan.svc, pins); stale {
+				// As in M: a pin for a target the rule no longer reviews into is surfaced, not skipped.
+				items = []ServiceMergeInspection{m.inspectPinnedTaskTrain(ctx, plan.svc, pin)}
+			} else if m.isMultiTargetReview(plan.svc.Name, plan.svc.Branch) {
 				// Per target, as M inspects: a recorded pin where one exists, the live MR otherwise.
 				var err error
 				items, err = m.inspectHotfixMRs(ctx, plan.svc, pins)
