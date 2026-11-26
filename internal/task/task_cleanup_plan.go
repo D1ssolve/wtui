@@ -197,7 +197,7 @@ func (m *manager) PlanTaskCleanup(ctx context.Context, request TaskCleanupReques
 	return plan, err
 }
 
-func (m *manager) planTaskCleanup(ctx context.Context, request TaskCleanupRequest, retry *TaskCleanupPlan) (TaskCleanupPlan, error) {
+func (m *manager) buildTaskCleanupPlan(ctx context.Context, request TaskCleanupRequest, retry *TaskCleanupPlan) (TaskCleanupPlan, error) {
 	plan := TaskCleanupPlan{preview: TaskCleanupPreview{TaskID: request.TaskID}}
 	if err := validateTaskID(request.TaskID); err != nil {
 		return plan, err

@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -36,6 +37,7 @@ func (m *manager) ForgeCreateMissingMRs(ctx context.Context, taskID, title strin
 	if len(descriptions) > 0 {
 		description = descriptions[0]
 	}
+	issue := m.taskIssue(ctx, m.taskDir(taskID))
 
 	result := TaskMRCreateResult{TaskID: taskID, Title: title, Services: make([]ServiceMRCreateResult, 0, len(services))}
 	for _, svc := range services {
@@ -91,14 +93,15 @@ func (m *manager) ForgeCreateMissingMRs(ctx context.Context, taskID, title strin
 			}
 		}
 
-		item.MR, item.Err = client.CreateMR(ctx, withMRPolicy(forge.CreateMRParams{
+		params := withMRPolicy(forge.CreateMRParams{
 			WorktreePath: svc.WorktreePath,
 			SourceBranch: svc.Branch,
 			TargetBranch: target,
 			Title:        title,
 			Description:  description,
 			Repo:         repo,
-		}, m.branchRule(svc.Name, svc.Branch).MR))
+		}, m.branchRule(svc.Name, svc.Branch).MR)
+		item.MR, item.Err = client.CreateMR(ctx, m.withIssueReference(params, issue, svc.RemoteURL))
 		if item.Err != nil {
 			item.Status = "failed"
 		} else {
@@ -209,7 +212,18 @@ func (m *manager) ForgeListIssues(ctx context.Context, taskID, serviceName strin
 		}
 	}
 
-	return client.ListIssues(ctx, params)
+	rows, err := client.ListIssues(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		link, _ := forge.ParseIssue(rows[i].URL, nil, m.cfg.Forge)
+		if link != nil && link.Provider != domain.IssueJira && link.Key == strconv.Itoa(rows[i].Number) {
+			link.Title = rows[i].Title
+			rows[i].Link = link
+		}
+	}
+	return rows, nil
 }
 
 func (m *manager) forgeClientForService(ctx context.Context, svc domain.Service) (forge.ForgeClient, error) {

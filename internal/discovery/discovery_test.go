@@ -130,6 +130,10 @@ func (m *mockGitClient) BuildMergeCommit(context.Context, string, string, string
 	panic("mockGitClient.BuildMergeCommit called unexpectedly")
 }
 
+func (m *mockGitClient) VerifyLocalRefGuards(context.Context, string, []git.RefGuard) error {
+	return nil
+}
+
 func (m *mockGitClient) DeleteBranchIfUnchanged(context.Context, string, string, string, ...git.RefGuard) error {
 	panic("mockGitClient.DeleteBranchIfUnchanged called unexpectedly")
 }

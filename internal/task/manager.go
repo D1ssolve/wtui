@@ -32,6 +32,7 @@ type SlnGenerator interface {
 
 type InitParams struct {
 	TaskID       string
+	Issue        *domain.Issue
 	Services     []string
 	BranchType   string
 	BranchPrefix string

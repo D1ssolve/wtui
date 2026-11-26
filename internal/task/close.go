@@ -299,6 +299,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 		}
 	}
 	continueOnError := m.cfg.Close != nil && m.cfg.Close.ContinueOnError
+	issue := m.taskIssue(ctx, m.taskDir(params.TaskID))
 
 	for _, svcPlan := range services {
 		svc, svcErr := m.findService(ctx, params.TaskID, svcPlan.ServiceName)
@@ -522,7 +523,7 @@ func (m *manager) closeTask(ctx context.Context, params CloseTaskParams) (CloseT
 
 		case gitflow.CloseStrategyReviewRequest:
 			var reviewErr error
-			reviewVerified, reviewMergeSHA, reviewErr = m.executeServiceReviews(ctx, svc, svcPlan, prepared[svc.Name], params, &result, step)
+			reviewVerified, reviewMergeSHA, reviewErr = m.executeServiceReviews(ctx, svc, svcPlan, prepared[svc.Name], params, issue, &result, step)
 			if reviewErr != nil {
 				step(svc.Name+":review-request", StepStatusFailed, reviewErr.Error())
 				svcFailed = true

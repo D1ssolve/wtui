@@ -303,6 +303,7 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 		return result, errors.New("hotfix plan changed; press C to review again")
 	}
 	var failures []error
+	issue := m.taskIssue(ctx, m.taskDir(p.TaskID))
 	for _, sp := range plan.Services {
 		svc, err := m.findService(ctx, p.TaskID, sp.ServiceName)
 		if err != nil {
@@ -331,7 +332,7 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 					params := withMRPolicy(forge.CreateMRParams{WorktreePath: svc.WorktreePath, Repo: repo, SourceBranch: sp.SourceBranch, TargetBranch: r.Target, Title: title, Description: p.ReviewDescription}, sp.MR)
 					// The source must survive until every target's MR merges.
 					params.RemoveSource = false
-					mr, err := client.CreateMR(ctx, params)
+					mr, err := client.CreateMR(ctx, m.withIssueReference(params, issue, svc.RemoteURL))
 					if err != nil {
 						return err
 					}

@@ -39,6 +39,9 @@ func cleanupDirectoryScope(root string, steps []releaseCleanupStep) (map[string]
 		if err != nil {
 			return err
 		}
+		if path == filepath.Join(root, pendingCleanupFile) {
+			return nil // Written under the task lock and checked independently.
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return err

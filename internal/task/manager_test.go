@@ -681,6 +681,10 @@ type remoteRefSHACall struct {
 	Ref      string
 }
 
+func (m *mockGitClient) VerifyLocalRefGuards(context.Context, string, []git.RefGuard) error {
+	return nil
+}
+
 func (m *mockGitClient) DeleteBranchIfUnchanged(_ context.Context, repoPath, branch, expectedSHA string, guards ...git.RefGuard) error {
 	m.mu.Lock()
 	m.deleteBranchIfUnchangedGuardCalls = append(m.deleteBranchIfUnchangedGuardCalls, slices.Clone(guards))

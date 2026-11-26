@@ -7,6 +7,7 @@ type Task struct {
 	Dir      string
 	Services []Service
 	Stale    bool
+	Issue    *Issue
 
 	// ParentID is empty for root tasks and references root task ID for phase children.
 	ParentID string

@@ -149,6 +149,7 @@ type Client interface {
 	CommitLog(ctx context.Context, repoPath, from, to string) ([]domain.Commit, error)
 
 	DeleteBranch(ctx context.Context, repoPath, branch string) error
+	VerifyLocalRefGuards(ctx context.Context, repoPath string, guards []RefGuard) error
 	// DeleteBranchIfUnchanged deletes refs/heads/<branch> only when it still
 	// points at expectedSHA. When guards is non-empty, every guard ref is
 	// verified against its exact OID in the same update-ref --stdin
@@ -252,7 +253,7 @@ func (c *CommandClient) BranchExists(ctx context.Context, repoPath, branch strin
 	}
 
 	var execErr *ExecError
-	if ok := errors.As(err, &execErr); ok {
+	if errors.As(err, &execErr) && execErr.ExitCode == 1 {
 		return false, nil
 	}
 	return false, err

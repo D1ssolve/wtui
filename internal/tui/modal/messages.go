@@ -1,9 +1,13 @@
 package modal
 
-import "github.com/D1ssolve/wtui/internal/task"
+import (
+	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/task"
+)
 
 type SubmitInitMsg struct {
 	TaskID       string
+	Issue        *domain.Issue
 	Services     []string
 	BranchType   string
 	BranchPrefix string

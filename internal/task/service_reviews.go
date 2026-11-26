@@ -52,7 +52,7 @@ func (m *manager) prepareServiceReviews(ctx context.Context, svc domain.Service,
 	return r, nil
 }
 
-func (m *manager) executeServiceReviews(ctx context.Context, svc domain.Service, sp ServiceClosePlan, reviews preparedReviews, p CloseTaskParams, result *CloseTaskResult, step func(string, StepStatus, string)) (bool, string, error) {
+func (m *manager) executeServiceReviews(ctx context.Context, svc domain.Service, sp ServiceClosePlan, reviews preparedReviews, p CloseTaskParams, issue *domain.Issue, result *CloseTaskResult, step func(string, StepStatus, string)) (bool, string, error) {
 	if m.cfg.Close == nil || m.cfg.Close.PushSourceBeforeReview {
 		var pushed bool
 		var err error
@@ -102,7 +102,8 @@ func (m *manager) executeServiceReviews(ctx context.Context, svc domain.Service,
 			if strings.TrimSpace(p.ReviewDescription) != "" {
 				desc = p.ReviewDescription
 			}
-			mr, err := reviews.client.CreateMR(ctx, withMRPolicy(forge.CreateMRParams{WorktreePath: svc.WorktreePath, SourceBranch: svc.Branch, TargetBranch: r.target, Title: title, Description: desc, Repo: reviews.repo}, sp.MR))
+			params := withMRPolicy(forge.CreateMRParams{WorktreePath: svc.WorktreePath, SourceBranch: svc.Branch, TargetBranch: r.target, Title: title, Description: desc, Repo: reviews.repo}, sp.MR)
+			mr, err := reviews.client.CreateMR(ctx, m.withIssueReference(params, issue, svc.RemoteURL))
 			if err != nil {
 				return false, "", err
 			}

@@ -128,6 +128,10 @@ func (m *mockValidationGitClient) RemoteRefSHAAt(context.Context, string, string
 func (m *mockValidationGitClient) BuildMergeCommit(context.Context, string, string, string, string) (string, error) {
 	panic("unexpected BuildMergeCommit in validation")
 }
+func (m *mockValidationGitClient) VerifyLocalRefGuards(context.Context, string, []git.RefGuard) error {
+	return nil
+}
+
 func (m *mockValidationGitClient) DeleteBranchIfUnchanged(context.Context, string, string, string, ...git.RefGuard) error {
 	return nil
 }

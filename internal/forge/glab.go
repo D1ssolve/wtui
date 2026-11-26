@@ -524,19 +524,15 @@ func (c *GlabClient) ListIssues(ctx context.Context, params ListIssuesParams) ([
 		return nil, err
 	}
 
-	type glabLabel struct {
-		Title string `json:"title"`
-		Name  string `json:"name"`
-	}
 	type glabIssue struct {
-		IID    int         `json:"iid"`
-		ID     int         `json:"id"`
-		Number int         `json:"number"`
-		Title  string      `json:"title"`
-		State  string      `json:"state"`
-		WebURL string      `json:"web_url"`
-		URL    string      `json:"url"`
-		Labels []glabLabel `json:"labels"`
+		IID    int              `json:"iid"`
+		ID     int              `json:"id"`
+		Number int              `json:"number"`
+		Title  string           `json:"title"`
+		State  string           `json:"state"`
+		WebURL string           `json:"web_url"`
+		URL    string           `json:"url"`
+		Labels []glabIssueLabel `json:"labels"`
 	}
 
 	var raw []glabIssue
@@ -560,12 +556,8 @@ func (c *GlabClient) ListIssues(ctx context.Context, params ListIssuesParams) ([
 
 		labels := make([]string, 0, len(item.Labels))
 		for _, lbl := range item.Labels {
-			name := lbl.Name
-			if name == "" {
-				name = lbl.Title
-			}
-			if name != "" {
-				labels = append(labels, name)
+			if lbl != "" {
+				labels = append(labels, string(lbl))
 			}
 		}
 

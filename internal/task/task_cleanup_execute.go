@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -86,6 +87,12 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 		}
 	}
 	plan = fresh
+	pending := filepath.Join(m.taskDir(plan.preview.TaskID), pendingCleanupFile)
+	if record := plan.pendingBranches(); record != "" {
+		if err := recordPendingBranches(pending, record); err != nil {
+			return result, err
+		}
+	}
 
 	ordered := taskCleanupExecutionOrder(plan.steps)
 	for _, step := range ordered {
@@ -99,6 +106,11 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 
 	if !taskCleanupDeletesRemoteBranches(plan.steps) {
 		result.Remote = slices.Clone(plan.preview.Remote)
+	}
+	if len(plan.proofs) != 0 {
+		if err := os.Remove(pending); err != nil {
+			return result, err
+		}
 	}
 	for _, candidate := range plan.preview.DeferredRemote {
 		result.Deferred = append(result.Deferred, "retain remote branch "+candidate.Branch+": remote tip diverges from proven source")
