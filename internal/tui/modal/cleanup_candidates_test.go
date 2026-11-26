@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func cleanupCandidatesFixture() []CleanupCandidate {
@@ -26,6 +27,20 @@ func TestCleanupCandidatesModal_NothingPreselectedAndEnterWithoutSelectionDoesNo
 	}
 	if _, cmd := m.Update(sendSpecialKey(tea.KeyEnter)); cmd != nil {
 		t.Fatal("enter with empty selection must not submit")
+	}
+}
+
+func TestCleanupCandidatesModal_SelectedBlockedRowShowsFullReason(t *testing.T) {
+	candidates := cleanupCandidatesFixture()
+	candidates[1].Reason = "task T-2 has no services and no proof it never enrolled one, so branches may remain; check them, then force cleanup (X)"
+	m := NewCleanupCandidatesModal(candidates, 7)
+	m.SetTerminalSize(120, 40)
+	modal, _ := m.Update(sendKey("j"))
+	view := strings.Join(strings.Fields(ansi.Strip(modal.View())), " ")
+	for _, want := range []string{"Blocked: " + candidates[1].Reason, "T-1", "rel-1"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
 	}
 }
 

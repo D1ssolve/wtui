@@ -276,10 +276,11 @@ func (m *manager) executeTaskCleanupStep(ctx context.Context, plan TaskCleanupPl
 		if err != nil {
 			return false, err
 		}
-		if len(entries) > 0 && !selection.Force {
+		onlyMarker := len(entries) == 1 && entries[0].Name() == emptyTaskMarkerFileName
+		if len(entries) > 0 && !onlyMarker && !selection.Force {
 			return false, fmt.Errorf("task directory %s is not empty", step.path)
 		}
-		if selection.Force {
+		if selection.Force || onlyMarker {
 			return false, os.RemoveAll(step.path)
 		}
 		return false, os.Remove(step.path)

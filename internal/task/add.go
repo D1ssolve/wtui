@@ -24,6 +24,12 @@ func (m *manager) Add(ctx context.Context, params AddParams) (PartialFailureResu
 	} else if err != nil {
 		return PartialFailureResult{}, fmt.Errorf("add: stat task directory %s: %w", taskDir, err)
 	}
+	// Serializes with Init, which publishes the empty-task marker under the same lock.
+	unlock, err := m.lockTask(ctx, params.TaskID)
+	if err != nil {
+		return PartialFailureResult{}, err
+	}
+	defer unlock()
 
 	bt, rule := m.resolveInitRule(params.BranchType)
 	branchPrefix := ""

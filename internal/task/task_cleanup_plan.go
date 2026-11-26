@@ -237,9 +237,13 @@ func (m *manager) buildTaskCleanupPlan(ctx context.Context, request TaskCleanupR
 		_, statErr := os.Stat(taskDir)
 		if statErr == nil {
 			if _, err := os.Lstat(filepath.Join(taskDir, emptyTaskMarkerFileName)); errors.Is(err, os.ErrNotExist) {
-				plan.block("task %s has no registered services, and wtui cannot prove no service add was attempted, so branches may remain; check them, then use force cleanup", request.TaskID)
+				plan.block("task %s has no services and no proof it never enrolled one, so branches may remain; check them, then force cleanup (X)", request.TaskID)
 			} else if err != nil {
 				return plan, err
+			} else if reason, err := m.emptyTaskLeftovers(ctx, request.TaskID, taskDir); err != nil {
+				return plan, err
+			} else if reason != "" {
+				plan.block("%s", reason)
 			}
 		}
 		plan.steps = append(plan.steps, releaseCleanupStep{kind: cleanupTaskDirectory, description: "remove task directory " + taskDir, path: taskDir, noop: os.IsNotExist(statErr)})

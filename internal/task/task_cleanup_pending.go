@@ -79,6 +79,32 @@ func (m *manager) checkEmptyTaskBranches(ctx context.Context, id string) error {
 	return nil
 }
 
+// emptyTaskLeftovers reports Git state a failed enrollment can leave behind a marked-empty task,
+// for example a rolled-back Init whose worktree registration outlived the task directory.
+func (m *manager) emptyTaskLeftovers(ctx context.Context, id, taskDir string) (string, error) {
+	if err := m.checkEmptyTaskBranches(ctx, id); errors.Is(err, ErrTaskCleanupBlocked) {
+		return strings.TrimPrefix(err.Error(), ErrTaskCleanupBlocked.Error()+": "), nil
+	} else if err != nil {
+		return "", err
+	}
+	repos, err := m.Repos(ctx, true)
+	if err != nil {
+		return "", err
+	}
+	for _, repo := range repos {
+		entries, err := m.git.ListWorktrees(ctx, repo.Path)
+		if err != nil {
+			return "", err
+		}
+		for _, entry := range entries {
+			if pathWithin(taskDir, entry.Path) {
+				return fmt.Sprintf("worktree %s is still registered in %s; restore it or run git worktree prune, then retry", entry.Path, repo.Path), nil
+			}
+		}
+	}
+	return "", nil
+}
+
 func (m *manager) planTaskCleanup(ctx context.Context, req TaskCleanupRequest, retry *TaskCleanupPlan) (TaskCleanupPlan, error) {
 	p, err := m.buildTaskCleanupPlan(ctx, req, retry)
 	if err != nil || p.Blocked() {

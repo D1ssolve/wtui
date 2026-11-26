@@ -86,6 +86,9 @@ func (m *CleanupCandidatesModal) visibleRows() int {
 		return 0
 	}
 	controlsHeight := wrappedHeight(m.controls(), m.contentWidth)
+	if reason := m.selectedBlockReason(); reason != "" {
+		controlsHeight += wrappedHeight(reason, m.contentWidth)
+	}
 	visible := max(1, m.contentHeight-4-controlsHeight)
 	if len(m.rows) > visible {
 		visible = max(1, visible-1)
@@ -209,6 +212,11 @@ func (m *CleanupCandidatesModal) View() string {
 		sb.WriteString("\n")
 	}
 
+	// Rows truncate; the selected blocked row's full reason carries its next action.
+	if reason := m.selectedBlockReason(); reason != "" {
+		sb.WriteString(dimStyle.Render(ansi.Wrap(reason, max(1, m.contentWidth), " ")))
+		sb.WriteString("\n")
+	}
 	sb.WriteString("\n")
 	sb.WriteString(ansi.Wrap(theme.HintLine(m.controls()), max(1, m.contentWidth), " "))
 	if visible := m.visibleRows(); visible > 0 && len(m.rows) > visible {
@@ -216,6 +224,16 @@ func (m *CleanupCandidatesModal) View() string {
 		sb.WriteString(dimStyle.Render(fmt.Sprintf("Showing %d-%d of %d", start+1, end, len(m.rows))))
 	}
 	return sb.String()
+}
+
+func (m *CleanupCandidatesModal) selectedBlockReason() string {
+	if m.selectedIndex < 0 || m.selectedIndex >= len(m.rows) {
+		return ""
+	}
+	if c := m.rows[m.selectedIndex].candidate; !c.Ready && c.Reason != "" {
+		return "Blocked: " + c.Reason
+	}
+	return ""
 }
 
 func (m *CleanupCandidatesModal) controls() string {
