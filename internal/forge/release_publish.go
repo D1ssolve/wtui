@@ -46,14 +46,9 @@ func (c *GhClient) PublishRelease(ctx context.Context, p PublishParams) (string,
 		Data struct {
 			Repository *struct {
 				NameWithOwner string `json:"nameWithOwner"`
-				Release       *struct {
-					URL       string `json:"url"`
-					TagName   string `json:"tagName"`
-					TagCommit struct {
-						OID string `json:"oid"`
-					} `json:"tagCommit"`
-				} `json:"release"`
-				Ref *struct {
+				// Raw, so a missing field (unproven) differs from an explicit null (absent).
+				Release json.RawMessage `json:"release"`
+				Ref     *struct {
 					Target struct {
 						OID    string `json:"oid"`
 						Target *struct {
@@ -86,7 +81,20 @@ func (c *GhClient) PublishRelease(ctx context.Context, p PublishParams) (string,
 	if commit != p.CommitSHA {
 		return "", fmt.Errorf("GitHub tag %s points to %s, want commit %s", p.Tag, commit, p.CommitSHA)
 	}
-	if rel := repo.Release; rel != nil {
+	if len(repo.Release) == 0 {
+		return "", fmt.Errorf("GitHub response for %s has no release field; absence is unproven", p.Tag)
+	}
+	if string(repo.Release) != "null" {
+		var rel struct {
+			URL       string `json:"url"`
+			TagName   string `json:"tagName"`
+			TagCommit struct {
+				OID string `json:"oid"`
+			} `json:"tagCommit"`
+		}
+		if err := json.Unmarshal(repo.Release, &rel); err != nil {
+			return "", &ForgeError{Category: ErrCategoryParseError, Cause: err, Stderr: out}
+		}
 		if rel.TagName != p.Tag || rel.TagCommit.OID != p.CommitSHA || rel.URL == "" {
 			return "", fmt.Errorf("GitHub release for %s is %q at commit %s, want commit %s", p.Tag, rel.TagName, rel.TagCommit.OID, p.CommitSHA)
 		}

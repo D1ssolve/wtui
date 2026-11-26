@@ -52,6 +52,7 @@ func TestGhPublishRelease_CreatesOnlyOnProvenAbsence(t *testing.T) {
 		{name: "proven absence for a lightweight tag creates", graphql: graphql("null", `"ref":{"target":{"oid":"accepted"}}`), wantCreate: true},
 		{name: "lookup failing with release not found creates nothing", graphql: `echo 'release not found' >&2; exit 1`, wantErr: "look up GitHub release"},
 		{name: "403 whose text mentions 404 creates nothing", graphql: `echo 'HTTP 403: Forbidden (request id 404; release not found in cache)' >&2; exit 1`, wantErr: "look up GitHub release"},
+		{name: "response without a release field creates nothing", graphql: `echo '{"data":{"repository":{"nameWithOwner":"Org/Repo",` + annotated + `}}}'`, wantErr: "absence is unproven"},
 		{name: "graphql errors create nothing", graphql: `echo '{"data":{"repository":null},"errors":[{"type":"NOT_FOUND"}]}'`, wantErr: "incomplete response"},
 		{name: "tag missing on GitHub creates nothing", graphql: graphql("null", `"ref":null`), wantErr: "publish never creates tags"},
 		{name: "tag at another commit creates nothing", graphql: graphql("null", `"ref":{"target":{"oid":"tag-object","target":{"oid":"other"}}}`), wantErr: "want commit accepted"},
