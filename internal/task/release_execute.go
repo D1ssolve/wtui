@@ -61,6 +61,11 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 	}
 
 	release.Tag = sharedTagOrEmpty(release.Services)
+	for i := range release.Services {
+		if release.Services[i].RemoteIdentity, err = m.remoteIdentity(ctx, release.Services[i].RepoPath); err != nil {
+			return domain.Release{}, err
+		}
+	}
 
 	if err := m.ensureReleasesRoot(); err != nil {
 		return domain.Release{}, err

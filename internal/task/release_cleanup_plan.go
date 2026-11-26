@@ -163,6 +163,18 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 			plan.block("release branch deletion requires release removal selection")
 		}
 	}
+	// Same-named branches in another repository are not this release's refs.
+	if selection.DeleteRelease || selection.DeleteRemoteReleaseBranches || selection.DeleteRemoteTaskBranches {
+		for _, svc := range release.Services {
+			reason, err := m.releaseRemoteMismatch(ctx, release, svc)
+			if err != nil {
+				return plan, err
+			}
+			if reason != "" {
+				plan.block("%s", reason)
+			}
+		}
+	}
 	if len(plan.preview.Blockers) > 0 {
 		plan.finishFingerprint()
 		return plan, nil

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	neturl "net/url"
 	"strings"
 	"text/template"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/gitflow"
+	"github.com/D1ssolve/wtui/internal/logutil"
 	"github.com/Masterminds/semver/v3"
 )
 
@@ -224,6 +226,47 @@ func (m *manager) releaseFingerprint() string {
 		fp += "|remote:" + remote
 	}
 	return fp
+}
+
+// remoteIdentity is the configured remote's URL without credentials: it names the repository
+// a release's remote refs belong to, whatever the remote is called later.
+func (m *manager) remoteIdentity(ctx context.Context, repoPath string) (string, error) {
+	url, err := m.git.RemoteURL(ctx, repoPath, m.cfg.ServiceRemote().String())
+	if err != nil {
+		return "", fmt.Errorf("resolve %s URL of %s: %w", m.cfg.ServiceRemote(), repoPath, err)
+	}
+	if u, err := neturl.Parse(url); err == nil && u.Scheme != "" && u.Host != "" {
+		u.User = nil // credentials change; the repository does not
+		return u.String(), nil
+	}
+	return logutil.RedactURLUserinfo(url), nil
+}
+
+// releaseRemoteMismatch explains why a release's remote refs may not be deleted through the
+// current forge.remote: it points to another repository (or, for releases without a recorded
+// identity, it is another remote than the one the release was started on).
+func (m *manager) releaseRemoteMismatch(ctx context.Context, release domain.Release, svc domain.ReleaseService) (string, error) {
+	if svc.RemoteIdentity == "" {
+		if started, now := releaseRemote(release), m.cfg.ServiceRemote().String(); started != now {
+			return fmt.Sprintf("release was started on remote %s but forge.remote is now %s; set forge.remote back to %s to delete its remote branches", started, now, started), nil
+		}
+		return "", nil
+	}
+	current, err := m.remoteIdentity(ctx, svc.RepoPath)
+	if err != nil || current == svc.RemoteIdentity {
+		return "", err
+	}
+	return fmt.Sprintf("service %s: forge.remote %s now points to %s, not to %s where the release was created; point it back to delete its remote branches", svc.Name, m.cfg.ServiceRemote(), current, svc.RemoteIdentity), nil
+}
+
+// releaseRemote is the forge.remote a release was started on, as bound into its fingerprint;
+// releases without the suffix were started on the default remote.
+func releaseRemote(release domain.Release) string {
+	if _, remote, ok := strings.Cut(release.FlowFingerprint, "|remote:"); ok {
+		return remote
+	}
+	var unset config.RemoteName
+	return unset.String()
 }
 
 // ensureReleaseFlowUnchanged refuses to continue a release under a different release process

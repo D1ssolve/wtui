@@ -94,6 +94,8 @@ type ReleaseService struct {
 	HooksDone []string          `json:"hooks_done,omitempty"`
 	// ReleaseURL is the forge Release object published for Tag; once set, publish skips the service.
 	ReleaseURL string `json:"release_url,omitempty"`
+	// RemoteIdentity is the credential-free URL of the configured remote when the release was created.
+	RemoteIdentity string `json:"remote_identity,omitempty"`
 }
 
 type ProductionMRRef struct {
