@@ -673,20 +673,7 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 
 	case panels.PlanCloseTaskMsg:
-		if blocked := m.taskWorkflowBlocks(msg.TaskID, gitflow.EventActionClose); blocked != "" {
-			m.outputPanel.AppendLine(blocked)
-			return m, nil
-		}
-		if selected := m.tasksPanel.SelectedTask(); selected != nil && selected.ID == msg.TaskID {
-			taskCopy := *selected
-			m.pendingCloseTask = &taskCopy
-		} else {
-			m.pendingCloseTask = &domain.Task{ID: msg.TaskID}
-		}
-		m.opRunning = true
-		m.operationGeneration++
-		m.outputPanel.AppendLine("Planning close for task " + msg.TaskID + "...")
-		return m, tea.Batch(planCloseTaskCmd(m.mgr, msg.TaskID, m.operationGeneration), m.spinner.Tick)
+		return m.startClosePreview(msg.TaskID)
 
 	case panels.ValidateTaskMsg:
 		ctx := m.startOperation("validation for task "+msg.TaskID, true)
@@ -1926,21 +1913,7 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 
 	case ClosePlanReadyMsg:
-		if msg.Generation != m.operationGeneration {
-			return m, nil
-		}
-		m.opRunning = false
-		if msg.Err != nil {
-			m.reportFailure("Plan close task", msg.Err)
-			return m, nil
-		}
-		closeTask := m.resolveCloseTask(msg.Plan.TaskID)
-		m.modal = modal.NewCloseTaskConfirmModal(closeTask, msg.Plan, m.width, m.height)
-		if msg.Plan.HotfixReview {
-			m.modal = modal.NewHotfixCloseModal(msg.Plan)
-			m.modal.SetTerminalSize(m.width, m.height)
-		}
-		return m, nil
+		return m.finishClosePreview(msg), nil
 
 	case CloseTaskFinishedMsg:
 		if msg.Generation != m.operationGeneration {
