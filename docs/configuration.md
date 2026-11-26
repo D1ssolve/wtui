@@ -606,7 +606,7 @@ When wtui opens an MR for the task, it appends the issue to the description: `Cl
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `issues.jira_url` | string | none | Jira link template with `{{.Key}}`, for example `https://jira.example.com/browse/{{.Key}}`. HTTP(S) only, no credentials. |
-| `issues.task_prefix` | string | none | Task ID prefix for tasks created from GitHub/GitLab issues: `PROJ` gives `PROJ-42`. Without it, the ID is the repository name in upper case plus the issue number (`API-42`). Jira issues use their key. |
+| `issues.task_prefix` | string | none | Task ID prefix for tasks created from GitHub/GitLab issues: `PROJ` gives `PROJ-42`. Without it, the ID is the repository name in upper case plus the issue number (`API-42`). For a Jira issue you enter the task ID yourself. |
 
 ## Tags
 
@@ -671,7 +671,7 @@ Force deletes more, so read its dialog carefully:
 
 Without force, directories are deleted only when every entry is plan-known. Unknown files or directories are kept and named in the error.
 
-A task directory without services is removed by a normal cleanup only when wtui knows the task was created empty and never had a service added. Otherwise a failed or earlier service add may have left a branch behind, so the cleanup is blocked. Check the task branches in your service clones, then use force cleanup (`X`). Force cleanup still refuses while an earlier cleanup is unfinished or a task branch exists that no service accounts for; the error names it, so restore its worktree or delete the branch first.
+A task directory without services is removed by a normal cleanup only when wtui knows the task was created empty and never had a service added. Otherwise a failed or earlier service add may have left a branch behind, so the cleanup is blocked. Check the task branches in your service clones, then use force cleanup (`X`). Force cleanup still refuses in two cases. If an earlier cleanup left `.wtui-cleanup-pending` in the task directory, the error names that record: inspect it, restore the worktrees it lists and retry a normal cleanup. If a task branch exists that no service accounts for, the error names the branch and its repository: restore its worktree or delete the branch, then retry.
 
 Task cleanup checks each repository's configured-remote push URL against the approved plan, including repositories whose worktree is already gone. It checks once before the first step and again before every step. A change before the first step stops cleanup with nothing removed. A change midway stops the remaining steps, while finished steps stay done; there's no rollback. In a normal cleanup, an unknown file in the task directory stops the directory removal at the end; a change that makes a worktree dirty can stop it earlier. With `f`, wtui lists the task directory's files when the cleanup first runs, not when it shows the plan, so a file you add between the preview and confirming is deleted too. A retry of that plan refuses files added to the task directory itself after the first run, but it doesn't look inside worktrees that are still there: a file added inside one of them is deleted with that worktree. Force task cleanup (`X`) doesn't compare files at all. In every case, read the output to see what finished, then press `D` again for a new plan. These checks belong to task cleanup; release cleanup and Delete Release have their own plans.
 
