@@ -61,22 +61,24 @@ func TestReleaseDeletion_RemoteIdentityFollowsRepositoryNotName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	release.Services[0].RemoteIdentity = "https://example.com/team/svc.git"
-	if _, err := mgr.writeReleaseManifest(release); err != nil {
-		t.Fatal(err)
-	}
 	var forge config.ForgeConfig
 	if err := yaml.Unmarshal([]byte("remote: upstream"), &forge); err != nil {
 		t.Fatal(err)
 	}
 	mgr.cfg.Forge = &forge
 	for _, tc := range []struct {
-		url     string
-		blocked bool
+		recorded, url string
+		blocked       bool
 	}{
-		{"https://token@example.com/team/svc.git", false}, // renamed remote, same repository
-		{"https://example.com/fork/svc.git", true},
+		{"https://example.com/team/svc.git", "https://token@example.com/team/svc.git", false}, // renamed remote, same repository
+		{"https://example.com/team/svc.git", "https://example.com/fork/svc.git", true},
+		{"ssh://alice@git.example.test/~/src.git", "ssh://alice:pw@git.example.test/~/src.git", false},
+		{"ssh://alice@git.example.test/~/src.git", "ssh://team@git.example.test/~/src.git", true}, // ~ is each login's home
 	} {
+		release.Services[0].RemoteIdentity = tc.recorded
+		if _, err := mgr.writeReleaseManifest(release); err != nil {
+			t.Fatal(err)
+		}
 		g.remoteURLRes = tc.url
 		plan, err := mgr.PlanReleaseCleanup(t.Context(), "rel-1", ReleaseDeletionSelection())
 		if err != nil {

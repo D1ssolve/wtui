@@ -236,7 +236,12 @@ func (m *manager) remoteIdentity(ctx context.Context, repoPath string) (string, 
 		return "", fmt.Errorf("resolve %s URL of %s: %w", m.cfg.ServiceRemote(), repoPath, err)
 	}
 	if u, err := neturl.Parse(url); err == nil && u.Scheme != "" && u.Host != "" {
-		u.User = nil // credentials change; the repository does not
+		if strings.Contains(u.Scheme, "ssh") && u.User != nil {
+			// An ssh login can select the repository (~ is its home); a password cannot.
+			u.User = neturl.User(u.User.Username())
+		} else {
+			u.User = nil // http(s)/file userinfo is credentials; the path names the repository
+		}
 		return u.String(), nil
 	}
 	return logutil.RedactURLUserinfo(url), nil
