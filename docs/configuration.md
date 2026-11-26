@@ -290,10 +290,31 @@ The preset files are the same YAML you can write yourself; `wtui flow` prints wh
 | `review` | release | `from: release`, `into: production`, `merge` | Production MR per service; `M` merges and records the accepted SHA. |
 | `back_merge` | release | `from: release`, `into: integration`, `when: diverged` | Merges the release branch back when it diverged. |
 | `tag` | release | `on: accepted_merge` after a review, `on: release_branch` otherwise | `release_branch` tags the release branch tip at finish; a retry keeps that SHA and refuses if the branch was rewritten. |
+| `publish` | release, after `tag` | `title`, `notes: changelog \| description` | Creates a GitHub or GitLab Release object for each service's tag. `title` is a template over `{{.Version}}`, `{{.Tag}}`, `{{.Service}}` and `{{.ReleaseID}}` (default: the tag name); `notes: changelog` (default) uses the annotated tag message, `description` the release description. The tag must already be on the remote (`release.push_tags`): publish never creates or pushes tags. A release that already exists for the tag at the accepted commit is reused; one at another commit stops the step. Remotes with an explicit port are refused. |
 
 Merge strategies: `merge_commit`, `squash`, `rebase`, `ff_only`. Releases accept tasks merged by squash or rebase: a task counts as merged when merging its branch into integration would change nothing.
 
-A release records the release process it started with. If `workflow.release` or the branches change while it is in progress, wtui blocks it with instructions instead of continuing under different rules.
+A release records the release process it started with. If `workflow.release`, the branches or `forge.remote` change while it is in progress, wtui blocks it with instructions instead of continuing under different rules. Set the configuration back to continue, or reject the release and prepare it again.
+
+### Per-service overrides
+
+`workflow.services.<service>.task_types.<type>` changes one task type for one service; every other service keeps the type as configured. Only `from`, `close` and `mr` can be overridden, and fields you leave out are inherited.
+
+```yaml
+workflow:
+  extends: git-flow
+  services:
+    api:
+      task_types:
+        feature:
+          close: [{review: {into: [main, stable]}}]
+          mr: {draft: true}
+    worker:
+      task_types:
+        feature: {from: production, close: [{merge: {into: production, merge: ff_only}}]}
+```
+
+The close preview, `M`, waits and cleanup all use the service's own targets: a review into several targets waits for an MR into every one of them. A close plan you approved is bound to the rules it was made under; if an override changes before you confirm, wtui asks you to review the new plan. `ff_only` refuses diverged history instead of creating a merge commit. `wtui flow` prints the overrides with the compiled workflow.
 
 ### MR policy
 
@@ -568,13 +589,24 @@ What it is used for:
 
 | Key | Type | Effective default | Description |
 |---|---|---|---|
-| `forge.remote` | string | `origin` | Named Git remote in each service repository (for example, `upstream` when `origin` is a fork). Use a name, not a URL or path. Guarded operations stay bound to their approved endpoint. |
+| `forge.remote` | string | `origin` | Named Git remote in each service repository (for example, `upstream` when `origin` is a fork). Use a name, not a URL or path. Guarded operations stay bound to their approved endpoint. A release in progress keeps the remote it started with: change `forge.remote` and wtui blocks it until you set it back. A release records each service's repository (its remote URL without credentials) and deletes remote branches only in that repository; renaming the remote is fine, pointing it at a fork or another repository blocks deletion. |
 | `forge.default_provider` | string | `auto` | Displayed in system status. Actual operation routing is detected from each service remote URL. |
-| `forge.merge_queue` | bool | `false` | GitHub repositories whose protected branches require a [merge queue](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-a-pull-request-with-a-merge-queue). `M` then adds each ready PR to the queue (`gh pr merge --auto --match-head-commit`) instead of merging; press `M` again after the queue merged it to record the result. Release preparation with `integrate_tasks` is refused, because it merges task MRs one after another. |
+| `forge.merge_queue` | bool | `false` | GitHub repositories whose protected branches require a [merge queue](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-a-pull-request-with-a-merge-queue). `M` then adds each ready PR to the queue (`gh pr merge --auto --match-head-commit`) instead of merging; press `M` again after the queue merged it to record the result. On GitLab, `M` adds each ready MR to the project's [merge train](https://docs.gitlab.com/ci/pipelines/merge_trains/) for the reviewed head instead, and wtui records the train MR; a wait or `F` counts it as delivered only once the target branch on the remote contains it, for every target of the service. Release preparation with `integrate_tasks` is refused, because it merges task MRs one after another. |
 | `forge.gitlab_host` | string | `gitlab.com` | GitLab hostname recognized in remote URLs. |
 | `forge.github_host` | string | `github.com` | GitHub hostname recognized in remote URLs. |
 
 `glab` and `gh` must be installed and authenticated separately. wtui checks both executables at startup.
+
+## Issues
+
+A task can carry the issue it works on. In the new task dialog (`i`), the `Issue:` field accepts a Jira key such as `PROJ-123`, a Jira URL matching `issues.jira_url`, or a GitHub or GitLab issue URL. To start from an issue instead, select a service, press `m` and choose the issue list: `Enter` on an open issue opens the new task dialog with the issue and a task ID filled in.
+
+When wtui opens an MR for the task, it appends the issue to the description: `Closes #N` when the issue belongs to the same project as the MR, otherwise `Issue: <URL>`. The issue is stored with the task and removed with it.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `issues.jira_url` | string | none | Jira link template with `{{.Key}}`, for example `https://jira.example.com/browse/{{.Key}}`. HTTP(S) only, no credentials. |
+| `issues.task_prefix` | string | none | Task ID prefix for tasks created from GitHub/GitLab issues: `PROJ` gives `PROJ-42`. Without it, the ID is the repository name in upper case plus the issue number (`API-42`). Jira issues use their key. |
 
 ## Tags
 
@@ -635,11 +667,13 @@ Cleanup (task or release) removes worktrees, directories and, for a release, its
 Force deletes more, so read its dialog carefully:
 
 - `f` in the task cleanup dialog, or the force confirmation offered after a normal cleanup failed, also removes unknown files in the task directory.
-- Force task cleanup (`X` in Tasks) skips the usual completion and dirty-worktree checks. It removes the task's worktrees and its whole directory. It also deletes the task's local branch in each of your service clones, and the remote branch on `origin` if you tick that option in the same dialog. Protected branches are skipped.
+- Force task cleanup (`X` in Tasks) skips the usual completion and dirty-worktree checks. It removes the task's worktrees and its whole directory. It also deletes the task's local branch in each of your service clones, and the remote branch on the configured remote (`forge.remote`, default `origin`) if you tick that option in the same dialog. Protected branches are skipped.
 
 Without force, directories are deleted only when every entry is plan-known. Unknown files or directories are kept and named in the error.
 
-Task cleanup checks each repository's `origin` push URL against the approved plan, including repositories whose worktree is already gone. It checks once before the first step and again before every step. A change before the first step stops cleanup with nothing removed. A change midway stops the remaining steps, while finished steps stay done; there's no rollback. In a normal cleanup, an unknown file in the task directory stops the directory removal at the end; a change that makes a worktree dirty can stop it earlier. With `f`, wtui lists the task directory's files when the cleanup first runs, not when it shows the plan, so a file you add between the preview and confirming is deleted too. A retry of that plan refuses files added to the task directory itself after the first run, but it doesn't look inside worktrees that are still there: a file added inside one of them is deleted with that worktree. Force task cleanup (`X`) doesn't compare files at all. In every case, read the output to see what finished, then press `D` again for a new plan. These checks belong to task cleanup; release cleanup and Delete Release have their own plans.
+A task directory without services is removed by a normal cleanup only when wtui knows the task was created empty and never had a service added. Otherwise a failed or earlier service add may have left a branch behind, so the cleanup is blocked with the reason, and leftover worktree registrations or task branches are named. Check them, then use force cleanup (`X`).
+
+Task cleanup checks each repository's configured-remote push URL against the approved plan, including repositories whose worktree is already gone. It checks once before the first step and again before every step. A change before the first step stops cleanup with nothing removed. A change midway stops the remaining steps, while finished steps stay done; there's no rollback. In a normal cleanup, an unknown file in the task directory stops the directory removal at the end; a change that makes a worktree dirty can stop it earlier. With `f`, wtui lists the task directory's files when the cleanup first runs, not when it shows the plan, so a file you add between the preview and confirming is deleted too. A retry of that plan refuses files added to the task directory itself after the first run, but it doesn't look inside worktrees that are still there: a file added inside one of them is deleted with that worktree. Force task cleanup (`X`) doesn't compare files at all. In every case, read the output to see what finished, then press `D` again for a new plan. These checks belong to task cleanup; release cleanup and Delete Release have their own plans.
 
 Task cleanup also inspects every release that involves the task. An active in-flight status, a recoverable failure, and a malformed or unknown status block cleanup; malformed manifests fail closed the same way. A `released` manifest supplies integration proof. A `rejected` release or a nonrecoverable failure neither blocks cleanup nor proves integration: the task must still be proven merged through live or forge-provided ancestry.
 
