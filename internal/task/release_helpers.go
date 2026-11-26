@@ -214,17 +214,30 @@ func validateReleaseStatusTransition(from, to domain.ReleaseStatus) error {
 	return fmt.Errorf("%w: %s -> %s", ErrReleaseInvalidStatusTransition, from, to)
 }
 
-// ensureReleaseFlowUnchanged refuses to continue a release under a different release process.
+// releaseFingerprint binds a release to its process and to a non-default forge.remote:
+// continuing under another remote would publish to a different repository. The default
+// remote adds nothing, so releases started before forge.remote keep their fingerprint.
+func (m *manager) releaseFingerprint() string {
+	fp := m.flow.ReleaseFingerprint()
+	var unset config.RemoteName
+	if remote := m.cfg.ServiceRemote().String(); remote != unset.String() {
+		fp += "|remote:" + remote
+	}
+	return fp
+}
+
+// ensureReleaseFlowUnchanged refuses to continue a release under a different release process
+// or a different forge.remote.
 func (m *manager) ensureReleaseFlowUnchanged(release domain.Release) error {
 	if release.FlowFingerprint == "" {
-		// Releases without a fingerprint were created by the fixed git-flow sequence.
-		if m.flow != nil && m.flow.Release != nil && (m.flow.Release.FromMachine || !m.flow.ReleaseHasStep(gitflow.StepReview) || !m.flow.ReleaseHasStep(gitflow.StepBackMerge)) {
-			return fmt.Errorf("%w: release %s predates workflow.release; finish it with the previous configuration or reject it and prepare again", ErrReleaseFlowChanged, release.ID)
+		// Releases without a fingerprint were created by the fixed git-flow sequence on origin.
+		if m.flow != nil && m.flow.Release != nil && (m.flow.Release.FromMachine || !m.flow.ReleaseHasStep(gitflow.StepReview) || !m.flow.ReleaseHasStep(gitflow.StepBackMerge)) || m.releaseFingerprint() != m.flow.ReleaseFingerprint() {
+			return fmt.Errorf("%w: release %s predates workflow.release and forge.remote; finish it with the previous configuration or reject it and prepare again", ErrReleaseFlowChanged, release.ID)
 		}
 		return nil
 	}
-	if release.FlowFingerprint != m.flow.ReleaseFingerprint() {
-		return fmt.Errorf("%w: release %s; restore the release configuration it started with, or reject it and prepare again", ErrReleaseFlowChanged, release.ID)
+	if release.FlowFingerprint != m.releaseFingerprint() {
+		return fmt.Errorf("%w: release %s; restore the release configuration (workflow and forge.remote) it started with, or reject it and prepare again", ErrReleaseFlowChanged, release.ID)
 	}
 	return nil
 }

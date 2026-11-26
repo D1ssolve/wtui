@@ -57,7 +57,7 @@ func (m *manager) CreateRelease(ctx context.Context, params CreateReleaseParams)
 		CreatedAt:   now,
 		UpdatedAt:   now,
 
-		FlowFingerprint: m.flow.ReleaseFingerprint(),
+		FlowFingerprint: m.releaseFingerprint(),
 	}
 
 	release.Tag = sharedTagOrEmpty(release.Services)
