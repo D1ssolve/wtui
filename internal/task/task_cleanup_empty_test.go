@@ -57,7 +57,12 @@ func TestDirectoryCleanupBlocksWorktreeRegisteredUnderEmptyTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A rolled-back Init can leave its registration (and branch) after the directory is recreated.
-	gitMock.listWorktreesRes = []git.WorktreeEntry{{Path: filepath.Join(tasks, "RETRY", "svc"), Branch: "refs/heads/feature/RETRY-v3"}}
+	// Git reports physical paths, which differ from a configured root behind a symlink (/var on macOS).
+	physical, err := filepath.EvalSymlinks(tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitMock.listWorktreesRes = []git.WorktreeEntry{{Path: filepath.Join(physical, "RETRY", "svc"), Branch: "refs/heads/feature/RETRY-v3"}}
 	p, err := m.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "RETRY"})
 	if err != nil || !p.Blocked() {
 		t.Fatalf("plan: blockers=%q err=%v, want blocked", p.Preview().Blockers, err)

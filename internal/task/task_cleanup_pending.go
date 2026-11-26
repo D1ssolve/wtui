@@ -87,6 +87,11 @@ func (m *manager) emptyTaskLeftovers(ctx context.Context, id, taskDir string) (s
 	} else if err != nil {
 		return "", err
 	}
+	// Git reports physical paths; the configured root may sit behind a symlink (/var on macOS).
+	physical, err := filepath.EvalSymlinks(taskDir)
+	if err != nil {
+		return "", err
+	}
 	repos, err := m.Repos(ctx, true)
 	if err != nil {
 		return "", err
@@ -97,7 +102,7 @@ func (m *manager) emptyTaskLeftovers(ctx context.Context, id, taskDir string) (s
 			return "", err
 		}
 		for _, entry := range entries {
-			if pathWithin(taskDir, entry.Path) {
+			if pathWithin(taskDir, entry.Path) || pathWithin(physical, entry.Path) {
 				return fmt.Sprintf("worktree %s is still registered in %s; restore it or run git worktree prune, then retry", entry.Path, repo.Path), nil
 			}
 		}
