@@ -242,14 +242,18 @@ func (m *manager) validateRetrySafety(ctx context.Context, release domain.Releas
 	return nil
 }
 
-// storedIntegrationRef reads a checkpointed Pre/PostIntegrationRef unambiguously. Older
-// manifests saved the short "<remote>/<branch>" tracking name, which a same-named local
-// branch shadows; a full ref, a commit SHA or a slash-free name is used as is.
-func storedIntegrationRef(ref string) string {
-	if ref == "" || strings.HasPrefix(ref, "refs/") || !strings.Contains(ref, "/") {
-		return ref
+// storedIntegrationRef reads a checkpointed Pre/PostIntegrationRef unambiguously. Writers
+// stored a full ref, a commit SHA, the local integration branch (v1) or the short
+// "<remote>/<branch>" tracking name, which a same-named local branch shadows; the
+// integration branch tells the last two apart, whatever the remote is called.
+func storedIntegrationRef(ref, integrationBranch string) string {
+	switch {
+	case ref == "" || ref == integrationBranch || integrationBranch == "" || strings.HasPrefix(ref, "refs/remotes/") || strings.HasPrefix(ref, "refs/heads/"):
+		return ref // full ref, local integration branch (as before), or nothing to tell apart
+	case strings.HasSuffix(ref, "/"+integrationBranch):
+		return "refs/remotes/" + ref
 	}
-	return "refs/remotes/" + ref
+	return ref
 }
 
 func (m *manager) validateRetryServiceRefs(ctx context.Context, svc domain.ReleaseService) error {
@@ -262,7 +266,7 @@ func (m *manager) validateRetryServiceRefs(ctx context.Context, svc domain.Relea
 			return fmt.Errorf("%w: service=%s missing integration branch %s", ErrReleaseRetryUnsafe, svc.Name, svc.IntegrationBranch)
 		}
 		if svc.PostIntegrationSHA != "" {
-			ref := storedIntegrationRef(svc.PostIntegrationRef)
+			ref := storedIntegrationRef(svc.PostIntegrationRef, svc.IntegrationBranch)
 			if ref == "" {
 				ref = svc.IntegrationBranch
 			}
@@ -316,7 +320,7 @@ func (m *manager) validateRetryServiceRefs(ctx context.Context, svc domain.Relea
 
 	if svc.PostIntegrationRef != "" && svc.ReleaseRef != "" {
 		if svc.PostIntegrationSHA == "" || svc.ReleaseSHA == "" {
-			ok, err := m.git.IsAncestor(ctx, svc.RepoPath, storedIntegrationRef(svc.PostIntegrationRef), svc.ReleaseRef)
+			ok, err := m.git.IsAncestor(ctx, svc.RepoPath, storedIntegrationRef(svc.PostIntegrationRef, svc.IntegrationBranch), svc.ReleaseRef)
 			if err != nil {
 				return fmt.Errorf("%w: service=%s post_integration_ref check: %v", ErrReleaseRetryUnsafe, svc.Name, err)
 			}
