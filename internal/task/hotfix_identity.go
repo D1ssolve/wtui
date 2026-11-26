@@ -54,10 +54,13 @@ func (m *manager) legacyHotfixConfig(defaults bool) hotfixIdentityConfig {
 func (m *manager) hotfixIdentity(services []ServiceClosePlan) string {
 	// Keep the original raw-config identity for new checkpoints. Readers also
 	// recognize checkpoints written after Load populated the retired defaults.
-	return m.legacyHotfixConfig(false).identity(services)
+	return m.closeServiceRules(services).bind(m.legacyHotfixConfig(false).identity(services))
 }
 
 func (m *manager) matchesPriorHotfixIdentity(services []ServiceClosePlan, saved string) bool {
+	if len(m.closeServiceRules(services)) > 0 {
+		return false
+	}
 	// 8cd9a32 through 3004051: reduced tag/close layout.
 	if (hotfixIdentityConfig{m.flow, m.cfg.Tag, m.cfg.Close}).identity(services) == saved {
 		return true

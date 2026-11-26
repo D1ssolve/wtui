@@ -413,7 +413,7 @@ func (m *manager) validateCleanupTaskBranch(ctx context.Context, plan *ReleaseCl
 		plan.block("task branch %s is protected", fb.Branch)
 	}
 	leaseSHA := featureBranchSourceIdentity(fb)
-	targets, err := m.resolveCleanupTargets(ctx, plan, svc.RepoPath, m.cleanupTaskMergeTargetRefs(fb.Branch), fb.MergeRef, "task branch "+fb.Branch)
+	targets, err := m.resolveCleanupTargets(ctx, plan, svc.RepoPath, m.cleanupTaskMergeTargetRefs(svc.Name, fb.Branch), fb.MergeRef, "task branch "+fb.Branch)
 	if err != nil {
 		return err
 	}
@@ -446,10 +446,10 @@ func (m *manager) validateCleanupTaskBranch(ctx context.Context, plan *ReleaseCl
 	return nil
 }
 
-func (m *manager) cleanupTaskMergeTargetRefs(branch string) []string {
+func (m *manager) cleanupTaskMergeTargetRefs(service, branch string) []string {
 	if m.flow != nil {
 		branchType := gitflow.DetectBranchType(branch, m.flow)
-		if rule, ok := m.flow.BranchTypes[branchType]; ok && len(rule.MergeTargets) > 0 {
+		if rule := m.flow.RuleFor(service, branchType); len(rule.MergeTargets) > 0 {
 			refs := make([]string, 0, len(rule.MergeTargets))
 			for _, configured := range rule.MergeTargets {
 				refs = append(refs, cleanupRemoteBranchRef(configured))

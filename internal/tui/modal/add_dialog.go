@@ -421,6 +421,11 @@ func (d *AddDialog) applyBranchTypeSelection() {
 	if len(rule.Prefixes) > 0 {
 		d.prefixInput.SetValue(strings.TrimSpace(rule.Prefixes[0]))
 	}
+	if len(d.flow.ServicesForType(selected)) > 0 {
+		d.baseInput.SetValue("")
+		d.baseInput.Placeholder = "service workflow default"
+		return
+	}
 	base := strings.TrimSpace(rule.BaseBranch)
 	if base != "" {
 		d.baseInput.SetValue(base)

@@ -162,3 +162,100 @@ type greenWaitForge struct{ forge.ForgeClient }
 func (greenWaitForge) PipelineStatus(_ context.Context, _, _ string) ([]forge.PipelineStatus, error) {
 	return []forge.PipelineStatus{{HeadSHA: "live-head", Status: "success"}}, nil
 }
+
+func TestTaskReviewWaitRequiresEveryServiceTarget(t *testing.T) {
+	flow, err := gitflow.ParseWorkflowYAML(`workflow:
+  extends: git-flow
+  task_types:
+    feature:
+      prefixes: [feature/]
+      from: integration
+      close: [{review: {into: [develop, next]}}]
+      machine:
+        states:
+          coding: {wait: manual, on: {close: {key: C, action: close, to: review}}}
+          review: {wait: review_merged, next: done}
+          done: {final: released}
+  services:
+    a: {task_types: {feature: {close: [{review: {into: [main, stable]}}]}}}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, missing string }{{"override", "a/stable"}, {"inherited", "b/next"}, {"all delivered", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newRuleWorkflowTestManager(t, flow.BranchTypes[gitflow.BranchTypeFeature], false).(*manager)
+			m.flow = flow
+			g := m.git.(*mockGitClient)
+			g.getWorktreeBranchFn = func(path string) (string, error) { return "feature/" + filepath.Base(path), nil }
+			g.resolveRefFn = func(repo, ref string) (string, error) { return filepath.Base(repo) + "-head", nil }
+			g.remoteRefSHAFn = func(repo, ref string) (string, error) {
+				name := filepath.Base(repo)
+				branch := strings.TrimPrefix(ref, "refs/heads/")
+				if branch == "feature/"+name {
+					return name + "-head", nil
+				}
+				key := name + "/" + branch
+				if key == tc.missing {
+					return "", nil
+				}
+				switch key {
+				case "a/main", "a/stable", "b/develop", "b/next":
+					return name + "-tip", nil
+				}
+				return "", nil
+			}
+			g.isAncestorFn = func(repo, source, target string) (bool, error) {
+				name := filepath.Base(repo)
+				return source == name+"-head" && target == name+"-tip", nil
+			}
+			manual := false
+			g.fetchFn = func(string) error {
+				if !manual {
+					t.Fatal("poll fetched")
+				}
+				return nil
+			}
+			ctx := t.Context()
+			const id = "TASK-1"
+			svcs, err := m.ListServices(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tf, err := m.loadTaskFlow(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tf.state.State = "review"
+			if err = m.saveTaskFlow(tf); err != nil {
+				t.Fatal(err)
+			}
+			statePath := filepath.Join(m.taskDir(id), taskFlowFileName)
+			before, err := os.ReadFile(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := m.ObserveTaskWait(ctx, domain.Task{ID: id, Phase: "feature", Services: svcs}, "review")
+			want := WaitObservation{}
+			state := "review"
+			if tc.missing == "" {
+				want = WaitObservation{Ready: true, Key: "F"}
+				state = "done"
+			}
+			if err != nil || got != want {
+				t.Errorf("observation: %+v, %v; want %+v", got, err, want)
+			}
+			if after, err := os.ReadFile(statePath); err != nil || string(after) != string(before) {
+				t.Fatalf("poll changed persisted state: %s, %v", after, err)
+			}
+			manual = true
+			if err := m.AdvanceTask(ctx, id, "", nil); err != nil {
+				t.Fatal(err)
+			}
+			summary, err := m.TaskWorkflow(ctx, id)
+			if err != nil || string(summary.Current) != state {
+				t.Fatalf("manual re-check: %s, %v; want %s", summary.Current, err, state)
+			}
+		})
+	}
+}

@@ -173,6 +173,9 @@ func (m *manager) completeAcceptedPreparation(ctx context.Context, release domai
 }
 
 func (m *manager) planReleaseTaskMergeRetryRow(ctx context.Context, svc domain.ReleaseService, fb domain.ReleaseFeatureBranch, client forge.ForgeClient, repo string) (ReleaseTaskMergeRow, releaseTaskMergeStep, error) {
+	if err := m.checkConfirmedTaskRule(svc, fb); err != nil {
+		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, err
+	}
 	if fb.TaskMergeMRNumber == 0 {
 		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, errors.New("release task merge retry: missing persisted MR number")
 	}
@@ -180,14 +183,14 @@ func (m *manager) planReleaseTaskMergeRetryRow(ctx context.Context, svc domain.R
 	if err != nil {
 		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, fmt.Errorf("release task merge retry: read MR !%d: %w", fb.TaskMergeMRNumber, err)
 	}
-	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(fb.Branch), &mr); err != nil {
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Name, fb.Branch), &mr); err != nil {
 		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, err
 	}
 	targetSHA := fb.TaskMergeExpectedTarget
 	if targetSHA == "" {
 		targetSHA = fb.TaskMergeTargetSHA
 	}
-	base := releaseTaskMergeStep{ServiceName: svc.Name, TaskID: fb.TaskID, Branch: fb.Branch, MRNumber: fb.TaskMergeMRNumber, MRURL: fb.TaskMergeMRURL, HeadSHA: fb.TaskMergeHeadSHA, TargetSHA: targetSHA, RepoPath: svc.RepoPath, WorktreePath: fb.WorktreePath, Repo: repo, TargetBranch: svc.IntegrationBranch, MergeMethod: m.mergeMethodForBranch(fb.Branch)}
+	base := releaseTaskMergeStep{ServiceName: svc.Name, TaskID: fb.TaskID, Branch: fb.Branch, MRNumber: fb.TaskMergeMRNumber, MRURL: fb.TaskMergeMRURL, HeadSHA: fb.TaskMergeHeadSHA, TargetSHA: targetSHA, RepoPath: svc.RepoPath, WorktreePath: fb.WorktreePath, Repo: repo, TargetBranch: svc.IntegrationBranch, MergeMethod: m.mergeMethodForBranch(svc.Name, fb.Branch)}
 	localHeadErr := m.validateTaskMergeLocalHead(ctx, fb.WorktreePath, mr.HeadSHA)
 	if fb.TaskMergeStatus == taskMergeStatusMerged && !mergedMRState(mr.State) {
 		return ReleaseTaskMergeRow{}, releaseTaskMergeStep{}, errors.New("release task merge retry: persisted merged MR is not externally proven")

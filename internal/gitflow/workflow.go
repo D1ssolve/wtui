@@ -132,6 +132,9 @@ func compileWorkflow(user *config.WorkflowConfig) (*ResolvedGitFlow, error) {
 		flow.BranchTypes[BranchTypeRelease] = rule
 	}
 
+	if err := c.compileServiceRules(user.Services, wf.TaskTypes); err != nil {
+		return nil, err
+	}
 	return flow, nil
 }
 

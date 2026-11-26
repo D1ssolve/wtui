@@ -114,30 +114,41 @@ func (m *manager) reviewWorkflowSummary(ctx context.Context, plans []serviceWork
 		case gitflow.CloseStrategyDirectMerge:
 			rows = append(rows, directWorkflowRow(*plan, states[i]))
 		case gitflow.CloseStrategyReviewRequest:
-			reviewTarget := ""
-			if len(plan.rule.ReviewTargets) > 0 {
-				reviewTarget = plan.rule.ReviewTargets[0]
-			}
-			item := m.inspectWorkflowReviewMR(ctx, plan.svc, reviewTarget)
-			reviewItems = append(reviewItems, item)
-			row := reviewWorkflowRow(item)
-			rows = append(rows, row)
-			switch item.Status {
-			case "no_mr":
-				missingMR = true
-			case "ready":
-				ready = true
-			case "merged":
-				// Externally merged MR proven independently of source
-				// ancestry (squash/rebase rewrites history): satisfied.
-			case "blocked", "failed":
-				detail := row.Blocker
-				if detail == "" {
-					detail = item.Status
+			var items []ServiceMergeInspection
+			if m.isMultiTargetReview(plan.svc.Name, plan.svc.Branch) {
+				var err error
+				items, err = m.inspectHotfixMRs(ctx, plan.svc)
+				if err != nil {
+					items = []ServiceMergeInspection{failedWorkflowInspection(ServiceMergeInspection{ServiceName: plan.svc.Name}, err, "inspect hotfix MR history and repository; refresh")}
 				}
-				blockedDetails = append(blockedDetails, item.ServiceName+": "+detail)
-			default:
-				waiting++
+			} else {
+				target := ""
+				if len(plan.rule.ReviewTargets) > 0 {
+					target = plan.rule.ReviewTargets[0]
+				}
+				items = []ServiceMergeInspection{m.inspectWorkflowReviewMR(ctx, plan.svc, target)}
+			}
+			for _, item := range items {
+				reviewItems = append(reviewItems, item)
+				row := reviewWorkflowRow(item)
+				rows = append(rows, row)
+				switch item.Status {
+				case "no_mr":
+					missingMR = true
+				case "ready":
+					ready = true
+				case "merged":
+					// Externally merged MR proven independently of source
+					// ancestry (squash/rebase rewrites history): satisfied.
+				case "blocked", "failed":
+					detail := row.Blocker
+					if detail == "" {
+						detail = item.Status
+					}
+					blockedDetails = append(blockedDetails, item.ServiceName+": "+detail)
+				default:
+					waiting++
+				}
 			}
 		}
 	}

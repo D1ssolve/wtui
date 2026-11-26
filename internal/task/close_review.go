@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/D1ssolve/wtui/internal/domain"
@@ -33,8 +34,8 @@ type reviewSourcePublication struct {
 // sourceRemovedOnMerge reports an eligible review whose forge removes the source on merge:
 // its MR history is classified before the source is published, so a merged review is
 // verified read-only and its removed source is never recreated.
-func (m *manager) sourceRemovedOnMerge(branch string) bool {
-	rule := m.branchRule(branch)
+func (m *manager) sourceRemovedOnMerge(service, branch string) bool {
+	rule := m.branchRule(service, branch)
 	return rule.MR.RemoveSourceBranch && gitflow.SourceNeededAfterReview(rule) == ""
 }
 
@@ -81,28 +82,18 @@ func (m *manager) publishReviewSource(ctx context.Context, svc domain.Service, p
 	return true, m.git.PushRefWithLease(ctx, svc.RepoPath, pushURL, ref, local, ref, remote)
 }
 
-// reconcileReviewClose returns the state and its evidence SHA: the published
-// head for a removal-enabled open review, or the contained merge for a verified review.
-func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, target, repo string, client forge.ForgeClient) (string, string, error) {
-	history, ok := client.(forge.HistoryClient)
-	if !ok {
-		return "", "", errors.New("forge does not support MR history")
-	}
-	rows, err := history.MRHistory(ctx, svc.Branch, repo)
-	if err != nil {
-		return "", "", err
-	}
-	removal := m.sourceRemovedOnMerge(svc.Branch)
+func (m *manager) classifyReview(ctx context.Context, svc domain.Service, target, repo string, client forge.ForgeClient, rows []forge.MRInfo) (string, string, error) {
+	removal := m.sourceRemovedOnMerge(svc.Name, svc.Branch)
 	const inspect = "inspect MR source, target and state in the forge; refresh before retrying"
-	if removal {
-		if svc.Branch == "" || target == "" {
-			return "", "", withRecovery(errors.New("review source or target branch is missing"), inspect)
-		}
+	if svc.Branch == "" || target == "" {
+		return "", "", withRecovery(errors.New("review source or target branch is missing"), inspect)
+	}
+	if removal || m.hasServiceRule(svc) {
 		// This listing is source-scoped. A row we cannot classify must not
 		// disappear into the same bucket as genuinely empty history.
 		seen := make(map[int]struct{}, len(rows))
 		for _, row := range rows {
-			if row.Number <= 0 || row.SourceBranch != svc.Branch || row.TargetBranch != target {
+			if row.Number <= 0 || row.SourceBranch != svc.Branch || !slices.Contains(m.branchRule(svc.Name, svc.Branch).ReviewTargets, row.TargetBranch) {
 				return "", "", withRecovery(fmt.Errorf("MR history identity is incomplete or unexpected: !%d %q → %q, expected %q → %q", row.Number, row.SourceBranch, row.TargetBranch, svc.Branch, target), inspect)
 			}
 			if _, duplicate := seen[row.Number]; duplicate {
@@ -124,22 +115,23 @@ func (m *manager) reconcileReviewClose(ctx context.Context, svc domain.Service, 
 		return reviewCloseCreate, "", nil
 	}
 	want := active[0]
+	if want.Number <= 0 {
+		return "", "", withRecovery(errors.New("review history has no valid MR number"), inspect)
+	}
 	fresh, err := client.MRReadinessByNumber(ctx, want.Number, repo, svc.WorktreePath)
 	if err != nil {
 		return "", "", err
 	}
-	if removal {
-		if fresh.Number != want.Number || fresh.SourceBranch != svc.Branch || fresh.TargetBranch != target {
-			return "", "", withRecovery(fmt.Errorf("MR !%d identity changed or is incomplete: got !%d %q → %q, expected %q → %q", want.Number, fresh.Number, fresh.SourceBranch, fresh.TargetBranch, svc.Branch, target), inspect)
-		}
-		if strings.TrimSpace(fresh.HeadSHA) == "" {
-			return "", "", withRecovery(fmt.Errorf("MR !%d has no head SHA", want.Number), inspect)
-		}
-		if mergedMRState(want.State) && !mergedMRState(fresh.State) {
-			return "", "", withRecovery(fmt.Errorf("MR !%d is listed as merged but numbered detail is %q", want.Number, fresh.State), inspect)
-		}
+	if fresh.Number != want.Number || fresh.SourceBranch != svc.Branch || fresh.TargetBranch != target {
+		return "", "", withRecovery(fmt.Errorf("MR !%d identity changed or is incomplete: got !%d %q → %q, expected %q → %q", want.Number, fresh.Number, fresh.SourceBranch, fresh.TargetBranch, svc.Branch, target), inspect)
 	}
-	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &fresh); err != nil {
+	if strings.TrimSpace(fresh.HeadSHA) == "" {
+		return "", "", withRecovery(fmt.Errorf("MR !%d has no head SHA", want.Number), inspect)
+	}
+	if mergedMRState(want.State) && !mergedMRState(fresh.State) {
+		return "", "", withRecovery(fmt.Errorf("MR !%d is listed as merged but numbered detail is %q", want.Number, fresh.State), inspect)
+	}
+	if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Name, svc.Branch), &fresh); err != nil {
 		return "", "", err
 	}
 	switch strings.ToLower(strings.TrimSpace(fresh.State)) {

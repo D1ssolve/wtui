@@ -94,13 +94,13 @@ workflow:
 	if !m.IsProtectedBranch(context.Background(), "emergency/APP-1") {
 		t.Fatal("shared custom type is not protected")
 	}
-	if !m.isMultiTargetReview("emergency/APP-1") {
+	if !m.isMultiTargetReview("svc", "emergency/APP-1") {
 		t.Fatal("custom type reviewing into two targets is not a multi-target review")
 	}
-	if m.isMultiTargetReview("story/APP-1") {
+	if m.isMultiTargetReview("svc", "story/APP-1") {
 		t.Fatal("single-target review classified as multi-target")
 	}
-	if got := m.pruneMergeTarget("emergency/APP-1"); got != "origin/main" {
+	if got := m.pruneMergeTarget("svc", "emergency/APP-1"); got != "origin/main" {
 		t.Fatalf("pruneMergeTarget = %q, want origin/main", got)
 	}
 }

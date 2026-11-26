@@ -197,6 +197,9 @@ func flowGraphLines(flow *gitflow.ResolvedGitFlow, pos FlowPosition) []string {
 		} else {
 			add(label + dim.Render(strings.Join(chain, "")))
 		}
+		for _, line := range flow.ServiceRuleDescriptions(gitflow.BranchType(name)) {
+			add("      " + dim.Render(line))
+		}
 		if rule.Machine != nil {
 			state := ""
 			if name == pos.TaskType {

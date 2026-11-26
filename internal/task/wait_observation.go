@@ -185,20 +185,21 @@ func (m *manager) taskReviewWaitHolds(ctx context.Context, services []domain.Ser
 		if err != nil || published == "" || published != local {
 			return false, err
 		}
-		target := plan.rule.ReviewTargets[0]
-		tip, err := m.git.RemoteRefSHA(ctx, plan.svc.RepoPath, "refs/heads/"+target)
-		if err != nil || tip == "" {
-			return false, err
-		}
-		// An uncached target or a squash may not prove source ancestry.
-		merged, ancestryErr := m.git.IsAncestor(ctx, plan.svc.RepoPath, published, tip)
-		if merged && ancestryErr == nil {
-			continue
-		}
-		refs := taskReviewRefs{sourceSHA: published, targetBranch: target, targetSHA: tip}
-		confirmed, err := m.taskReviewAtTarget(ctx, plan.svc, refs)
-		if err != nil || !confirmed {
-			return false, err
+		for _, target := range plan.rule.ReviewTargets {
+			tip, err := m.git.RemoteRefSHA(ctx, plan.svc.RepoPath, "refs/heads/"+target)
+			if err != nil || tip == "" {
+				return false, err
+			}
+			// An uncached target or a squash may not prove source ancestry.
+			merged, ancestryErr := m.git.IsAncestor(ctx, plan.svc.RepoPath, published, tip)
+			if merged && ancestryErr == nil {
+				continue
+			}
+			refs := taskReviewRefs{sourceSHA: published, targetBranch: target, targetSHA: tip}
+			confirmed, err := m.taskReviewAtTarget(ctx, plan.svc, refs)
+			if err != nil || !confirmed {
+				return false, err
+			}
 		}
 	}
 	return len(plans) > 0, nil

@@ -12,7 +12,19 @@ type WorkflowConfig struct {
 	Branches    WorkflowBranches           `yaml:"branches"`
 	DefaultType string                     `yaml:"default_type"`
 	TaskTypes   map[string]*TaskTypeConfig `yaml:"task_types"`
+	Services    ServiceWorkflows           `yaml:"services"`
 	Release     *ReleaseFlowConfig         `yaml:"release"`
+}
+
+type ServiceWorkflowConfig struct {
+	TaskTypes map[string]*ServiceTaskRule `yaml:"task_types"`
+}
+
+// Unspecified fields inherit from the globally selected task type.
+type ServiceTaskRule struct {
+	From  *string      `yaml:"from"`
+	Close []StepConfig `yaml:"close"`
+	MR    *MRConfig    `yaml:"mr"`
 }
 
 type WorkflowBranches struct {

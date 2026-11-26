@@ -132,7 +132,7 @@ func TestDirectMergeProof_OpenMRAllowsCloseAndCleanup(t *testing.T) {
 	detail.State, detail.MergedSHA, detail.Ready = "open", "", true
 	row := mergedReviewHistoryRow(7)
 	row.State = "open"
-	m, g, client := setupReviewEvidenceCleanup(t, detail, row)
+	m, g, _ := setupReviewEvidenceCleanup(t, detail, row)
 	g.remoteRefSHAAtFn = func(_, _, _ string) (string, error) { return taskCleanupSquashSHA, nil }
 	resolve := g.resolveRefFn
 	g.resolveRefFn = func(repo, ref string) (string, error) {
@@ -145,7 +145,7 @@ func TestDirectMergeProof_OpenMRAllowsCloseAndCleanup(t *testing.T) {
 			return resolve(repo, ref)
 		}
 	}
-	params := forge.MergeMRParams{Repo: "gitlab.com/group/repo", Number: 7, ExpectedHeadSHA: detail.HeadSHA, ExpectedTargetBranch: "master", Method: m.mergeMethodForBranch(detail.SourceBranch)}
+	params := forge.MergeMRParams{Repo: "gitlab.com/group/repo", Number: 7, ExpectedHeadSHA: detail.HeadSHA, ExpectedTargetBranch: "master", Method: m.mergeMethodForBranch("svc", detail.SourceBranch)}
 	_, dir, err := m.readDirectMergeProofs(params)
 	if err != nil {
 		t.Fatal(err)
@@ -161,12 +161,12 @@ func TestDirectMergeProof_OpenMRAllowsCloseAndCleanup(t *testing.T) {
 	}
 
 	// When
-	state, sha, closeErr := m.reconcileReviewClose(t.Context(), services[0], "master", params.Repo, client)
+	prepared, closeErr := m.prepareServiceReviews(t.Context(), services[0], ServiceClosePlan{ReviewTargets: []string{"master"}})
 	plan, cleanupErr := m.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1"})
 
 	// Then
-	if closeErr != nil || state != reviewCloseVerified || sha != taskCleanupSquashSHA {
-		t.Fatalf("close = %q/%q/%v", state, sha, closeErr)
+	if closeErr != nil || len(prepared.targets) != 1 || prepared.targets[0].state != reviewCloseVerified || prepared.targets[0].sha != taskCleanupSquashSHA {
+		t.Fatalf("close = %+v/%v", prepared.targets, closeErr)
 	}
 	if cleanupErr != nil || plan.Blocked() {
 		t.Fatalf("cleanup error = %v, blockers = %v", cleanupErr, plan.Preview().Blockers)

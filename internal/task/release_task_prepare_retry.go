@@ -52,6 +52,9 @@ func (m *manager) proveAcceptedTaskPreparation(ctx context.Context, svc domain.R
 	}
 	finalAccepted := false
 	for _, fb := range svc.FeatureBranches {
+		if err := m.checkConfirmedTaskRule(svc, fb); err != nil {
+			return err
+		}
 		if fb.TaskMergeStatus != taskMergeStatusMerged || !fb.Merged || fb.TaskMergeMRNumber <= 0 || strings.TrimSpace(fb.TaskMergeHeadSHA) == "" || strings.TrimSpace(fb.MergeRef) == "" {
 			return fmt.Errorf("%w: service=%s task=%s incomplete merged evidence; fresh task-MR preview/confirmation required", ErrReleaseRetryUnsafe, svc.Name, fb.TaskID)
 		}
@@ -59,7 +62,7 @@ func (m *manager) proveAcceptedTaskPreparation(ctx context.Context, svc domain.R
 		if err != nil {
 			return fmt.Errorf("%w: read task MR !%d; fresh task-MR preview/confirmation required: %w", ErrReleaseRetryUnsafe, fb.TaskMergeMRNumber, err)
 		}
-		if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(fb.Branch), &mr); err != nil {
+		if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Name, fb.Branch), &mr); err != nil {
 			return err
 		}
 		if mr.Number != fb.TaskMergeMRNumber || !mergedMRState(mr.State) || mr.SourceBranch != fb.Branch || mr.TargetBranch != svc.IntegrationBranch || mr.HeadSHA != fb.TaskMergeHeadSHA || mr.MergedSHA != fb.MergeRef {

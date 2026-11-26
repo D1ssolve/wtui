@@ -27,11 +27,11 @@ type HotfixReview struct {
 
 // isMultiTargetReview reports review closes into several targets (e.g. hotfix into production and integration),
 // which wait for every target MR before tagging.
-func (m *manager) isMultiTargetReview(branch string) bool {
+func (m *manager) isMultiTargetReview(service, branch string) bool {
 	if m.flow == nil {
 		return false
 	}
-	rule := m.flow.BranchTypes[gitflow.DetectBranchType(branch, m.flow)]
+	rule := m.flow.RuleFor(service, gitflow.DetectBranchType(branch, m.flow))
 	return rule.CloseStrategy == gitflow.CloseStrategyReviewRequest && len(appendUnique(nil, rule.ReviewTargets...)) > 1
 }
 
@@ -72,7 +72,7 @@ func (m *manager) saveHotfixCheckpoint(taskID string, cp hotfixCheckpoint) error
 	return fsutil.WriteFileAtomic(filepath.Join(m.taskDir(taskID), ".hotfix-close.json"), data, 0o600)
 }
 
-func (m *manager) planHotfixClose(ctx context.Context, taskID string, services []domain.Service, branchType gitflow.BranchType, rule gitflow.BranchTypeRule) (ClosePlan, error) {
+func (m *manager) planHotfixClose(ctx context.Context, taskID string, services []domain.Service, branchType gitflow.BranchType) (ClosePlan, error) {
 	plan := ClosePlan{TaskID: taskID, BranchType: branchType, HotfixReview: true, RequiresForge: true, SharedVersion: m.cfg.Tag != nil && m.cfg.Tag.SharedVersion}
 	cp, err := m.loadHotfixCheckpoint(taskID)
 	if err != nil {
@@ -83,6 +83,7 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 		if gitflow.DetectBranchType(svc.Branch, m.flow) != branchType {
 			return plan, ErrMixedBranchTypes
 		}
+		rule := m.flow.RuleFor(svc.Name, branchType)
 		sha, err := m.resolveFreshSourceSHA(ctx, svc)
 		if err != nil {
 			return plan, err
@@ -121,7 +122,7 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 				if err := validateHotfixMRIdentity(svc, sha, matches[0], r); err != nil {
 					return plan, fmt.Errorf("%s → %s: %w", svc.Name, target, err)
 				}
-				if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Branch), &r); err != nil {
+				if _, err := m.reconcileDirectMR(ctx, svc.RepoPath, m.mergeMethodForBranch(svc.Name, svc.Branch), &r); err != nil {
 					return plan, err
 				}
 				review.Number, review.URL = r.Number, r.URL
@@ -168,9 +169,13 @@ func (m *manager) planHotfixClose(ctx context.Context, taskID string, services [
 		Identity string
 		Services []ServiceClosePlan
 	}{identity, plan.Services})
-	if allMerged && rule.TagOnClose && (m.cfg.Tag == nil || m.cfg.Tag.Enabled) {
+	if allMerged && (m.cfg.Tag == nil || m.cfg.Tag.Enabled) {
 		for i := range plan.Services {
 			sp := &plan.Services[i]
+			rule := m.flow.RuleFor(sp.ServiceName, branchType)
+			if !rule.TagOnClose {
+				continue
+			}
 			source := rule.TagSource
 			if source == "production_branch" {
 				source = m.flow.ProductionBranch
@@ -382,9 +387,8 @@ func (m *manager) executeHotfixClose(ctx context.Context, p CloseTaskParams, pla
 		}
 	}
 	if !result.Waiting {
-		rule := m.flow.BranchTypes[plan.BranchType]
-		if rule.TriggerPipelineOnClose {
-			for _, sp := range plan.Services {
+		for _, sp := range plan.Services {
+			if m.flow.RuleFor(sp.ServiceName, plan.BranchType).TriggerPipelineOnClose {
 				svc, err := m.findService(ctx, p.TaskID, sp.ServiceName)
 				if err != nil {
 					return result, err
