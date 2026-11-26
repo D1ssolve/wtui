@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -51,12 +52,21 @@ func (m *manager) inspectTaskMerge(ctx context.Context, taskID string) (TaskMerg
 	if err != nil {
 		return TaskMergeInspection{}, nil, err
 	}
+	pins, err := m.loadTaskTrainPins(taskID)
+	if err != nil {
+		return TaskMergeInspection{}, nil, err
+	}
 
 	inspection := TaskMergeInspection{TaskID: taskID, Services: make([]ServiceMergeInspection, len(services))}
 	hotfixRows := make([][]ServiceMergeInspection, len(services))
 	servicesByName := make(map[string]domain.Service, len(services))
 	for _, svc := range services {
 		servicesByName[svc.Name] = svc
+	}
+	for _, pin := range pins {
+		if _, found := servicesByName[pin.Service]; !found {
+			return TaskMergeInspection{}, nil, fmt.Errorf("service %s for recorded train MR !%d is missing", pin.Service, pin.Number)
+		}
 	}
 	sem := make(chan struct{}, m.concurrency())
 	var wg sync.WaitGroup
@@ -67,8 +77,14 @@ func (m *manager) inspectTaskMerge(ctx context.Context, taskID string) (TaskMerg
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			for _, pin := range pins {
+				if pin.Service == svc.Name && !slices.Contains(m.taskTrainTargets(svc), pin.Target) {
+					inspection.Services[i] = m.inspectPinnedTaskTrain(ctx, svc, pin)
+					return
+				}
+			}
 			if m.isMultiTargetReview(svc.Name, svc.Branch) {
-				rows, err := m.inspectHotfixMRs(ctx, svc)
+				rows, err := m.inspectHotfixMRs(ctx, svc, pins)
 				if err != nil {
 					item := ServiceMergeInspection{ServiceName: svc.Name}
 					if len(rows) > 0 {
@@ -82,7 +98,12 @@ func (m *manager) inspectTaskMerge(ctx context.Context, taskID string) (TaskMerg
 				return
 			}
 
-			inspection.Services[i] = m.inspectWorkflowReviewMR(ctx, svc, m.reviewTarget(svc.Name, svc.Branch))
+			target := m.reviewTarget(svc.Name, svc.Branch)
+			if pin, found := pins[taskTrainKey{svc.Name, target}]; found {
+				inspection.Services[i] = m.inspectPinnedTaskTrain(ctx, svc, pin)
+			} else {
+				inspection.Services[i] = m.inspectWorkflowReviewMR(ctx, svc, target)
+			}
 		}()
 	}
 	wg.Wait()
@@ -193,6 +214,21 @@ func (m *manager) mergeTaskReviews(ctx context.Context, taskID, serviceName stri
 			Method:               m.mergeMethodForBranch(svc.Name, svc.Branch),
 		}
 		if queue, ok := m.mergeQueue(client); ok {
+			if m.usesGitLabTrain(client) {
+				if item.MR.SourceBranch != svc.Branch || params.Number <= 0 {
+					recordMergeFailure(&result, item.ServiceName, errors.New("cannot record train identity without exact MR number and source"))
+					continue
+				}
+				pin := taskTrainPin{
+					taskTrainKey: taskTrainKey{svc.Name, params.ExpectedTargetBranch},
+					Repo:         params.Repo, Number: params.Number, Source: svc.Branch, Head: params.ExpectedHeadSHA,
+				}
+				if err := m.recordTaskTrainPin(taskID, pin); err != nil {
+					recordMergeFailure(&result, item.ServiceName, err)
+					continue
+				}
+				params.ExpectedSourceBranch = pin.Source
+			}
 			if err := queue.EnqueueMR(ctx, params); err != nil {
 				recordMergeFailure(&result, item.ServiceName, fmt.Errorf("add !%d to the merge queue: %w", item.MR.Number, err))
 				continue
@@ -438,7 +474,7 @@ func (m *manager) verifyMergedTaskMRContained(ctx context.Context, svc domain.Se
 	return nil
 }
 
-func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]ServiceMergeInspection, error) {
+func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service, pins map[taskTrainKey]taskTrainPin) ([]ServiceMergeInspection, error) {
 	client, err := m.forgeClientForService(ctx, svc)
 	if err != nil {
 		return nil, err
@@ -451,16 +487,24 @@ func (m *manager) inspectHotfixMRs(ctx context.Context, svc domain.Service) ([]S
 	if repo == "" {
 		return nil, withRecovery(errors.New("invalid forge repository"), "correct the service remote URL; refresh workflow")
 	}
-	rows, err := history.MRHistory(ctx, svc.Branch, repo)
-	if err != nil {
-		return nil, withRecovery(err, "inspect hotfix MR history in forge; restore access")
-	}
-	sha, err := m.resolveFreshSourceSHA(ctx, svc)
-	if err != nil {
-		return nil, err
-	}
+	var rows []forge.MRInfo
+	var sha string
 	var result []ServiceMergeInspection
-	for _, target := range appendUnique(nil, m.branchRule(svc.Name, svc.Branch).ReviewTargets...) {
+	for _, target := range appendUnique(nil, m.taskTrainTargets(svc)...) {
+		if pin, found := pins[taskTrainKey{svc.Name, target}]; found {
+			result = append(result, m.inspectPinnedTaskTrain(ctx, svc, pin))
+			continue
+		}
+		if sha == "" {
+			rows, err = history.MRHistory(ctx, svc.Branch, repo)
+			if err != nil {
+				return nil, withRecovery(err, "inspect hotfix MR history in forge; restore access")
+			}
+			sha, err = m.resolveFreshSourceSHA(ctx, svc)
+			if err != nil {
+				return nil, err
+			}
+		}
 		item := ServiceMergeInspection{ServiceName: svc.Name, Status: "no_mr", MR: forge.MRReadiness{TargetBranch: target}}
 		matches, _ := matchTargetMRs(rows, svc.Branch, target)
 		if len(matches) > 1 {

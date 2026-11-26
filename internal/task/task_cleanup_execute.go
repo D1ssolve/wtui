@@ -65,7 +65,7 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 	if err != nil {
 		return result, err
 	}
-	if fresh.Blocked() || !approvedCleanupRemainder(plan, fresh, selection.Force) {
+	if fresh.Blocked() || !plan.trainPin.matches(fresh.trainPin) || !approvedCleanupRemainder(plan, fresh, selection.Force) {
 		return result, fmt.Errorf("%w: approved plan is stale: %s", ErrTaskCleanupBlocked, strings.Join(fresh.preview.Blockers, "; "))
 	}
 	if plan.firstScope != nil {
@@ -87,6 +87,9 @@ func (m *manager) ExecuteTaskCleanup(ctx context.Context, plan TaskCleanupPlan, 
 		}
 	}
 	plan = fresh
+	if err := m.verifyTaskTrainCleanup(ctx, plan); err != nil {
+		return result, fmt.Errorf("%w: verify recorded train delivery: %w", ErrTaskCleanupBlocked, err)
+	}
 	pending := filepath.Join(m.taskDir(plan.preview.TaskID), pendingCleanupFile)
 	if record := plan.pendingBranches(); record != "" {
 		if err := recordPendingBranches(pending, record); err != nil {
@@ -170,6 +173,9 @@ func (m *manager) runTaskCleanupStep(ctx context.Context, statusCh chan<- string
 	if !noop {
 		if err := m.checkTaskCleanupDestinations(ctx, plan); err != nil {
 			return err
+		}
+		if _, err := plan.trainPin.recheck(m.taskDir(plan.preview.TaskID)); err != nil {
+			return fmt.Errorf("%w: %w", ErrTaskCleanupBlocked, err)
 		}
 		executed, execErr := m.executeTaskCleanupStep(ctx, plan, selection, step)
 		if execErr != nil {
@@ -269,21 +275,15 @@ func (m *manager) executeTaskCleanupStep(ctx context.Context, plan TaskCleanupPl
 		if err := removeGeneratedTaskFiles(step.path, plan.preview.TaskID); err != nil {
 			return false, err
 		}
-		entries, err := os.ReadDir(step.path)
-		if errors.Is(err, os.ErrNotExist) {
-			return true, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		onlyMarker := len(entries) == 1 && entries[0].Name() == emptyTaskMarkerFileName
-		if len(entries) > 0 && !onlyMarker && !selection.Force {
-			return false, fmt.Errorf("task directory %s is not empty", step.path)
-		}
-		if selection.Force || onlyMarker {
+		if selection.Force && plan.trainPin.info == nil {
+			if _, err := os.ReadDir(step.path); errors.Is(err, os.ErrNotExist) {
+				return true, nil
+			} else if err != nil {
+				return false, err
+			}
 			return false, os.RemoveAll(step.path)
 		}
-		return false, os.Remove(step.path)
+		return removeTaskDirectoryAfterCleanup(ctx, step.path, plan.trainPin)
 	default:
 		return false, fmt.Errorf("unknown cleanup step %d", step.kind)
 	}

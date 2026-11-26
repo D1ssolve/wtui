@@ -7,9 +7,25 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 )
+
+func TestServiceRuleTrainTargetsFollowOverride(t *testing.T) {
+	mgr, _ := newWorkflowTestManager(t, nil, false, true)
+	m := mgr.(*manager)
+	flow, err := gitflow.ParseWorkflowYAML(`workflow: {extends: git-flow, services: {a: {task_types: {feature: {close: [{review: {into: main}}]}}}}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.flow = flow
+	for svc, want := range map[string]string{"a": "main", "b": "develop"} {
+		if got := m.taskTrainTargets(domain.Service{Name: svc, Branch: "feature/" + svc}); !slices.Equal(got, []string{want}) {
+			t.Fatalf("%s train targets = %v, want [%s]", svc, got, want)
+		}
+	}
+}
 
 func TestServiceRuleRejectsWrongMRTarget(t *testing.T) {
 	mgr, _ := newWorkflowTestManager(t, map[string]forge.MRReadiness{"feature/a": {Number: 1, Ready: true, State: "open", SourceBranch: "feature/a", TargetBranch: "develop"}, "feature/b": {Number: 2, Ready: true, State: "open", SourceBranch: "feature/b", TargetBranch: "develop"}}, false, true)

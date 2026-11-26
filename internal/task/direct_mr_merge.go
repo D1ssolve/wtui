@@ -117,16 +117,24 @@ func (m *manager) directMergeContained(ctx context.Context, repoPath string, pro
 	return m.git.IsAncestor(ctx, repoPath, proof.MergeSHA, tip)
 }
 
-// mergeMRWithLease never lets mutable MR metadata choose the push destination.
-// mergeQueue returns the client's queue when forge.merge_queue is on and the forge has one.
+// mergeQueue fails closed when the configured forge has no queue capability.
 func (m *manager) mergeQueue(client forge.ForgeClient) (forge.MergeQueuer, bool) {
 	if m.cfg == nil || m.cfg.Forge == nil || !m.cfg.Forge.MergeQueue {
 		return nil, false
 	}
-	q, ok := client.(forge.MergeQueuer)
-	return q, ok
+	if queue, ok := client.(forge.MergeQueuer); ok {
+		return queue, true
+	}
+	return unavailableMergeQueue{}, true
 }
 
+type unavailableMergeQueue struct{}
+
+func (unavailableMergeQueue) EnqueueMR(context.Context, forge.MergeMRParams) error {
+	return errors.New("the configured forge does not support a merge queue")
+}
+
+// mergeMRWithLease never lets mutable MR metadata choose the push destination.
 func (m *manager) mergeMRWithLease(ctx context.Context, repoPath string, params forge.MergeMRParams, client forge.ForgeClient) (forge.MRMergeResult, error) {
 	if params.ExpectedHeadSHA == "" || params.ExpectedTargetBranch == "" || params.ExpectedTargetSHA == "" || params.Repo == "" || params.Number <= 0 {
 		return forge.MRMergeResult{}, errors.New("direct merge requires complete source, target and MR identity")
@@ -208,6 +216,10 @@ func (m *manager) reconcileDirectMR(ctx context.Context, repoPath, method string
 	remoteURL, err := m.git.RemoteURL(ctx, repoPath, "origin")
 	if err != nil {
 		return false, err
+	}
+	if m.cfg.Forge != nil && m.cfg.Forge.MergeQueue && forge.DetectProvider(remoteURL, m.cfg.Forge) == forge.ForgeProviderGitLab {
+		// A past direct push is not numbered MR delivery evidence for a train.
+		return false, nil
 	}
 	params := forge.MergeMRParams{Repo: forge.ExtractRepoPath(remoteURL), Number: mr.Number, ExpectedHeadSHA: mr.HeadSHA, ExpectedTargetBranch: mr.TargetBranch, Method: method}
 	proofs, _, err := m.readDirectMergeProofs(params)

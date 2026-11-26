@@ -115,9 +115,12 @@ func (m *manager) reviewWorkflowSummary(ctx context.Context, plans []serviceWork
 			rows = append(rows, directWorkflowRow(*plan, states[i]))
 		case gitflow.CloseStrategyReviewRequest:
 			var items []ServiceMergeInspection
-			if m.isMultiTargetReview(plan.svc.Name, plan.svc.Branch) {
+			if pinned := states[i].pinned; pinned != nil {
+				// A recorded train pin replaces live MR lookup for this service.
+				items = []ServiceMergeInspection{*pinned}
+			} else if m.isMultiTargetReview(plan.svc.Name, plan.svc.Branch) {
 				var err error
-				items, err = m.inspectHotfixMRs(ctx, plan.svc)
+				items, err = m.inspectHotfixMRs(ctx, plan.svc, nil) // no pins: pinned is nil here
 				if err != nil {
 					items = []ServiceMergeInspection{failedWorkflowInspection(ServiceMergeInspection{ServiceName: plan.svc.Name}, err, "inspect hotfix MR history and repository; refresh")}
 				}

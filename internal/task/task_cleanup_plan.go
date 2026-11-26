@@ -83,6 +83,7 @@ type TaskCleanupPlan struct {
 	fingerprint           [32]byte
 	steps                 []releaseCleanupStep
 	closePostActionProofs []string
+	trainPin              trainCleanupPin
 	firstScope            func() (map[string]os.FileInfo, error)
 }
 
@@ -109,6 +110,12 @@ func (p *TaskCleanupPlan) finishFingerprint() {
 	h := sha256.New()
 	h.Write([]byte(p.preview.TaskID))
 	h.Write([]byte{0})
+	if p.trainPin.info == nil {
+		h.Write([]byte{0})
+	} else {
+		h.Write([]byte{1})
+		h.Write(p.trainPin.sum[:])
+	}
 	for _, b := range p.preview.Blockers {
 		h.Write([]byte(b))
 		h.Write([]byte{0})
@@ -202,6 +209,11 @@ func (m *manager) buildTaskCleanupPlan(ctx context.Context, request TaskCleanupR
 	if err := validateTaskID(request.TaskID); err != nil {
 		return plan, err
 	}
+	pin, _, err := readTrainCleanupPin(m.taskDir(request.TaskID))
+	if err != nil {
+		return plan, fmt.Errorf("%w: read task train cleanup identity: %w", ErrTaskCleanupBlocked, err)
+	}
+	plan.trainPin = pin
 
 	releases, err := m.loadTaskCleanupReleases(ctx, &plan)
 	if err != nil {

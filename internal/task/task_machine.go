@@ -359,7 +359,7 @@ func (m *manager) taskWaitHolds(ctx context.Context, tf *taskFlow, st *gitflow.S
 				return false, err
 			}
 		}
-		return m.taskReviewWaitHolds(ctx, tf.services)
+		return m.taskReviewWaitHolds(ctx, tf)
 	case gitflow.WaitCIGreen:
 		green, _, err := m.taskCIGreen(ctx, tf, st.WaitOn)
 		return green, err
