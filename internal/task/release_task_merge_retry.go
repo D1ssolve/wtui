@@ -20,6 +20,10 @@ func (m *manager) PlanReleaseTaskMergeRetry(ctx context.Context, releaseID strin
 }
 
 func (m *manager) taskMergeRetryPlan(ctx context.Context, release domain.Release) (ReleaseTaskMergePlan, error) {
+	// Preview and execution share this plan, so neither continues under another workflow or remote.
+	if err := m.ensureReleaseFlowUnchanged(release); err != nil {
+		return ReleaseTaskMergePlan{}, err
+	}
 	plan, err := m.buildTaskMergeRetryPlan(ctx, release)
 	plan.retryID, plan.retryStatus, plan.retryCheckpoint = release.ID, release.Status, release.Checkpoint
 	return plan, err
