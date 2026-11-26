@@ -248,10 +248,9 @@ func (m *manager) buildTaskCleanupPlan(ctx context.Context, request TaskCleanupR
 		taskDir := m.taskDir(request.TaskID)
 		_, statErr := os.Stat(taskDir)
 		if statErr == nil {
-			// Ownership proof: the empty-task marker, or a train pin that cleanup re-verifies before removal.
-			if _, err := os.Lstat(filepath.Join(taskDir, emptyTaskMarkerFileName)); errors.Is(err, os.ErrNotExist) && plan.trainPin.info == nil {
+			if _, err := os.Lstat(filepath.Join(taskDir, emptyTaskMarkerFileName)); errors.Is(err, os.ErrNotExist) {
 				plan.block("task %s has no services and no proof it never enrolled one, so branches may remain; check them, then force cleanup (X)", request.TaskID)
-			} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			} else if err != nil {
 				return plan, err
 			} else if reason, err := m.emptyTaskLeftovers(ctx, request.TaskID, taskDir); err != nil {
 				return plan, err
