@@ -232,7 +232,7 @@ func (c *CommandClient) IsValidRepo(ctx context.Context, repoPath string) error 
 }
 
 func (c *CommandClient) BaseBranch(ctx context.Context, repoPath string) (string, error) {
-	remotePrefix := "refs/remotes/" + c.remote.Tracking("")
+	remotePrefix := c.remote.Tracking("")
 	head := remotePrefix + "HEAD"
 	_, err := c.execGit(ctx, "-C", repoPath, "show-ref", "--verify", "--quiet", head)
 	if err == nil {
@@ -375,7 +375,7 @@ func (c *CommandClient) AddWorktreeWithTracking(ctx context.Context, repoPath, d
 	if err := c.Fetch(ctx, repoPath); err != nil {
 		return err
 	}
-	args := []string{"-C", repoPath, "worktree", "add", "--track", "-b", localBranch, dest, "refs/remotes/" + c.remote.Tracking(remoteBranch)}
+	args := []string{"-C", repoPath, "worktree", "add", "--track", "-b", localBranch, dest, c.remote.Tracking(remoteBranch)}
 	_, err := c.execGit(ctx, args...)
 	return err
 }
