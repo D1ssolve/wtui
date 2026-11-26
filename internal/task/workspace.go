@@ -111,8 +111,12 @@ func discoverServicesFromTaskDir(taskDir string) ([]domain.Service, error) {
 	return services, nil
 }
 
+// emptyTaskMarkerFileName proves a task was created without services and never tried to enroll one.
+const emptyTaskMarkerFileName = ".wtui-empty"
+
 func removeGeneratedTaskFiles(taskDir, taskID string) error {
 	paths := []string{
+		filepath.Join(taskDir, emptyTaskMarkerFileName),
 		filepath.Join(taskDir, taskID+".code-workspace"),
 		filepath.Join(taskDir, taskID+".sln"),
 		filepath.Join(taskDir, closePostActionsProofFileName),

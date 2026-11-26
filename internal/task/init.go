@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/D1ssolve/wtui/internal/domain"
+	"github.com/D1ssolve/wtui/internal/fsutil"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 	"golang.org/x/sync/semaphore"
 )
@@ -66,6 +67,17 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 			// The rename may have succeeded before the directory sync failed.
 			return PartialFailureResult{}, errors.Join(err, os.RemoveAll(taskDir))
 		}
+	}
+
+	marker := filepath.Join(taskDir, emptyTaskMarkerFileName)
+	if len(params.Services) == 0 {
+		if created {
+			if err := fsutil.WriteFileAtomic(marker, nil, 0o644); err != nil {
+				return PartialFailureResult{}, errors.Join(fmt.Errorf("init: mark empty task: %w", err), os.RemoveAll(taskDir))
+			}
+		}
+	} else if err := fsutil.RemoveFile(marker); err != nil {
+		return PartialFailureResult{}, fmt.Errorf("init: clear empty task marker: %w", err)
 	}
 
 	baseBranch := strings.TrimSpace(params.BaseBranch)

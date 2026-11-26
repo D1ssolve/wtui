@@ -92,7 +92,7 @@ func TestPlanTaskCleanup_RemoteDeleteSelectionAuthorizesRemoteStep(t *testing.T)
 	}
 }
 
-func TestPlanTaskCleanup_ServiceLessTaskPlansDirectoryCleanup(t *testing.T) {
+func TestPlanTaskCleanup_ServiceLessTaskWithEnrollmentHistoryBlocks(t *testing.T) {
 	mgr, _ := taskCleanupTestManager(t)
 	serviceDir := filepath.Join(mgr.cfg.TasksRoot, "APP-1", "svc")
 	if err := os.RemoveAll(serviceDir); err != nil {
@@ -103,8 +103,9 @@ func TestPlanTaskCleanup_ServiceLessTaskPlansDirectoryCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Blocked() {
-		t.Fatalf("blockers = %q", plan.Preview().Blockers)
+	// The service's branch may outlive its directory; only force may remove the task.
+	if !plan.Blocked() {
+		t.Fatal("service-less task with a removed service was not blocked")
 	}
 	if len(plan.steps) != 1 || plan.steps[0].kind != cleanupTaskDirectory {
 		t.Fatalf("steps = %+v, want only task directory cleanup", plan.steps)

@@ -88,3 +88,14 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	return syncDir(dir)
 }
+
+// RemoveFile removes path, if present, and syncs its directory so the removal survives a crash.
+func RemoveFile(path string) error {
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return syncDir(filepath.Dir(path))
+}
