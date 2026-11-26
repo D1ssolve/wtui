@@ -204,7 +204,12 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 		}
 
 		firstStep := len(plan.steps)
-		url, err := m.verifiedRepoPushURL(ctx, svc.Name, svc.RepoPath)
+		var url string
+		if selection.DeleteRemoteTaskBranches || selection.DeleteRemoteReleaseBranches {
+			url, err = m.verifiedRepoPushURL(ctx, svc.Name, svc.RepoPath)
+		} else {
+			url, err = m.git.RemoteURL(ctx, svc.RepoPath, m.cfg.ServiceRemote().String())
+		}
 		if err != nil {
 			return plan, err
 		}

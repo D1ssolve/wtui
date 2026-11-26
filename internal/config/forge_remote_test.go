@@ -26,12 +26,16 @@ func TestForgeRemoteRejectsNonNames(t *testing.T) {
 	}
 }
 
-func TestForgeRemoteRejectsMapping(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(p, []byte("forge: {remote: {url: /somewhere}}"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "forge.remote") {
-		t.Fatalf("mapping: %v", err)
+func TestForgeRemoteRejectsNonString(t *testing.T) {
+	for _, value := range []string{"{url: /somewhere}", "null", "~"} {
+		t.Run(value, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(p, []byte("forge: {remote: "+value+"}"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "forge.remote") {
+				t.Fatalf("remote %s: %v", value, err)
+			}
+		})
 	}
 }

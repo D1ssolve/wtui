@@ -195,7 +195,7 @@ func (m *manager) workflowMergeStates(ctx context.Context, plans []serviceWorkfl
 		}
 		st.merged = make([]bool, len(st.targets))
 		for j, target := range st.targets {
-			if st.merged[j], st.err = m.git.IsAncestor(ctx, plan.svc.RepoPath, plan.svc.Branch, target); st.err != nil {
+			if st.merged[j], st.err = m.git.IsAncestor(ctx, plan.svc.RepoPath, plan.svc.Branch, "refs/remotes/"+target); st.err != nil {
 				return
 			}
 		}

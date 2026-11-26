@@ -43,3 +43,22 @@ func (c *Config) ServiceRemote() RemoteName {
 }
 
 func (r RemoteName) MarshalText() ([]byte, error) { return []byte(r.String()), nil }
+
+// yaml.v3 skips field unmarshallers for null. Check presence before decoding the block.
+func (c *ForgeConfig) UnmarshalYAML(node *yaml.Node) error {
+	var fields struct {
+		Remote yaml.Node `yaml:"remote"`
+	}
+	if err := node.Decode(&fields); err != nil {
+		return err
+	}
+	remote := &fields.Remote
+	for remote.Kind == yaml.AliasNode {
+		remote = remote.Alias
+	}
+	if remote.ShortTag() == "!!null" && remote.Kind != 0 {
+		return fmt.Errorf("forge.remote: expected a Git remote name, got null")
+	}
+	type plain ForgeConfig
+	return node.Decode((*plain)(c))
+}

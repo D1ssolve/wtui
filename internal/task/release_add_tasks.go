@@ -61,6 +61,12 @@ func CanAddReleaseTasks(r domain.Release) error {
 // PlanReleaseTaskAdd validates the tasks against the release and pins every SHA the add will use.
 // It changes nothing but remote-tracking refs (fetch).
 func (m *manager) PlanReleaseTaskAdd(ctx context.Context, releaseID string, taskIDs []string) (ReleaseTaskAddPlan, error) {
+	return m.planReleaseTaskAdd(ctx, ReleaseTaskAddPlan{ReleaseID: releaseID, TaskIDs: taskIDs}, nil)
+}
+
+// Only the initial preview fetches. Revalidation reads refs at the approved endpoints.
+func (m *manager) planReleaseTaskAdd(ctx context.Context, request ReleaseTaskAddPlan, approved map[string]string) (ReleaseTaskAddPlan, error) {
+	releaseID, taskIDs := request.ReleaseID, request.TaskIDs
 	release, err := m.loadReleaseManifestWithContext(ctx, releaseID)
 	if err != nil {
 		return ReleaseTaskAddPlan{}, err
@@ -91,7 +97,7 @@ func (m *manager) PlanReleaseTaskAdd(ctx context.Context, releaseID string, task
 
 	plan := ReleaseTaskAddPlan{ReleaseID: release.ID, TaskIDs: ids}
 	byService := map[string]*ReleaseTaskAddService{}
-	fetched := map[string]bool{}
+
 	for _, id := range ids {
 		idx := slices.IndexFunc(tasks, func(t domain.Task) bool { return t.ID == id })
 		if idx < 0 {
@@ -125,19 +131,24 @@ func (m *manager) PlanReleaseTaskAdd(ctx context.Context, releaseID string, task
 			}
 			ps := byService[rs.Name]
 			if ps == nil {
-				if !fetched[rs.RepoPath] {
-					if err := m.git.Fetch(ctx, rs.RepoPath); err != nil {
-						return ReleaseTaskAddPlan{}, fmt.Errorf("release add tasks: fetch %s: %w", rs.Name, err)
-					}
-					fetched[rs.RepoPath] = true
-				}
-				tip, err := m.resolveReleaseRefSHA(ctx, rs.RepoPath, m.cfg.ServiceRemote().Tracking(rs.ReleaseBranch))
-				if err != nil {
-					return ReleaseTaskAddPlan{}, err
-				}
 				url, err := m.verifiedPushURL(ctx, svc)
 				if err != nil {
 					return ReleaseTaskAddPlan{}, err
+				}
+				if approved != nil && !sameRemoteURL(approved[rs.Name], url) {
+					return ReleaseTaskAddPlan{}, fmt.Errorf("%w: destination changed for %s", ErrReleaseRetryUnsafe, rs.Name)
+				}
+				if approved == nil {
+					if err := m.git.Fetch(ctx, rs.RepoPath); err != nil {
+						return ReleaseTaskAddPlan{}, fmt.Errorf("release add tasks: fetch %s: %w", rs.Name, err)
+					}
+				}
+				tip, err := m.git.RemoteRefSHAAt(ctx, rs.RepoPath, url, "refs/heads/"+rs.ReleaseBranch)
+				if err != nil {
+					return ReleaseTaskAddPlan{}, err
+				}
+				if tip == "" {
+					return ReleaseTaskAddPlan{}, fmt.Errorf("%w: release branch %s is missing", ErrReleaseRetryUnsafe, rs.ReleaseBranch)
 				}
 				ps = &ReleaseTaskAddService{PushURL: url, ServiceName: rs.Name, ReleaseBranch: rs.ReleaseBranch, ReleaseTipSHA: tip}
 				byService[rs.Name] = ps
@@ -169,13 +180,9 @@ func (m *manager) planReleaseTaskAddBranch(ctx context.Context, taskID string, s
 	}
 	branch := ReleaseTaskAddBranch{TaskID: taskID, Branch: svc.Branch, HeadSHA: head, WorktreePath: svc.WorktreePath}
 	var blockers []string
-	if remote, err := m.git.RemoteBranchExists(ctx, svc.RepoPath, svc.Branch); err != nil {
+	if remoteSHA, err := m.git.RemoteRefSHAAt(ctx, svc.RepoPath, ps.PushURL, "refs/heads/"+svc.Branch); err != nil {
 		return ReleaseTaskAddBranch{}, nil, err
-	} else if remote {
-		remoteSHA, err := m.git.ResolveRef(ctx, svc.RepoPath, m.cfg.ServiceRemote().Tracking(svc.Branch))
-		if err != nil {
-			return ReleaseTaskAddBranch{}, nil, err
-		}
+	} else if remoteSHA != "" {
 		if behind, err := m.git.IsAncestor(ctx, svc.RepoPath, remoteSHA, head); err != nil {
 			return ReleaseTaskAddBranch{}, nil, err
 		} else if !behind {
@@ -218,7 +225,22 @@ func (m *manager) AddReleaseTasks(ctx context.Context, plan ReleaseTaskAddPlan, 
 		return domain.Release{}, err
 	}
 	defer unlock()
-	fresh, err := m.PlanReleaseTaskAdd(ctx, plan.ReleaseID, plan.TaskIDs)
+	approved := make(map[string]string, len(plan.Services))
+	for _, ps := range plan.Services {
+		repo, err := m.discoverer.Resolve(ctx, ps.ServiceName)
+		if err != nil {
+			return domain.Release{}, err
+		}
+		url, err := m.verifiedRepoPushURL(ctx, ps.ServiceName, repo)
+		if err != nil {
+			return domain.Release{}, err
+		}
+		if !sameRemoteURL(url, ps.PushURL) {
+			return domain.Release{}, fmt.Errorf("%w: destination changed for %s", ErrReleaseRetryUnsafe, ps.ServiceName)
+		}
+		approved[ps.ServiceName] = ps.PushURL
+	}
+	fresh, err := m.planReleaseTaskAdd(ctx, plan, approved)
 	if err != nil {
 		return domain.Release{}, err
 	}

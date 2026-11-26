@@ -169,6 +169,9 @@ func TestReleaseCleanupChecklist_BlockedUnchangedSelectionCannotSubmitButChanged
 
 func TestReleaseCleanupModals_CancelAndTwoStageConfirm(t *testing.T) {
 	preview := cleanupPreview(task.ReleaseCleanupSelection{RemoveTasks: true, DeleteRemoteTaskBranches: true})
+	if err := yaml.Unmarshal([]byte("upstream"), &preview.Remote); err != nil {
+		t.Fatal(err)
+	}
 	confirm := NewReleaseCleanupConfirmModal(preview, 7)
 	_, cmd := confirm.Update(sendSpecialKey(tea.KeyEnter))
 	msg, ok := execCmd(cmd).(ConfirmReleaseCleanupMsg)
@@ -180,6 +183,15 @@ func TestReleaseCleanupModals_CancelAndTwoStageConfirm(t *testing.T) {
 	}
 
 	remote := NewReleaseCleanupRemoteConfirmModal(preview, 7)
+	for _, stage := range []Modal{confirm, remote} {
+		for _, width := range []int{120, 40} {
+			stage.SetTerminalSize(width, 20)
+			v := stripAnsi(stage.Title() + "\n" + stage.View())
+			if !strings.Contains(v, "upstream") || strings.Contains(v, "unsupported") || !strings.Contains(v, "feature/TASK-1") || strings.Contains(v, "release/1.2.3") {
+				t.Errorf("wrong confirmation scope: %s", v)
+			}
+		}
+	}
 	remoteView := stripAnsi(remote.View())
 	for _, want := range []string{"Remote branches", "feature/TASK-1", "delete remote branches"} {
 		if !strings.Contains(remoteView, want) {

@@ -75,7 +75,7 @@ func (m *manager) verifiedPushURL(ctx context.Context, svc domain.Service) (stri
 		return "", fmt.Errorf("resolve configured remote push URL for %s: %w", svc.Name, err)
 	}
 	if !sameRemoteURL(pushURL, svc.RemoteURL) {
-		return "", fmt.Errorf("configured remote push URL %q does not match remote %q for %s", pushURL, svc.RemoteURL, svc.Name)
+		return "", fmt.Errorf("push URL differs from fetch URL for service %s (forge.remote %q)", svc.Name, m.cfg.ServiceRemote().String())
 	}
 	return pushURL, nil
 }
@@ -94,7 +94,7 @@ func (m *manager) verifiedRepoPushURL(ctx context.Context, name, repoPath string
 		return "", fmt.Errorf("resolve configured remote push URL for %s: %w", name, err)
 	}
 	if !sameRemoteURL(pushURL, remoteURL) {
-		return "", fmt.Errorf("configured remote push URL %q does not match remote %q for %s", pushURL, remoteURL, name)
+		return "", fmt.Errorf("push URL differs from fetch URL for service %s (forge.remote %q)", name, m.cfg.ServiceRemote().String())
 	}
 	return pushURL, nil
 }

@@ -394,7 +394,7 @@ func (m *ReleaseCleanupConfirmModal) View() string {
 	}
 	warning := "Review cleanup for selected groups."
 	if cleanupHasRemoteSelection(m.preview.Selection) {
-		warning += " Remote branch deletion is unsupported and fails before any mutation."
+		warning += " Selected remote branches require separate confirmation."
 	}
 	return cleanupConfirmView(m.preview, warning, "[Enter/y] confirm  [Esc/n] cancel", false)
 }
@@ -462,7 +462,7 @@ func cleanupConfirmView(preview task.ReleaseCleanupPreview, warning, footer stri
 	b.WriteString(renderCleanupSelection(preview.Selection, normalStyle))
 	if cleanupHasRemoteSelection(preview.Selection) {
 		b.WriteString("\n")
-		b.WriteString(normalStyle.Bold(true).Render("Remote branches"))
+		b.WriteString(normalStyle.Bold(true).Render("Remote branches on " + preview.Remote.String()))
 		b.WriteString("\n")
 		b.WriteString(normalStyle.Render(remoteReleaseBranches(preview)))
 	}

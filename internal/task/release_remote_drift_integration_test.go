@@ -66,6 +66,7 @@ func TestAddTasksRejectsEqualTipReplacement(t *testing.T) {
 	url := gitOutput(t, env.repoPath, "remote", "get-url", "origin")
 	other := filepath.Join(t.TempDir(), "other.git")
 	mustGit(t, env.repoPath, "clone", "--bare", url, other)
+	mustGit(t, other, "tag", "replacement-only-tag", plan.Services[0].ReleaseTipSHA)
 	mustGit(t, env.repoPath, "remote", "set-url", "origin", other)
 	_, err = env.manager.AddReleaseTasks(t.Context(), plan, nil)
 	if !errors.Is(err, ErrReleaseRetryUnsafe) {
@@ -73,5 +74,8 @@ func TestAddTasksRejectsEqualTipReplacement(t *testing.T) {
 	}
 	if got := gitOutput(t, other, "rev-parse", "refs/heads/"+r.Services[0].ReleaseBranch); got != plan.Services[0].ReleaseTipSHA {
 		t.Fatal("replacement tip moved")
+	}
+	if got := gitOutput(t, env.repoPath, "tag", "--list", "replacement-only-tag"); got != "" {
+		t.Fatal("rejected replan imported replacement tag")
 	}
 }
