@@ -126,6 +126,28 @@ func cloneCleanupPreview(src ReleaseCleanupPreview) ReleaseCleanupPreview {
 }
 
 func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, selection ReleaseCleanupSelection) (ReleaseCleanupPlan, error) {
+	plan, err := m.planReleaseCleanup(ctx, releaseID, selection)
+	if err != nil || !(selection.DeleteRelease || selection.DeleteRemoteReleaseBranches || selection.DeleteRemoteTaskBranches) {
+		return plan, err
+	}
+	// After the destination checks: same-named branches in another repository are not this release's refs.
+	release, err := m.loadReleaseManifestWithContext(ctx, releaseID)
+	if err != nil {
+		return plan, err
+	}
+	for _, svc := range release.Services {
+		reason, err := m.releaseRemoteMismatch(ctx, release, svc)
+		if err != nil {
+			return plan, err
+		}
+		if reason != "" {
+			plan.block("%s", reason)
+		}
+	}
+	return plan, nil
+}
+
+func (m *manager) planReleaseCleanup(ctx context.Context, releaseID string, selection ReleaseCleanupSelection) (ReleaseCleanupPlan, error) {
 	plan := ReleaseCleanupPlan{preview: ReleaseCleanupPreview{ReleaseID: releaseID, Selection: selection, Remote: m.cfg.ServiceRemote()}}
 	if err := validateReleaseID(releaseID); err != nil {
 		return plan, err
@@ -161,18 +183,6 @@ func (m *manager) PlanReleaseCleanup(ctx context.Context, releaseID string, sele
 	if selection.DeleteLocalReleaseBranches || selection.DeleteRemoteReleaseBranches {
 		if !selection.RemoveRelease {
 			plan.block("release branch deletion requires release removal selection")
-		}
-	}
-	// Same-named branches in another repository are not this release's refs.
-	if selection.DeleteRelease || selection.DeleteRemoteReleaseBranches || selection.DeleteRemoteTaskBranches {
-		for _, svc := range release.Services {
-			reason, err := m.releaseRemoteMismatch(ctx, release, svc)
-			if err != nil {
-				return plan, err
-			}
-			if reason != "" {
-				plan.block("%s", reason)
-			}
 		}
 	}
 	if len(plan.preview.Blockers) > 0 {
