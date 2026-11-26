@@ -108,7 +108,7 @@ func (m *manager) TaskWorkflow(ctx context.Context, taskID string) (domain.Workf
 	if !hasReview {
 		return m.directOnlyWorkflowSummary(plans, states, hasDirect), nil
 	}
-	return m.reviewWorkflowSummary(ctx, plans, states)
+	return m.reviewWorkflowSummary(ctx, taskID, plans, states)
 }
 
 func (m *manager) integrationBranch() string {

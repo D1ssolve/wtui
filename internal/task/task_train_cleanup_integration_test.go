@@ -186,7 +186,7 @@ func TestTaskCleanup_TrainSidecarLifecycle(t *testing.T) {
 				if err := os.Chmod(filepath.Dir(root), 0o755); err != nil {
 					t.Fatal(err)
 				}
-				retryTaskTrainCleanupAfterPermissionError(t, m, details, sidecar, owner, before)
+				retryTaskTrainCleanupAfterPermissionError(t, m, sidecar, before)
 			}
 			if mode == "stale" {
 				owner = filepath.Join(tree, "untracked-owner.txt")
@@ -201,35 +201,19 @@ func TestTaskCleanup_TrainSidecarLifecycle(t *testing.T) {
 	}
 }
 
-func retryTaskTrainCleanupAfterPermissionError(t *testing.T, m *manager, details map[int]forge.MRReadiness, sidecar, owner string, before []byte) {
+// A pin proves one service's delivery, not that no other enrolled service left a branch,
+// so an ordinary retry of a service-less task blocks and keeps the evidence; force is explicit.
+func retryTaskTrainCleanupAfterPermissionError(t *testing.T, m *manager, sidecar string, before []byte) {
 	t.Helper()
-	delivered := details[7]
-	pending := delivered
-	pending.State = "open"
-	details[7] = pending
 	plan, err := m.PlanTaskCleanup(t.Context(), TaskCleanupRequest{TaskID: "APP-1"})
-	if err != nil || plan.Blocked() {
-		t.Fatalf("fresh retry plan: %+v %v", plan.Preview(), err)
+	if err != nil || !plan.Blocked() {
+		t.Fatalf("fresh retry plan: %+v %v, want blocked", plan.Preview(), err)
 	}
-	writeFile(t, owner, "retry owner data")
 	result, err := m.ExecuteTaskCleanup(t.Context(), plan, nil)
 	if !errors.Is(err, ErrTaskCleanupBlocked) || len(result.Completed) != 0 {
-		t.Fatalf("pending retry: %+v %v", result, err)
+		t.Fatalf("blocked retry: %+v %v", result, err)
 	}
-	details[7] = delivered
-	result, err = m.ExecuteTaskCleanup(t.Context(), plan, nil)
-	if err == nil || len(result.Completed) != 0 {
-		t.Fatalf("owner file must prevent final removal: %+v %v", result, err)
-	}
-	ownerData, ownerErr := os.ReadFile(owner)
-	pinData, pinErr := os.ReadFile(sidecar)
-	if ownerErr != nil || string(ownerData) != "retry owner data" || pinErr != nil || !bytes.Equal(pinData, before) {
-		t.Fatalf("retry lost owner data or evidence: owner=%q (%v) pin=%q (%v)", ownerData, ownerErr, pinData, pinErr)
-	}
-	if err := os.Remove(owner); err != nil {
-		t.Fatal(err)
-	}
-	if result, err = m.ExecuteTaskCleanup(t.Context(), plan, nil); err != nil || len(result.Completed) != 1 {
-		t.Fatalf("delivered retry failed: %+v %v", result, err)
+	if pinData, pinErr := os.ReadFile(sidecar); pinErr != nil || !bytes.Equal(pinData, before) {
+		t.Fatalf("blocked retry changed train evidence: %q (%v)", pinData, pinErr)
 	}
 }

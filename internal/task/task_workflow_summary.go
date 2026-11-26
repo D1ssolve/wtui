@@ -98,7 +98,11 @@ func (m *manager) directOnlyWorkflowSummary(plans []serviceWorkflowPlan, states 
 // reviewWorkflowSummary aggregates review_request services via forge readiness
 // with direct_merge/none services from git state, so forge is only touched for
 // services that actually use merge requests.
-func (m *manager) reviewWorkflowSummary(ctx context.Context, plans []serviceWorkflowPlan, states []serviceMergeState) (domain.WorkflowSummary, error) {
+func (m *manager) reviewWorkflowSummary(ctx context.Context, taskID string, plans []serviceWorkflowPlan, states []serviceMergeState) (domain.WorkflowSummary, error) {
+	pins, err := m.loadTaskTrainPins(taskID)
+	if err != nil {
+		return domain.WorkflowSummary{}, err
+	}
 	rows := make([]domain.ServiceWorkflow, 0, len(plans))
 	var reviewItems []ServiceMergeInspection
 	missingMR, ready := false, false
@@ -115,15 +119,16 @@ func (m *manager) reviewWorkflowSummary(ctx context.Context, plans []serviceWork
 			rows = append(rows, directWorkflowRow(*plan, states[i]))
 		case gitflow.CloseStrategyReviewRequest:
 			var items []ServiceMergeInspection
-			if pinned := states[i].pinned; pinned != nil {
-				// A recorded train pin replaces live MR lookup for this service.
-				items = []ServiceMergeInspection{*pinned}
-			} else if m.isMultiTargetReview(plan.svc.Name, plan.svc.Branch) {
+			if m.isMultiTargetReview(plan.svc.Name, plan.svc.Branch) {
+				// Per target, as M inspects: a recorded pin where one exists, the live MR otherwise.
 				var err error
-				items, err = m.inspectHotfixMRs(ctx, plan.svc, nil) // no pins: pinned is nil here
+				items, err = m.inspectHotfixMRs(ctx, plan.svc, pins)
 				if err != nil {
 					items = []ServiceMergeInspection{failedWorkflowInspection(ServiceMergeInspection{ServiceName: plan.svc.Name}, err, "inspect hotfix MR history and repository; refresh")}
 				}
+			} else if pinned := states[i].pinned; pinned != nil {
+				// A recorded train pin replaces live MR lookup for a single-target review.
+				items = []ServiceMergeInspection{*pinned}
 			} else {
 				target := ""
 				if len(plan.rule.ReviewTargets) > 0 {

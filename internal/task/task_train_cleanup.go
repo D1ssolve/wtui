@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
@@ -85,6 +86,10 @@ func (m *manager) verifyTaskTrainCleanup(ctx context.Context, plan TaskCleanupPl
 			return err
 		}
 		svc := domain.Service{Name: pin.Service, RepoPath: path, WorktreePath: path, Branch: pin.Source}
+		// Same rule as M: a pin for a target the current service rule no longer reviews is stale evidence.
+		if !slices.Contains(m.taskTrainTargets(svc), pin.Target) {
+			return fmt.Errorf("recorded train MR !%d targets %s, which %s no longer reviews into; check it with M before cleanup", pin.Number, pin.Target, pin.Service)
+		}
 		client, repo, err := m.serviceForgeTarget(ctx, svc)
 		if err != nil {
 			return err
