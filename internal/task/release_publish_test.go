@@ -109,7 +109,7 @@ func TestPublishReleases_BindsDestinationTagToAcceptedCommit(t *testing.T) {
 		{name: "ssh destination with a port", remote: annotatedAtDestination, local: func(g *mockGitClient) {
 			g.remoteURLRes, g.pushURLRes = "ssh://git@github.com:2222/org/repo.git", "ssh://git@github.com:2222/org/repo.git"
 		}, wantErr: "non-default port"},
-		{name: "push destination differs from the fetched project", remote: annotatedAtDestination, local: func(g *mockGitClient) { g.pushURLRes = "git@github.com:org/fork.git" }, wantErr: "does not match remote"},
+		{name: "push destination differs from the fetched project", remote: annotatedAtDestination, local: func(g *mockGitClient) { g.pushURLRes = "git@github.com:org/fork.git" }, wantErr: "push URL differs from fetch URL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, gitMock := newFinishTestManager(t)
