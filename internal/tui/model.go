@@ -2348,8 +2348,9 @@ func (m Model) View() string {
 	}
 
 	if m.modal != nil {
-		if dialog, ok := m.modal.(*modal.CreateReleaseDialog); ok {
-			return dialog.OverlayView()
+		// Modals that size their own frame (wide diagrams, multi-column dialogs).
+		if framed, ok := m.modal.(interface{ OverlayView() string }); ok {
+			return framed.OverlayView()
 		}
 		return modal.OverlayView(m.modal.View(), m.width, m.height)
 	}

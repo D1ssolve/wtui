@@ -15,10 +15,18 @@ var _ Modal = (*FlowOverlay)(nil)
 
 // FlowOverlay draws the configured workflow as a graph: each task type's close steps
 // and every release state with its transitions, marking where the selection stands.
+// Further tabs draw each built-in preset, so its flow can be compared before adopting it.
 type FlowOverlay struct {
-	lines  []string
+	tabs   []flowTab
+	active int
 	offset int
+	width  int
 	height int
+}
+
+type flowTab struct {
+	name  string
+	lines []string
 }
 
 // FlowPosition is what the overlay highlights: the selected task's type and the
@@ -31,16 +39,38 @@ type FlowPosition struct {
 }
 
 func NewFlowOverlay(flow *gitflow.ResolvedGitFlow, pos FlowPosition) *FlowOverlay {
-	return &FlowOverlay{lines: flowGraphLines(flow, pos)}
+	tabs := []flowTab{{name: "Current", lines: flowGraphLines(flow, pos)}}
+	dim := lipgloss.NewStyle().Foreground(modalColorDim)
+	for _, name := range gitflow.PresetNames() {
+		lines := []string{dim.Render(fmt.Sprintf("preset %s — what `workflow: {extends: %s}` gives without overrides", name, name)), ""}
+		if preset, err := gitflow.ParseWorkflowYAML("workflow: {extends: " + name + "}"); err != nil {
+			lines = append(lines, "cannot compile: "+err.Error())
+		} else {
+			lines = append(lines, flowGraphLines(preset, FlowPosition{})...)
+		}
+		tabs = append(tabs, flowTab{name: name, lines: lines})
+	}
+	return &FlowOverlay{tabs: tabs}
 }
+
+func (o *FlowOverlay) lines() []string { return o.tabs[o.active].lines }
 
 func (o *FlowOverlay) Title() string { return "Workflow" }
 
-func (o *FlowOverlay) SetTerminalSize(_, height int) { o.height = height }
+func (o *FlowOverlay) SetTerminalSize(width, height int) { o.width, o.height = width, height }
+
+// OverlayView frames the diagram at most of the terminal width: its chains are long
+// lines that the standard half-width modal would wrap.
+func (o *FlowOverlay) OverlayView() string {
+	width := min(max(o.width*90/100, 50), max(o.width-4, 1))
+	height := min(max(o.height*70/100, 10), o.height-2)
+	boxed := boxStyle(width).Height(height).Render(o.View())
+	return lipgloss.Place(o.width, o.height, lipgloss.Center, lipgloss.Center, boxed)
+}
 
 func (o *FlowOverlay) pageSize() int {
 	if o.height <= 8 {
-		return len(o.lines)
+		return len(o.lines())
 	}
 	return o.height - 8
 }
@@ -50,10 +80,14 @@ func (o *FlowOverlay) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	if !ok {
 		return o, nil
 	}
-	maxOffset := max(0, len(o.lines)-o.pageSize())
+	maxOffset := max(0, len(o.lines())-o.pageSize())
 	switch keyMsg.String() {
 	case "esc", "W", "q":
 		return o, func() tea.Msg { return CloseModalMsg{} }
+	case "right", "l", "tab":
+		o.active, o.offset = (o.active+1)%len(o.tabs), 0
+	case "left", "h", "shift+tab":
+		o.active, o.offset = (o.active+len(o.tabs)-1)%len(o.tabs), 0
 	case "j", "down":
 		o.offset = min(o.offset+1, maxOffset)
 	case "k", "up":
@@ -67,15 +101,28 @@ func (o *FlowOverlay) Update(msg tea.Msg) (Modal, tea.Cmd) {
 }
 
 func (o *FlowOverlay) View() string {
-	end := min(len(o.lines), o.offset+o.pageSize())
+	lines := o.lines()
+	end := min(len(lines), o.offset+o.pageSize())
+	active := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
+	dim := lipgloss.NewStyle().Foreground(modalColorDim)
 	var b strings.Builder
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder).Render("Workflow"))
+	b.WriteString(active.Render("Workflow") + "  ")
+	for i, tab := range o.tabs {
+		if i > 0 {
+			b.WriteString(dim.Render(" · "))
+		}
+		if i == o.active {
+			b.WriteString(active.Render("[" + tab.name + "]"))
+		} else {
+			b.WriteString(dim.Render(tab.name))
+		}
+	}
 	b.WriteString("\n\n")
-	b.WriteString(strings.Join(o.lines[o.offset:end], "\n"))
+	b.WriteString(strings.Join(lines[o.offset:end], "\n"))
 	b.WriteString("\n\n")
-	hint := "[Esc] close"
-	if end-o.offset < len(o.lines) {
-		hint = fmt.Sprintf("[j/k] scroll %d-%d of %d  ", o.offset+1, end, len(o.lines)) + hint
+	hint := "[←/→] presets  [Esc] close"
+	if end-o.offset < len(lines) {
+		hint = fmt.Sprintf("[j/k] scroll %d-%d of %d  ", o.offset+1, end, len(lines)) + hint
 	}
 	b.WriteString(theme.HintLine(hint))
 	return b.String()

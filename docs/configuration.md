@@ -69,7 +69,7 @@ The same workflow as a diagram:
 
 - `wtui flow --mermaid` prints a Mermaid flowchart: one lane per task type with its close steps, and the release lifecycle with every wait, event key and error path. GitHub and GitLab render it in Markdown.
 - `wtui flow --html > flow.html` writes a self-contained page that draws it in the browser. Mermaid is embedded in the file, so it works offline and makes no network requests.
-- In the TUI, `W` opens the diagram for the current configuration, marking the selected task's type or, on Releases, the selected release's state and the states it already passed.
+- In the TUI, `W` opens the diagram for the current configuration, marking the selected task's type or, on Releases, the selected release's state and the states it already passed. `←`/`→` switch to the built-in presets, so you can compare what each would do before choosing one.
 
 `root_dir` contains service repositories. `tasks_root` contains task worktrees and generated workspace files.
 

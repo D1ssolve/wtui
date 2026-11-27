@@ -42,6 +42,44 @@ func TestFlowOverlay_ScrollsWithinHeight(t *testing.T) {
 	}
 }
 
+func TestFlowOverlay_PresetTabsDrawEachPreset(t *testing.T) {
+	flow, err := gitflow.ParseWorkflowYAML("workflow: {extends: git-flow, branches: {production: prod}}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := NewFlowOverlay(flow, FlowPosition{TaskType: "feature"})
+	press := func(k tea.KeyMsg) string { o.Update(k); return stripAnsi(o.View()) }
+	right := tea.KeyMsg{Type: tea.KeyRight}
+	if view := stripAnsi(o.View()); !strings.Contains(view, "production prod") || !strings.Contains(view, "▶ feature") {
+		t.Fatalf("current tab must show the configured flow and position:\n%s", view)
+	}
+	want := map[string]string{"git-flow": "production master · integration develop", "github-flow": "production main · integration main", "trunk-based": "production main · integration main"}
+	for _, name := range gitflow.PresetNames() {
+		view := press(right)
+		if !strings.Contains(view, "preset "+name) || !strings.Contains(view, want[name]) || strings.Contains(view, "▶ feature") {
+			t.Fatalf("tab %s must draw the preset without the selection:\n%s", name, view)
+		}
+	}
+	if view := press(right); !strings.Contains(view, "production prod") {
+		t.Fatalf("right after the last preset must wrap to the current flow:\n%s", view)
+	}
+	if view := press(tea.KeyMsg{Type: tea.KeyLeft}); !strings.Contains(view, "preset trunk-based") {
+		t.Fatalf("left from current must wrap to the last preset:\n%s", view)
+	}
+}
+
+func TestFlowOverlay_FramesWideEnoughForChains(t *testing.T) {
+	flow, err := gitflow.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := NewFlowOverlay(flow, FlowPosition{})
+	o.SetTerminalSize(100, 32)
+	if view := stripAnsi(o.OverlayView()); !strings.Contains(view, "feature/* from develop ─[C]─▶ review into develop (merge_commit) ─▶ done") {
+		t.Fatalf("a 100-column terminal must fit the feature chain on one line:\n%s", view)
+	}
+}
+
 func TestFlowOverlay_DrawsTaskTypeMachineAtItsState(t *testing.T) {
 	flow, err := gitflow.Resolve(nil)
 	if err != nil {
