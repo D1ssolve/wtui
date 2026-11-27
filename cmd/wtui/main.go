@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -297,9 +298,19 @@ func draftWorkflow(ctx context.Context, drafter interface {
 }
 
 func runTUI(configPath string) error {
-	cfg, err := config.Load(configPath)
+	cfg, path, snapshot, err := config.LoadSnapshot(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+	if path == "" {
+		// If there is no user location, the TUI is still usable without apply.
+		path, _ = config.DefaultPath()
+	}
+	if path != "" {
+		path, err = filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("resolve config target: %w", err)
+		}
 	}
 	cfg, err = cfg.Effective()
 	if err != nil {
@@ -319,25 +330,68 @@ func runTUI(configPath string) error {
 		return fmt.Errorf("build dependencies: %w", err)
 	}
 
-	waitRefreshCtx, cancelWaitRefresh := context.WithCancel(context.Background())
-	defer cancelWaitRefresh()
-	model, err := tui.NewWithOptions(cfg, deps.Manager, logger, tui.Options{
-		WaitRefreshContext: waitRefreshCtx,
-		LazygitAvailable:   deps.LazygitAvailable,
-		GlabAvailable:      deps.GlabAvailable,
-		GhAvailable:        deps.GhAvailable,
-		ResolvedFlow:       deps.ResolvedFlow,
-		MetadataGenerator:  deps.MetadataGenerator,
-		Assistant:          deps.Assistant,
-		Version:            resolveVersion(),
-		LogLevel:           logLevel,
-		LogPath:            logPath,
-	})
-	if err != nil {
-		return fmt.Errorf("create TUI model: %w", err)
-	}
+	notice := ""
+	for {
+		target := tui.WorkflowApplyTarget{Path: path}
+		var nextConfig *config.Config
+		var nextSnapshot []byte
+		var nextDeps app.Dependencies
+		var nextNotice string
+		if path != "" {
+			expected := snapshot
+			target.Apply = func(workflow string) (bool, error) {
+				backup, err := applyWorkflowFile(path, expected, workflow)
+				if err != nil {
+					return false, err
+				}
+				nextNotice = fmt.Sprintf("Workflow written to %q.", path)
+				if backup != "" {
+					nextNotice += fmt.Sprintf(" Backup: %q.", backup)
+				}
+				nextConfig, _, nextSnapshot, err = config.LoadSnapshot(path)
+				if err == nil {
+					nextConfig, err = nextConfig.Effective()
+				}
+				if err == nil {
+					nextDeps, err = app.BuildDependencies(nextConfig, logger)
+				}
+				if err != nil {
+					return true, fmt.Errorf("%w. %s", err, nextNotice)
+				}
+				return true, nil
+			}
+		}
 
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	_, err = p.Run()
-	return err
+		if logLevel != nil {
+			logLevel.Set(logutil.ParseLogLevel(cfg.LogLevel))
+		}
+		waitRefreshCtx, cancelWaitRefresh := context.WithCancel(context.Background())
+		model, err := tui.NewWithOptions(cfg, deps.Manager, logger, tui.Options{
+			WaitRefreshContext: waitRefreshCtx,
+			LazygitAvailable:   deps.LazygitAvailable,
+			GlabAvailable:      deps.GlabAvailable,
+			GhAvailable:        deps.GhAvailable,
+			ResolvedFlow:       deps.ResolvedFlow,
+			MetadataGenerator:  deps.MetadataGenerator,
+			Assistant:          deps.Assistant,
+			Version:            resolveVersion(),
+			LogLevel:           logLevel,
+			LogPath:            logPath,
+			WorkflowApply:      target,
+			StartupNotice:      notice,
+		})
+		if err != nil {
+			cancelWaitRefresh()
+			return fmt.Errorf("create TUI model: %w", err)
+		}
+		p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+		final, err := p.Run()
+		cancelWaitRefresh()
+		if err != nil || !final.(tui.Model).WorkflowReloadRequested() {
+			return err
+		}
+		// The successful apply result synchronizes the prepared state with Run.
+		// A new program cannot receive commands from the old program.
+		cfg, snapshot, deps, notice = nextConfig, nextSnapshot, nextDeps, nextNotice
+	}
 }

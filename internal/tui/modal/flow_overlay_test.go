@@ -6,6 +6,7 @@ import (
 
 	"github.com/D1ssolve/wtui/internal/gitflow"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestFlowOverlay_MarksPositionAndListsTransitions(t *testing.T) {
@@ -77,6 +78,23 @@ func TestFlowOverlay_FramesWideEnoughForChains(t *testing.T) {
 	o.SetTerminalSize(100, 32)
 	if view := stripAnsi(o.OverlayView()); !strings.Contains(view, "feature/* from develop ─[C]─▶ review into develop (merge_commit) ─▶ done") {
 		t.Fatalf("a 100-column terminal must fit the feature chain on one line:\n%s", view)
+	}
+}
+
+func TestFlowOverlay_PresetStaysVisibleOnSmallScreens(t *testing.T) {
+	flow, _ := gitflow.Resolve(nil)
+	o := NewFlowOverlay(flow, FlowPosition{})
+	o.Update(tea.KeyMsg{Type: tea.KeyRight})
+	for _, size := range [][2]int{{40, 12}, {60, 16}, {80, 24}} {
+		o.SetTerminalSize(size[0], size[1])
+		for _, key := range []rune{'g', 'j', 'G'} {
+			o.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+			view := stripAnsi(o.OverlayView())
+			w, h := lipgloss.Size(view)
+			if w != size[0] || h != size[1] || !strings.Contains(view, "[git-flow]") {
+				t.Errorf("%dx%d after %c: got %dx%d:\n%s", size[0], size[1], key, w, h, view)
+			}
+		}
 	}
 }
 

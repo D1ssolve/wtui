@@ -59,7 +59,8 @@ type Model struct {
 	tasks []domain.Task
 	repos []domain.Repo
 
-	modal modal.Modal
+	modal         modal.Modal
+	workflowApply workflowApplyState
 
 	logOverlay      *LogOverlay
 	logPath         string
@@ -185,6 +186,8 @@ type Options struct {
 	GhAvailable        bool
 	ResolvedFlow       *gitflow.ResolvedGitFlow
 	Version            string
+	WorkflowApply      WorkflowApplyTarget
+	StartupNotice      string
 }
 
 func New(cfg *config.Config, mgr task.Manager, logger *slog.Logger) (Model, error) {
@@ -231,6 +234,10 @@ func NewWithOptions(cfg *config.Config, mgr task.Manager, logger *slog.Logger, o
 		outputPanel:       panels.NewOutputPanel(80, cfg.OutputPanelLines+2),
 	}
 	m.waitRefresh.parent = opts.WaitRefreshContext
+	m.workflowApply.target = opts.WorkflowApply
+	if opts.StartupNotice != "" {
+		m.outputPanel.AppendLine(opts.StartupNotice)
+	}
 	if m.waitRefresh.parent == nil {
 		m.waitRefresh.parent = context.Background()
 	}
@@ -258,6 +265,35 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
+	if done, ok := msg.(workflowApplyDoneMsg); ok {
+		return m.finishWorkflowApply(done)
+	}
+	if m.workflowApply.writing != nil || m.workflowApply.restart {
+		if _, resize := msg.(tea.WindowSizeMsg); !resize {
+			return m, nil
+		}
+	}
+	if builder := m.workflowApply.recovery; builder != nil {
+		// Disk and runtime no longer agree. Keep the draft accessible, but
+		// do not let the old session run any workflow operations.
+		switch keyMsg := msg.(type) {
+		case tea.WindowSizeMsg:
+		case tea.KeyMsg:
+			if key.Matches(keyMsg, m.keymap.ForceQuit) {
+				return m, tea.Quit
+			}
+			if m.modal == builder && keyMsg.String() == "ctrl+s" {
+				return m.workflowApplyError(builder, "Restart wtui (Ctrl+C) before applying another workflow.")
+			}
+			next, cmd := m.modal.Update(keyMsg)
+			if _, back := next.(*modal.FlowOverlay); !back {
+				m.modal = next
+			}
+			return m, cmd
+		default:
+			return m, nil
+		}
+	}
 	if handled, cmd := m.handleMetadata(msg); handled {
 		return m, cmd
 	}
@@ -277,6 +313,13 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg := msg.(type) {
+	case modal.ReviewWorkflowApplyMsg:
+		return m.reviewWorkflowApply(msg.Builder)
+	case workflowApplyReviewedMsg:
+		return m.finishWorkflowApplyReview(msg)
+	case modal.ConfirmWorkflowApplyMsg:
+		return m.confirmWorkflowApply(msg.Dialog)
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -313,6 +356,7 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		if m.modal != nil {
 			newModal, cmd := m.modal.Update(msg)
 			m.modal = newModal
+			m.invalidateWorkflowApplyReview()
 			return m, cmd
 		}
 

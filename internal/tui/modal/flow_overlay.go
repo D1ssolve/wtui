@@ -9,6 +9,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/tui/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 var _ Modal = (*FlowOverlay)(nil)
@@ -57,22 +58,34 @@ func (o *FlowOverlay) lines() []string { return o.tabs[o.active].lines }
 
 func (o *FlowOverlay) Title() string { return "Workflow" }
 
-func (o *FlowOverlay) SetTerminalSize(width, height int) { o.width, o.height = width, height }
+func (o *FlowOverlay) SetTerminalSize(width, height int) {
+	if o.width == width && o.height == height {
+		return
+	}
+	o.width, o.height = width, height
+	rows, page := o.pageRows()
+	o.offset = min(o.offset, max(0, len(rows)-page))
+}
+
+func (o *FlowOverlay) boxWidth() int {
+	return min(max(o.width*90/100, 50), max(o.width-4, 1))
+}
 
 // OverlayView frames the diagram at most of the terminal width: its chains are long
 // lines that the standard half-width modal would wrap.
 func (o *FlowOverlay) OverlayView() string {
-	width := min(max(o.width*90/100, 50), max(o.width-4, 1))
-	height := min(max(o.height*70/100, 10), o.height-2)
-	boxed := boxStyle(width).Height(height).Render(o.View())
+	boxed := boxStyle(o.boxWidth()).Render(o.View())
 	return lipgloss.Place(o.width, o.height, lipgloss.Center, lipgloss.Center, boxed)
 }
 
-func (o *FlowOverlay) pageSize() int {
-	if o.height <= 8 {
-		return len(o.lines())
+func (o *FlowOverlay) pageRows() ([]string, int) {
+	if o.width == 0 || o.height == 0 {
+		return o.lines(), len(o.lines())
 	}
-	return o.height - 8
+	width := max(1, o.boxWidth()-boxStyle(0).GetHorizontalPadding())
+	rows := strings.Split(ansi.Wrap(strings.Join(o.lines(), "\n"), width, ""), "\n")
+	// Reserve the frame, header, footer, two blank lines and outer margins.
+	return rows, max(1, o.height-8)
 }
 
 func (o *FlowOverlay) Update(msg tea.Msg) (Modal, tea.Cmd) {
@@ -80,8 +93,15 @@ func (o *FlowOverlay) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	if !ok {
 		return o, nil
 	}
-	maxOffset := max(0, len(o.lines())-o.pageSize())
 	switch keyMsg.String() {
+	case "e":
+		if o.active > 0 {
+			if d, err := gitflow.NewDraft(o.tabs[o.active].name); err == nil {
+				b := newWorkflowBuilder(o, d)
+				b.SetTerminalSize(o.width, o.height)
+				return b, nil
+			}
+		}
 	case "esc", "W", "q":
 		return o, func() tea.Msg { return CloseModalMsg{} }
 	case "right", "l", "tab":
@@ -89,20 +109,22 @@ func (o *FlowOverlay) Update(msg tea.Msg) (Modal, tea.Cmd) {
 	case "left", "h", "shift+tab":
 		o.active, o.offset = (o.active+len(o.tabs)-1)%len(o.tabs), 0
 	case "j", "down":
-		o.offset = min(o.offset+1, maxOffset)
+		rows, page := o.pageRows()
+		o.offset = min(o.offset+1, max(0, len(rows)-page))
 	case "k", "up":
 		o.offset = max(o.offset-1, 0)
 	case "g":
 		o.offset = 0
 	case "G":
-		o.offset = maxOffset
+		rows, page := o.pageRows()
+		o.offset = max(0, len(rows)-page)
 	}
 	return o, nil
 }
 
 func (o *FlowOverlay) View() string {
-	lines := o.lines()
-	end := min(len(lines), o.offset+o.pageSize())
+	lines, page := o.pageRows()
+	end := min(len(lines), o.offset+page)
 	active := lipgloss.NewStyle().Bold(true).Foreground(modalColorBorder)
 	dim := lipgloss.NewStyle().Foreground(modalColorDim)
 	var b strings.Builder
@@ -117,15 +139,26 @@ func (o *FlowOverlay) View() string {
 			b.WriteString(dim.Render(tab.name))
 		}
 	}
-	b.WriteString("\n\n")
-	b.WriteString(strings.Join(lines[o.offset:end], "\n"))
-	b.WriteString("\n\n")
+	width := max(1, o.boxWidth()-boxStyle(0).GetHorizontalPadding())
+	header := b.String()
+	if o.width > 0 && lipgloss.Width(header) > width {
+		header = ansi.Truncate(active.Render("Workflow  ["+o.tabs[o.active].name+"]"), width, "")
+	}
 	hint := "[←/→] presets  [Esc] close"
+	if o.active > 0 {
+		hint = "[e] build  " + hint
+	}
 	if end-o.offset < len(lines) {
 		hint = fmt.Sprintf("[j/k] scroll %d-%d of %d  ", o.offset+1, end, len(lines)) + hint
 	}
-	b.WriteString(theme.HintLine(hint))
-	return b.String()
+	if o.width > 0 && lipgloss.Width(hint) > width {
+		hint = "←/→ presets · j/k scroll · Esc"
+		if o.active > 0 {
+			hint = "e build · ←/→ · j/k scroll · Esc"
+		}
+		hint = ansi.Truncate(hint, width, "")
+	}
+	return header + "\n\n" + strings.Join(lines[o.offset:end], "\n") + "\n\n" + theme.HintLine(hint)
 }
 
 func machineLines(m *gitflow.Machine, currentState string, visited []string, indent string) []string {
