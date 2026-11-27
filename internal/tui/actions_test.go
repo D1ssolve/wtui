@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/D1ssolve/wtui/internal/config"
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
@@ -42,6 +43,7 @@ func actionFixtures(t *testing.T) []Model {
 		base(domain.Task{ID: "T-1", Services: []domain.Service{{Name: "api", Branch: "feature/T-1"}}}),
 		base(domain.Task{ID: "T-2-hotfix", Phase: "hotfix"}),
 	}
+	fixtures[1].cfg.Tracker = &config.TrackerConfig{Plugin: "jira", Queries: []config.TrackerQuery{{Name: "Mine", Query: "x"}}}
 	prepared := time.Now()
 	for _, rel := range []domain.Release{
 		{Status: domain.ReleaseStatusDraft},

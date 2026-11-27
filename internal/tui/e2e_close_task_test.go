@@ -12,6 +12,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tracker"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
 )
@@ -133,6 +134,14 @@ func (m *closeTaskE2EManager) ForgeCreateMissingMRs(_ context.Context, taskID, _
 
 func (m *closeTaskE2EManager) ForgePipelineStatus(_ context.Context, _, _ string, _ string) ([]forge.PipelineStatus, error) {
 	return nil, nil
+}
+
+func (m *closeTaskE2EManager) ListTrackerIssues(context.Context, string) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
+func (m *closeTaskE2EManager) GetTrackerIssue(context.Context, string) (tracker.IssueDetail, error) {
+	return tracker.IssueDetail{}, nil
 }
 
 func (m *closeTaskE2EManager) ForgeListIssues(_ context.Context, _, _ string, _ forge.ListIssuesParams) ([]forge.IssueInfo, error) {

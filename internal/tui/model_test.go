@@ -26,14 +26,18 @@ import (
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/gitflow"
 	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tracker"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
 	"github.com/D1ssolve/wtui/internal/tui/theme"
 )
 
 type mockManager struct {
-	releaseEvents []task.ReleaseEvent
-	mu            sync.Mutex
+	releaseEvents  []task.ReleaseEvent
+	trackerIssues  []tracker.Issue
+	trackerQueries []string
+	trackerErr     error
+	mu             sync.Mutex
 
 	listTasksResult    []domain.Task
 	listTasksErr       error
@@ -231,6 +235,20 @@ func (m *mockManager) ForgeCreateMissingMRs(_ context.Context, _ string, title s
 
 func (m *mockManager) ForgePipelineStatus(_ context.Context, _, _ string, _ string) ([]forge.PipelineStatus, error) {
 	return nil, nil
+}
+
+func (m *mockManager) ListTrackerIssues(_ context.Context, query string) ([]tracker.Issue, error) {
+	m.trackerQueries = append(m.trackerQueries, query)
+	return m.trackerIssues, m.trackerErr
+}
+
+func (m *mockManager) GetTrackerIssue(_ context.Context, key string) (tracker.IssueDetail, error) {
+	for _, issue := range m.trackerIssues {
+		if issue.Key == key {
+			return tracker.IssueDetail{Issue: issue, Description: "details of " + key}, m.trackerErr
+		}
+	}
+	return tracker.IssueDetail{}, errors.New("issue not found: " + key)
 }
 
 func (m *mockManager) ForgeListIssues(_ context.Context, _, _ string, _ forge.ListIssuesParams) ([]forge.IssueInfo, error) {

@@ -109,6 +109,10 @@ func (m *manager) Init(ctx context.Context, params InitParams) (PartialFailureRe
 		)
 	}
 
+	if created {
+		m.syncTracker(ctx, params.Issue, onTaskCreated, nil, params.StatusCh)
+	}
+
 	if summary.HasPartialFailure() {
 		return summary.PartialResult(), &ErrPartialFailure{Result: summary.PartialResult()}
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/logutil"
 	"github.com/D1ssolve/wtui/internal/shell"
 	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tracker"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
 )
@@ -836,6 +837,41 @@ type ExplanationMsg struct {
 	Subject     string
 	Explanation ai.Explanation
 	Err         error
+}
+
+type TrackerIssuesMsg struct {
+	Index  int
+	Issues []tracker.Issue
+	Err    error
+}
+
+type TrackerIssueMsg struct {
+	Issue tracker.IssueDetail
+	Err   error
+}
+
+func trackerIssuesCmd(mgr task.Manager, index int, query string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		issues, err := mgr.ListTrackerIssues(ctx, query)
+		return TrackerIssuesMsg{Index: index, Issues: issues, Err: err}
+	}
+}
+
+func (m *Model) loadTrackerQuery(index int) tea.Cmd {
+	q := m.cfg.Tracker.Queries[index]
+	m.outputPanel.AppendLine("Loading tracker issues: " + q.Name + "...")
+	return trackerIssuesCmd(m.mgr, index, q.Query)
+}
+
+func trackerIssueCmd(mgr task.Manager, key string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		issue, err := mgr.GetTrackerIssue(ctx, key)
+		return TrackerIssueMsg{Issue: issue, Err: err}
+	}
 }
 
 func explainFailureCmd(assistant ai.Assistant, subject string, request ai.FailureRequest) tea.Cmd {

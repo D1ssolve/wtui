@@ -196,6 +196,11 @@ func (m *manager) CloseTask(ctx context.Context, params CloseTaskParams) (CloseT
 		return CloseTaskResult{TaskID: params.TaskID}, err
 	}
 	result, err := m.closeTask(ctx, params)
+	if issue := m.taskIssue(ctx, m.taskDir(params.TaskID)); err == nil && result.Success {
+		m.syncTracker(ctx, issue, onMRMerged, result.MRURLs, params.StatusCh)
+	} else if len(result.MRURLs) > 0 {
+		m.syncTracker(ctx, issue, onMROpened, result.MRURLs, params.StatusCh)
+	}
 	if err == nil && result.Success {
 		if flowErr := m.afterTaskAction(ctx, tf, gitflow.EventActionClose, params.StatusCh); flowErr != nil {
 			err = fmt.Errorf("close succeeded, but the task workflow stopped after it: %w", flowErr)

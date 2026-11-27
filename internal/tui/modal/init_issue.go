@@ -30,6 +30,16 @@ func (d *InitDialog) PrefillIssue(issue domain.Issue, service string) {
 	}
 }
 
+func (d *InitDialog) SelectBranchType(branchType string) {
+	for i, bt := range d.branchTypeOptions {
+		if string(bt) == branchType {
+			d.branchTypeIndex = i
+			d.applyBranchTypeSelection()
+			return
+		}
+	}
+}
+
 func (d *InitDialog) selectedIssue() (*domain.Issue, error) {
 	raw := strings.TrimSpace(d.fields[4].Value())
 	if d.prefilledIssue != nil && raw == issueInput(*d.prefilledIssue) {

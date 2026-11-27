@@ -14,6 +14,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/git"
 	"github.com/D1ssolve/wtui/internal/gitflow"
+	"github.com/D1ssolve/wtui/internal/tracker"
 	"github.com/D1ssolve/wtui/internal/validation"
 )
 
@@ -183,6 +184,9 @@ type Manager interface {
 	ForgePipelineStatus(ctx context.Context, taskID, serviceName string, branch string) ([]forge.PipelineStatus, error)
 
 	ForgeListIssues(ctx context.Context, taskID, serviceName string, params forge.ListIssuesParams) ([]forge.IssueInfo, error)
+
+	ListTrackerIssues(ctx context.Context, query string) ([]tracker.Issue, error)
+	GetTrackerIssue(ctx context.Context, key string) (tracker.IssueDetail, error)
 }
 
 type manager struct {
@@ -193,6 +197,7 @@ type manager struct {
 	validator    *validation.TaskValidator
 	flow         *gitflow.ResolvedGitFlow
 	forgeClients map[forge.ForgeProvider]forge.ForgeClient
+	tracker      tracker.Tracker
 	logger       *slog.Logger
 }
 
@@ -206,6 +211,10 @@ func New(
 	forgeClients map[forge.ForgeProvider]forge.ForgeClient,
 	logger *slog.Logger,
 ) Manager {
+	var trk tracker.Tracker
+	if cfg != nil && cfg.Tracker != nil {
+		trk = tracker.NewPluginClient(tracker.BinaryName(cfg.Tracker.Plugin))
+	}
 	return &manager{
 		cfg:          cfg,
 		git:          gitClient,
@@ -214,6 +223,7 @@ func New(
 		validator:    validator,
 		flow:         flow,
 		forgeClients: forgeClients,
+		tracker:      trk,
 		logger:       logger,
 	}
 }

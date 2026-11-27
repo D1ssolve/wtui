@@ -139,6 +139,9 @@ func (m *manager) mergeTaskMRs(ctx context.Context, taskID, serviceName string, 
 	if err == nil {
 		err = m.afterTaskAction(ctx, tf, gitflow.EventActionMergeReviews, nil)
 	}
+	if err == nil && serviceName == "" && len(result.Merged) > 0 && len(result.Skipped)+len(result.Queued)+len(result.Errs) == 0 {
+		m.syncTracker(ctx, m.taskIssue(ctx, m.taskDir(taskID)), onMRMerged, nil, nil)
+	}
 	return result, err
 }
 

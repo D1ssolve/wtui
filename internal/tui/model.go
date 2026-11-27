@@ -456,6 +456,9 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 			m.outputPanel.AppendLine("Asking AI why " + subject + " failed...")
 			return m, tea.Batch(explainFailureCmd(m.assistant, subject, request), m.spinner.Tick)
 
+		case msg.String() == "J" && m.cfg != nil && m.cfg.Tracker != nil:
+			return m, m.loadTrackerQuery(0)
+
 		case msg.String() == "W" && m.flow != nil:
 			m.modal = modal.NewFlowOverlay(m.flow, m.flowPosition())
 			m.modal.SetTerminalSize(m.width, m.height)
@@ -568,6 +571,36 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		if selected := m.tasksPanel.SelectedTask(); selected != nil && selected.ID == msg.TaskID {
 			return m, m.loadTaskSelectionCmd(msg.TaskID)
+		}
+		return m, nil
+
+	case TrackerIssuesMsg:
+		if msg.Err != nil {
+			m.reportFailure("Load tracker issues", msg.Err)
+			return m, nil
+		}
+		if _, inbox := m.modal.(*modal.TrackerInbox); m.modal == nil || inbox {
+			names := make([]string, len(m.cfg.Tracker.Queries))
+			for i, q := range m.cfg.Tracker.Queries {
+				names[i] = q.Name
+			}
+			m.modal = modal.NewTrackerInbox(msg.Issues, names, msg.Index, m.cfg.Tracker.BranchTypes, m.width, m.height)
+		}
+		return m, nil
+
+	case modal.LoadTrackerQueryMsg:
+		return m, m.loadTrackerQuery(msg.Index)
+
+	case modal.ShowTrackerIssueMsg:
+		return m, trackerIssueCmd(m.mgr, msg.Key)
+
+	case TrackerIssueMsg:
+		if msg.Err != nil {
+			m.reportFailure("Load tracker issue", msg.Err)
+			return m, nil
+		}
+		if inbox, ok := m.modal.(*modal.TrackerInbox); ok {
+			m.modal = modal.NewTrackerIssueView(inbox, msg.Issue, m.width, m.height)
 		}
 		return m, nil
 
@@ -1511,11 +1544,14 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		)
 
 	case modal.CreateTaskFromIssueMsg:
-		if _, ok := m.modal.(*modal.IssueList); !ok {
+		switch m.modal.(type) {
+		case *modal.IssueList, *modal.TrackerInbox, *modal.TrackerIssueView:
+		default:
 			return m, nil
 		}
 		dialog := modal.NewInitDialogWithFlow(m.defaultBranchPrefix(), m.flow, m.repos, m.width, m.height)
 		dialog.SetIssueConfig(m.cfg)
+		dialog.SelectBranchType(msg.BranchType)
 		dialog.PrefillIssue(msg.Issue, msg.Service)
 		m.modal = dialog
 		return m, nil

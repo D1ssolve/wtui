@@ -14,8 +14,9 @@ import (
 )
 
 type CreateTaskFromIssueMsg struct {
-	Issue   domain.Issue
-	Service string
+	Issue      domain.Issue
+	Service    string
+	BranchType string
 }
 
 type issueListItem struct{ forge.IssueInfo }

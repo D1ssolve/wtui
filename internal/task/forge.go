@@ -110,6 +110,15 @@ func (m *manager) ForgeCreateMissingMRs(ctx context.Context, taskID, title strin
 		result.Services = append(result.Services, item)
 	}
 
+	var created []string
+	for _, item := range result.Services {
+		if item.Status == "created" {
+			created = append(created, item.MR.URL)
+		}
+	}
+	if len(created) > 0 {
+		m.syncTracker(ctx, issue, onMROpened, created, nil)
+	}
 	return result, nil
 }
 

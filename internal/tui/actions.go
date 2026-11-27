@@ -175,6 +175,7 @@ var actionRegistry = []action{
 	{scope: scopeGlobal, keys: []string{"r"}, short: "refresh", help: "Refresh tasks, releases, and repository cache"},
 	{scope: scopeGlobal, keys: []string{"."}, short: "status", help: "System status (tools / forge)"},
 	{scope: scopeGlobal, keys: []string{"E"}, short: "explain", help: "Ask AI why the selected release or the last operation failed, and what to do", when: func(m Model) bool { return m.assistant != nil }},
+	{scope: scopeGlobal, keys: []string{"J"}, short: "issues", help: "Tracker issues: browse tracker.query results, view details, create a task from one", when: func(m Model) bool { return m.cfg != nil && m.cfg.Tracker != nil }},
 	{scope: scopeGlobal, keys: []string{"W"}, short: "flow", help: "Workflow diagram: task close steps and release states with the selection marked; ←/→ compares the built-in presets"},
 	{scope: scopeGlobal, keys: []string{"L"}, help: "Toggle logs (commands / application)"},
 	{scope: scopeGlobal, keys: []string{"q", "ctrl+c"}, short: "quit", help: "Quit"},

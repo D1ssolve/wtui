@@ -19,6 +19,7 @@ import (
 	"github.com/D1ssolve/wtui/internal/domain"
 	"github.com/D1ssolve/wtui/internal/forge"
 	"github.com/D1ssolve/wtui/internal/task"
+	"github.com/D1ssolve/wtui/internal/tracker"
 	"github.com/D1ssolve/wtui/internal/tui/modal"
 	"github.com/D1ssolve/wtui/internal/tui/panels"
 )
@@ -467,6 +468,14 @@ func (m *cmdManager) ForgeCreateMissingMRs(_ context.Context, _ string, title st
 func (m *cmdManager) ForgePipelineStatus(_ context.Context, _, _ string, branch string) ([]forge.PipelineStatus, error) {
 	m.forgePipelineStatusArg = forgePipelineStatusParams{Branch: branch}
 	return m.forgePipelineResult, m.forgeErr
+}
+
+func (m *cmdManager) ListTrackerIssues(context.Context, string) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
+func (m *cmdManager) GetTrackerIssue(context.Context, string) (tracker.IssueDetail, error) {
+	return tracker.IssueDetail{}, nil
 }
 
 func (m *cmdManager) ForgeListIssues(_ context.Context, _, _ string, params forge.ListIssuesParams) ([]forge.IssueInfo, error) {
