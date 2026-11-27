@@ -36,6 +36,7 @@ var clock = time.Now
 
 // linkFile and replaceFile are the publication primitives; tests make them fail like exFAT does.
 var linkFile, replaceFile = os.Link, os.Rename
+var acquireConfigLock = lockPublication
 
 // draftFunc turns a one-line description into a validated `workflow:` document (draftWorkflow output).
 type draftFunc func(ctx context.Context, description string) (string, error)
@@ -136,7 +137,7 @@ func initCommand(c cliArgs, stdin io.Reader, stdout, stderr io.Writer, draft dra
 	if err != nil {
 		return fail(err)
 	}
-	backup, err := writeConfig(target, data, c.force)
+	backup, err := writeConfig(target, data, configPublication{force: c.force})
 	if err != nil {
 		return fail(err)
 	}
@@ -311,7 +312,7 @@ func renderConfig(root, tasksRoot, editor string, workflow *yaml.Node) ([]byte, 
 
 // writeConfig validates the exact bytes through the real loader from a temp file next to the
 // target, then publishes that same file. It writes nothing to stdout: output starts after the commit.
-func writeConfig(target string, data []byte, force bool) (string, error) {
+func writeConfig(target string, data []byte, publication configPublication) (string, error) {
 	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -332,41 +333,61 @@ func writeConfig(target string, data []byte, force bool) (string, error) {
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
-	if err := validateConfigFile(tmp.Name()); err != nil {
+	if err := validateConfigFile(tmp.Name(), publication.expected != nil && *publication.expected == nil); err != nil {
 		return "", fmt.Errorf("the generated config is invalid, nothing was written: %w", err)
 	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
-		return "", err
-	}
-	return publish(tmp.Name(), target, force)
+	return publish(tmp.Name(), target, publication)
 }
 
-// publish runs under a lock every wtui init on this target shares, so concurrent writers take
+type configPublication struct {
+	force    bool
+	expected *[]byte // nil is init's unconditional policy; a pointer to a nil slice expects no file.
+}
+
+// publish runs under a lock every wtui config publisher on this target shares, so concurrent writers take
 // turns and each backup holds exactly the bytes its writer replaced. An existing config never
 // leaves its path: its bytes are first copied to a private synced backup, then the validated temp
 // file is renamed over it in one step. A new config is hard-linked, which cannot clobber a file
 // another program created meanwhile. Returns the backup path, if any.
-func publish(tmp, target string, force bool) (string, error) {
-	unlock, err := lockPublication(lockPath(target))
+func publish(tmp, target string, publication configPublication) (string, error) {
+	unlock, err := acquireConfigLock(lockPath(target))
 	if err != nil {
 		return "", fmt.Errorf("lock %s: %w", target, err)
 	}
 	defer unlock()
-	if err := checkTarget(target, force); err != nil {
+	info, err := inspectTarget(target, publication.force || publication.expected != nil)
+	if err != nil {
 		return "", err
 	}
-	info, err := os.Lstat(target)
-	if errors.Is(err, os.ErrNotExist) {
+	if publication.expected != nil {
+		want := *publication.expected
+		if (info == nil) != (want == nil) {
+			return "", staleConfig(target)
+		}
+		if info != nil {
+			got, err := os.ReadFile(target)
+			if errors.Is(err, os.ErrNotExist) || err == nil && !bytes.Equal(got, want) {
+				return "", staleConfig(target)
+			}
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	if info == nil {
+		if err := os.Chmod(tmp, 0o644); err != nil {
+			return "", err
+		}
 		// ponytail: creating needs hard links (not FAT/exFAT); there init fails and writes nothing.
 		if err := linkFile(tmp, target); errors.Is(err, os.ErrExist) {
+			if publication.expected != nil {
+				return "", staleConfig(target)
+			}
 			return "", fmt.Errorf("%s was created by another program while init was writing; nothing was replaced, run init again", target)
 		} else if err != nil {
 			return "", err
 		}
 		return "", nil
-	}
-	if err != nil {
-		return "", err
 	}
 	backup, err := copyToBackup(target)
 	if err != nil {
@@ -381,6 +402,10 @@ func publish(tmp, target string, force bool) (string, error) {
 		return "", err
 	}
 	return backup, nil
+}
+
+func staleConfig(target string) error {
+	return fmt.Errorf("%s changed since it was loaded; nothing was replaced, reload the config and try again", target)
 }
 
 // lockPath is a hidden sibling that stays after use: deleting a lock others may hold reopens the race.
@@ -414,20 +439,25 @@ func copyToBackup(target string) (string, error) {
 
 // checkTarget refuses links and non-regular files whatever force says, and existing files without force.
 func checkTarget(target string, force bool) error {
+	_, err := inspectTarget(target, force)
+	return err
+}
+
+func inspectTarget(target string, force bool) (os.FileInfo, error) {
 	info, err := os.Lstat(target)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return nil
+		return nil, nil
 	case err != nil:
-		return err
+		return nil, err
 	case info.Mode()&os.ModeSymlink != 0:
-		return fmt.Errorf("%s is a symbolic link; wtui init does not replace links: edit the file it points to, or remove the link and run init again", target)
+		return nil, fmt.Errorf("%s is a symbolic link; wtui does not replace links: edit the file it points to, or remove the link and try again", target)
 	case !info.Mode().IsRegular():
-		return fmt.Errorf("%s exists and is not a regular file; move it away and run init again", target)
+		return nil, fmt.Errorf("%s exists and is not a regular file; move it away and try again", target)
 	case !force:
-		return fmt.Errorf("%s already exists; use --force to replace it", target)
+		return nil, fmt.Errorf("%s already exists; use --force to replace it", target)
 	}
-	return nil
+	return info, nil
 }
 
 // reserveBackup creates a private, never-reused backup file; a same-second name gets a -N suffix.
@@ -445,13 +475,18 @@ func reserveBackup(target string) (*os.File, error) {
 	}
 }
 
-func validateConfigFile(path string) error {
+func validateConfigFile(path string, requireRoot bool) error {
 	cfg, err := config.Load(path)
 	if err != nil {
 		return err
 	}
 	if cfg, err = cfg.Effective(); err != nil {
 		return err
+	}
+	if requireRoot {
+		if info, err := os.Stat(cfg.RootDir); err != nil || !info.IsDir() {
+			return errors.New("there is no usable root_dir; run wtui init with an existing root directory first")
+		}
 	}
 	_, err = gitflow.Resolve(cfg)
 	return err

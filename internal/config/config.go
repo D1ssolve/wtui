@@ -88,21 +88,30 @@ type PruneConfig struct {
 }
 
 func Load(flagPath string) (*Config, error) {
+	cfg, _, _, err := LoadSnapshot(flagPath)
+	return cfg, err
+}
+
+// LoadSnapshot also returns the path and exact bytes parsed, for compare-before-replace.
+// An empty path means no configuration file was found.
+func LoadSnapshot(flagPath string) (*Config, string, []byte, error) {
 	path, err := resolvePath(flagPath)
 	if err != nil {
-		return nil, err
+		return nil, "", nil, err
 	}
-
-	cfg := &Config{}
 	if path == "" {
-		return cfg, nil
+		return &Config{}, "", nil, nil
 	}
-
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("config: read %s: %w", path, err)
+		return nil, "", nil, fmt.Errorf("config: read %s: %w", path, err)
 	}
+	cfg, err := parseConfig(path, data)
+	return cfg, path, data, err
+}
 
+func parseConfig(path string, data []byte) (*Config, error) {
+	cfg := &Config{}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
