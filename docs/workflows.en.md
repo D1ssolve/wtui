@@ -10,6 +10,13 @@ Short guide for the `git-flow` preset (`workflow: {extends: git-flow}`): `develo
 2. Authenticate `glab` for GitLab or `gh` for GitHub.
 3. In wtui, press `,` to view the effective configuration and `.` to check available tools. `W` shows the workflow diagram (`←`/`→` for the built-in presets); `wtui flow --html > flow.html` saves it as a page that opens offline.
 
+To build a variant, open a preset tab in `W` and press `e`.
+Select a field with the arrow keys. `Enter` edits text, cycles a choice, or runs the selected action. Separate list entries with commas.
+Each accepted edit updates the diagram below the form or shows the compiler error with its field path. `Tab` opens a scrollable diagram.
+The draft starts from the **preset**, not your current config. Edit custom state machines and service-specific rules in YAML rather than in this form.
+
+`Ctrl+S` shows the target file and warns about in-flight releases. `Esc` returns to the form without writing. Pressing `y` replaces the **entire `workflow` block**, including any hand-written settings inside it. wtui backs up the existing file next to the config and shows the new workflow on the `Current` tab without a manual restart. If another process has already changed the config since wtui loaded it, the write is refused.
+
 A **task** groups same-named branches and worktrees across services. wtui creates **MRs/PRs**; review and CI run in the forge. A **release** prepares versions, production MRs/PRs, and tags.
 
 ## Feature
