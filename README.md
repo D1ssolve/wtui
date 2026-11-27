@@ -1,18 +1,20 @@
 # wtui
 
+[![Release](https://img.shields.io/github/v/release/D1ssolve/wtui)](https://github.com/D1ssolve/wtui/releases/latest)
+[![Go](https://img.shields.io/github/go-mod/go-version/D1ssolve/wtui)](go.mod)
+[![License](https://img.shields.io/github/license/D1ssolve/wtui)](LICENSE)
+
 **One task, many repositories, one terminal.**
 
 `wtui` is a terminal UI for managing task-scoped Git worktrees across multi-repository and microservice codebases.
 
-![wtui overview](docs/images/wtui-overview.png)
+[![Watch the 20-second wtui launch video](docs/images/launch-video.jpg)](https://github.com/D1ssolve/wtui/releases/download/v0.18.0/wtui-v0.18.0-launch.mp4)
 
+## Why wtui
 
+A feature rarely stays inside one repository. You create the same branch several times, arrange worktrees by hand, repeat sync and push commands, open PRs/MRs, then remember which services are ready to merge and release.
 
-## Built for multi-repository development
-
-If one ticket touches multiple services, the Git work often becomes a task of its own: create matching branches, set up worktrees, keep repositories in sync, open PRs/MRs, and coordinate the release.
-
-**wtui brings that workflow together in a single terminal UI.** Instead of managing each service separately, create a task once, choose its repositories, and work in isolated worktrees for each service.
+`wtui` treats that work as one task. Pick the repositories once, then manage their worktrees, branches, validation, reviews and releases from one screen.
 
 **A good fit if you:**
 - Work on features that span several Git repositories or microservices.
@@ -20,34 +22,31 @@ If one ticket touches multiple services, the Git work often becomes a task of it
 - Use GitHub or GitLab and need to track PR/MR readiness across services.
 - Coordinate task branches and per-service release versions.
 
-**How it differs from a general Git TUI:** tools such as `lazygit` are excellent for working inside a repository. wtui focuses on the *cross-repository task and release lifecycle* and can open lazygit for individual services.
+Tools such as `lazygit` are excellent inside one repository. wtui focuses on the *cross-repository task and release lifecycle*, and opens lazygit for individual services.
 
-**See it in action:** [Overview screenshot](docs/images/wtui-overview.png) · [Task workflow](docs/images/task-workflow.png) · [Release workflow](docs/images/release-workflow.png)
+![wtui overview](docs/images/wtui-overview.png)
 
-## Why wtui
+## Highlights
 
-A feature rarely stays inside one repository. You create the same branch several times, arrange worktrees by hand, repeat sync and push commands, then remember which services are ready to merge.
+New in 0.18: see the [release notes](https://github.com/D1ssolve/wtui/releases/tag/v0.18.0).
 
-`wtui` treats that work as one task. Pick the repositories once, then manage their worktrees, branches, validation, reviews, and releases from one screen.
+- **Task-scoped worktrees** - matching branches and worktrees across the repositories you select; sync, push, validate and inspect them together.
+- **Your workflow, as configuration** - start from `git-flow`, `github-flow` or `trunk-based`, or describe your own task types and release state machines in YAML: gates, QA loops, CI waits, hooks, service order, per-service close targets.
+- **See what wtui will do** - `wtui flow` prints the compiled workflow; `W` in the TUI, `wtui flow --mermaid` and `wtui flow --html` (works offline) draw it.
+- **GitHub and GitLab** - create and inspect MRs/PRs through `gh` or `glab`; merging stays on the forge and wtui reconciles the result. GitHub merge queues and GitLab merge trains, fork + upstream via `forge.remote`.
+- **Issues** - link a Jira, GitHub or GitLab issue to a task (Jira keys need `issues.jira_url`), or start a task from a GitHub/GitLab issue.
+- **Releases** - per-service versions (optionally from Conventional Commits), promotion to production, tags, and GitHub/GitLab Release objects with the changelog.
+- **Team defaults for MRs** - draft, labels, reviewers and assignees per task type or release ([`mr:`](docs/configuration.md#mr-policy)).
+- **AI where it saves time (optional)** - MR and release texts, `E` explains a failure and the next step, `wtui flow --draft "how your team works"` writes a validated `workflow:` block. Codex CLI by default, or Claude Code with `ai.provider: claude`.
+- **Focused workspaces** - a VS Code workspace per task, plus a .NET solution when the `dotnet` CLI is installed.
 
 ## Key terms
 
 - **Task**: a named unit of work (for example `PROJ-101`) that groups the same branch across several repositories.
-- **Worktree**: an extra working copy of a repository. Each service in a task gets its own worktree, so you never switch branches in your main clone.
-- **MR/PR**: a merge request (GitLab) or pull request (GitHub). wtui creates them; the actual merge happens on GitHub/GitLab.
-- **Release**: a separate wtui object that snapshots integrated work, promotes it to production, and tags versions per service.
+- **Worktree**: an extra working copy of a repository. Each service in a task gets its own, so you never switch branches in your main clone.
+- **MR/PR**: a merge request (GitLab) or pull request (GitHub). wtui creates them; the merge happens on GitHub/GitLab.
+- **Release**: a wtui object that snapshots integrated work, promotes it to production, and tags versions per service.
 - **Cleanup**: manual removal of finished task/release worktrees and directories. Always explicit, never automatic.
-
-## Highlights
-
-- **Task-scoped worktrees** - create matching branches and worktrees across selected repositories.
-- **Multi-service operations** - sync, push, validate, and inspect an entire task together.
-- **Your workflow, as configuration** - start from `git-flow`, `github-flow` or `trunk-based`, or describe your own branch types and state machines for tasks and releases in YAML: stands and QA before merge, QA loops, environment chains, CI gates, your own hook commands, service order, per-service close targets, GitHub merge queues and GitLab merge trains, versions from Conventional Commits. `wtui flow` shows what wtui will do; `W` in the TUI, `wtui flow --mermaid` and `wtui flow --html` (a self-contained page that works offline) draw it as a diagram.
-- **GitHub and GitLab workflows** - create and inspect MRs/PRs through `gh` or `glab`. Merging stays on the forge; wtui reconciles the result. Tasks can link a Jira, GitHub or GitLab issue (referenced in the MR description; Jira keys need `issues.jira_url`) or start from a GitHub/GitLab issue, releases can publish GitHub/GitLab Release objects with the changelog, and `forge.remote` works with a fork plus an upstream remote.
-- **AI where it saves time** - MR and release texts, `E` explains a failure and the next step, `wtui flow --draft "how your team works"` writes a validated `workflow:` block. It uses the Codex CLI with your ChatGPT login by default, or the Claude Code CLI with a Claude subscription if you set `ai.provider: claude`. AI is optional; everything else works without it.
-- **Release orchestration** - prepare per-service versions, promote to production, and tag from one release view.
-- **Focused workspaces** - generate a VS Code workspace for each task, plus a .NET solution when the `dotnet` CLI is installed.
-- **Team defaults for MRs** - draft, labels, reviewers and assignees per task type or release (`mr:` in the [configuration reference](docs/configuration.md#mr-policy)).
 
 ## Install
 
@@ -59,97 +58,29 @@ go install github.com/D1ssolve/wtui/cmd/wtui@latest
 
 ## Quick Start
 
-1. Clone your service repositories into one existing directory. wtui doesn't clone anything; it finds Git clones up to a few levels below that directory (`root_dir`):
+1. **Clone your service repositories** into one directory. wtui doesn't clone anything; it finds Git clones a few levels below that directory (`root_dir`). `git-flow` needs `master` and `develop` in every repository; with only `main`, use `github-flow` or `trunk-based`.
+2. **Create a config** - `wtui init` asks for that directory, the task directory, the editor and a workflow, and writes a validated config (it never overwrites an existing one without `--force`). Non-interactive: `wtui init --root ~/dev --preset github-flow --yes`. Writing it by hand: see [minimal configuration](docs/configuration.md#minimal-configuration).
+3. **Check and start** - `wtui flow` shows the workflow wtui will follow; `wtui` starts the TUI. `--config PATH` selects another file; `wtui --help` lists every command.
+4. **Start a task** - press `i`, enter a task ID (for example `PROJ-101`) and select the repositories. wtui creates a branch and a worktree per service under `tasks_root/PROJ-101/`; `O` opens it in your editor.
 
-```text
-~/dev/
-├── gateway/   (git clone)
-└── billing/   (git clone)
-```
-
-Pick the workflow your branches support. `git-flow` needs both `master` and `develop` in every repository, because features start from `develop`. If your repositories have only `main`, use `github-flow` (or `trunk-based`).
-
-2. Create a config. `wtui init` asks for that directory, the task directory, the editor and a workflow, then writes a validated config:
-
-```bash
-wtui init
-```
-
-It writes `$XDG_CONFIG_HOME/wtui/config.yaml` (or `~/.config/wtui/config.yaml`), or the file named by `--config PATH`. An existing config is never overwritten: init stops unless you pass `--force`, and then it saves a backup next to it first. For a non-interactive setup with `main`-only repositories:
-
-```bash
-wtui init --root ~/dev --preset github-flow --yes
-```
-
-You can also write the file by hand. The minimal config is:
-
-```yaml
-root_dir: /Users/you/dev
-tasks_root: /Users/you/dev/.tasks
-editor: code
-
-workflow:
-  extends: github-flow   # git-flow needs master and develop
-```
-
-`root_dir` is where your service repositories live. `tasks_root` is where task worktrees go. Nothing else is required to start; every other key has a default (see the [configuration reference](docs/configuration.md)).
-
-3. Check the workflow, then start wtui:
-
-```bash
-wtui flow
-wtui
-```
-
-Add `--config PATH` to either command to use another file. `wtui --help` lists every command.
-
-4. Press `i`, enter a task ID (for example `PROJ-101`), and select the repositories involved. wtui creates a branch and a worktree per service:
-
-```text
-.tasks/PROJ-101/
-├── gateway/
-├── billing/
-├── PROJ-101.code-workspace
-└── PROJ-101.sln   (only with the dotnet CLI)
-```
-
-5. Press `O` to open the task in your editor, write code, and commit as usual.
-
-Press `?` at any time for keyboard help for the focused panel, or `:` / `Ctrl+P` to search and run any available action.
-
-While a long operation runs, `Esc` can cancel it only if wtui marks it safe to interrupt; `y` confirms. Other operations just tell you to wait. Cancelling never quits wtui and never rolls back: anything already done stays done, and wtui reports the outcome so you can check it and repeat the action.
+Press `?` for keyboard help in the focused panel, or `:` / `Ctrl+P` to search and run any action.
 
 ## Everyday flow
 
 The default path from task to a cleaned-up release (with the `git-flow` preset):
 
-1. **Develop** - work in the task worktrees. `V` validates Git state (clean worktree, no interrupted merge/rebase); it does not run your application tests. `S` syncs branches.
-2. **`C` (Close)** - shows a plan, then pushes source branches. What `C` does is defined by the task type's `close` steps in `workflow`: it creates MRs for a `review` step, merges directly for a `merge` step, and once the reviews are verified as merged runs the remaining steps (`tag`, `cherry_pick`, `pipeline`).
+1. **Develop** - work in the task worktrees. `V` validates Git state (clean worktree, no interrupted merge/rebase); it does not run your tests. `S` syncs branches.
+2. **`C` (Close)** - shows a plan, then runs the task type's `close` steps: MRs for a `review` step, a direct merge for a `merge` step, then `tag`, `cherry_pick` or `pipeline` once the reviews are merged.
 3. **Review and CI** - complete reviews and wait for CI on GitHub/GitLab.
-4. **`M` (Merge)** - rechecks readiness, asks for confirmation, merges ready MRs, and verifies the result.
-5. **Release** - in the Releases panel (`3`), press `N` to bundle merged tasks into a release and `F` to move it to its next step. With `git-flow`, `F` opens production MRs, `M` merges the ready ones, and `F` again back-merges and tags; with `trunk-based`, `F` tags the release branch. The release steps come from `workflow.release`.
-6. **`D` (Cleanup)** - remove the finished task and release worktrees manually. See below.
+4. **`M` (Merge)** - rechecks readiness, asks for confirmation, merges ready MRs and verifies the result.
+5. **Release** - in the Releases panel (`3`), `N` bundles merged tasks into a release and `F` moves it to its next step. With `git-flow`, `F` opens production MRs, `M` merges them, and `F` again back-merges and tags.
+6. **`D` (Cleanup)** - remove finished task and release worktrees.
 
 ![Task workflow across multiple service worktrees](docs/images/task-workflow.png)
 
 ## Cleanup is always manual
 
-Nothing is deleted automatically. Not after Close, not after an MR merge, not after tagging, not after release finalization. Finished tasks and releases stay on disk until you remove them.
-
-One exception: temporary integration worktrees used internally during release preparation are managed by the release flow itself (see `release.keep_integration_worktrees` in the [configuration reference](docs/configuration.md)). This does not affect your task or release directories.
-
-To clean up:
-
-1. Press `D` (or its alias `P`) in the Tasks or Releases panel.
-2. wtui runs a read-only scan and lists candidates. Nothing is touched yet.
-3. Select the items you want to remove.
-4. Each selected item is replanned and confirmed individually before anything is deleted.
-
-When the full scan is too slow or you already know the target, press `d` in the Tasks panel to clean up only the selected task, or in the Releases panel to clean up only the selected released release. This skips the scan and goes straight to the per-item plan and confirmation; everything else works the same.
-
-Cleanup removes worktrees, generated metadata, and task/release directories. It also deletes the local task and release branches it proves merged and unchanged; the plan lists them. Remote branches stay unless you tick remote deletion and confirm it in a second dialog. Cleanup never deletes tags; deleting a release with `x` in Releases is a separate action that also removes its branches and tags. Directories containing unknown files are preserved and reported; a separate force confirmation can remove them.
-
-Steps run one at a time and nothing is rolled back. If a check fails midway, for example because a push URL changed, the remaining steps stop and finished ones stay done. Read the output, then press `D` again to plan what's left. Details: [cleanup guide (Russian)](docs/cleanup.md) and the [configuration reference](docs/configuration.md#release-cleanup).
+Nothing is deleted automatically - not after Close, a merge, tagging or a finished release. Press `D` (or `P`) for a read-only scan of candidates, select what to remove, and confirm each item's plan; `d` skips the scan for the selected task or release. Remote branches are deleted only when you tick that and confirm it separately, and cleanup never deletes tags. Details: [cleanup guide (Russian)](docs/cleanup.md) and the [configuration reference](docs/configuration.md#release-cleanup).
 
 ![Manual cleanup review](docs/images/manual-cleanup.png)
 
@@ -165,7 +96,7 @@ Prepare per-service versions, move each release through the steps your workflow 
 - [`gh`](https://cli.github.com) for GitHub pull requests and workflows
 - [`glab`](https://gitlab.com/gitlab-org/cli) for GitLab merge requests and pipelines
 
-wtui detects available tools automatically. Press `.` to view current integration status.
+wtui detects available tools automatically. Press `.` to view their status.
 
 ## Requirements
 
