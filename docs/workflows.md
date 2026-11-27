@@ -31,7 +31,7 @@ flowchart LR
     F --> G["D/P: очистить вручную"]
 ```
 
-1. В Tasks (`1`) нажмите `i`, укажите ID и сервисы. Для каждого сервиса wtui создаст `feature/<TASK>` и worktree в `<tasks_root>/<TASK>/<service>`.
+1. В Tasks (`1`) нажмите `i`, укажите ID и сервисы. Для каждого сервиса wtui создаст `feature/<TASK>` и worktree в `<tasks_root>/<TASK>/<service>`. Если настроен [трекер](configuration.md#tracker), начните с `J`: это список задач из Jira по вашим фильтрам, `Tab` переключает фильтр. `v` показывает описание, а `Enter` открывает этот же диалог с ключом задачи вместо ID. Дальше wtui сам переводит задачу в Jira по шагам из `tracker.transitions`.
 ![Диалог создания feature-задачи в wtui](images/workflows/feature-01-init.png)
 2. Нажмите `O` для редактора или `R` для Rider. Пишите код, запускайте тесты и делайте commits как обычно. В Services (`Enter` или `2`) можно добавить сервис клавишей `a` или открыть lazygit клавишей `Enter` на выбранном сервисе.
 ![Состояние feature-задачи в wtui перед работой во внешних инструментах](images/workflows/feature-02-overview.png)

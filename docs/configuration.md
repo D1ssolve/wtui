@@ -608,6 +608,72 @@ When wtui opens an MR for the task, it appends the issue to the description: `Cl
 | `issues.jira_url` | string | none | Jira link template with `{{.Key}}`, for example `https://jira.example.com/browse/{{.Key}}`. HTTP(S) only, no credentials. |
 | `issues.task_prefix` | string | none | Task ID prefix for tasks created from GitHub/GitLab issues: `PROJ` gives `PROJ-42`. Without it, the ID is the repository name in upper case plus the issue number (`API-42`). For a Jira issue you enter the task ID yourself. |
 
+## Tracker
+
+The `tracker` block connects wtui to an issue tracker through a plugin: a separate executable named `wtui-tracker-<plugin>` found on `PATH`. wtui ships `wtui-tracker-jira` for Jira Cloud; `make install` and the release archives include it. Without the block, wtui never runs a plugin.
+
+The Jira plugin reads its credentials from the environment, so they never appear in the wtui config:
+
+```sh
+export JIRA_BASE_URL=https://your-site.atlassian.net
+export JIRA_EMAIL=you@example.com
+export JIRA_API_TOKEN=...   # https://id.atlassian.com/manage-profile/security/api-tokens
+```
+
+```yaml
+tracker:
+  plugin: jira
+  queries:
+    - name: Free
+      query: |
+        project = APP AND assignee IS empty AND status = "To Development"
+        ORDER BY created DESC
+    - name: Mine
+      query: 'project = APP AND assignee = currentUser() AND statusCategory != Done'
+  branch_types: {Bug: hotfix, Story: feature}
+  transitions:
+    task_created: In Progress
+    mr_opened: Code Review
+    mr_merged: Done
+  comment_mrs: true
+```
+
+Press `J` to list the issues the first query finds; `Tab` and `Shift+Tab` switch between queries. `v` shows the description and comments, and `Enter` opens the new task dialog with the issue key as the task ID and the issue attached.
+
+The tracker is updated after an operation succeeds. If an update fails, wtui shows a warning and the operation still counts as done; move the issue manually.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `tracker.plugin` | string | required | Plugin name: `jira` runs `wtui-tracker-jira`. Lowercase letters, digits and hyphens. |
+| `tracker.queries` | list | one query `My issues`: `assignee = currentUser() AND statusCategory = "To Do" ORDER BY updated DESC` | Named filters for the `J` list, in the tracker's language (JQL for Jira). `name` defaults to `Query N`; `query` is required. A YAML block (`|`) keeps long JQL readable. |
+| `tracker.branch_types` | map | none | Issue type to the workflow branch type preselected in the new task dialog. |
+| `tracker.transitions.task_created` | string | none | Status the issue moves to when its task is created. |
+| `tracker.transitions.mr_opened` | string | none | Status after wtui opens MRs for the task (`C` with a review step, or creating missing MRs). |
+| `tracker.transitions.mr_merged` | string | none | Status after `C` completes or `M` merges every MR of the task. |
+| `tracker.comment_mrs` | bool | `false` | Comment the links of newly opened MRs on the issue. |
+
+A status may be the target status or the transition name as your Jira workflow shows them. An empty value leaves the issue alone. Only tasks with a Jira issue are synced.
+
+### Writing a tracker plugin
+
+wtui runs the plugin once per call, writes one JSON request to its stdin and reads one JSON response from stdout:
+
+```json
+{"protocol": 1, "method": "transition", "params": {"key": "APP-1", "status": "Done"}}
+{"result": null}
+{"error": {"message": "no transition to \"Done\""}}
+```
+
+| Method | Params | Result |
+|---|---|---|
+| `handshake` | none | `{"protocol": 1, "methods": [...]}` |
+| `list_issues` | `{"query", "limit"}` | `[{"key", "summary", "type", "status", "url"}]` |
+| `get_issue` | `{"key"}` | the issue fields plus `"description"` and `"comments": [{"author", "created", "body"}]` |
+| `transition` | `{"key", "status"}` | `null` |
+| `comment` | `{"key", "body"}` | `null` |
+
+A Go plugin can use `tracker.Serve` from `internal/tracker`.
+
 ## Tags
 
 Every omitted key gets the default shown below, whether the `tag` block is absent or only partly written. For example, `tag: {format: "release-{{.Version}}"}` keeps `enabled`, `annotated` and `push` set to `true`, so tags are still pushed. Write `push: false` to stop pushing.

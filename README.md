@@ -28,13 +28,16 @@ Tools such as `lazygit` are excellent inside one repository. wtui focuses on the
 
 ## Highlights
 
-New in 0.18: see the [release notes](https://github.com/D1ssolve/wtui/releases/tag/v0.18.0).
+New in 0.20: Jira issues inside wtui. Press `J` to pick an issue from your saved filters, `Enter` to start a task from it, and let wtui move the issue as the task progresses. See the [release notes](https://github.com/D1ssolve/wtui/releases/tag/v0.20.0).
+
+![Jira issue to task: J lists issues, Enter creates the task, the issue moves to In Progress](docs/images/tracker-highlight.gif)
 
 - **Task-scoped worktrees** - matching branches and worktrees across the repositories you select; sync, push, validate and inspect them together.
 - **Your workflow, as configuration** - start from `git-flow`, `github-flow` or `trunk-based`, or describe your own task types and release state machines in YAML: gates, QA loops, CI waits, hooks, service order, per-service close targets.
 - **See what wtui will do** - `wtui flow` prints the compiled workflow; `W` in the TUI, `wtui flow --mermaid` and `wtui flow --html` (works offline) draw it.
 - **GitHub and GitLab** - create and inspect MRs/PRs through `gh` or `glab`; merging stays on the forge and wtui reconciles the result. GitHub merge queues and GitLab merge trains, fork + upstream via `forge.remote`.
 - **Issues** - link a Jira, GitHub or GitLab issue to a task (Jira keys need `issues.jira_url`), or start a task from a GitHub/GitLab issue.
+- **Jira, as a plugin** - `J` lists issues from your named JQL filters (`Tab` switches them); `Enter` starts a task with the issue key as its ID. wtui moves the issue when the task is created and its MRs open or merge, and can comment the MR links ([`tracker:`](docs/configuration.md#tracker)). Other trackers plug in through the same small JSON protocol.
 - **Releases** - per-service versions (optionally from Conventional Commits), promotion to production, tags, and GitHub/GitLab Release objects with the changelog.
 - **Team defaults for MRs** - draft, labels, reviewers and assignees per task type or release ([`mr:`](docs/configuration.md#mr-policy)).
 - **AI where it saves time (optional)** - MR and release texts, `E` explains a failure and the next step, `wtui flow --draft "how your team works"` writes a validated `workflow:` block. Codex CLI by default, or Claude Code with `ai.provider: claude`.
@@ -95,6 +98,7 @@ Prepare per-service versions, move each release through the steps your workflow 
 - [`lazygit`](https://github.com/jesseduffield/lazygit) for service-level Git operations
 - [`gh`](https://cli.github.com) for GitHub pull requests and workflows
 - [`glab`](https://gitlab.com/gitlab-org/cli) for GitLab merge requests and pipelines
+- `wtui-tracker-jira` (shipped with wtui) for Jira issues and status updates; see [Tracker](docs/configuration.md#tracker)
 
 wtui detects available tools automatically. Press `.` to view their status.
 

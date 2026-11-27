@@ -31,7 +31,7 @@ flowchart LR
     F --> G["D/P: manual cleanup"]
 ```
 
-1. In Tasks (`1`), press `i`, enter an ID and select services. wtui creates `feature/<TASK>` and a worktree at `<tasks_root>/<TASK>/<service>` for every service.
+1. In Tasks (`1`), press `i`, enter an ID and select services. wtui creates `feature/<TASK>` and a worktree at `<tasks_root>/<TASK>/<service>` for every service. With a [tracker](configuration.md#tracker) configured, start from `J` instead: it lists Jira issues from your filters, `Tab` switches the filter, `v` shows one, and `Enter` opens the same dialog with the issue key as the ID. wtui then moves the issue along `tracker.transitions`.
 ![Feature task creation dialog in wtui](images/workflows/feature-01-init.png)
 2. Press `O` for your editor or `R` for Rider. Write code, run application tests, and commit normally. In Services (`Enter` or `2`), press `a` to add a service or `Enter` on a service to open lazygit.
 ![Feature task state before working in external tools](images/workflows/feature-02-overview.png)
