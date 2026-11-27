@@ -23,6 +23,7 @@ lint:
 
 install: build
 	go install $(LDFLAGS) $(CMD_PATH)
+	go install ./cmd/wtui-tracker-jira
 
 clean:
 	rm -rf $(BIN_DIR)

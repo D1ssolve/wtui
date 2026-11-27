@@ -23,11 +23,26 @@ builds:
     goarch:
       - amd64
       - arm64
+  - id: wtui-tracker-jira
+    main: ./cmd/wtui-tracker-jira
+    binary: wtui-tracker-jira
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
 
 archives:
   - id: wtui
     ids:
       - wtui
+      - wtui-tracker-jira
     formats:
       - tar.gz
     format_overrides:

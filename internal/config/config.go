@@ -27,6 +27,7 @@ type Config struct {
 	Workflow         *WorkflowConfig   `yaml:"workflow"`
 	Forge            *ForgeConfig      `yaml:"forge"`
 	Issues           *IssuesConfig     `yaml:"issues"`
+	Tracker          *TrackerConfig    `yaml:"tracker"`
 	Tag              *TagConfig        `yaml:"tag"`
 	Release          *ReleaseConfig    `yaml:"release"`
 	Validation       *ValidationConfig `yaml:"validation"`
@@ -230,6 +231,9 @@ func (c *Config) Effective() (*Config, error) {
 		return nil, err
 	}
 	if err := c.Issues.validate(); err != nil {
+		return nil, err
+	}
+	if err := c.effectiveTracker(); err != nil {
 		return nil, err
 	}
 	c.effectivePaths()
