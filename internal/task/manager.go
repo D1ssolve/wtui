@@ -140,9 +140,9 @@ type Manager interface {
 	FinalizeRelease(ctx context.Context, params FinishReleaseParams) (domain.Release, error)
 
 	// IsProtectedBranch reports whether branch is protected under the resolved
-	// git-flow policy. A branch is protected if it exactly equals the resolved
-	// production branch, integration branch, or top-level base_branch, OR if it
-	// shares a prefix with a release/hotfix branch type as resolved by gitflow.
+	// workflow. A branch is protected if it exactly equals the production or
+	// integration branch, OR if it has the prefix of the release type or of a
+	// task type marked shared.
 	// Pure in-memory computation; performs no git I/O.
 	IsProtectedBranch(ctx context.Context, branch string) bool
 
