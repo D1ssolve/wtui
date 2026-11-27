@@ -8,7 +8,7 @@
 
 `wtui` is a terminal UI for managing task-scoped Git worktrees across multi-repository and microservice codebases.
 
-[![Watch the 20-second wtui launch video](docs/images/launch-video.jpg)](https://github.com/D1ssolve/wtui/releases/download/v0.18.0/wtui-v0.18.0-launch.mp4)
+https://github.com/user-attachments/assets/976ec6b9-acd5-47f9-a85c-33a191f46517
 
 ## Why wtui
 
