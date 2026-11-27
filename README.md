@@ -6,6 +6,24 @@
 
 ![wtui overview](docs/images/wtui-overview.png)
 
+
+
+## Built for multi-repository development
+
+If one ticket touches multiple services, the Git work often becomes a task of its own: create matching branches, set up worktrees, keep repositories in sync, open PRs/MRs, and coordinate the release.
+
+**wtui brings that workflow together in a single terminal UI.** Instead of managing each service separately, create a task once, choose its repositories, and work in isolated worktrees for each service.
+
+**A good fit if you:**
+- Work on features that span several Git repositories or microservices.
+- Want isolated working directories without repeatedly switching branches.
+- Use GitHub or GitLab and need to track PR/MR readiness across services.
+- Coordinate task branches and per-service release versions.
+
+**How it differs from a general Git TUI:** tools such as `lazygit` are excellent for working inside a repository. wtui focuses on the *cross-repository task and release lifecycle* and can open lazygit for individual services.
+
+**See it in action:** [Overview screenshot](docs/images/wtui-overview.png) · [Task workflow](docs/images/task-workflow.png) · [Release workflow](docs/images/release-workflow.png)
+
 ## Why wtui
 
 A feature rarely stays inside one repository. You create the same branch several times, arrange worktrees by hand, repeat sync and push commands, then remember which services are ready to merge.
